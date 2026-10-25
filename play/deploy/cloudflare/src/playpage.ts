@@ -1,12 +1,20 @@
 // The playground page at /play and /play/<id>: server-rendered HTML in
-// RawrGallery's Ink sheet. A small inline script runs the snippet through
-// POST /play/render and shares it through POST /play/share. A run shows an
-// iced snippet's last frame or its GIF, or a plain program's output as a terminal.
-// "Run in browser" loads rawr-web (WEB_MODULE, from web/build.sh) on first use
-// instead: an iced snippet runs live on a canvas and an edit swaps it in, and a
-// plain program's output shows as the server's would. The server runs a
-// snippet the browser cannot: the module did not load, an iced snippet without
-// WebGL2 or WebGPU, or an `async fn main`.
+// RawrGallery's Ink sheet, under the site's own header. A small inline script
+// runs the snippet in the browser by default: rawr-web (WEB_MODULE, from
+// web/build.sh) loads once the page is up, an iced snippet runs live on a
+// canvas and an edit swaps it in, and a plain program's output shows as the
+// server's would, an `async fn main` program's as it is written. "Run on
+// server" runs it through POST /play/render instead, which shows an iced
+// snippet's last frame or its GIF. The server also runs a snippet the browser
+// cannot: the module did not load, or an iced snippet without WebGL2 or
+// WebGPU. Share goes through POST /play/share.
+//
+// The address keeps the page's state: `#<slug>` names the example loaded (see
+// `slug`), and `?run=server` the server when the visitor chose it (the browser,
+// the default, has no parameter). Both are written with history.replaceState.
+// A share's code wins over an example's hash, which a share page drops, and an
+// edit to the code drops the hash, since the code no longer is the example's.
+// Share's link keeps ?run=server and never has a hash.
 
 import { escape } from "./dashboard.ts";
 import { ogTags, type Og, type Snippet } from "./play.ts";
@@ -37,6 +45,11 @@ export interface Page {
 
 /** rawr-web's module: web/build.sh's output, which the release puts in public/web. */
 export const WEB_MODULE = "/web/rawr_web.js";
+
+/** An example's name as the URL's hash names it: "Async tasks" is "async-tasks". */
+export function slug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
 
 const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
@@ -74,25 +87,36 @@ export function render(page: Page): string {
 <link rel="icon" href="/play.svg" type="image/svg+xml">
 ${ogTags(page.og, escape)}
 <meta name="theme-color" content="#ff2e93">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 ${sitekey && !pass ? `<script src="${TURNSTILE_JS}" async defer></script>` : ""}
 <style>
-:root { --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; }
+:root { --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93;
+  --mono: "Fira Mono", ui-monospace, Menlo, monospace; --sans: "Fira Sans", system-ui, -apple-system, sans-serif; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 "Fira Sans", system-ui, sans-serif; display: flex; flex-direction: column; }
 a { color: var(--pink); text-decoration: none; }
-.cap, .bar, label span, button, select, footer { font: 11px/1.4 "Fira Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
+.cap, label span, button, select, footer { font: 11px/1.4 "Fira Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
 .cap { color: var(--dim); }
-.brand b { text-transform: none; }
 .pink { color: var(--pink); }
-.bar { position: sticky; top: 0; z-index: 10; background: var(--bg); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
-.brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
-.brand:hover b { color: var(--pink); }
-.brand:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
-/* The play triangle of /play.svg (M11 8 L25 16 L11 24 Z in 32x32), in the square's 10px box. */
-.mark { width: 10px; height: 10px; background: var(--pink); clip-path: polygon(6.25% 0, 93.75% 50%, 6.25% 100%); }
-.brand b { font-weight: 400; color: var(--text); font-size: 13px; letter-spacing: 0.02em; }
-.links { display: flex; gap: 16px; }
+/* The site's header, as site/public/index.html and the docs draw it. */
+.bar { position: sticky; top: 0; z-index: 10; height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 32px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.bar .cap { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--dim); text-transform: none; }
+.bar :focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+.brand { display: flex; align-items: center; gap: 12px; color: var(--dim); }
+.brand:hover { text-decoration: none; }
+.mark { width: 10px; height: 10px; background: var(--pink); flex: none; }
+.brand b { font: 400 14px var(--mono); color: var(--text); letter-spacing: 0.04em; }
+.links { display: flex; gap: 20px; }
+.links a { color: var(--dim); }
+.links a:hover, .links a[aria-current] { color: var(--text); text-decoration: none; }
+@media (max-width: 640px) {
+  .bar { padding: 0 16px; }
+  .links { gap: 14px; }
+  .links .wide { display: none; }
+}
 .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
 button, select, input[type=text] { height: 30px; border: 1px solid var(--line); background: var(--raised); color: var(--text); padding: 0 12px; border-radius: 0; }
 input[type=text] { font: 13px "Fira Mono", ui-monospace, monospace; width: 9em; text-transform: none; }
@@ -131,26 +155,34 @@ textarea:focus { border-color: var(--dim); }
 .plain { text-transform: none; letter-spacing: 0; }
 #ts { margin-top: 12px; }
 footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 12px 24px; border-top: 1px solid var(--line); color: var(--dim); }
+footer nav { display: flex; gap: 16px; flex-wrap: wrap; }
 @media (max-width: 760px) {
   html, body { height: auto; }
   main { display: block; }
   .pane { min-height: 0; }
   .out { min-height: 200px; }
   .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
-  .bar, .tools, .pane, footer { padding-left: 16px; padding-right: 16px; }
+  .tools, .pane, footer { padding-left: 16px; padding-right: 16px; }
   #code { min-height: 300px; }
-  .links a.status { display: none; }
 }
 </style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="/" aria-label="rawr home, playground"><span class="mark" aria-hidden="true"></span><b>rawr</b><span>Playground</span></a><span class="links"><a href="/docs">Docs</a><a href="/docs/play">Help</a><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs">Docs</a>
+    <a class="wide" href="/docs/start">Get started</a>
+    <a href="/play" aria-current="page">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
 <div class="tools">
 <select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
 <span class="seg">${theme("dark")}${theme("light")}</span>
 <input type="text" id="size" placeholder="size: auto" value="${escape(snippet.size)}" aria-label="Size, WxH" spellcheck="false">
 <span class="grow"></span>
-<span class="seg" role="radiogroup" aria-label="Where it runs">${where("server", "Run on server", true)}${where("browser", "Run in browser")}</span>
+<span class="seg" role="radiogroup" aria-label="Where it runs">${where("server", "Run on server")}${where("browser", "Run in browser", true)}</span>
 <button id="share" type="button">Share</button>
 <button id="run" class="run" type="button" title="Ctrl/Cmd + Enter">Run</button>
 </div>
@@ -164,11 +196,11 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 </section>
 <section class="pane">
 <p class="cap"><span><span class="pink">//</span> Output</span><span id="status">${shared ? `shared · ${escape(shared)}` : "ready"}</span></p>
-<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). On the server, iced code shows its last frame, and an app that moves shows a GIF. In the browser, iced code runs live and updates as you type. Other programs show their output.</p></div>
+<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). In the browser, iced code runs live and updates as you type. On the server, iced code shows its last frame, and an app that moves shows a GIF. Other programs show their output.</p></div>
 </section>
 </main>
-<footer><span>MIT or Apache-2.0</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
-<script type="application/json" id="example-data">${scriptJson(examples)}</script>
+<footer><nav aria-label="Playground"><a href="/docs/play">Help</a><a href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></nav><span>MIT or Apache-2.0 · <a href="https://airstrike.fyi">airstrike.fyi</a></span></footer>
+<script type="application/json" id="example-data">${scriptJson(examples.map((e) => ({ ...e, slug: slug(e.name) })))}</script>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -209,12 +241,27 @@ ${sitekey ? '<div id="ts"></div>' : ""}
     size: $("size").value.trim(),
     messages: messages.value.split("\\n"),
   });
-  if (!shared) {
+  // The address: the page's path, ?run=server when the visitor chose the
+  // server (the browser is the default), and #<slug> while the code is an
+  // example's. A share's code wins over an example's hash.
+  let path = location.pathname, chosen = new URLSearchParams(location.search).get("run") === "server" ? "server" : "browser", mark = "";
+  const remember = () => history.replaceState(null, "", path + (chosen === "server" ? "?run=server" : "") + (mark ? "#" + mark : ""));
+  let named = "";
+  try { named = decodeURIComponent((location.hash || "").slice(1)); } catch {}
+  const restored = shared ? undefined : examples.find((e) => e.slug === named);
+  if (restored) {
+    fill({ code: restored.code, messages: restored.messages || [], theme: "dark", size: restored.size || "" });
+    mark = restored.slug;
+  } else if (!shared) {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT) || "null");
       if (draft && typeof draft.code === "string" && draft.code.trim()) fill(draft);
     } catch {}
   }
+  if (chosen === "server") document.querySelector("input[name=where][value=server]").checked = true;
+  if (location.search || location.hash) remember();
+  // An edit makes the code no longer the example's.
+  code.addEventListener("input", () => { if (mark) { mark = ""; remember(); } });
   for (const node of [code, messages, $("size")]) node.addEventListener("input", edited);
   radios().forEach((r) => r.addEventListener("change", edited));
   const show = (node) => { out.replaceChildren(node); };
@@ -291,13 +338,15 @@ ${sitekey ? '<div id="ts"></div>' : ""}
     const response = await fetch("/play/share", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(snippet()) });
     if (!response.ok) { status.textContent = "share failed"; show(text(await response.text(), "error")); return; }
     const { id } = await response.json();
-    const link = location.origin + "/play/" + id;
-    history.replaceState(null, "", "/play/" + id);
+    // A share's link keeps the run mode; an example's hash does not apply, since its code is the share.
+    const link = location.origin + "/play/" + id + (chosen === "server" ? "?run=server" : "");
+    path = "/play/" + id; mark = ""; remember();
     try { await navigator.clipboard.writeText(link); status.textContent = "link copied · " + id; }
     catch { status.textContent = "shared · " + id; }
   }
-  // "Run in browser": rawr-web, loaded once. The server runs what it cannot.
-  let web = null, live = null, started = false, typing = null;
+  // "Run in browser", the default: rawr-web, loaded once. The server runs what it cannot.
+  // A run that a later one replaced shows nothing.
+  let web = null, live = null, started = false, typing = null, runs = 0;
   const here = () => document.querySelector("input[name=where]:checked").value === "browser";
   const load = () => web ??= import(${scriptJson(WEB_MODULE)}).then(async (m) => { await m.default(); return m; })
     .catch((error) => { web = null; throw error; });
@@ -305,16 +354,32 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   const server = (reason) => run().then(() => { status.textContent += " · on the server: " + reason; });
   async function browser() {
     save();
+    const mine = ++runs;
     if (!web) status.textContent = "loading…";
     let m;
     try { m = await load(); } catch (error) {
       document.querySelector("input[name=where][value=server]").checked = true;
       return server("rawr-web did not load");
     }
+    if (mine !== runs) return;
     const kind = m.kind(code.value), start = performance.now();
     const ms = () => Math.round(performance.now() - start) + " ms in the browser";
-    if (kind === "server") return server("an async main needs tokio's timers");
+    if (kind === "server") return server("rawr-web cannot run this yet");
     if (kind === "iced" && !gpu()) return server("this browser has no WebGL2 or WebGPU");
+    if (kind === "async") {
+      // An async main runs on the page's clock: its output shows as it is written.
+      const pre = text("", "term");
+      show(pre); markMessages(true); status.textContent = "running in the browser…";
+      const add = (stream, chunk) => {
+        if (mine !== runs) return;
+        const span = document.createElement("span"); span.textContent = chunk; if (stream === "stderr") span.className = "err"; pre.append(span);
+      };
+      const result = JSON.parse(await m.run_async(code.value, add));
+      if (mine !== runs) return;
+      if (result.kind === "error") { report(text(result.text, "error")); return; }
+      show(terminal(result)); status.textContent = ms() + (result.status !== 0 ? " · exit " + result.status : "");
+      return;
+    }
     if (kind === "text") {
       const result = JSON.parse(m.run_text(code.value));
       // A snippet that doesn't parse reads as plain: a running app stays, with the report under it.
@@ -343,20 +408,28 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   const typed = () => { if (here()) { clearTimeout(typing); typing = setTimeout(browser, 500); } };
   for (const node of [code, messages, $("size")]) node.addEventListener("input", typed);
   radios().forEach((r) => r.addEventListener("change", typed));
-  document.querySelectorAll("input[name=where]").forEach((r) => r.addEventListener("change", go));
+  // A visitor's choice is remembered in the address.
+  document.querySelectorAll("input[name=where]").forEach((r) => r.addEventListener("change", () => { chosen = r.value; remember(); go(); }));
   $("run").onclick = go;
   $("share").onclick = share;
   $("examples").onchange = (event) => {
     const example = event.target.value === "reset" ? examples[0] : examples[event.target.value];
     if (example) {
       fill({ code: example.code, messages: example.messages || [], theme: "dark", size: example.size || "" });
-      save(); history.replaceState(null, "", "/play"); go();
+      save(); path = "/play"; mark = example.slug; remember(); go();
     }
     event.target.value = "";
   };
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); go(); }
   });
+  // In the browser, rawr-web loads once the page is up, so it does not hold up the
+  // first paint. An example the address named runs once it has loaded.
+  const preload = () => setTimeout(() => {
+    if (!here()) return;
+    load().then(() => { if (restored && here() && runs === 0) browser(); }, () => {});
+  }, 0);
+  if (document.readyState === "complete") preload(); else window.addEventListener("load", preload, { once: true });
   code.addEventListener("keydown", (event) => {
     if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;
     event.preventDefault();

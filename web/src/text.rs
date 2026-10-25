@@ -2,6 +2,7 @@
 //! on the base language, as the `?play` server runs it, and its output comes
 //! back as the server's text result.
 
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
@@ -12,12 +13,12 @@ const MAX_OUTPUT: usize = 64 * 1024;
 /// What ends output cut at [`MAX_OUTPUT`].
 const TRUNCATED: &str = "… output truncated";
 /// The status of a program that panicked, as Rust's.
-const PANIC_STATUS: i32 = 101;
-/// Script time before a program is stopped, in milliseconds. The page waits
-/// for the program, so a long one is cut rather than left to hang the tab.
-const TIME_MS: f64 = 10_000.0;
-const TIME_LIMIT: &str = "time limit exceeded";
-const OUTPUT_LIMIT: &str = "output limit exceeded";
+pub(crate) const PANIC_STATUS: i32 = 101;
+/// Time before a program is stopped, in milliseconds. The page waits for
+/// the program, so a long one is cut rather than left to hang the tab.
+pub(crate) const TIME_MS: f64 = 10_000.0;
+pub(crate) const TIME_LIMIT: &str = "time limit exceeded";
+pub(crate) const OUTPUT_LIMIT: &str = "output limit exceeded";
 /// The server's limits on call depth and data sizes.
 const CALL_DEPTH: usize = 32;
 const DATA_SIZE: usize = 64 * 1024;
@@ -25,19 +26,31 @@ const DATA_SIZE: usize = 64 * 1024;
 const UNUSED_ITERATOR: &str =
     "This iterator is never used. Iterators are lazy and do nothing unless consumed.";
 
+thread_local! {
+    /// Where a running program's output also goes as it is written: the
+    /// page's callback, given `(stream, text)`. None for a program the page
+    /// waits for.
+    static STREAM: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+}
+
+/// Send the output written from now on to `callback` as well.
+pub(crate) fn stream(callback: Option<js_sys::Function>) {
+    STREAM.with(|stream| *stream.borrow_mut() = callback);
+}
+
 /// A program's output, in the order it was written.
 #[derive(Default)]
-struct Output {
+pub(crate) struct Output {
     /// Runs of text, each `(stderr, text)`.
     chunks: Vec<(bool, String)>,
-    status: i32,
-    truncated: bool,
-    limit: bool,
+    pub(crate) status: i32,
+    pub(crate) truncated: bool,
+    pub(crate) limit: bool,
     note: Option<&'static str>,
 }
 
 impl Output {
-    fn push(&mut self, stderr: bool, text: &str) {
+    pub(crate) fn push(&mut self, stderr: bool, text: &str) {
         let used: usize = self.chunks.iter().map(|(_, text)| text.len()).sum();
         if self.truncated || text.is_empty() {
             return;
@@ -57,6 +70,27 @@ impl Output {
             Some((last, chunk)) if *last == stderr => chunk.push_str(text),
             _ => self.chunks.push((stderr, text.to_owned())),
         }
+        STREAM.with(|stream| {
+            if let Some(callback) = &*stream.borrow() {
+                let name = if stderr { "stderr" } else { "stdout" };
+                let _ = callback.call2(&wasm_bindgen::JsValue::NULL, &name.into(), &text.into());
+            }
+        });
+    }
+
+    /// The server's text result, with the truncation marker when output
+    /// was cut.
+    pub(crate) fn finish(mut self) -> String {
+        if self.truncated {
+            let marker = format!("\n{TRUNCATED}\n");
+            match self.chunks.last_mut() {
+                Some((true, chunk)) => chunk.push_str(&marker),
+                _ => self.chunks.push((true, marker)),
+            }
+            self.status = 1;
+            self.limit = true;
+        }
+        self.to_json()
     }
 
     /// The server's text result: `{"kind":"text","status":0,"output":[..]}`.
@@ -211,16 +245,7 @@ pub fn run(source: &str) -> String {
             }
         }
     }
-    if output.truncated {
-        let marker = format!("\n{TRUNCATED}\n");
-        match output.chunks.last_mut() {
-            Some((true, chunk)) => chunk.push_str(&marker),
-            _ => output.chunks.push((true, marker)),
-        }
-        output.status = 1;
-        output.limit = true;
-    }
-    output.to_json()
+    output.finish()
 }
 
 type Compiled = (
@@ -265,7 +290,7 @@ fn unprintable(report: &rawr::diagnostic::Report, source: &str) -> Option<String
 }
 
 /// The server's wording for an error that is a limit.
-fn limit(text: &str) -> Option<String> {
+pub(crate) fn limit(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     Some(
         if lower.contains(TIME_LIMIT) || lower.contains("terminated") {
@@ -289,6 +314,14 @@ fn limit(text: &str) -> Option<String> {
 /// wall-clock deadline instead, whose output goes to `sink`.
 fn engine(sink: &Arc<Mutex<Output>>) -> Engine {
     let mut engine = Engine::new();
+    sandbox(&mut engine, sink);
+    engine
+}
+
+/// Give `engine` the server's limits but its operation count, and a
+/// wall-clock deadline [`TIME_MS`] from now instead, and send its output
+/// to `sink`.
+pub(crate) fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
     let deadline = crate::now() + TIME_MS;
     let depth = engine.max_call_levels().min(CALL_DEPTH);
     let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());
@@ -325,5 +358,4 @@ fn engine(sink: &Arc<Mutex<Output>>) -> Engine {
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())
         .register_fn("sleep", move |_: rawr::FLOAT| refuse());
-    engine
 }

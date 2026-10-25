@@ -32,7 +32,7 @@ import {
   type Snippet,
 } from "../src/play.ts";
 import { escape } from "../src/dashboard.ts";
-import { render, WEB_MODULE } from "../src/playpage.ts";
+import { render, slug, WEB_MODULE, type Example } from "../src/playpage.ts";
 
 const OG = {
   title: "Rawr Playground",
@@ -443,36 +443,57 @@ test("a render request names its caller for the animation allowance", async () =
   assert.equal(await request.text(), '{"code":"x"}');
 });
 
-test("the page offers Run on server, the default, and Run in browser, which loads rawr-web on demand", () => {
+test("the page offers Run in browser, the default, and Run on server; rawr-web loads once the page is up", () => {
   const html = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
-  assert.match(html, /<input type="radio" name="where" value="server" checked><span>Run on server<\/span>/);
-  assert.match(html, /<input type="radio" name="where" value="browser"><span>Run in browser<\/span>/);
-  // Nothing loads the module up front: the inline script imports it on first use.
+  assert.match(html, /<input type="radio" name="where" value="server"><span>Run on server<\/span>/);
+  assert.match(html, /<input type="radio" name="where" value="browser" checked><span>Run in browser<\/span>/);
+  // Nothing loads the module in the HTML: the inline script imports it after the page loads.
   assert.ok(!html.includes(`<script type="module"`));
   assert.ok(!html.includes(`src="${WEB_MODULE}"`));
   const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
   assert.ok(script.includes(`import(${JSON.stringify(WEB_MODULE)})`));
+  assert.ok(script.includes(`addEventListener("load", preload`));
   // The server runs what the browser cannot.
-  for (const reason of ["rawr-web did not load", "this browser has no WebGL2 or WebGPU", "an async main needs tokio's timers"]) {
+  for (const reason of ["rawr-web did not load", "this browser has no WebGL2 or WebGPU", "rawr-web cannot run this yet"]) {
     assert.ok(script.includes(reason), reason);
   }
+  assert.ok(!script.includes("tokio's timers"), "an async main runs in the browser");
+});
+
+test("the playground's header is the site's, with Playground current, and its own links in the footer", async () => {
+  const html = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
+  const site = (await import("node:fs")).readFileSync(new URL("../../../../site/public/index.html", import.meta.url), "utf8");
+  const header = (page: string) => page.match(/<header class="bar">[\s\S]*?<\/header>/)![0];
+  assert.equal(header(html), header(site).replace(`<a href="/play">`, `<a href="/play" aria-current="page">`));
+  const footer = html.match(/<footer>[\s\S]*?<\/footer>/)![0];
+  for (const href of ["/docs/play", "/bot", "/bot/invite"]) assert.ok(footer.includes(`href="${href}"`), href);
 });
 
 /** The page's inline script against a stand-in DOM, with `web` as the loaded rawr-web. */
-async function browserRun(code: string, web: Record<string, unknown> | null, gpu = true) {
-  const html = render({ snippet: snippet({ code }), examples: [], sitekey: null, shared: null, og: OG });
+function standIn(options: { code?: string; web?: Record<string, unknown> | null; gpu?: boolean; url?: string; shared?: string | null; examples?: Example[] } = {}) {
+  const { code = "", web = null, gpu = true, url = "http://localhost/play", shared = null, examples = [] } = options;
+  const html = render({ snippet: snippet({ code }), examples, sitekey: null, shared, og: OG });
   const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
+  const data = html.match(/<script type="application\/json" id="example-data">([\s\S]*?)<\/script>/)![1];
   const nodes: Record<string, any> = {};
+  const listen = () => ({ on: {} as Record<string, Function[]>, addEventListener(type: string, f: Function) { (this.on[type] ??= []).push(f); } });
   const node = (id: string, value = "") => (nodes[id] ??= {
     id, value, textContent: id === "msghint" ? "(sent before preview)" : "", children: [] as any[], style: {}, dataset: {},
-    classList: { toggle() {}, add() {} }, addEventListener() {}, append(...c: any[]) { this.children.push(...c); },
+    classList: { toggle() {}, add() {} }, ...listen(), append(...c: any[]) { this.children.push(...c); },
     replaceChildren(...c: any[]) { this.children = c; },
   });
   node("code", code); node("messages"); node("size");
-  node("example-data").textContent = "[]";
-  const where = { server: { checked: false, value: "server", addEventListener() {} }, browser: { checked: true, value: "browser", addEventListener() {} } };
+  node("example-data").textContent = data;
+  // Radios in one group: checking one unchecks the other.
+  const where: Record<"server" | "browser", any> = {} as any;
+  for (const value of ["server", "browser"] as const) {
+    let on = value === "browser";
+    where[value] = { value, ...listen(), get checked() { return on; },
+      set checked(next: boolean) { on = next; if (next) where[value === "server" ? "browser" : "server"].checked = false; } };
+  }
   const fetched: string[] = [];
   const document = {
+    readyState: "loading",
     getElementById: node,
     createElement: (tag: string) => tag === "canvas" ? { getContext: () => (gpu ? {} : null) } : { ...node("new-" + Math.random()), tag },
     querySelectorAll: (q: string) => q.includes("where") ? Object.values(where) : [],
@@ -482,12 +503,28 @@ async function browserRun(code: string, web: Record<string, unknown> | null, gpu
   };
   const loads: string[] = [];
   const load = async (url: string) => { loads.push(url); if (!web) throw new Error("404"); return { default: async () => {}, ...web }; };
-  const fetch = async (url: string) => { fetched.push(url); return { ok: true, status: 200, headers: new Map([["content-type", "application/json"]]), json: async () => ({ status: 0, output: [{ stream: "stdout", text: "from the server\n" }] }) }; };
-  const run = new Function("document", "localStorage", "fetch", "navigator", "performance", "history", "location", "loadModule",
+  let fetch: Function = async (url: string) => { fetched.push(url); return { ok: true, status: 200, headers: new Map([["content-type", "application/json"]]), json: async () => ({ status: 0, output: [{ stream: "stdout", text: "from the server\n" }] }) }; };
+  const addresses: string[] = [];
+  const parsed = new URL(url);
+  const location = { pathname: parsed.pathname, search: parsed.search, hash: parsed.hash, origin: parsed.origin };
+  const window = listen();
+  const run = new Function("document", "localStorage", "fetch", "navigator", "performance", "history", "location", "window", "loadModule",
     script.replace(/import\(/, "loadModule("));
-  run(document, { getItem: () => null, setItem() {} }, fetch, {}, { now: () => 0 }, { replaceState() {} }, {}, load);
-  await nodes.run.onclick();
-  return { out: nodes.out, status: nodes.status.textContent, loads, fetched, where };
+  const navigator: any = {};
+  run(document, { getItem: () => null, setItem() {} }, (...args: unknown[]) => fetch(...args), navigator, { now: () => 0 }, { replaceState: (_: unknown, __: string, to: string) => addresses.push(to) }, location, window, load);
+  const choose = (value: "server" | "browser") => {
+    where[value].checked = true;
+    for (const f of where[value].on.change ?? []) f();
+  };
+  return { nodes, where, loads, fetched, addresses, window, choose,
+    setFetch: (next: Function) => { fetch = next; },
+    clipboard: (write: (text: string) => void) => { navigator.clipboard = { writeText: async (text: string) => write(text) }; } };
+}
+
+async function browserRun(code: string, web: Record<string, unknown> | null, gpu = true) {
+  const page = standIn({ code, web, gpu });
+  await page.nodes.run.onclick();
+  return { out: page.nodes.out, status: page.nodes.status.textContent, loads: page.loads, fetched: page.fetched, where: page.where };
 }
 
 test("Run in browser runs a plain program in rawr-web and shows its output as the server's", async () => {
@@ -519,8 +556,113 @@ test("Run in browser falls back to the server when the module does not load or c
   const iced = await browserRun("text(\"hi\")", { kind: () => "iced", run() { throw new Error("not called"); } }, false);
   assert.deepEqual(iced.fetched, ["/play/render"]);
   assert.match(iced.status, /no WebGL2 or WebGPU$/);
-  const tokio = await browserRun("#[tokio::main]\nasync fn main() {}", { kind: () => "server" });
-  assert.deepEqual(tokio.fetched, ["/play/render"]);
+  const later = await browserRun("1 + 2", { kind: () => "server" });
+  assert.deepEqual(later.fetched, ["/play/render"]);
+  assert.match(later.status, /rawr-web cannot run this yet$/);
+});
+
+test("Run in browser runs an async main in rawr-web and shows its output as it is written", async () => {
+  let seen: any[] = [];
+  const page = standIn({ code: "#[tokio::main]\nasync fn main() {}", web: {
+    kind: () => "async",
+    run_async: async (_code: string, write: (stream: string, text: string) => void) => {
+      write("stdout", "fetch at 100 ms\n");
+      // The page shows a chunk the moment it is written.
+      seen = page.nodes.out.children[0].children.map((span: any) => span.textContent);
+      write("stdout", "3 jobs in 300 ms\n");
+      return JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "fetch at 100 ms\n3 jobs in 300 ms\n" }] });
+    },
+  } });
+  await page.nodes.run.onclick();
+  assert.deepEqual(seen, ["fetch at 100 ms\n"]);
+  assert.deepEqual(page.fetched, [], "the server is not asked");
+  assert.equal(page.nodes.out.children[0].className, "term");
+  assert.equal(page.nodes.out.children[0].children[0].textContent, "fetch at 100 ms\n3 jobs in 300 ms\n");
+  assert.match(page.nodes.status.textContent, /in the browser$/);
+});
+
+test("example slugs are stable, readable and unique", async () => {
+  assert.equal(slug("Async tasks"), "async-tasks");
+  assert.equal(slug("Counter"), "counter");
+  assert.equal(slug("Enums, match and ?"), "enums-match-and");
+  assert.equal(slug("Use after move (error)"), "use-after-move-error");
+  // examples.ts imports .rs files, which only the Worker's build reads: its names come from its source.
+  const source = (await import("node:fs")).readFileSync(new URL("../src/examples.ts", import.meta.url), "utf8");
+  const slugs = [...source.matchAll(/name: "([^"]+)"/g)].map((m) => slug(m[1]));
+  assert.ok(slugs.length > 20);
+  assert.ok(slugs.every((s) => /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s)));
+  assert.equal(new Set(slugs).size, slugs.length);
+});
+
+const EXAMPLE_SET: Example[] = [
+  { name: "Async tasks", code: "async fn main() {}", group: "Rust" },
+  { name: "Counter", code: "counter code", messages: ["Message::Increment"], group: "iced" },
+];
+
+test("the address restores an example from its hash and the server from ?run=server", () => {
+  const page = standIn({ url: "http://localhost/play?run=server#counter", examples: EXAMPLE_SET });
+  assert.equal(page.nodes.code.value, "counter code");
+  assert.equal(page.nodes.messages.value, "Message::Increment");
+  assert.ok(page.where.server.checked && !page.where.browser.checked);
+  assert.deepEqual(page.addresses, ["/play?run=server#counter"]);
+  // The browser is the default: ?run=browser is dropped, and the hash kept.
+  const browser = standIn({ url: "http://localhost/play?run=browser#async-tasks", examples: EXAMPLE_SET });
+  assert.equal(browser.nodes.code.value, "async fn main() {}");
+  assert.ok(browser.where.browser.checked);
+  assert.deepEqual(browser.addresses, ["/play#async-tasks"]);
+  // A bare address writes nothing.
+  assert.deepEqual(standIn({ examples: EXAMPLE_SET }).addresses, []);
+});
+
+test("a share's code wins over an example's hash, which the share page drops", () => {
+  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server#counter", shared: "abcDEF1234", examples: EXAMPLE_SET });
+  assert.equal(page.nodes.code.value, "shared code");
+  assert.deepEqual(page.addresses, ["/play/abcDEF1234?run=server"]);
+});
+
+test("a share's link keeps ?run=server and drops the example's hash; opening it restores the server", async () => {
+  const copied: string[] = [];
+  const page = standIn({ code: "x", url: "http://localhost/play?run=server#counter", examples: EXAMPLE_SET });
+  page.clipboard((text: string) => copied.push(text));
+  page.setFetch(async () => ({ ok: true, json: async () => ({ id: "abcDEF1234" }) }));
+  await page.nodes.share.onclick();
+  assert.equal(page.addresses.at(-1), "/play/abcDEF1234?run=server");
+  assert.deepEqual(copied, ["http://localhost/play/abcDEF1234?run=server"]);
+  const opened = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server", shared: "abcDEF1234" });
+  assert.ok(opened.where.server.checked);
+  assert.equal(opened.nodes.code.value, "shared code");
+});
+
+test("choosing an example, the run mode and an edit keep the address with replaceState", async () => {
+  const page = standIn({ code: "x", url: "http://localhost/play/abcDEF1234", shared: "abcDEF1234", examples: EXAMPLE_SET, web: { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) } });
+  const target = { value: "1" };
+  page.nodes.examples.onchange({ target });
+  assert.equal(page.nodes.code.value, "counter code");
+  assert.equal(page.addresses.at(-1), "/play#counter");
+  page.choose("server");
+  assert.equal(page.addresses.at(-1), "/play?run=server#counter");
+  // An edit drops the hash: the code is no longer the example's.
+  for (const f of page.nodes.code.on.input) f();
+  assert.equal(page.addresses.at(-1), "/play?run=server");
+  page.choose("browser");
+  assert.equal(page.addresses.at(-1), "/play");
+  await new Promise((done) => setTimeout(done, 10));
+});
+
+test("in the browser, rawr-web loads once the page has loaded, and a restored example runs", async () => {
+  const ran: string[] = [];
+  const web = { kind: () => "text", run_text: (code: string) => { ran.push(code); return JSON.stringify({ kind: "text", status: 0, output: [] }); } };
+  const page = standIn({ url: "http://localhost/play#async-tasks", examples: EXAMPLE_SET, web });
+  assert.deepEqual(page.loads, [], "nothing loads before the page has");
+  for (const f of page.window.on.load) f();
+  await new Promise((done) => setTimeout(done, 10));
+  assert.deepEqual(page.loads, [WEB_MODULE]);
+  assert.deepEqual(ran, ["async fn main() {}"]);
+  // On the server, nothing loads.
+  const server = standIn({ url: "http://localhost/play?run=server", web });
+  for (const f of server.window.on.load) f();
+  await new Promise((done) => setTimeout(done, 10));
+  assert.deepEqual(server.loads, []);
 });
 
 test("rawr-web's files are served with types the edge compresses", () => {

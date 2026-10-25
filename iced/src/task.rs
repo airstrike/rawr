@@ -481,7 +481,8 @@ pub(crate) fn tokio_blocking(
 /// closure holds its own captured values, and the UI thread's State is not
 /// one of them. While a recording's clock is frozen on the polling thread,
 /// the worker reads the same frozen time and the poll waits for it, so its
-/// output is ready at the instant the task started, on every run.
+/// output is ready at the instant the task started, on every run. In a
+/// browser, which has no threads, the first poll calls the closure inline.
 enum Blocking {
     Unstarted(Option<Box<(Authority, item::Value)>>),
     Running(iced::futures::channel::oneshot::Receiver<Result<Dynamic, Error>>),
@@ -498,6 +499,10 @@ impl std::future::Future for Blocking {
             let Some((authority, work)) = work.take().map(|work| *work) else {
                 return std::task::Poll::Ready(Err(Error::Spent));
             };
+            // A browser has no threads: the closure runs here, inline.
+            if cfg!(target_arch = "wasm32") {
+                return std::task::Poll::Ready(authority.call(&work).map(rawr::result::ok));
+            }
             let frozen = crate::snapshot::clock::now();
             let (sender, receiver) = iced::futures::channel::oneshot::channel();
             let worker = std::thread::Builder::new()

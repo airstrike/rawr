@@ -2,9 +2,11 @@
 // DevTools protocol with Node's own WebSocket:
 //   web/build.sh && node test/browser.ts [WEB_DIR] [SHOTS_DIR]
 // It serves the page (playpage.ts) with rawr-web from WEB_DIR (default
-// target/wasm/site), picks "Run in browser" on the Counter, clicks Increment
-// three times, makes an edit that keeps the count, runs a plain program, and
-// saves window screenshots in SHOTS_DIR (default target/web-check).
+// target/wasm/site), runs the Counter in the browser (the default), clicks
+// Increment three times, makes an edit that keeps the count, runs a plain
+// program, an iced app whose task sleeps, and the "Async tasks" example from
+// its #async-tasks address on the page's real clock, and saves window
+// screenshots in SHOTS_DIR (default target/web-check).
 // CHROME names the browser when it is not in the usual place.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,11 +21,13 @@ const web = resolve(process.argv[2] ?? join(repo, "target/wasm/site"));
 const shots = resolve(process.argv[3] ?? join(repo, "target/web-check"));
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const counter = readFileSync(join(repo, "play/tests/fixtures/counter.rs"), "utf8");
+const tasks = readFileSync(join(repo, "play/tests/fixtures/rust/tasks.rs"), "utf8");
+const channel = readFileSync(join(repo, "play/tests/fixtures/channel.rs"), "utf8");
 mkdirSync(shots, { recursive: true });
 
 const og = { title: "rawr playground", description: "", url: "http://localhost/play", image: "", alt: "" };
 const brotli: string[] = [];
-const page = render({ snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples: [], sitekey: null, shared: null, og });
+const page = render({ snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples: [{ name: "Async tasks", code: tasks, group: "Rust" }], sitekey: null, shared: null, og });
 const server = createServer((request, response) => {
   const path = new URL(request.url ?? "/", "http://localhost").pathname;
   if (path === "/play") return response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page);
@@ -126,8 +130,9 @@ try {
   await evaluate(`window.clicks = []; let t = 0;
     addEventListener("pointerup", () => { t = performance.now(); }, true);
     addEventListener("pointerup", () => { const handled = performance.now() - t; requestAnimationFrame(() => requestAnimationFrame(() => window.clicks.push([handled, performance.now() - t]))); });`);
-  check(await evaluate(`typeof window.rawr_web === "undefined" && !document.querySelector("script[src*=rawr_web]")`), "nothing loads rawr-web up front");
-  await evaluate(`document.querySelector("input[name=where][value=browser]").click()`);
+  check(await evaluate(`typeof window.rawr_web === "undefined" && !document.querySelector("script[src*=rawr_web]")`), "nothing loads rawr-web in the HTML");
+  check(await evaluate(`document.querySelector("input[name=where]:checked").value === "browser"`), "the browser is the default");
+  await evaluate(`document.getElementById("run").click()`);
   await until("the canvas", `!!document.querySelector("#out .live canvas") && document.getElementById("status").textContent.includes("live")`);
   await until("the first frame", `document.querySelector("#out .live canvas").width > 0`);
   console.log(`canvas up ${Math.round(performance.now() - loaded)} ms after navigation`);
@@ -187,6 +192,40 @@ try {
   await shot("plain.png");
   console.log("plain output:", JSON.stringify(await evaluate(`document.querySelector("#out pre.term").textContent`)), "·", await evaluate(`document.getElementById("status").textContent`));
   check(true, "a plain program runs in the browser");
+
+  // An iced app whose boot task sleeps and joins a channel's two ends: "adding up", then "sum 10" 400 ms on.
+  await evaluate(`(() => { const code = document.getElementById("code"); code.value = ${JSON.stringify(channel)}; code.dispatchEvent(new Event("input")); })()`);
+  await until("the app", `!!document.querySelector("#out .live canvas") && document.getElementById("status").textContent.includes("live")`, 5000);
+  await new Promise((done) => setTimeout(done, 100));
+  const adding = await out();
+  await new Promise((done) => setTimeout(done, 1200));
+  const summed = await out();
+  await shot("iced-task.png");
+  check(adding !== summed && !logs.some((line) => line.includes("does not run in a browser")), "an iced app's task sleeps on the page's clock and ends");
+
+  // The "Async tasks" example from its address: restored and run in the browser once the module is up.
+  // From another page: a hash change alone would not load the page again.
+  await on("Page.navigate", { url: "about:blank" });
+  await on("Page.navigate", { url: `http://127.0.0.1:${port}/play#async-tasks` });
+  await until("the restored example", `(document.querySelector("#out pre.term") || {}).textContent?.includes("jobs in")`, 15000);
+  check(await evaluate(`document.getElementById("code").value.includes("mpsc::channel(4)")`), "#async-tasks restores the example");
+  // Run it again, timing each line as it shows.
+  await evaluate(`window.lines = []; window.ran = performance.now();
+    new MutationObserver(() => { const text = (document.querySelector("#out pre.term") || {}).textContent || "";
+      for (const line of text.split("\\n")) if (line && !window.lines.some((l) => l[0] === line)) window.lines.push([line, performance.now() - window.ran]); })
+      .observe(document.getElementById("out"), { childList: true, subtree: true, characterData: true });
+    document.getElementById("run").click();`);
+  await until("the async output", `window.lines.some(([line]) => line.includes("jobs in"))`, 5000);
+  await shot("async.png");
+  const lines: [string, number][] = await evaluate("window.lines");
+  console.log("async output:", lines.map(([line, ms]) => `${JSON.stringify(line)} at ${Math.round(ms)} ms`).join(", "), "·", await evaluate(`document.getElementById("status").textContent`));
+  const printed = lines.map(([line]) => line);
+  const times = printed.map((line) => Number(line.match(/(\d+) ms/)?.[1]));
+  const shown = (start: string) => lines.find(([line]) => line.startsWith(start))?.[1] ?? 0;
+  check(printed[0]?.startsWith("fetch at") && printed[1]?.startsWith("parse at") && printed[2]?.startsWith("render at") && printed[3]?.startsWith("3 jobs in"), "the Async tasks example prints its four lines in order");
+  check(times.every((ms, i) => ms >= [100, 200, 300, 300][i] && ms < [100, 200, 300, 300][i] + 60), "its times are the real clock's, 100, 200 and 300 ms");
+  check(shown("fetch at") < shown("3 jobs in") - 150 && shown("3 jobs in") >= 290 && shown("3 jobs in") < 600, "its lines show as they are written, the last about 300 ms after the run");
+  check(await evaluate(`location.hash === "#async-tasks" && location.search === ""`), "the address keeps the example and the default mode");
   check(brotli.includes("/web/rawr_web_bg.wasm"), "the module comes as its brotli copy");
 } catch (error) {
   check(false, String(error));

@@ -2,13 +2,16 @@
 //!
 //! [`kind`] says how a snippet runs, as the `?play` server decides it from
 //! rawr-iced's claims. [`run_text`] runs a plain program and returns its
-//! output as the server's text result. [`run`] runs an iced snippet as one
+//! output as the server's text result. [`run_async`] runs a program whose
+//! `main` is `async` on the page's event loop and real clock, and streams
+//! its output as it is written. [`run`] runs an iced snippet as one
 //! iced application on the page's `#iced` element; a later call swaps in the
 //! edited program, and its State carries over when its script types are
 //! unchanged. Both wrap a snippet with `rawr-snippet`, as the server does.
 #![cfg(target_arch = "wasm32")]
 
 mod fonts;
+mod tasks;
 mod text;
 
 use std::cell::RefCell;
@@ -56,9 +59,8 @@ pub fn sample() -> String {
     SAMPLE.to_owned()
 }
 
-/// How `code` runs: `"iced"` for [`run`], `"text"` for [`run_text`], or
-/// `"server"` for an `async fn main`, whose tokio timers do not run in a
-/// browser yet.
+/// How `code` runs: `"iced"` for [`run`], `"async"` for [`run_async`] (an
+/// `async fn main`), or `"text"` for [`run_text`].
 #[wasm_bindgen]
 pub fn kind(code: &str) -> String {
     let program = rawr_snippet::plain::program(code);
@@ -68,7 +70,7 @@ pub fn kind(code: &str) -> String {
     if iced {
         "iced"
     } else if rawr_snippet::plain::async_main(&rawr_snippet::without_tests(code)).is_some() {
-        "server"
+        "async"
     } else {
         "text"
     }
@@ -80,6 +82,16 @@ pub fn kind(code: &str) -> String {
 #[wasm_bindgen]
 pub fn run_text(code: &str) -> String {
     text::run(code)
+}
+
+/// Run a program whose `main` is `async`: its tasks run on the page's event
+/// loop, and tokio's timers on the page's clock. `output` is called with
+/// `(stream, text)` as the program writes. Resolves to the server's JSON
+/// text result, or `{"kind":"error","text":..}` when it does not compile.
+/// A later call stops a program still running.
+#[wasm_bindgen]
+pub async fn run_async(code: String, output: js_sys::Function) -> String {
+    tasks::run(code, output).await
 }
 
 /// Run an iced snippet: the first call opens the app, and a later one swaps
