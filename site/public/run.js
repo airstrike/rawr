@@ -10,9 +10,9 @@
 // POST /play/render, the playground's endpoint, with the playground's checks:
 // its pass cookie or a Turnstile token, and its per-IP limits.
 //
-// After a run the play icon becomes an ×, which clears the output and
-// restores the original code. A Reset button shows while the code differs
-// from the original, and restores it.
+// After a run the play icon becomes an ×, which clears the output. A Reset
+// button at the code's top-right shows while the code differs from the
+// original, and restores it.
 (() => {
   const SVG = "http://www.w3.org/2000/svg";
   const icon = (cls, d) => {
@@ -133,7 +133,8 @@
     reset.setAttribute("aria-label", `Restore the original ${name}`);
     reset.title = `Restore the original ${name}`;
     reset.hidden = true;
-    button.after(reset);
+    // It belongs to the code, so it sits at the code block's top-right corner.
+    source.before(reset);
 
     // While it runs, the icon is three dots: there is nothing to stop. After
     // it, the icon is an ×.
@@ -155,7 +156,7 @@
       const say = {
         idle: label,
         running: `Running ${name}…`,
-        done: `Clear the output and restore the original ${name}`,
+        done: `Clear the output of ${name}`,
       }[next];
       button.setAttribute("aria-label", say);
       button.title = say;
@@ -266,7 +267,6 @@
       if (state === "running") return;
       if (state === "done") {
         clear();
-        restore();
         setState("idle");
         return;
       }
