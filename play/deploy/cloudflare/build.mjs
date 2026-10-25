@@ -3,7 +3,8 @@
 // every deploy and dev (`build` in wrangler.jsonc). A path in both fails.
 // It also writes src/runnable.gen.ts, the hashes of the sources /play/run
 // accepts: every <code data-run> block in the site's pages (allowlist.mjs).
-import { cpSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { allowList, module, sitePages } from "./allowlist.mjs";
 
@@ -41,3 +42,14 @@ console.log(`build: ${runnable.blocks.length} run blocks, ${runnable.hashes.leng
 rmSync(dist, { recursive: true, force: true });
 for (const source of sources) cpSync(source, dist, { recursive: true });
 console.log(`build: ${seen.size} files in dist/`);
+
+// Link previews (Discord, Slack, iMessage) cache the card by its URL, so the
+// pages name it with its content hash: a new card is a new URL.
+const card = "og/card.png";
+const version = createHash("sha256").update(readFileSync(join(dist, card))).digest("hex").slice(0, 12);
+for (const file of files(dist).filter((file) => file.endsWith(".html"))) {
+  const path = join(dist, file);
+  const page = readFileSync(path, "utf8");
+  if (page.includes(card)) writeFileSync(path, page.replaceAll(card, `${card}?v=${version}`));
+}
+console.log(`build: the card is ${card}?v=${version}`);
