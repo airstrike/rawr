@@ -60,12 +60,28 @@ check_layout() {
 }
 
 check_rust() {
-    echo "Running cargo fmt --check..."
-    if ! cargo "+$fmt_toolchain" fmt --all --check >/dev/null 2>&1; then
-        echo "ERROR: code is not formatted. Run: cargo +$fmt_toolchain fmt --all"
-        cargo "+$fmt_toolchain" fmt --all --check 2>&1 | grep '^Diff in' | sed 's/^/  /'
-        return 1
+    # With FMT_FILES set (pre-commit), check only those files, so another
+    # agent's unformatted work elsewhere in a shared checkout doesn't block
+    # this commit. Without it (pre-push), check the whole workspace.
+    if [ -n "${FMT_FILES:-}" ]; then
+        echo "Running rustfmt --check on the staged files..."
+        # shellcheck disable=SC2086
+        if ! rustfmt "+$fmt_toolchain" --edition 2024 --check $FMT_FILES >/dev/null 2>&1; then
+            echo "ERROR: staged code is not formatted. Run: rustfmt +$fmt_toolchain --edition 2024 <files>"
+            # shellcheck disable=SC2086
+            rustfmt "+$fmt_toolchain" --edition 2024 --check $FMT_FILES 2>&1 | grep '^Diff in' | sed 's/^/  /'
+            return 1
+        fi
+    else
+        echo "Running cargo fmt --check..."
+        if ! cargo "+$fmt_toolchain" fmt --all --check >/dev/null 2>&1; then
+            echo "ERROR: code is not formatted. Run: cargo +$fmt_toolchain fmt --all"
+            cargo "+$fmt_toolchain" fmt --all --check 2>&1 | grep '^Diff in' | sed 's/^/  /'
+            return 1
+        fi
     fi
+    # Clippy compiles the working tree as a whole, so another agent's
+    # unfinished code in a shared checkout can still fail it.
     echo "Running cargo clippy $* ..."
     if ! cargo "+$clippy_toolchain" clippy -q "$@" --all-targets -- -D warnings; then
         echo "ERROR: Clippy found issues (D114: fix them; only narrow, named, documented exceptions)."

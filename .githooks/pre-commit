@@ -9,6 +9,7 @@ check_audit || exit 1
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$|(^|/)Cargo\.toml$')
 if [ -n "$staged" ]; then
+    FMT_FILES=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs' | grep -vE '^(toml/edit|watch/notify)/' | grep -v '^toml/src/debug' | tr '\n' ' ')
     check_rust --workspace || exit 1
 fi
 exit 0
