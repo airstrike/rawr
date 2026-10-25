@@ -106,6 +106,8 @@ fn a_failed_compile_keeps_the_old_program_running() {
     let error = failure(script.reload());
     assert!(error.starts_with("error[E0609]: no field `payeee`"), "{error}");
     assert_eq!(category.call(coffee()).unwrap().as_deref(), Some("coffee"));
+    // The same broken text gives the same error again.
+    assert_eq!(failure(script.reload()), error);
 
     // Fixing the file publishes it.
     std::fs::write(&path, CATEGORY.replace("\"coffee\"", "\"cafe\"")).unwrap();

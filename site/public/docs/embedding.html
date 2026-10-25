@@ -225,7 +225,8 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 
 <h2 id="reload">Reloading</h2>
 <p><code>script.reload()</code> rereads the script&rsquo;s file. If the text is unchanged, it does nothing and returns <code>false</code>. Otherwise it compiles the new text and checks every live handle against it. Then it publishes the new program, and every handle runs the new code at its next call. Your app decides when to reload, such as between two reports or when its file watcher fires.</p>
-<p>A reload publishes all of the new program or none of it. If the new text doesn&rsquo;t compile, or a handle no longer matches its function, <code>reload</code> returns the error and the old program keeps running. A dropped handle isn&rsquo;t checked.</p>
+<p>A reload publishes all of the new program or none of it. If the new text doesn&rsquo;t compile, or a handle no longer matches its function, <code>reload</code> returns the error and the old program keeps running. Reloading the same text again returns the same error without compiling it again. A dropped handle isn&rsquo;t checked.</p>
+<p>Reloads on two threads take turns: each one reads, compiles and publishes before the next one reads the file, so an older text never replaces a newer one.</p>
 <p>Run the example with an edit. It loads a copy of <code>rules.rs</code>, saves <code>scripts/edited.rs</code> over the copy and reloads it.</p>
 <div class="block">
   <div class="run"><b>cargo run -- rules.rs scripts/edited.rs</b><span>coffee       -14.50

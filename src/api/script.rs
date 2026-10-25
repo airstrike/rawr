@@ -17,11 +17,12 @@ use crate::host::export::Value;
 use crate::program::signatures::{self, Signatures, Ty};
 use crate::types::{ParseErrorType, Rendered};
 use crate::{
-    host, resolve, CallFnOptions, Dynamic, Engine, EvalAltResult, ImmutableString, Position,
-    RawrResult, Scope, Shared, AST, ERR,
+    host, resolve, CallFnOptions, Dynamic, Engine, EvalAltResult, ImmutableString, ParseError,
+    Position, RawrResult, Scope, Shared, AST, ERR,
 };
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 #[cfg(not(feature = "sync"))]
 type Weak<T> = std::rc::Weak<T>;
@@ -53,8 +54,22 @@ struct Inner {
     /// The generation every handle calls. A reload swaps it whole.
     current: Locked<Shared<Generation>>,
     /// The handles looked up so far, by index. A reload checks the live
-    /// ones against the new program.
+    /// ones against the new program. A dropped handle's slot goes to the
+    /// next lookup, so the list is as long as the most handles alive at
+    /// once.
     wants: Locked<Vec<Weak<Want>>>,
+    /// Held through a whole reload, so reloads on two threads read,
+    /// compile and publish one after the other. It keeps the last text a
+    /// reload refused, so reloading that text again doesn't compile it
+    /// again.
+    reloading: Mutex<Option<Refused>>,
+}
+
+/// A text a reload refused: its compile error, or the program a live
+/// handle didn't match.
+struct Refused {
+    source: diagnostic::Source,
+    compiled: Result<Shared<Program>, ParseError>,
 }
 
 /// One compile of the script.
@@ -181,8 +196,8 @@ impl Engine {
     /// compile error, printed as rustc prints it.
     pub fn load(self, path: impl AsRef<Path>) -> Result<Script, Box<EvalAltResult>> {
         let path = path.as_ref();
-        let text = read(path)?;
-        let program = compile(&self, text, &path.to_string_lossy())?;
+        let source = source(read(path)?, Some(path))?;
+        let program = compile(&self, source, Some(path))?;
         Ok(Script::new(self, Some(path.to_path_buf()), program))
     }
 
@@ -193,7 +208,7 @@ impl Engine {
     ///
     /// Returns the script's compile error, printed as rustc prints it.
     pub fn script(self, text: impl Into<String>) -> Result<Script, Box<EvalAltResult>> {
-        let program = compile(&self, text.into(), "<script>")?;
+        let program = compile(&self, source(text.into(), None)?, None)?;
         Ok(Script::new(self, None, program))
     }
 
@@ -228,18 +243,34 @@ fn read(path: &Path) -> Result<String, Box<EvalAltResult>> {
     })
 }
 
-fn compile(engine: &Engine, text: String, identity: &str) -> Result<Program, Box<EvalAltResult>> {
-    let (mut ast, signatures) = engine.compile_script(&text, identity)?;
-    if identity != "<script>" {
-        ast.set_source(identity);
+/// The script's text, named by its path or, without one, `<script>`.
+fn source(text: String, path: Option<&Path>) -> Result<diagnostic::Source, Box<EvalAltResult>> {
+    let identity = path.map_or_else(|| "<script>".into(), Path::to_string_lossy);
+    diagnostic::Source::new(identity.as_ref(), text)
+        .map_err(|error| ERR::ErrorRuntime(error.to_string().into(), Position::NONE).into())
+}
+
+fn compile(
+    engine: &Engine,
+    source: diagnostic::Source,
+    path: Option<&Path>,
+) -> Result<Program, ParseError> {
+    let (mut ast, signatures) = engine.compile_script(source.text(), source.identity())?;
+    if path.is_some() {
+        ast.set_source(source.identity());
     }
-    let source = diagnostic::Source::new(identity, text)
-        .map_err(|error| Box::new(ERR::ErrorRuntime(error.to_string().into(), Position::NONE)))?;
     Ok(Program {
         ast,
         signatures,
         source,
     })
+}
+
+/// Drop the dead handles at the end of the list.
+fn trim(wants: &mut Vec<Weak<Want>>) {
+    while wants.last().is_some_and(|want| want.strong_count() == 0) {
+        wants.pop();
+    }
 }
 
 impl Script {
@@ -253,6 +284,7 @@ impl Script {
                     functions: Box::default(),
                 })),
                 wants: Locked::new(Vec::new()),
+                reloading: Mutex::new(None),
             }),
         }
     }
@@ -297,8 +329,14 @@ impl Script {
         let output = Ty::from_host(&R::qualified(registry).map_err(invalid)?);
 
         let mut wants = locked_write(&self.inner.wants).ok_or_else(busy)?;
+        trim(&mut wants);
+        // The first dead handle's slot, or a new one.
+        let index = wants
+            .iter()
+            .position(|want| want.strong_count() == 0)
+            .unwrap_or(wants.len());
         let want = Shared::new(Want {
-            index: wants.len(),
+            index,
             name: name.into(),
             parameters,
             output,
@@ -306,15 +344,26 @@ impl Script {
         let current = self.inner.generation()?;
         let function = check(&self.inner.engine, &current.program, &want)?;
 
-        // The current program, with this handle's function added.
-        let mut functions = current.functions.to_vec();
-        functions.push(Some(function));
-        let generation = Shared::new(Generation {
+        // The current program, with this handle's function in its slot and
+        // none for the dead handles.
+        if index == wants.len() {
+            wants.push(Shared::downgrade(&want));
+        } else {
+            wants[index] = Shared::downgrade(&want);
+        }
+        let functions = wants
+            .iter()
+            .enumerate()
+            .map(|(slot, live)| match slot {
+                _ if slot == index => Some(function.clone()),
+                _ if live.strong_count() == 0 => None,
+                _ => current.functions.get(slot).cloned().flatten(),
+            })
+            .collect();
+        *locked_write(&self.inner.current).ok_or_else(busy)? = Shared::new(Generation {
             program: current.program.clone(),
-            functions: functions.into_boxed_slice(),
+            functions,
         });
-        *locked_write(&self.inner.current).ok_or_else(busy)? = generation;
-        wants.push(Shared::downgrade(&want));
 
         Ok(Func {
             inner: self.inner.clone(),
@@ -325,7 +374,10 @@ impl Script {
 
     /// Reread the script's file. When its text changed, compile it, check
     /// every live handle against it, and publish it, so every handle runs
-    /// the new code at its next call. Unchanged text costs nothing.
+    /// the new code at its next call. Unchanged text costs nothing, and a
+    /// text a reload refused isn't compiled again until the file changes.
+    /// Reloads on two threads take turns, so an older text never replaces
+    /// a newer one.
     ///
     /// Returns whether a new program was published. A script made by
     /// [`Engine::script`] has no file, and reloading it does nothing.
@@ -340,28 +392,54 @@ impl Script {
         let Some(path) = &self.inner.path else {
             return Ok(false);
         };
+        let mut refused = self
+            .inner
+            .reloading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let text = read(path)?;
         if self.inner.generation()?.program.source.text() == text {
+            *refused = None;
             return Ok(false);
         }
-        let program = Shared::new(compile(&self.inner.engine, text, &path.to_string_lossy())?);
-
-        let wants = locked_write(&self.inner.wants).ok_or_else(busy)?;
-        let functions = wants
-            .iter()
-            .map(|want| {
-                want.upgrade()
-                    .map(|want| check(&self.inner.engine, &program, &want))
-                    .transpose()
-            })
-            .collect::<Result<Box<[_]>, _>>()?;
-        *locked_write(&self.inner.current).ok_or_else(busy)? =
-            Shared::new(Generation { program, functions });
-        Ok(true)
+        let (source, compiled) = match refused.take() {
+            Some(last) if last.source.text() == text => (last.source, last.compiled),
+            _ => {
+                let source = source(text, Some(path))?;
+                let compiled = compile(&self.inner.engine, source.clone(), Some(path));
+                (source, compiled.map(Shared::new))
+            }
+        };
+        let published = match &compiled {
+            Ok(program) => self.inner.publish(program.clone()),
+            Err(error) => Err(error.clone().into()),
+        };
+        if published.is_err() {
+            *refused = Some(Refused { source, compiled });
+        }
+        published.map(|()| true)
     }
 }
 
 impl Inner {
+    /// Check every live handle against `program`, and make it the current
+    /// generation when all of them match.
+    fn publish(&self, program: Shared<Program>) -> Result<(), Box<EvalAltResult>> {
+        let mut wants = locked_write(&self.wants).ok_or_else(busy)?;
+        trim(&mut wants);
+        let functions = wants
+            .iter()
+            .map(|want| {
+                want.upgrade()
+                    .map(|want| check(&self.engine, &program, &want))
+                    .transpose()
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
+        *locked_write(&self.current).ok_or_else(busy)? =
+            Shared::new(Generation { program, functions });
+        Ok(())
+    }
+
     fn generation(&self) -> Result<Shared<Generation>, Box<EvalAltResult>> {
         locked_read(&self.current)
             .map(|current| current.clone())
@@ -622,5 +700,109 @@ mod tests {
         );
         let double = script.func::<(i64,), i64>("double").unwrap();
         assert_eq!(double.call(21).unwrap(), 42);
+    }
+
+    /// A file of its own for a test, removed when the test ends.
+    struct File(std::path::PathBuf);
+
+    impl File {
+        fn new(name: &str, text: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("rawr-script-{name}-{}.rs", std::process::id()));
+            std::fs::write(&path, text).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, text: &str) {
+            std::fs::write(&self.0, text).unwrap();
+        }
+    }
+
+    impl Drop for File {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn dropped_handles_give_their_slots_to_new_lookups() {
+        let file = File::new("slots", "fn double(x: i64) -> i64 { x * 2 }");
+        let script = Engine::new().load(&file.0).unwrap();
+        let kept = script.func::<(i64,), i64>("double").unwrap();
+        for _ in 0..1000 {
+            let double = script.func::<(i64,), i64>("double").unwrap();
+            assert_eq!(double.call(2).unwrap(), 4);
+        }
+        let lengths = |script: &Script| {
+            (
+                super::locked_read(&script.inner.wants).unwrap().len(),
+                script.inner.generation().unwrap().functions.len(),
+            )
+        };
+        assert_eq!(lengths(&script), (2, 2));
+
+        // A reload drops the dead handles at the end of the list.
+        file.write("fn double(x: i64) -> i64 { x + x }");
+        assert!(script.reload().unwrap());
+        assert_eq!(lengths(&script), (1, 1));
+        assert_eq!(kept.call(3).unwrap(), 6);
+    }
+
+    #[test]
+    fn reloading_a_refused_text_again_does_not_compile_it_again() {
+        let file = File::new("refused", "fn double(x: i64) -> i64 { x * 2 }");
+        let script = Engine::new().load(&file.0).unwrap();
+        let double = script.func::<(i64,), i64>("double").unwrap();
+        let refused = |script: &Script| {
+            let refused = script.inner.reloading.lock().unwrap();
+            refused.as_ref().map(|refused| refused.source.clone())
+        };
+
+        file.write("fn double(x: i64) -> i64 { x * }");
+        let first = error(script.reload());
+        let source = refused(&script).unwrap();
+        assert_eq!(error(script.reload()), first);
+        // The same text, not a second read and compile of it.
+        let again = refused(&script).unwrap();
+        assert!(std::ptr::eq(again.text(), source.text()));
+
+        // A program a live handle didn't match is kept too, and published
+        // once the handle is dropped.
+        file.write("fn double(x: f64) -> f64 { x * 2.0 }");
+        let mismatch = error(script.reload());
+        assert!(mismatch.contains("found `fn(f64) -> f64`"), "{mismatch}");
+        let source = refused(&script).unwrap();
+        assert_eq!(error(script.reload()), mismatch);
+        assert!(std::ptr::eq(
+            refused(&script).unwrap().text(),
+            source.text()
+        ));
+        drop(double);
+        assert!(script.reload().unwrap());
+        assert!(refused(&script).is_none());
+        let double = script.func::<(f64,), f64>("double").unwrap();
+        assert_eq!(double.call(1.5).unwrap(), 3.0);
+    }
+
+    #[cfg(feature = "sync")]
+    #[test]
+    fn a_reload_reads_the_file_only_once_it_holds_the_reload_lock() {
+        let file = File::new("threads", "fn version() -> i64 { 1 }");
+        let script = std::sync::Arc::new(Engine::new().load(&file.0).unwrap());
+        let version = script.func::<(), i64>("version").unwrap();
+
+        let held = script.inner.reloading.lock().unwrap();
+        file.write("fn version() -> i64 { 2 }");
+        let other = {
+            let script = script.clone();
+            std::thread::spawn(move || script.reload().map_err(|error| error.to_string()))
+        };
+        // The other thread's reload waits for the lock before it reads, so
+        // it reads this newer text, never the one written before it began.
+        file.write("fn version() -> i64 { 3 }");
+        drop(held);
+        assert_eq!(other.join().unwrap(), Ok(true));
+        assert_eq!(version.call().unwrap(), 3);
+        assert!(!script.reload().unwrap());
     }
 }
