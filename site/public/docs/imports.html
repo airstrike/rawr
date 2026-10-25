@@ -37,7 +37,7 @@
   <ol data-here>
     <li><a href="/docs/start">Start</a></li>
     <li><a href="/docs/run">Run</a></li>
-    <li><a href="/docs/imports" aria-current="page">Imports</a><ol class="secs"><li><a href="#install">Install rawr-import</a></li><li><a href="#project">Project setup</a></li><li><a href="#use">Use a dependency</a></li><li><a href="#native">Native modules</a></li><li><a href="#values">Imported values</a></li><li><a href="#gaps">Known gaps</a></li></ol></li>
+    <li><a href="/docs/imports" aria-current="page">Imports</a><ol class="secs"><li><a href="#install">Install rawr-import</a></li><li><a href="#project">Project setup</a></li><li><a href="#use">Use a dependency</a></li><li><a href="#native">Native modules</a></li><li><a href="#values">Imported values</a></li><li><a href="#generics">Generic items and your own types</a></li><li><a href="#gaps">Known gaps</a></li></ol></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
     <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
@@ -120,11 +120,18 @@ fn main() {
 <p>An imported type written without its defaulted type arguments takes their defaults. So palette&rsquo;s <code>Hsl</code> is <code>Hsl&lt;Srgb, f32&gt;</code>. A default that rawr cannot name, such as iced&rsquo;s renderer in <code>text_editor::Content</code>, still has to be written.</p>
 <p>A Rust function or method that returns a <code>Vec</code>, a slice or a tuple gives a rawr <code>Vec</code> or tuple. An immutable <code>static</code> of a slice or a number reads as its value, as <code>preset::ALL</code> does for <code>pub static ALL: &amp;[Preset] = &amp;[..]</code>. Rust functions still cannot take a <code>Vec</code>, a slice or a tuple from rawr.</p>
 <p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones.</p>
+<p>An imported value is dropped with its last owner in your code, as in Rust. A tokio channel closes once its last sender is gone.</p>
+
+<h2 id="generics">Generic items and your own types</h2>
+<p>A generic Rust function or method can take your own types, as <code>mpsc::channel::&lt;Job&gt;()</code> does with a struct from a marked file. rawr builds the item once in its runner at <code>rawr::Value</code>, which carries any of your values as they are. A value that comes back, as <code>recv</code> gives a <code>Job</code>, is checked against the type you named.</p>
+<p><code>rawr::Value</code> is <code>Send</code>, <code>Sync</code>, <code>Clone</code> and <code>Debug</code>. A bound it can&rsquo;t meet, such as <code>Default</code>, <code>Copy</code>, <code>Hash</code> or <code>Deserialize</code>, stops the build with an error that names the bound. Call such an item with a Rust type.</p>
+<p>A parameter <code>F: FnOnce() -&gt; R</code> takes a closure of yours, as <code>spawn_blocking</code> does. The closure runs with an evaluation of its own on whichever thread calls it. It can&rsquo;t use values of imported types there.</p>
+<p>An async method that borrows its receiver crosses too. <a href="/docs/run#async">Run</a> explains how its future holds the receiver.</p>
 
 <h2 id="gaps">Known gaps</h2>
 <ul>
   <li>A program that rawr-import runs exits with status 1 when it fails, a panic included. Rust would exit with 101.</li>
-  <li>rawr-import runs a program once. It doesn&rsquo;t watch for saves yet.</li>
+  <li>rawr-import restarts a program with an <code>async fn main</code> when you save. Any other program runs once.</li>
   <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/run">Previous<b>Run</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>

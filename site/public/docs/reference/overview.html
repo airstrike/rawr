@@ -63,7 +63,7 @@
 <ul>
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
   <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
-  <li><code>async</code> code runs in iced apps and in a <code>?play</code> program whose <code>main</code> is <code>async</code>.</li>
+  <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
   <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value. It <a href="#lenient">accepts some code rustc rejects</a>, so <code>rawr check</code> also runs <code>cargo check</code>.</li>
 </ul>
@@ -113,7 +113,8 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
-  <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code>.</li>
+  <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code> or under a runtime&rsquo;s attribute in a crate.</li>
+  <li><code>try_join!</code> and <code>select!</code> outside iced and <code>?play</code>.</li>
   <li>A <code>const</code> captured in a format string, as in <code>"{LIMIT}"</code>. Pass it as an argument instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>

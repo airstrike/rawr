@@ -123,7 +123,9 @@ fn shade(f: impl Fn(f32) -&gt; Color) -&gt; Color {
 let base = Color { r: 0.0, g: 1.0 };
 let c = shade(|r| Color { r, ..base });</code></pre></div>
 <h2 id="async">Async code</h2>
-<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. <a href="/docs/reference/iced#async">iced</a> describes how an app runs them. In <code>?play</code>, a program whose <code>main</code> is <code>async</code> runs the same way. <a href="/docs/reference/play#tokio">Play</a> lists its tokio. Other programs can&rsquo;t use <code>async</code> yet.</p>
+<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. <a href="/docs/reference/iced#async">iced</a> describes how an app runs them. In <code>?play</code>, a program whose <code>main</code> is <code>async</code> runs the same way. <a href="/docs/reference/play#tokio">Play</a> lists its tokio.</p>
+<p>A crate whose <code>main</code> is <code>#[tokio::main] async fn main</code>, or another runtime&rsquo;s <code>main</code>, runs on the runtime in its <code>Cargo.toml</code>. There, an <code>async</code> block or an <code>async fn</code> gives a Rust future, <code>.await</code> takes a future&rsquo;s output, and <code>join!</code> runs futures together. A closure you pass to <code>spawn_blocking</code> runs on a worker thread. <a href="/docs/run#async">Run</a> describes how.</p>
+<p>Other programs can&rsquo;t use <code>async</code> yet.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/moves">Previous<b>Moves</b></a><a class="next" href="/docs/reference/macros">Next<b>Macros</b></a></nav>
 </article>
 </main>

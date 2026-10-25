@@ -46,7 +46,7 @@
   </ol>
   <p class="grp" data-here>API Reference</p>
   <ol data-here>
-    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std" aria-current="page">std</a><ol class="secs"><li><a href="#string"><code>String</code> and <code>&amp;str</code></a></li><li><a href="#vec"><code>Vec</code> and slices</a></li><li><a href="#iterators">Iterators</a></li><li><a href="#arrays">Arrays</a></li><li><a href="#numbers">Numbers</a></li><li><a href="#time"><code>Duration</code> and <code>Instant</code></a></li><li><a href="#collections">Collections</a></li><li><a href="#refcell"><code>RefCell</code></a></li><li><a href="#mem"><code>std::mem</code> and <code>PhantomData</code></a></li><li><a href="#traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></a></li><li><a href="#conversions">Conversions</a></li><li><a href="#path-io"><code>path</code>, <code>ffi</code> and <code>io</code></a></li></ol></li></ol></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std" aria-current="page">std</a><ol class="secs"><li><a href="#string"><code>String</code> and <code>&amp;str</code></a></li><li><a href="#vec"><code>Vec</code> and slices</a></li><li><a href="#iterators">Iterators</a></li><li><a href="#arrays">Arrays</a></li><li><a href="#numbers">Numbers</a></li><li><a href="#time"><code>Duration</code> and <code>Instant</code></a></li><li><a href="#futures">Futures</a></li><li><a href="#collections">Collections</a></li><li><a href="#refcell"><code>RefCell</code></a></li><li><a href="#mem"><code>std::mem</code> and <code>PhantomData</code></a></li><li><a href="#traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></a></li><li><a href="#conversions">Conversions</a></li><li><a href="#path-io"><code>path</code>, <code>ffi</code> and <code>io</code></a></li></ol></li></ol></li>
     <li><a href="/docs/reference/iced">iced</a></li>
     <li><a href="/docs/reference/play">Play</a></li>
     <li><a href="/docs/reference/commands">Commands</a></li>
@@ -94,6 +94,13 @@ let start = Instant::now();
 let step = Duration::from_millis(500) * 3;
 println!("{step:?}"); // 1.5s
 let spent = start.elapsed();</code></pre></div>
+<h2 id="futures">Futures</h2>
+<p><code>std::future::Future</code> is the type of an <code>async</code> block and of an <code>async fn</code>&rsquo;s result, written <code>impl Future&lt;Output = T&gt;</code>. Outside iced, it is a Rust future that the crate&rsquo;s own runtime polls, as <a href="/docs/run#async">Run</a> describes. tokio&rsquo;s <code>join!</code> and the futures crate&rsquo;s <code>join!</code> run two to five futures together and give their outputs as a tuple.</p>
+<div class="block"><pre><code data-lang="rust">async fn double(n: u32) -&gt; u32 {
+    n * 2
+}
+
+let (a, b) = tokio::join!(double(1), double(2)); // (2, 4)</code></pre></div>
 <h2 id="collections">Collections</h2>
 <p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
 <div class="block"><pre><code data-lang="rust">use std::collections::HashMap;
