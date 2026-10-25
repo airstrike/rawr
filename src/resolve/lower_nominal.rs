@@ -10095,12 +10095,33 @@ impl<'a> Parser<'a> {
             .and_then(|definitions| {
                 definitions
                     .iter()
+                    .filter(|definition| self.trait_in_scope(definition))
                     .filter_map(|definition| Some((rank(definition)?, definition)))
                     .min_by_key(|(rank, _)| *rank)
             })
             .filter(|(rank, _)| *rank < inherent)
             .map(|(_, definition)| definition.clone())
             .or(found)
+    }
+
+    /// Whether the trait of `definition`, a trait impl's function, is in
+    /// scope where the method is called, as Rust's probe asks of a trait
+    /// method before an inherent one: declared in this module or imported
+    /// into it. A std trait counts as in scope.
+    fn trait_in_scope(&self, definition: &method::Definition) -> bool {
+        let Some(trait_name) = definition.trait_name() else {
+            return true;
+        };
+        if self.models.import(trait_name).is_some()
+            || self.models.std_traits.contains(trait_name.as_str())
+            || crate::resolve::builtin_trait(trait_name).is_some()
+        {
+            return true;
+        }
+        self.models
+            .traits
+            .get(trait_name.as_str())
+            .is_some_and(|(source, _)| *source == self.models.context)
     }
 
     /// The instances of the supertrait `parent` that `dyn sub<..>` has:

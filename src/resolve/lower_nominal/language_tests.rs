@@ -3002,6 +3002,44 @@ fn language_sized_as_a_supertrait_and_a_bound() {
 }
 
 #[test]
+fn language_an_inherent_method_before_a_trait_method_out_of_scope() {
+    // game_of_life's `self.grid.update(message)`: `Grid`'s inherent
+    // `update(&mut self, ..)`, as the trait with the other `update` is not
+    // in scope where it is called.
+    let source = r#"mod g {
+    pub struct G { pub n: i64 }
+    impl G { pub fn update(&mut self, x: i64) { self.n += x; } }
+    pub trait P { fn update(&self, a: i64, b: i64) -> i64; }
+    impl P for G { fn update(&self, a: i64, b: i64) -> i64 { a * b } }
+    pub fn both(g: &G) -> i64 { g.update(2, 3) }
+}
+
+use g::G;
+
+fn main() {
+    let mut s = G { n: 1 };
+    s.update(5);
+    println!("{} {}", s.n, g::both(&s));
+}
+"#;
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let unit = engine.parse_unit(source).unwrap();
+    let ast = engine
+        .compile_unit(
+            unit,
+            crate::diagnostic::Source::new("play.rs", source).unwrap(),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    engine
+        .call_fn::<()>(&mut crate::Scope::new(), &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "6 6\n");
+}
+
+#[test]
 fn language_generic_traits() {
     let value = run_string(
         r#"

@@ -135,6 +135,7 @@ println!("{} {}", p.x, p.y);</code></pre>
 </div>
 <h2 id="trait"><code>trait</code></h2>
 <p>Default methods, associated types and static functions. A trait can be implemented for your own types and for built-in types such as <code>i64</code>.</p>
+<p>A type can have an inherent method and a trait method of the same name. A call reaches the trait method before the inherent one only where the trait is declared or imported, as in rustc.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="traits.rs" id="src-traits">trait Describe {
     fn name(&amp;self) -&gt; String;
