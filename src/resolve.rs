@@ -1910,6 +1910,10 @@ fn resolve_item(
                 associated_bound_arguments: associated_bound_arguments.into_boxed_slice(),
                 supertraits: (supertrait_bounds, supertrait_names),
                 supertrait_arguments,
+                sized: parsed
+                    .supertraits
+                    .iter()
+                    .any(crate::parser::item::is_sized_trait),
                 generics: trait_generics,
                 declaration: None,
             })
@@ -3395,6 +3399,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             (crate::capability::Set::new(), Box::default())
         },
         supertrait_arguments: Box::default(),
+        sized: false,
         generics,
         declaration: None,
     })
@@ -4146,7 +4151,7 @@ fn resolve_bounds_with_arguments(
         // path. rawr does not prove a type's auto traits, so the bound is
         // accepted and asks nothing (an over-admission: an `Rc` passes
         // `T: Send`), as rustc reads it for every type that has them.
-        if crate::parser::item::is_auto_trait(bound) {
+        if crate::parser::item::is_auto_trait(bound) || crate::parser::item::is_sized_trait(bound) {
             continue;
         }
         // `Debug`, or `std::fmt::Debug` as Rust spells it in full.
@@ -4396,6 +4401,18 @@ pub(crate) fn dyn_incompatibility(
     // `Default` need `Self: Sized`, and `PartialEq`/`Eq` name `Self`.
     let name = &declared.name.text;
     let (bounds, supers) = &declared.supertraits;
+    if declared.sized {
+        return Some(Error::InvalidMethodSignature {
+            owner: name.clone(),
+            method: "Sized".into(),
+            reason: format!(
+                "the trait `{name}` is not dyn compatible, so `dyn {name}` is not a type: it \
+                 requires `Self: Sized` (E0038)"
+            )
+            .into(),
+            signature: span,
+        });
+    }
     if let Some(kind) = bounds.iter().find(|kind| {
         matches!(
             kind,

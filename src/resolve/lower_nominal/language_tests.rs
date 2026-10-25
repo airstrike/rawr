@@ -2965,6 +2965,43 @@ fn language_supertraits() {
 }
 
 #[test]
+fn language_sized_as_a_supertrait_and_a_bound() {
+    let value = run(r#"
+        trait Space: Sized {
+            const LABEL: i64;
+            fn new(a: i64) -> Self;
+            fn parts(&self) -> [i64; 2];
+        }
+        trait Named: std::marker::Sized + Space { fn name(&self) -> i64 { self.parts()[1] } }
+        #[derive(Clone, Copy)]
+        struct P { a: i64 }
+        impl Space for P {
+            const LABEL: i64 = 100;
+            fn new(a: i64) -> Self { P { a } }
+            fn parts(&self) -> [i64; 2] { [self.a, self.a * 2] }
+        }
+        impl Named for P {}
+        fn make<C: Space + Copy>(a: i64) -> i64 { let [x, y] = C::new(a).parts(); C::LABEL + x + y }
+        fn sized<T: Sized + Named>(t: T) -> i64 { t.name() }
+        fn core<T>(t: T) -> i64 where T: core::marker::Sized + Space { t.parts()[0] }
+        pub fn run() -> i64 { make::<P>(3) + sized(P { a: 5 }) + core(P { a: 7 }) }
+        run()
+    "#);
+    assert_eq!(value, 100 + 3 + 6 + 10 + 7);
+    // `Self: Sized` makes the trait dyn incompatible (E0038).
+    let object = rejected(
+        "trait Space: Sized { fn a(&self) -> i64; } fn f(s: &dyn Space) -> i64 { 0 } \
+         pub fn run() -> i64 { 0 } run()",
+    );
+    assert!(object.contains("dyn compatible"), "{object}");
+    let inherited = rejected(
+        "trait Space: Sized { fn a(&self) -> i64; } trait Named: Space {} \
+         fn f(s: &dyn Named) -> i64 { 0 } pub fn run() -> i64 { 0 } run()",
+    );
+    assert!(inherited.contains("dyn compatible"), "{inherited}");
+}
+
+#[test]
 fn language_generic_traits() {
     let value = run_string(
         r#"
