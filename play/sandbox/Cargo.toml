@@ -1,0 +1,21 @@
+[package]
+name = "rawr-play-sandbox"
+version = "0.1.0"
+rust-version = "1.95.0"
+edition = "2024"
+publish = false
+description = "What a ?play snippet reaches beyond iced: rand, tracing_subscriber and the bundled files of the playground's examples, shared by the ?play server and the browser"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rawr = { path = "../..", features = ["sync"] }
+# rand's own generator and sampling. A snippet's `rand::rng()` is a
+# `StdRng` the host seeds, so a render can repeat its frames.
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
+# `tracing_subscriber::fmt::init()`: iced's events, written where the host
+# says (the browser's console, or nowhere for a server render).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "tracing-log"] }
+
+[dev-dependencies]
+sha2 = "0.10"

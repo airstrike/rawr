@@ -9789,3 +9789,33 @@ fn language_unit_pattern_matches_the_unit_value() {
     "#);
     assert_eq!(value, 12);
 }
+
+#[test]
+fn language_float_exclusive_range_is_a_value() {
+    // `a..b` of floats is Rust's `Range<f32>` or `Range<f64>`, a value
+    // rand's `random_range` takes; integer ranges still iterate.
+    let value = run(r#"
+        fn half(width: f32) -> i64 {
+            let _stars = (-width / 2.0)..(width / 2.0);
+            1
+        }
+        pub fn run() -> i64 {
+            let _size = 0.5..1.0;
+            let mut n = half(1024.0);
+            for i in 0..4 {
+                n += i;
+            }
+            n
+        }
+        run()
+    "#);
+    assert_eq!(value, 7);
+    let range = Engine::new()
+        .eval::<crate::Dynamic>("pub fn run() -> i64 { 0 } let r = 0.5..1.5; r")
+        .unwrap();
+    assert_eq!(
+        range.try_cast::<std::ops::Range<crate::FLOAT>>(),
+        Some(0.5..1.5)
+    );
+    rejected("pub fn run() -> i64 { let _r = 0.5..1; 0 } run()");
+}

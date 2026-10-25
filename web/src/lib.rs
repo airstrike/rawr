@@ -309,7 +309,13 @@ fn wakes() -> impl iced::futures::Stream<Item = ()> {
 
 /// A program checked and booted, or its report against the snippet.
 fn compile(program: &str, source: &str) -> Result<Adapter, String> {
-    let compiler = rawr_iced::application::Compiler::new().map_err(|error| error.to_string())?;
+    sandbox();
+    // rand, tracing_subscriber and the examples' shipped files, as the
+    // server gives a snippet.
+    let compiler = rawr_iced::application::Compiler::configured(|engine| {
+        rawr_play_sandbox::install(engine).expect("the sandbox's facades install");
+    })
+    .map_err(|error| error.to_string())?;
     // An inline `mod` needs the crate compiler, which reads the one file
     // as a crate's root.
     let checked = if rawr_snippet::has_top_level_mod(program) {
@@ -318,13 +324,30 @@ fn compile(program: &str, source: &str) -> Result<Adapter, String> {
         compiler.check_named_source(rawr_snippet::SOURCE_NAME, program)
     };
     checked
-        .and_then(rawr_iced::application::Checked::prepare)
+        .and_then(|checked| {
+            checked.prepare_with(
+                rawr_play_sandbox::runtime_facades()
+                    .expect("the sandbox's runtime facades bind every item"),
+            )
+        })
         .map(rawr_iced::application::Prepared::into_adapter)
         .map_err(|error| {
             let evidence = rawr::diagnostic::Source::new(rawr_snippet::SOURCE_NAME, program).ok();
             let report = rawr::diagnostic::render(&error.report(evidence));
             rawr_snippet::report(&report, program, source)
         })
+}
+
+/// The page's sandbox, once: rand seeded from the page, as `rand::rng()`
+/// is seeded from the system, and tracing's lines in the console.
+fn sandbox() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let seed = (js_sys::Math::random() * f64::from(u32::MAX)) as u64
+            ^ ((js_sys::Math::random() * f64::from(u32::MAX)) as u64) << 32;
+        rawr_play_sandbox::rand::seed(seed);
+        rawr_play_sandbox::tracing::write_to(log);
+    });
 }
 
 fn now() -> f64 {

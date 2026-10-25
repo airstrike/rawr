@@ -691,9 +691,9 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
         convert::Type::ProfileMessage { mapper, payload } => {
             *mapper != [0; 16] && concrete(payload, depth + 1)
         }
-        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
-            concrete(element, depth + 1)
-        }
+        convert::Type::Option(element)
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => concrete(element, depth + 1),
         convert::Type::Result(ok, err) => concrete(ok, depth + 1) && concrete(err, depth + 1),
         convert::Type::Tuple(members) => members.iter().all(|ty| concrete(ty, depth + 1)),
         convert::Type::Unit | convert::Type::Builtin(_) => true,

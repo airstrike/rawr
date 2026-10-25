@@ -21,6 +21,8 @@ rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
 # How a snippet becomes a program, shared with rawr-web.
 rawr-snippet = { path = "snippet" }
+# rand, tracing_subscriber and the examples' assets, shared with rawr-web.
+rawr-play-sandbox = { path = "sandbox" }
 # An animated render, as a GIF.
 color_quant = "1.1"
 gif = "0.13"

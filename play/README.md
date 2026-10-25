@@ -272,6 +272,19 @@ functions, and `render_png` touches no files. Untyped functions
 `print`, `debug`, `eval` and `import`, installs a module resolver that loads
 nothing, and replaces `sleep` with an error.
 
+A snippet reads no file. The one exception is the playground examples'
+own files, which `play/sandbox` (`rawr-play-sandbox`) ships inside the
+renderer and inside rawr-web, each pinned by its SHA-256. `include_bytes!`
+of exactly one of their paths (`../assets/sun.png` and the others of iced's
+`solar_system`) reads the shipped copy from a module the Engine holds, and
+any other path still fails. A shipped file's own bytes are left out of the
+array limit, so the 113 KB sun loads, and anything added to them counts. The same crate gives a snippet the parts of
+rand and tracing-subscriber that iced's examples use: `rand::rng()` is
+rand's own `StdRng`, seeded the same for every render as the clock is
+frozen the same, so a snippet's frames repeat. `tracing_subscriber::fmt::init()`
+installs tracing-subscriber's `fmt` subscriber, whose lines go nowhere in a
+render and to the console in the browser.
+
 ## Run locally
 
 With the token in `~/.config/rawr-play/token` (or `DISCORD_TOKEN`), and

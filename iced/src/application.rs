@@ -263,6 +263,16 @@ impl Checked {
 
     /// Bind this checked application to the canonical native iced runtime.
     pub fn prepare(self) -> Result<Prepared, Error> {
+        self.prepare_with(Vec::new())
+    }
+
+    /// [`prepare`](Self::prepare), with the runtime bindings of facades the
+    /// host registered on its compiler's Engine beside iced's, as `?play`
+    /// gives a snippet its rand.
+    pub fn prepare_with(
+        self,
+        facades: impl IntoIterator<Item = host::runtime::Facade>,
+    ) -> Result<Prepared, Error> {
         let source = self.source;
         let launch = self
             .engine
@@ -270,6 +280,9 @@ impl Checked {
             .map_err(Error::Launch)?;
         let mut registry = host::runtime::Registry::new();
         for facade in crate::runtime_facades().map_err(Error::RuntimeFacade)? {
+            registry.install(facade).map_err(Error::RuntimeBinding)?;
+        }
+        for facade in facades {
             registry.install(facade).map_err(Error::RuntimeBinding)?;
         }
         let launch = launch.bind(registry).map_err(Error::RuntimeBinding)?;

@@ -8,6 +8,8 @@ use rawr::{application, host, program, timing, Dynamic};
 use crate::{diagnostic, effect, home, runtime, subscription, task, theme, widget};
 
 #[cfg(test)]
+mod backend_tests;
+#[cfg(test)]
 mod borrowed_tests;
 #[cfg(test)]
 mod carry_tests;

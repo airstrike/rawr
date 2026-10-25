@@ -383,6 +383,12 @@ fn imported_surface_type(
             Int::Usize => Builtin::Usize,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::Range(element) => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Range(Box::new(imported_surface_type(
+                inference, element, operation, imported,
+            )?))
+        }
         Ty::String | Ty::Str => Type::Builtin(Builtin::String),
         Ty::ProfileMessage { payload, seal, .. } => {
             // The mapper is inline in the outer Type; its payload owns one
@@ -482,6 +488,7 @@ fn instance_surface_type(
             Int::Usize => Builtin::Usize,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::Range(element) => Type::Range(Box::new(instance_surface_type(inference, element)?)),
         Ty::String | Ty::Str => Type::Builtin(Builtin::String),
         Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
             mapper: *seal,
@@ -2792,6 +2799,7 @@ impl Models {
             | Ty::Result(..)
             | Ty::InclusiveRange
             | Ty::FloatRange
+            | Ty::Range(_)
             | Ty::Ordering
             | Ty::Time(_)
             | Ty::ParseError(_)
@@ -6022,6 +6030,10 @@ enum Ty {
     InclusiveRange,
     /// `a..=b` of floats: Rust's `RangeInclusive<f64>`, bounds only.
     FloatRange,
+    /// `a..b` of floats: Rust's `Range<T>` as a value, which an imported
+    /// generic item takes as rand's `random_range` does. A `Range<f64>` at
+    /// runtime.
+    Range(Box<Ty>),
     /// `std::cmp::Ordering`: an `i64` at runtime, its Rust discriminant
     /// (`Less` -1, `Equal` 0, `Greater` 1), so `==` and `<` are the integers'.
     Ordering,
@@ -6119,6 +6131,7 @@ impl Ty {
             | Self::Boxed(_, target)
             | Self::Iter(target)
             | Self::Reverse(target)
+            | Self::Range(target)
             | Self::Cell(target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
@@ -6357,6 +6370,7 @@ impl Ty {
             Self::Str => "&str".into(),
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
+            Self::Range(element) => format!("Range<{}>", element.name(models)).into(),
             Self::Ordering => "Ordering".into(),
             Self::Time(time) => time.name().into(),
             Self::ParseError(error) => error.name().into(),
@@ -6505,6 +6519,7 @@ impl Ty {
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
+            Self::Range(_) => Some(TypeId::of::<std::ops::Range<crate::FLOAT>>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
@@ -6631,6 +6646,7 @@ impl Ty {
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
+            | Self::Range(_)
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
@@ -6821,6 +6837,7 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
+            | (Ty::Range(left), Ty::Range(right))
             | (Ty::Cell(left), Ty::Cell(right)) => compare(left, right, forward, reverse),
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
@@ -7058,6 +7075,7 @@ impl Inference {
             Ty::Boxed(pointer, target) => Ty::Boxed(*pointer, Box::new(self.resolve(target))),
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
+            Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::Cell(inner) => Ty::Cell(Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
@@ -8052,6 +8070,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         }
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
+        Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
         Ty::Cell(inner) => Ty::Cell(Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
@@ -13452,6 +13471,10 @@ impl<'a> Parser<'a> {
                     || crate::capability::builtin_supports("String", capability)
             }
             Ty::InclusiveRange | Ty::FloatRange => false,
+            // `Range<T>` derives from `T`, but is never `Copy`.
+            Ty::Range(element) => {
+                capability != capability::Kind::Copy && self.type_provides(&element, capability)
+            }
             // `ParseIntError` and kin: `Debug`, `Clone`, `PartialEq`, `Eq`.
             Ty::ParseError(_) => matches!(
                 capability,
@@ -13645,6 +13668,10 @@ impl<'a> Parser<'a> {
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
+            Ty::Range(_) => intrinsic::Type::builtin(
+                "Range<f64>",
+                TypeId::of::<std::ops::Range<crate::FLOAT>>(),
+            ),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
@@ -14529,6 +14556,9 @@ impl<'a> Parser<'a> {
             item_owner.as_ref(),
             output_origin,
         )?;
+        if let Some(arguments) = arguments {
+            self.apply_relations(item, arguments, &mut parameters)?;
+        }
         let requirements = item
             .signature()
             .type_parameters()
@@ -14544,6 +14574,131 @@ impl<'a> Parser<'a> {
             inputs,
             output,
             requirements,
+        })
+    }
+
+    /// What an imported item's bounds tie between its type parameters. rand's
+    /// `random_range<T, R>(range: R) -> T` has `R: SampleRange<T>`, which rand
+    /// implements for `Range<T>`: an argument `0.5..1.0` fills `R` with a
+    /// range of floats, and `T` is that float, as rustc's trait selection
+    /// infers it. Only a bound whose argument matches exactly one
+    /// implementation ties anything.
+    fn apply_relations(
+        &mut self,
+        item: &crate::host::item::Definition,
+        arguments: &[ParsedExpr],
+        parameters: &mut BTreeMap<ImmutableString, Ty>,
+    ) -> Result<(), Error> {
+        let signature = item.signature();
+        for relation in signature.relations() {
+            let Some(argument) =
+                signature
+                    .parameters()
+                    .iter()
+                    .zip(arguments)
+                    .find_map(|(declared, argument)| match declared.shape() {
+                        crate::host::type_ref::Shape::Parameter(name)
+                            if name.to_string() == relation.parameter() =>
+                        {
+                            Some(argument)
+                        }
+                        _ => None,
+                    })
+            else {
+                continue;
+            };
+            let actual = self.inference.resolve(&argument.ty);
+            let mut matched = None;
+            let mut ambiguous = false;
+            for case in relation.cases() {
+                let mut bindings = BTreeMap::new();
+                if self.pattern_matches(case.this(), &actual, &mut bindings) {
+                    ambiguous |= matched.is_some();
+                    matched = Some((case, bindings));
+                }
+            }
+            let (Some((case, mut bindings)), false) = (matched, ambiguous) else {
+                continue;
+            };
+            let item_path = item.path();
+            for (implemented, declared) in case.arguments().iter().zip(relation.arguments()) {
+                let implemented =
+                    self.pattern_type(implemented, &mut bindings, parameters, &item_path)?;
+                let declared =
+                    self.pattern_type(declared, &mut BTreeMap::new(), parameters, &item_path)?;
+                // A mismatch is rustc's to report where it compiles the call.
+                let _ = self.unify_type(&declared, &implemented);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `ty` is a type of `pattern`, binding its variables.
+    fn pattern_matches(
+        &self,
+        pattern: &crate::host::signature::Pattern,
+        ty: &Ty,
+        bindings: &mut BTreeMap<u32, Ty>,
+    ) -> bool {
+        use crate::host::signature::Pattern;
+        let ty = self.inference.resolve(ty);
+        match (pattern, &ty) {
+            (Pattern::Variable(index), _) => match bindings.get(index) {
+                Some(bound) => *bound == ty,
+                None => {
+                    bindings.insert(*index, ty);
+                    true
+                }
+            },
+            (Pattern::Unit, Ty::Unit) => true,
+            (Pattern::Range(element), Ty::Range(actual))
+            | (Pattern::Option(element), Ty::Option(actual)) => {
+                self.pattern_matches(element, actual, bindings)
+            }
+            (Pattern::Builtin(builtin), _) => builtin
+                .name()
+                .is_some_and(|name| ty.name(&self.models) == name),
+            _ => false,
+        }
+    }
+
+    /// The type `pattern` names, its variables from `bindings` (a fresh one
+    /// for an unbound variable) and the item's parameters from `parameters`.
+    fn pattern_type(
+        &mut self,
+        pattern: &crate::host::signature::Pattern,
+        bindings: &mut BTreeMap<u32, Ty>,
+        parameters: &mut BTreeMap<ImmutableString, Ty>,
+        operation: &str,
+    ) -> Result<Ty, Error> {
+        use crate::host::signature::Pattern;
+        Ok(match pattern {
+            Pattern::Parameter(name) => parameters
+                .entry(name.clone())
+                .or_insert_with(|| self.inference.fresh())
+                .clone(),
+            Pattern::Variable(index) => match bindings.get(index) {
+                Some(ty) => ty.clone(),
+                None => {
+                    let ty = self.inference.fresh();
+                    bindings.insert(*index, ty.clone());
+                    ty
+                }
+            },
+            Pattern::Unit => Ty::Unit,
+            Pattern::Builtin(builtin) => self.instantiate_host_type(
+                &crate::host::type_ref::Type::builtin(*builtin),
+                parameters,
+                operation,
+                None,
+                None,
+            )?,
+            Pattern::Range(element) => Ty::Range(Box::new(
+                self.pattern_type(element, bindings, parameters, operation)?,
+            )),
+            Pattern::Option(element) => Ty::Option(Box::new(
+                self.pattern_type(element, bindings, parameters, operation)?,
+            )),
         })
     }
 
@@ -14832,6 +14987,13 @@ impl<'a> Parser<'a> {
                 originating,
             )?)),
             Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
+                element,
+                parameters,
+                operation,
+                owner,
+                originating,
+            )?)),
+            Shape::Range(element) => Ty::Range(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
                 operation,
@@ -24298,6 +24460,16 @@ impl<'a> Parser<'a> {
         {
             self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
             return Ok(self.binary(lhs, "..=", rhs.clone(), Ty::FloatRange));
+        }
+        // `0.5..1.0`: Rust's `Range<f32>` or `Range<f64>`, a value of two
+        // bounds that an imported generic item such as `random_range` takes.
+        if !inclusive
+            && let Some(rhs) = &rhs
+            && matches!(self.inference.resolve(&lhs.ty), Ty::Float(_))
+        {
+            self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            let element = Box::new(lhs.ty.clone());
+            return Ok(self.binary(lhs, "..", rhs.clone(), Ty::Range(element)));
         }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
         let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
@@ -35340,6 +35512,19 @@ impl<'a> Parser<'a> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
         if name == "include_bytes" {
+            // A file the host ships is read from its bundle's module, as the
+            // constant the host built once: its bytes are the program's, as
+            // its text is, and no array literal of them is parsed.
+            if let Some((index, bytes)) = crate::resolve::bundled(&text) {
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(Ty::Array {
+                        element: Box::new(Ty::Int(Int::U8)),
+                        length: Some(bytes.len()),
+                    }),
+                };
+                return Ok(self.literal(crate::resolve::bundled_constant(index), ty, at));
+            }
             let bytes = self.include(name, &text, at)?;
             return Ok(self.byte_literal(&bytes, at));
         }
@@ -35573,6 +35758,11 @@ impl<'a> Parser<'a> {
             reason: reason.into(),
             operation: at,
         };
+        // A file the host ships with its programs, as `?play` ships its
+        // examples' assets.
+        if let Some((_, bytes)) = crate::resolve::bundled(path) {
+            return Ok(bytes.to_vec());
+        }
         if let Some(reason) = crate::resolve::files_denied() {
             return Err(error(reason.into()));
         }
@@ -39430,6 +39620,7 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
+            | (Ty::Range(expected_element), Ty::Range(actual_element))
             | (Ty::Cell(expected_element), Ty::Cell(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
             }
@@ -40385,6 +40576,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Boxed(_, target)
         | Ty::Iter(target)
         | Ty::Reverse(target)
+        | Ty::Range(target)
         | Ty::Cell(target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),

@@ -108,6 +108,8 @@ pub(crate) enum Shape {
     /// An iterator of `T` (`impl Iterator<Item = T>`): the array of its
     /// items at runtime, made when the call returns.
     Iter(Box<Type>),
+    /// Rust's `std::ops::Range<T>` of a float: a `Range<f64>` at runtime.
+    Range(Box<Type>),
     /// Rust's `Result<T, E>`, Rawr's builtin generic enum.
     Result(Box<Type>, Box<Type>),
     Callable {
@@ -171,9 +173,10 @@ impl Type {
             Shape::Imported {
                 arguments: values, ..
             } => types(values, profile),
-            Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
-                element.normalize_profile(profile)
-            }
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Iter(element)
+            | Shape::Range(element) => element.normalize_profile(profile),
             Shape::Result(ok, err) => ok
                 .normalize_profile(profile)
                 .saturating_add(err.normalize_profile(profile)),
@@ -213,9 +216,10 @@ impl Type {
                 Shape::Imported {
                     arguments: types, ..
                 } => types.iter().any(contains),
-                Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
-                    contains(element)
-                }
+                Shape::Array { element, .. }
+                | Shape::Option(element)
+                | Shape::Iter(element)
+                | Shape::Range(element) => contains(element),
                 Shape::Result(ok, err) => contains(ok) || contains(err),
                 Shape::Callable { input, output } => contains(input) || contains(output),
                 #[cfg(feature = "rust-import")]
@@ -233,6 +237,7 @@ impl Type {
             Shape::Tuple(types) if types.iter().any(contains) => Some("tuple"),
             Shape::Array { element, .. } if contains(element) => Some("array"),
             Shape::Iter(element) if contains(element) => Some("iterator"),
+            Shape::Range(element) if contains(element) => Some("range"),
             Shape::Option(element) if contains(element) => Some("option"),
             Shape::Result(ok, err) if contains(ok) || contains(err) => Some("result"),
             Shape::Callable { input, output } if contains(input) || contains(output) => {
@@ -259,6 +264,7 @@ impl Type {
             | Shape::Array { .. }
             | Shape::Option(_)
             | Shape::Iter(_)
+            | Shape::Range(_)
             | Shape::Result(..)
             | Shape::Callable { .. }
             | Shape::Builtin(_)
@@ -286,9 +292,10 @@ impl Type {
 
         match &self.0 {
             Shape::Unit | Shape::Builtin(_) => Some(0),
-            Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
-                element.retained_bytes()
-            }
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Iter(element)
+            | Shape::Range(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_add(err.retained_bytes()?)),
@@ -340,6 +347,7 @@ impl Type {
             },
             Shape::Option(element) => Shape::Option(Box::new(element.try_clone()?)),
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
+            Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
                 Shape::Result(Box::new(ok.try_clone()?), Box::new(err.try_clone()?))
             }
@@ -423,6 +431,13 @@ impl Type {
     #[must_use]
     pub fn iterator(element: Self) -> Self {
         Self(Shape::Iter(Box::new(element)))
+    }
+
+    /// Construct Rust's `std::ops::Range<element>` of a float, a
+    /// `Range<f64>` at runtime.
+    #[must_use]
+    pub fn range(element: Self) -> Self {
+        Self(Shape::Range(Box::new(element)))
     }
 
     /// Construct Rust's `Result<ok, err>`, a Rawr result at runtime.
@@ -563,6 +578,9 @@ impl Type {
                 element.resolve(root, types, supports, parameters, _imported, item)?,
             )),
             Shape::Iter(element) => Ok(Self::iterator(
+                element.resolve(root, types, supports, parameters, _imported, item)?,
+            )),
+            Shape::Range(element) => Ok(Self::range(
                 element.resolve(root, types, supports, parameters, _imported, item)?,
             )),
             Shape::Result(ok, err) => Ok(Self::result(
@@ -711,7 +729,10 @@ impl Type {
                     )?;
                 }
             }
-            Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Iter(element)
+            | Shape::Range(element) => {
                 element.resolve_imported(
                     root, types, supports, parameters, imported, item, allocation,
                 )?;
@@ -847,7 +868,10 @@ impl Type {
                     member.collect_exports(exports);
                 }
             }
-            Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Iter(element)
+            | Shape::Range(element) => {
                 element.collect_exports(exports);
             }
             Shape::Result(ok, err) => {
@@ -894,7 +918,10 @@ impl Type {
                     member.collect_support_exports(exports);
                 }
             }
-            Shape::Array { element, .. } | Shape::Option(element) | Shape::Iter(element) => {
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Iter(element)
+            | Shape::Range(element) => {
                 element.collect_support_exports(exports);
             }
             Shape::Result(ok, err) => {
@@ -984,6 +1011,10 @@ impl crate::preview::digest::Write for Type {
             }
             Shape::Iter(element) => {
                 writer.tag(0x230e);
+                element.write(writer)?;
+            }
+            Shape::Range(element) => {
+                writer.tag(0x2313);
                 element.write(writer)?;
             }
             Shape::Result(ok, err) => {

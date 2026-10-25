@@ -1,0 +1,250 @@
+//! An animated solar system.
+//!
+//! This example showcases how to use a `Canvas` widget with transforms to draw
+//! using different coordinate systems.
+//!
+//! Inspired by the example found in the MDN docs[1].
+//!
+//! [1]: https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Basic_animations#An_animated_solar_system
+use iced::backend;
+use iced::mouse;
+use iced::widget::canvas::stroke::{self, Stroke};
+use iced::widget::canvas::{Geometry, Path};
+use iced::widget::{canvas, column, container, image, pick_list, stack, text};
+use iced::window;
+use iced::{
+    Backend, Color, Fill, Font, Point, Rectangle, Renderer, Right, Size, Subscription, Task, Theme,
+    Vector, Widget, color,
+};
+
+use std::time::Instant;
+
+pub fn main() -> iced::Result {
+    tracing_subscriber::fmt::init();
+
+    iced::application::timed(
+        SolarSystem::new,
+        SolarSystem::update,
+        SolarSystem::subscription,
+        SolarSystem::view,
+    )
+    .theme(SolarSystem::theme)
+    .run()
+}
+
+struct SolarSystem {
+    state: State,
+    backend: Backend,
+    error: Option<backend::Error>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Tick,
+    BackendSelected(Backend),
+    BackendConfigured(Backend, Result<(), backend::Error>),
+}
+
+impl SolarSystem {
+    fn new() -> Self {
+        Self {
+            state: State::new(),
+            backend: Backend::default(),
+            error: None,
+        }
+    }
+
+    fn update(&mut self, message: Message, now: Instant) -> Task<Message> {
+        match message {
+            Message::Tick => {
+                self.state.update(now);
+
+                Task::none()
+            }
+            Message::BackendSelected(backend) => {
+                self.error = None;
+
+                backend::configure(backend::Settings {
+                    backend: backend.clone(),
+                    ..backend::Settings::default()
+                })
+                .map(move |result| Message::BackendConfigured(backend.clone(), result))
+            }
+            Message::BackendConfigured(backend, Ok(())) => {
+                self.backend = backend;
+
+                Task::none()
+            }
+            Message::BackendConfigured(_backend, Err(error)) => {
+                self.error = Some(error);
+
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let solar_system = canvas(&self.state).width(Fill).height(Fill);
+
+        let backend = {
+            let error = self.error.as_ref().map(|error| {
+                text!("{error}")
+                    .color(color!(0xff0000))
+                    .font(Font::MONOSPACE)
+                    .size(12)
+            });
+
+            column![
+                error,
+                pick_list(Some(&self.backend), Backend::ALL, Backend::to_string)
+                    .on_select(Message::BackendSelected,)
+            ]
+            .align_x(Right)
+            .spacing(10)
+        };
+
+        stack![
+            solar_system,
+            container(backend)
+                .align_right(Fill)
+                .align_bottom(Fill)
+                .padding(10)
+        ]
+    }
+
+    fn theme(&self) -> Theme {
+        Theme::Moonfly
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        window::frames().map(|_| Message::Tick)
+    }
+}
+
+#[derive(Debug)]
+struct State {
+    sun: image::Handle,
+    earth: image::Handle,
+    moon: image::Handle,
+    space_cache: canvas::Cache,
+    system_cache: canvas::Cache,
+    start: Instant,
+    now: Instant,
+    stars: Vec<(Point, f32)>,
+}
+
+impl State {
+    const SUN_RADIUS: f32 = 70.0;
+    const ORBIT_RADIUS: f32 = 150.0;
+    const EARTH_RADIUS: f32 = 12.0;
+    const MOON_RADIUS: f32 = 4.0;
+    const MOON_DISTANCE: f32 = 28.0;
+
+    pub fn new() -> State {
+        let now = Instant::now();
+        let size = window::Settings::default().size;
+
+        State {
+            sun: image::Handle::from_bytes(include_bytes!("../assets/sun.png").as_slice()),
+            earth: image::Handle::from_bytes(include_bytes!("../assets/earth.png").as_slice()),
+            moon: image::Handle::from_bytes(include_bytes!("../assets/moon.png").as_slice()),
+            space_cache: canvas::Cache::default(),
+            system_cache: canvas::Cache::default(),
+            start: now,
+            now,
+            stars: Self::generate_stars(size.width, size.height),
+        }
+    }
+
+    pub fn update(&mut self, now: Instant) {
+        self.start = self.start.min(now);
+        self.now = now;
+        self.system_cache.clear();
+    }
+
+    fn generate_stars(width: f32, height: f32) -> Vec<(Point, f32)> {
+        use rand::RngExt;
+
+        let mut rng = rand::rng();
+
+        (0..100)
+            .map(|_| {
+                (
+                    Point::new(
+                        rng.random_range((-width / 2.0)..(width / 2.0)),
+                        rng.random_range((-height / 2.0)..(height / 2.0)),
+                    ),
+                    rng.random_range(0.5..1.0),
+                )
+            })
+            .collect()
+    }
+}
+
+impl<Message> canvas::Program<Message> for State {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        use std::f32::consts::PI;
+
+        let background = self.space_cache.draw(renderer, bounds.size(), |frame| {
+            frame.fill_rectangle(Point::ORIGIN, frame.size(), Color::BLACK);
+
+            let stars = Path::new(|path| {
+                for (p, size) in &self.stars {
+                    path.rectangle(*p, Size::new(*size, *size));
+                }
+            });
+
+            frame.translate(frame.center() - Point::ORIGIN);
+            frame.fill(&stars, Color::WHITE);
+        });
+
+        let system = self.system_cache.draw(renderer, bounds.size(), |frame| {
+            let center = frame.center();
+            frame.translate(Vector::new(center.x, center.y));
+
+            frame.draw_image(Rectangle::with_radius(Self::SUN_RADIUS), &self.sun);
+
+            let orbit = Path::circle(Point::ORIGIN, Self::ORBIT_RADIUS);
+            frame.stroke(
+                &orbit,
+                Stroke {
+                    style: stroke::Style::Solid(Color::WHITE.scale_alpha(0.1)),
+                    width: 1.0,
+                    line_dash: canvas::LineDash {
+                        offset: 0,
+                        segments: &[3.0, 6.0],
+                    },
+                    ..Stroke::default()
+                },
+            );
+
+            let elapsed = self.now - self.start;
+            let rotation = (2.0 * PI / 60.0) * elapsed.as_secs() as f32
+                + (2.0 * PI / 60_000.0) * elapsed.subsec_millis() as f32;
+
+            frame.rotate(rotation);
+            frame.translate(Vector::new(Self::ORBIT_RADIUS, 0.0));
+
+            frame.draw_image(
+                Rectangle::with_radius(Self::EARTH_RADIUS),
+                canvas::Image::new(&self.earth).rotation(-rotation * 20.0),
+            );
+
+            frame.rotate(rotation * 10.0);
+            frame.translate(Vector::new(0.0, Self::MOON_DISTANCE));
+
+            frame.draw_image(Rectangle::with_radius(Self::MOON_RADIUS), &self.moon);
+        });
+
+        vec![background, system]
+    }
+}

@@ -2748,6 +2748,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // parameters (for example `Wrapper<T>` or `&T`) remain eligible.
         match obligation.self_ty.kind() {
             ty::Param(parameter) if selected => {
+                self.request_relation_implementations(obligation)?;
                 return self.process_scalar_predicate_obligation(obligation, *parameter);
             }
             ty::Param(_) | ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
@@ -2834,6 +2835,48 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             return Err("trait obligation candidate cache identity collision".to_owned());
         }
         result
+    }
+
+    /// A selected item's bound `R: Trait<T>` that ties its parameter to
+    /// another: the trait's implementations, so the classifier can read
+    /// which self types give which trait arguments. rand's `random_range`
+    /// has `R: SampleRange<T>`, implemented for `Range<T>`. Only a trait
+    /// outside the sysroot with at most [`RELATION_IMPLEMENTATIONS`]
+    /// implementations is read.
+    fn request_relation_implementations(
+        &mut self,
+        obligation: TraitObligation<'tcx>,
+    ) -> Result<(), String> {
+        /// More implementations than this are not read.
+        const RELATION_IMPLEMENTATIONS: usize = 64;
+        if obligation.polarity != ty::PredicatePolarity::Positive
+            || obligation.associated.is_some()
+            || obligation.arguments.len() < 2
+            || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
+            || self.is_sysroot_crate(obligation.trait_id.krate)?
+        {
+            return Ok(());
+        }
+        let mut implementations = Vec::new();
+        for impl_id in self.tcx.all_impls(obligation.trait_id) {
+            if implementations.len() == RELATION_IMPLEMENTATIONS {
+                return Ok(());
+            }
+            self.budget.edge(1)?;
+            implementations
+                .try_reserve(1)
+                .map_err(|error| format!("relation implementation allocation failed: {error}"))?;
+            implementations.push(impl_id);
+        }
+        implementations.sort_unstable_by_key(|impl_id| {
+            self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+        });
+        for impl_id in implementations {
+            if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
+                self.request_implementation(impl_id, obligation.relevance, None)?;
+            }
+        }
+        Ok(())
     }
 
     fn process_scalar_predicate_obligation(

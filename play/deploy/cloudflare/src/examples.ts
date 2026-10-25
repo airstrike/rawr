@@ -28,6 +28,7 @@ import qrCode from "../../../tests/fixtures/qr_code.rs";
 import sandpiles from "../../../tests/fixtures/sandpiles.rs";
 import scrollable from "../../../tests/fixtures/scrollable.rs";
 import slider from "../../../tests/fixtures/slider.rs";
+import solarSystem from "../../../tests/fixtures/iced/solar_system.rs";
 import stopwatch from "../../../tests/fixtures/stopwatch.rs";
 import styling from "../../../tests/fixtures/styling.rs";
 import table from "../../../tests/fixtures/table.rs";
@@ -103,6 +104,7 @@ const ICED: Example[] = [
   },
   { name: "Custom quad", code: customQuad, size: "480x660" },
   { name: "Arc", code: arc },
+  { name: "Solar system", code: solarSystem },
   { name: "Sandpiles", code: sandpiles },
 ].map((example) => ({ ...example, group: "iced" }));
 
