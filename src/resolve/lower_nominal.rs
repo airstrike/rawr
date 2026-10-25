@@ -19950,8 +19950,10 @@ impl<'a> Parser<'a> {
             return self.parse_slice_pattern(start);
         }
         if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            // `()` matches the one unit value, as `Ok(())` does.
             if matches!(self.next().0, Token::Unit) {
-                return Err(self.unsupported("the unit pattern `()`"));
+                let span = Span::new(start, text_end(start, "()"));
+                return Ok(PatternSyntax::Discard { span });
             }
             let mut members = Vec::new();
             let mut trailing_comma = false;

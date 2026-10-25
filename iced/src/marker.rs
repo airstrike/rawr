@@ -770,6 +770,9 @@ pub(crate) enum Draw {
     Rotate(f32),
     Scale(f32),
     ScaleNonuniform(iced::Vector),
+    /// `draw_image(bounds, image)`.
+    #[cfg(feature = "image")]
+    Image(iced::Rectangle, iced::widget::canvas::Image),
 }
 
 #[cfg(feature = "canvas")]

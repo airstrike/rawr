@@ -122,6 +122,7 @@ Error: "\"forty\": invalid digit found in string"
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
   <li><code>i128</code> and <code>u128</code>.</li>
+  <li>A range of floats that excludes its end, as in <code>0.5..1.0</code>. <code>0.5..=1.0</code> works.</li>
   <li>Returning <code>&amp;mut</code> from a function or method.</li>
   <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>

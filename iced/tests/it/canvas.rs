@@ -492,3 +492,87 @@ fn touch_fingers_key_a_map() {
         adapter.diagnostics()
     );
 }
+
+/// solar_system's drawing: images in a frame, one turned, and a dashed
+/// orbit.
+const IMAGES: &str = r#"
+use iced::mouse;
+use iced::widget::canvas::{self, stroke, Geometry, Path, Stroke};
+use iced::widget::{canvas as canvas_widget, image};
+use iced::{Color, Fill, Point, Rectangle, Renderer, Theme, Vector, Widget};
+
+struct State {
+    sun: image::Handle,
+    cache: canvas::Cache,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn new() -> State {
+        State {
+            sun: image::Handle::from_rgba(2, 2, vec![255; 16]),
+            cache: canvas::Cache::default(),
+        }
+    }
+
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        canvas_widget(self).width(Fill).height(Fill)
+    }
+}
+
+impl<Message> canvas::Program<Message> for State {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let system = self.cache.draw(renderer, bounds.size(), |frame| {
+            let center = frame.center();
+            frame.translate(Vector::new(center.x, center.y));
+            frame.draw_image(Rectangle::with_radius(20.0), &self.sun);
+            frame.stroke(
+                &Path::circle(Point::ORIGIN, 50.0),
+                Stroke {
+                    style: stroke::Style::Solid(Color::WHITE.scale_alpha(0.1)),
+                    width: 1.0,
+                    line_dash: canvas::LineDash {
+                        offset: 0,
+                        segments: &[3.0, 6.0],
+                    },
+                    ..Stroke::default()
+                },
+            );
+            frame.draw_image(
+                Rectangle::with_radius(5.0),
+                canvas::Image::new(&self.sun).rotation(-0.5),
+            );
+        });
+        vec![system]
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#;
+
+#[test]
+fn a_program_draws_images_and_a_dashed_stroke() {
+    let adapter = boot(IMAGES);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.draw(&iced::Theme::Dark);
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
+}

@@ -9772,3 +9772,20 @@ fn fails() -> i64 {
         "{error}"
     );
 }
+
+#[test]
+fn language_unit_pattern_matches_the_unit_value() {
+    let value = run(r#"
+        fn check(result: Result<(), String>) -> i64 {
+            match result {
+                Ok(()) => 1,
+                Err(_) => 2,
+            }
+        }
+        pub fn run() -> i64 {
+            check(Ok(())) * 10 + check(Err("no".to_string()))
+        }
+        run()
+    "#);
+    assert_eq!(value, 12);
+}
