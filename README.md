@@ -231,3 +231,6 @@ and `pre-merge-commit` refuse messages that mention Claude. Run
 
 MIT or Apache-2.0, at your option. See [`LICENSE-MIT.txt`](LICENSE-MIT.txt) and
 [`LICENSE-APACHE.txt`](LICENSE-APACHE.txt).
+
+rawr's evaluator began as a fork of [Rhai](https://github.com/rhaiscript/rhai).
+The LICENSE files carry its attribution.
