@@ -1024,6 +1024,29 @@ impl Adapter {
         self.seed_state_authority(&launch, bytes, timing.as_ref())
     }
 
+    /// Continue from `previous`'s State, an adapter of an earlier program
+    /// in this process, as an in-process reload keeps it: the value itself,
+    /// so a native value in it (an `Instant`, a `Duration`) carries too.
+    /// The boot's State and startup tasks give way to it, and view, title,
+    /// theme and subscription are evaluated from it. `false` keeps the
+    /// boot: the State is not this program's, as when a script type in it
+    /// changed. `previous`'s running tasks do not carry.
+    pub fn carry_state(&mut self, previous: &Self) -> bool {
+        let Launch::Static(launch) = &self.launch else {
+            return false;
+        };
+        let launch = launch.as_ref().clone();
+        if launch.validate_state(&previous.state).is_err() {
+            return false;
+        }
+        self.state = previous.state.clone();
+        self.startup = task::Plan::none();
+        self.prepared = None;
+        let timing = self.timing.clone();
+        self.settle_authority_observed(&launch, timing.as_ref());
+        true
+    }
+
     /// The State as bytes a new runner process can seed from; `None`
     /// when it holds anything but plain script data.
     pub(crate) fn export_state_authority(

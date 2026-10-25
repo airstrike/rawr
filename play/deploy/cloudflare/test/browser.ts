@@ -6,7 +6,7 @@
 // /web is rawr-web from WEB_DIR (default target/wasm/site). On the
 // playground's island it runs the Counter in the browser (the default),
 // clicks Increment three times, edits it in the editor and keeps the count,
-// switches the theme from the site's header and sees the app follow, runs a
+// runs the Stopwatch and edits it while it runs, switches the theme from the site's header and sees the app follow, runs a
 // plain program, an iced app whose task sleeps, the "Async tasks" example
 // from its #async-tasks address on the page's real clock, picks an example
 // from the menu, runs a program on a stand-in server, and checks the phone
@@ -29,6 +29,7 @@ const counter = readFileSync(join(repo, "play/tests/fixtures/counter.rs"), "utf8
 const tasks = readFileSync(join(repo, "play/tests/fixtures/rust/tasks.rs"), "utf8");
 const channel = readFileSync(join(repo, "play/tests/fixtures/channel.rs"), "utf8");
 const histogram = readFileSync(join(repo, "play/tests/fixtures/rust/histogram.rs"), "utf8");
+const stopwatch = readFileSync(join(repo, "play/tests/fixtures/stopwatch.rs"), "utf8");
 mkdirSync(shots, { recursive: true });
 
 // The site's build, served as the Worker's assets serve it.
@@ -39,6 +40,7 @@ const examples = [
   { name: "Letter histogram", code: histogram, group: "Rust" },
   { name: "Async tasks", code: tasks, group: "Rust" },
   { name: "Counter", code: counter, messages: ["Message::Increment", "Message::Increment"], group: "iced" },
+  { name: "Stopwatch", code: stopwatch, messages: ["Message::Toggle"], group: "iced" },
 ];
 const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
   snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples, sitekey: null, shared: null, og,
@@ -144,6 +146,33 @@ const out = async () => {
   const { data } = await on("Page.captureScreenshot", { format: "png", clip: { ...(await evaluate(`(() => { const r = document.getElementById("out").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`)), scale: 1 } });
   return data as string;
 };
+// A clip of the page at the canvas's (x, y), w by h.
+const clip = async (x: number, y: number, width: number, height: number) => {
+  const { data } = await on("Page.captureScreenshot", { format: "png", clip: { x, y, width, height, scale: 1 } });
+  return data as string;
+};
+// The widest run of magenta in one row of #out: the Stopwatch edit's bar, 50 px a second.
+const bar = async () => evaluate(`(async () => {
+  const image = new Image(); image.src = "data:image/png;base64,${await out()}"; await image.decode();
+  const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+  const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let widest = 0;
+  for (let y = 0; y < canvas.height; y++) {
+    let run = 0;
+    for (let x = 0; x < canvas.width; x++) { const i = (y * canvas.width + x) * 4; if (data[i] > 200 && data[i + 1] < 60 && data[i + 2] > 200) run++; }
+    widest = Math.max(widest, run);
+  }
+  return widest; })()`);
+const swaps = () => logs.filter((line) => line.startsWith("rawr-web: swapped")).length;
+const swapped = async (count: number) => {
+  const start = Date.now();
+  while (swaps() <= count) {
+    if (Date.now() - start > 10000) throw new Error(`timed out waiting for a swap\n${logs.join("\n")}`);
+    await sleep(50);
+  }
+  return logs.filter((line) => line.startsWith("rawr-web: swapped")).at(-1)!;
+};
 const click = async (x: number, y: number) => {
   for (const type of ["mousePressed", "mouseReleased"]) {
     await on("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -165,6 +194,24 @@ const setCode = async (text: string) => {
   await on("Input.insertText", { text });
 };
 const radio = (group: string, name: string) => `[...document.querySelectorAll('[aria-label="${group}"] [role=radio]')].find((b) => b.textContent === ${JSON.stringify(name)})`;
+/** An edit in the editor: `from` becomes `to`. */
+const edit = async (from: string, to: string) => {
+  const code: string = await evaluate(editorText);
+  if (!code.includes(from)) throw new Error(`no ${from} in the editor`);
+  await setCode(code.replace(from, to));
+};
+/** Picks an example from the menu, as a visitor does. */
+const pick = async (name: string) => {
+  await clickOn(`document.querySelector('[aria-label="Examples"]')`);
+  await until("the menu", `!!document.querySelector("[role=listbox]")`, 5000);
+  await clickOn(`[...document.querySelectorAll("[role=option]")].find((o) => o.textContent === ${JSON.stringify(name)})`);
+};
+/** Empties the messages box, as a visitor does. */
+const clearMessages = async () => {
+  await evaluate(`(() => { const box = document.querySelector('textarea[aria-label="Messages"]'); box.focus(); box.select(); return true; })()`);
+  await on("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+  await on("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+};
 const checked = (group: string) => `document.querySelector('[aria-label="${group}"] [role=radio][aria-checked=true]')?.textContent`;
 
 let failed = false;
@@ -197,6 +244,9 @@ try {
   const before = await out();
   await shot("counter.png");
   const box = await evaluate(`(() => { const r = document.querySelector("#out .live canvas").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`);
+  // The Counter's value, under Increment.
+  const value = () => clip(box.x + 10, box.y + 57, 120, 54);
+  const zero = await value();
   // The Counter's column: 20 px of padding, then Increment centred above the wider Decrement.
   for (let i = 0; i < 3; i++) {
     await click(box.x + 69, box.y + 36);
@@ -206,6 +256,7 @@ try {
   const clicked = await out();
   await shot("counter-clicked.png");
   check(clicked !== before, "three clicks on Increment change the canvas");
+  const three = await value();
   const clicks: number[][] = await evaluate("window.clicks");
   console.log(`click handlers: ${clicks.map(([h]) => h.toFixed(1)).join(", ")} ms; to the next frame: ${clicks.map(([, f]) => f.toFixed(1)).join(", ")} ms`);
 
@@ -216,6 +267,8 @@ try {
   await shot("counter-edited.png");
   check(await evaluate(`(${editorText}) === ${JSON.stringify(edited)}`), "typing in the editor replaces the code");
   check(logs.some((line) => line.includes("state carried")), "an edit swaps in a new generation and keeps the count");
+  const counted = await value();
+  check(counted === three && three !== zero, "the edited Counter still shows 3");
   await click(box.x + 69, box.y + 36);
   await sleep(400);
   await shot("counter-edited-clicked.png");
@@ -235,8 +288,47 @@ try {
   await sleep(300);
   check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the playground's Dark sets the page's theme");
 
+  // The Stopwatch, started by its Toggle message. An edit while it runs keeps
+  // it running from its elapsed time: a bar 50 px a second shows the time.
+  let count = swaps();
+  await pick("Stopwatch");
+  check(!(await swapped(count)).includes("started fresh"), "another example boots without a note");
+  await sleep(1500);
+  count = swaps();
+  await edit("let content = column![duration, controls]", `let bar = container(text("")).width(self.duration.as_secs_f32() * 50.0).height(12)
+            .style(|_| container::Style::default().background(Color::from_rgb(1.0, 0.0, 1.0)));
+        let content = column![duration, controls, bar]`);
+  await edit("use iced::widget::{button, center, column, row, text};", "use iced::widget::{button, center, column, container, row, text};");
+  await edit("use iced::{Center, Subscription, Widget};", "use iced::{Center, Color, Subscription, Widget};");
+  check((await swapped(count)).includes("state carried"), "an edit to the running Stopwatch carries its State");
+  await sleep(200);
+  const first = await bar();
+  await sleep(1000);
+  const second = await bar();
+  await shot("stopwatch-edited.png");
+  console.log(`stopwatch bar: ${first} px after the edit, ${second} px a second on`);
+  check(first >= 90, "the edited Stopwatch shows the time it had run, not 0");
+  check(second >= first + 35, "and it keeps running");
+  count = swaps();
+  await edit('button("Reset")', 'button("Clear")');
+  check((await swapped(count)).includes("state carried"), "a relabel carries it too");
+  await sleep(200);
+  const third = await bar();
+  check(third >= second + 5, "and it runs on from where it was");
+  // A field more: the State boots fresh, with its message, and a note says why.
+  count = swaps();
+  await edit("    state: State,\n}", "    state: State,\n    laps: u32,\n}");
+  check((await swapped(count)).includes("State changed shape; started fresh"), "a reshaped State boots fresh with a note");
+  await sleep(300);
+  await shot("stopwatch-reshaped.png");
+  const fresh = await bar();
+  console.log(`reshaped stopwatch bar: ${fresh} px`);
+  check(fresh < third && fresh > 0, "and runs again from its Toggle message");
+  // The snippets that follow are not full apps: they take no messages.
+  await clearMessages();
+
   // A broken edit keeps the app and shows the report under it.
-  await setCode(edited.replace("fn update", "fn update("));
+  await edit("fn update", "fn update(");
   await until("the report", `!!document.querySelector("#out .live ~ pre.error, #out pre.error")`, 5000);
   await shot("counter-error.png");
   check(await evaluate(`!!document.querySelector("#out .live canvas")`), "a broken edit keeps the running app");
