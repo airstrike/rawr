@@ -144,7 +144,6 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
-  <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
   <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
   <li><strong>A large <code>u64</code> in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
 </ul>

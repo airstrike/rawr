@@ -9374,3 +9374,47 @@ main();
         "5 s 2.5 7 5 5\n"
     );
 }
+
+/// `TryFromIntError` and `FromUtf8Error` print as rustc prints them:
+/// `{:?}` names the overflow's side or the bytes and the `Utf8Error`, and
+/// `{}` is std's message. The expected lines are rustc's.
+#[test]
+fn language_std_errors_print_as_rustc_prints_them() {
+    assert_eq!(
+        printed(
+            r#"
+use std::num::TryFromIntError;
+fn narrow(x: i64) -> Result<u8, TryFromIntError> { u8::try_from(x) }
+fn main() {
+    let r: Result<u8, _> = u8::try_from(300i32);
+    println!("{:?}", r);
+    println!("{:?}", i8::try_from(-200i64));
+    let t: Result<u16, _> = 70000i64.try_into();
+    println!("{:?} {:?}", t, u8::try_from(7i64));
+    if let Err(e) = u8::try_from(300i32) { println!("{e} | {e:?} | {}", e.to_string()); }
+    println!("{:?} {}", narrow(-1), narrow(-1) == narrow(-2));
+    println!("{}", narrow(256) == narrow(-1));
+    let e = String::from_utf8(vec![0x41, 0xff, 0x42]).unwrap_err();
+    println!("{e} | {e:?}");
+    let e = String::from_utf8(vec![0x41, 0xe2, 0x82]).unwrap_err();
+    println!("{e} | {e:?} | {}", e.to_string());
+    println!("{:?} {:?}", String::from_utf8(vec![0x68, 0x69]), "x1".parse::<i32>());
+}
+main();
+"#
+        ),
+        "Err(TryFromIntError(PosOverflow))\n\
+         Err(TryFromIntError(NegOverflow))\n\
+         Err(TryFromIntError(PosOverflow)) Ok(7)\n\
+         out of range integral type conversion attempted | TryFromIntError(PosOverflow) | \
+         out of range integral type conversion attempted\n\
+         Err(TryFromIntError(NegOverflow)) true\n\
+         false\n\
+         invalid utf-8 sequence of 1 bytes from index 1 | FromUtf8Error { bytes: [65, 255, 66], \
+         error: Utf8Error { valid_up_to: 1, error_len: Some(1) } }\n\
+         incomplete utf-8 byte sequence from index 1 | FromUtf8Error { bytes: [65, 226, 130], \
+         error: Utf8Error { valid_up_to: 1, error_len: None } } | incomplete utf-8 byte sequence \
+         from index 1\n\
+         Ok(\"hi\") Err(ParseIntError { kind: InvalidDigit })\n"
+    );
+}

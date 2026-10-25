@@ -1465,6 +1465,7 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         "ParseCharError" => ("char", "ParseCharError"),
         "Infallible" => ("convert", "Infallible"),
         "FromUtf8Error" => ("string", "FromUtf8Error"),
+        "TryFromIntError" => ("num", "TryFromIntError"),
         _ => return None,
     };
     (module.is_empty() || module == expected).then_some(error)

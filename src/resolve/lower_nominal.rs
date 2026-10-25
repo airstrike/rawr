@@ -10501,7 +10501,34 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn display_text(&self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+    /// A std error's `Display` of its runtime `value`: its message, or for
+    /// the errors whose runtime value is their `Debug`, the message their
+    /// `Debug` determines.
+    fn parse_error_display(
+        &mut self,
+        error: ParseError,
+        value: origin::Fragment,
+    ) -> origin::Fragment {
+        match error {
+            ParseError::TryFromInt => {
+                value.surrounded("{ ", &format!("; {TRY_FROM_INT_MESSAGE:?} }}"))
+            }
+            ParseError::Utf8 => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == "utf8_display")
+                    .expect("a listed piece")
+                    .to_string();
+                self.prelude_op(
+                    PreludeOp::StrPieces,
+                    [value, code.into(), "()".into(), "()".into()],
+                )
+            }
+            _ => value,
+        }
+    }
+
+    fn display_text(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
         match ty {
             Ty::Script(id, _) => self
                 .models
@@ -10511,7 +10538,7 @@ impl<'a> Parser<'a> {
                 Self::std_dispatch("Display", "fmt", value, &["\"\"".into()]),
             ),
             // A `ParseIntError` and kin is its message.
-            Ty::ParseError(_) => Some(value),
+            Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
             _ => None,
         }
     }
@@ -26335,7 +26362,10 @@ impl<'a> Parser<'a> {
                 &target,
                 &number,
             );
-            let ty = Ty::Result(Box::new(target), Box::new(Ty::Unit));
+            let ty = Ty::Result(
+                Box::new(target),
+                Box::new(Ty::ParseError(ParseError::TryFromInt)),
+            );
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         if let Ty::Float(_) = number
@@ -27730,17 +27760,19 @@ impl<'a> Parser<'a> {
             }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
             // its message, which is its value.
-            if let Ty::ParseError(_) = number
+            if let Ty::ParseError(error) = number
                 && matches!(member.as_str(), "to_string" | "clone")
                 && matches!(self.peek(), Token::Unit)
             {
                 let end = self.next().1;
-                let ty = if member.as_str() == "clone" {
-                    number
+                let (ty, source) = if member.as_str() == "clone" {
+                    (number, value.rendered_source())
                 } else {
-                    Ty::String
+                    (
+                        Ty::String,
+                        self.parse_error_display(error, value.rendered_source()),
+                    )
                 };
-                let source = value.rendered_source();
                 value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
@@ -35292,7 +35324,10 @@ impl<'a> Parser<'a> {
                 &builtin,
                 &source,
             );
-            let ty = Ty::Result(Box::new(builtin), Box::new(Ty::Unit));
+            let ty = Ty::Result(
+                Box::new(builtin),
+                Box::new(Ty::ParseError(ParseError::TryFromInt)),
+            );
             return Ok(self.operator_expr(value, ty, expression));
         }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
@@ -41185,6 +41220,9 @@ enum ParseError {
     Infallible,
     /// `std::string::FromUtf8Error`, the error of `String::from_utf8`.
     Utf8,
+    /// `std::num::TryFromIntError`, the error of `u8::try_from(x)` and
+    /// `x.try_into()` among integers.
+    TryFromInt,
 }
 
 impl ParseError {
@@ -41196,6 +41234,7 @@ impl ParseError {
             "ParseCharError" => Self::Char,
             "Infallible" => Self::Infallible,
             "FromUtf8Error" => Self::Utf8,
+            "TryFromIntError" => Self::TryFromInt,
             _ => return None,
         })
     }
@@ -41208,6 +41247,7 @@ impl ParseError {
             Self::Char => "ParseCharError",
             Self::Infallible => "Infallible",
             Self::Utf8 => "FromUtf8Error",
+            Self::TryFromInt => "TryFromIntError",
         }
     }
 
@@ -41224,7 +41264,8 @@ impl ParseError {
     }
 
     /// Each message (the error's `Display`, its value at runtime) with the
-    /// error's `Debug`, as Rust's std writes them.
+    /// error's `Debug`, as Rust's std writes them. A `TryFromIntError` is
+    /// its `Debug` at runtime instead, and [`Self::display`] its message.
     const fn texts(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::Int => &[
@@ -41266,10 +41307,16 @@ impl ParseError {
                     "ParseCharError { kind: TooManyChars }",
                 ),
             ],
-            Self::Infallible | Self::Utf8 => &[],
+            // A `TryFromIntError` is its `Debug` text, which names the
+            // side it overflowed, and its message is one for both. A
+            // `FromUtf8Error` is its `Debug` text, which holds its bytes.
+            Self::Infallible | Self::Utf8 | Self::TryFromInt => &[],
         }
     }
 }
+
+/// `std::num::TryFromIntError`'s message, its `Display`.
+const TRY_FROM_INT_MESSAGE: &str = "out of range integral type conversion attempted";
 
 /// `text.parse()` into the kind `code` (`kind_code`): `Ok` of the value,
 /// or `Err` of the std error's message, by Rust's own `FromStr`.
@@ -41865,9 +41912,17 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
 }
 
 /// The string methods `StrPieces` runs, by code: each gives an array.
-/// `from_utf8` gives a `Result` of the text or its error's message, and
-/// `debug` a string's or a char's `Debug` text.
-const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8", "debug"];
+/// `from_utf8` gives a `Result` of the text or its error's `Debug` text,
+/// `utf8_display` that error's message from its `Debug` text, and `debug`
+/// a string's or a char's `Debug` text.
+const STR_PIECES: &[&str] = &[
+    "bytes",
+    "char_indices",
+    "splitn",
+    "from_utf8",
+    "debug",
+    "utf8_display",
+];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
@@ -41882,9 +41937,27 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
         return Ok(match String::from_utf8(bytes) {
             Ok(text) => crate::result::ok(Dynamic::from(ImmutableString::from(text))),
             Err(error) => {
-                crate::result::err(Dynamic::from(ImmutableString::from(error.to_string())))
+                crate::result::err(Dynamic::from(ImmutableString::from(format!("{error:?}"))))
             }
         });
+    }
+    // `FromUtf8Error { bytes: [..], error: Utf8Error { valid_up_to: 0,
+    // error_len: Some(1) } }`: std's `Display` of that `Utf8Error`.
+    if name == "utf8_display" {
+        let debug = args[0].clone_cast::<ImmutableString>();
+        let number = |key: &str| {
+            let rest = debug.rsplit_once(key)?.1;
+            let digits = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+            digits.parse::<usize>().ok()
+        };
+        let valid_up_to = number("valid_up_to: ").unwrap_or_default();
+        let text = match number("error_len: Some(") {
+            Some(length) => {
+                format!("invalid utf-8 sequence of {length} bytes from index {valid_up_to}")
+            }
+            None => format!("incomplete utf-8 byte sequence from index {valid_up_to}"),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
     }
     if name == "debug" {
         let text = match args[0].as_char() {
@@ -42211,10 +42284,13 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
     if name == "try_from" {
         let source = operand_kind.widen(value);
+        // `TryFromIntError`'s `Debug`, its runtime value.
         return Ok(if (low..=high).contains(&source) {
             crate::result::ok(kind.store(source).into())
+        } else if source > high {
+            crate::result::err(ImmutableString::from("TryFromIntError(PosOverflow)").into())
         } else {
-            crate::result::err(Dynamic::UNIT)
+            crate::result::err(ImmutableString::from("TryFromIntError(NegOverflow)").into())
         });
     }
     let a = kind.widen(value);
