@@ -201,12 +201,15 @@ pub(super) fn resolve(
             )
             .map(Type::Path)
         }
-        // `&str` is Rawr's `String`, which every string value is.
+        // `&str` is Rawr's `String`, which every string value is. The path
+        // keeps the reference's lifetime, at its `&` when none is written,
+        // which marks the text borrowed (`Type::is_str`): a `&str` is
+        // `Copy`, where a `String` moves.
         item::type_ref::Type::Reference {
             mutable: false,
+            lifetime,
             target,
             span,
-            ..
         } if matches!(&*target, item::type_ref::Type::Path(path)
             if path.segments.len() == 1
                 && path.segments[0].name.text == "str"
@@ -215,7 +218,9 @@ pub(super) fn resolve(
             Ok(Type::Path(Path {
                 name: "String".into(),
                 target: Target::Builtin,
-                arguments: Box::default(),
+                arguments: Box::new([Argument::Lifetime(
+                    lifetime.map_or(span, |lifetime| lifetime.span),
+                )]),
                 span,
             }))
         }
@@ -1126,6 +1131,15 @@ fn prelude_arity(parsed: &item::type_ref::Path) -> Option<usize> {
 }
 
 impl Type {
+    /// Whether this is a written `&str`: Rawr's `String` path with the
+    /// reference's lifetime (`resolve`).
+    pub(crate) fn is_str(&self) -> bool {
+        matches!(self, Type::Path(path)
+            if path.target == Target::Builtin
+                && path.name.as_str() == "String"
+                && matches!(*path.arguments, [Argument::Lifetime(_)]))
+    }
+
     /// `T` of `Option<T>`.
     pub(crate) fn option_element(&self) -> Option<&Type> {
         let Type::Path(path) = self else {

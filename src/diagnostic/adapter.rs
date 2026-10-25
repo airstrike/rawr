@@ -527,6 +527,10 @@ fn resolution_report_with_sources(
 fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
     match error {
         resolve::Error::Syntax { label, .. } => Some(label.clone()),
+        resolve::Error::MovedValue {
+            previous_iteration: true,
+            ..
+        } => Some("value moved here, in previous iteration of loop".into()),
         _ => None,
     }
 }

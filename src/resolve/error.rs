@@ -210,6 +210,11 @@ pub enum Error {
         moved: Span,
         /// The use after the move.
         reference: Span,
+        /// The move is in a loop's body, which goes on to its next
+        /// iteration and moves the value again: rustc's "value moved here,
+        /// in previous iteration of loop". `moved` and `reference` are both
+        /// the move.
+        previous_iteration: bool,
     },
     /// A struct field or enum variant reference cannot be resolved.
     UnknownMember {
@@ -521,6 +526,10 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::ImmutableBinding { declaration, .. } => Some(*declaration),
+            Self::MovedValue {
+                previous_iteration: true,
+                ..
+            } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
             Self::DuplicateMethod {
                 previous_declaration,
@@ -648,8 +657,19 @@ impl fmt::Display for Written<'_> {
             }
             Error::MovedValue {
                 name,
+                reference,
+                previous_iteration: true,
+                ..
+            } => write!(
+                formatter,
+                "use of moved value `{name}` at {reference}: value moved here, in previous \
+                 iteration of loop"
+            ),
+            Error::MovedValue {
+                name,
                 moved,
                 reference,
+                ..
             } => write!(
                 formatter,
                 "use of moved value `{name}` at {reference}; it was already moved at {moved}"

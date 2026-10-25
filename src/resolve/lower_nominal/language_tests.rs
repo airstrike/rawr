@@ -8695,6 +8695,196 @@ fn language_moves_keep_what_rust_accepts() {
     assert_eq!(value, 2 + 2 + 1 + 3 + 2 + 4);
 }
 
+/// What a program prints, line by line, as `?play` shows it.
+fn printed(source: &str) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn language_moves_andys_loop_snippet_prints_what_rustc_prints() {
+    let source = r#"
+use std::mem;
+
+fn main() {
+    fn parse(line: &str) -> Option<(String, i32)> {
+        let Some((name, score)) = line.split_once('=') else {
+            return None;
+        };
+        Some((name.trim().to_string(), score.trim().parse().ok()?))
+    }
+
+    let mut best = (String::from("nobody"), i32::MIN);
+    for line in ["ferris = 42", "say \"hi\"", "dyno=99", "gopher=7"] {
+        let shown = format!("{:?}", line);
+        let Some(entry) = parse(line) else {
+            println!("skipping {}", shown);
+            continue;
+        };
+        if entry.1 > best.1 {
+            let old = mem::replace(&mut best, entry);
+            println!("{} takes the lead from {}", best.0, old.0);
+        }
+    }
+
+    let label = {
+        let mut s = best.0.clone();
+        s.insert(0, '@');
+        s
+    };
+
+    assert_eq!(label, "@dyno");
+    println!("{} wins with {}", label, best.1);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "ferris takes the lead from nobody\n\
+         skipping \"say \\\"hi\\\"\"\n\
+         dyno takes the lead from ferris\n\
+         @dyno wins with 99\n"
+    );
+}
+
+#[test]
+fn language_moves_never_move_a_shared_reference_or_a_copy_value() {
+    // The repros: a `&str` passed twice, a `&str` loop pattern, and a
+    // `String` loop pattern moved in each iteration.
+    assert_eq!(
+        printed(
+            "fn take(s: &str) -> usize { s.len() }\n\
+             let line: &str = \"a\";\n\
+             println!(\"{} {}\", take(line), take(line));"
+        ),
+        "1 1\n"
+    );
+    assert_eq!(
+        printed(
+            "fn take(s: &str) -> usize { s.len() }\n\
+             for line in [\"a\", \"bb\"] {\n    println!(\"{}\", take(line));\n}"
+        ),
+        "1\n2\n"
+    );
+    // Every shared reference, `&str` in item headers and from `str`
+    // methods, primitives, and tuples and arrays of `Copy` values.
+    let value = run(r#"
+        struct Named { name: &'static str }
+        fn peek(s: &str) -> i64 { s.len() as i64 }
+        fn twice(s: &str) -> i64 { peek(s) + peek(s) }
+        fn first(s: &str) -> &str { s }
+        fn sum(v: &[i64]) -> i64 { v.iter().sum() }
+        fn count(v: &Vec<String>) -> i64 { v.len() as i64 }
+        fn pair(p: (i64, char)) -> i64 { p.0 }
+        fn all(a: [i64; 2]) -> i64 { a[0] + a[1] }
+        pub fn run() -> i64 {
+            let owned = String::from("abc");
+            let r = &owned;
+            let t = owned.as_str().trim();
+            let w = first(t);
+            let parts: Vec<&str> = "a,bb".split(',').collect();
+            let head = parts[0];
+            let again = parts[0];
+            let (k, v) = "k=vv".split_once('=').unwrap();
+            let named = Named { name: "n" };
+            let n = named.name;
+            let m = named.name;
+            let words = vec![String::from("x")];
+            let borrowed = &words;
+            let numbers = vec![1, 2];
+            let slice = &numbers[..];
+            let p = (1, 'c');
+            let a = [2, 3];
+            let x = 4;
+            twice("ab") + peek(r) + peek(r) + peek(t) + peek(w) + peek(w)
+                + peek(head) + peek(again) + peek(k) + peek(v) + peek(n) + peek(m)
+                + count(borrowed) + count(borrowed) + sum(slice) + sum(slice)
+                + pair(p) + pair(p) + all(a) + all(a) + x + x
+        }
+        run()
+    "#);
+    assert_eq!(
+        value,
+        4 + 3 + 3 + 3 + 3 + 3 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 3 + 3 + 1 + 1 + 5 + 5 + 4 + 4
+    );
+}
+
+#[test]
+fn language_moves_loop_patterns_bind_fresh_values_each_iteration() {
+    assert_eq!(
+        printed(
+            "fn take(s: String) -> usize { s.len() }\n\
+             for line in [String::from(\"a\"), String::from(\"bb\")] {\n    println!(\"{}\", take(line));\n}"
+        ),
+        "1\n2\n"
+    );
+    // `while let`, a `let` inside `loop`, and a pattern that shadows an
+    // outer local, which keeps its value.
+    let value = run(r#"
+        fn take(s: String) -> i64 { s.len() as i64 }
+        pub fn run() -> i64 {
+            let line = String::from("outer");
+            let mut total = 0;
+            for line in [String::from("a"), String::from("bb")] {
+                total += take(line);
+            }
+            for (word, n) in [(String::from("ccc"), 1)] {
+                total += take(word) * n;
+            }
+            let mut it = vec![String::from("dddd")].into_iter();
+            while let Some(w) = it.next() {
+                total += take(w);
+            }
+            let mut rounds = 0;
+            loop {
+                let w = String::from("eeeee");
+                total += take(w);
+                rounds += 1;
+                if rounds == 2 {
+                    break;
+                }
+            }
+            total * 10 + take(line)
+        }
+        run()
+    "#);
+    assert_eq!(value, (1 + 2 + 3 + 4 + 5 + 5) * 10 + 5);
+}
+
+#[test]
+fn language_moves_out_of_a_loop_are_moved_in_its_previous_iteration() {
+    // A local declared outside the loop and moved inside it is moved on
+    // the next iteration: rustc's E0382, at the move.
+    for source in [
+        "fn take(s: String) -> usize { s.len() }\n\
+         pub fn run() -> i64 {\n    let s = String::from(\"a\");\n    for _ in 0..2 {\n        take(s);\n    }\n    0\n}",
+        "fn take(s: String) -> usize { s.len() }\n\
+         pub fn run() -> i64 {\n    let s = String::from(\"a\");\n    let mut it = vec![1].into_iter();\n    while let Some(_) = it.next() {\n        take(s);\n    }\n    0\n}",
+        "fn take(s: String) -> usize { s.len() }\n\
+         pub fn run() -> i64 {\n    let s = String::from(\"a\");\n    loop {\n        let t = String::from(\"b\");\n        take(t);\n        take(s);\n    }\n}",
+    ] {
+        let error = Engine::new()
+            .compile(source)
+            .expect_err("rustc rejects this program")
+            .to_string();
+        assert!(error.contains("use of moved value: `s`"), "{source}\n{error}");
+        assert!(
+            error.contains("value moved here, in previous iteration of loop"),
+            "{source}\n{error}"
+        );
+        assert!(error.contains("take(s);"), "{source}\n{error}");
+    }
+    // A loop pattern may shadow the local, which is still moved by `for`.
+    let error = rejected(
+        "pub fn run() -> i64 { let v = vec![String::new()]; for v in v { drop(v); } v.len() as i64 } run()",
+    );
+    assert!(error.contains("moved value 'v'"), "{error}");
+}
+
 #[test]
 fn language_unsafe_impl_of_an_auto_trait() {
     let value = run(r#"

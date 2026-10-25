@@ -85,12 +85,13 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
     incapable.register_host_facade(concrete_and_generic_facade(&[capability::Kind::Clone, capability::Kind::Copy])).unwrap();
     // The rejected generic candidate returns bool. Exact Value output therefore
     // also proves its inferred signature did not escape candidate selection.
+    // An owned `String` is not `Copy`; a `&str` literal would be.
     incapable
         .compile_executable(
             r#"
                 use constrained::Value;
                 enum Message { Tick }
-                pub fn key(value: Value<Message>) -> Value<Message> { value.key("copy fails") }
+                pub fn key(value: Value<Message>) -> Value<Message> { value.key(String::from("copy fails")) }
             "#,
         )
         .unwrap();
@@ -122,7 +123,7 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
             r#"
                 use constrained::Value;
                 enum Message { Tick }
-                pub fn string(value: Value<Message>) -> Value<Message> { value.key("clone only") }
+                pub fn string(value: Value<Message>) -> Value<Message> { value.key(String::from("clone only")) }
             "#,
         )
         .unwrap();

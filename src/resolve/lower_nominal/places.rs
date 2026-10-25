@@ -493,15 +493,11 @@ impl Parser<'_> {
             None => origin::Fragment::plain(format!("for {index} in 0..{root}.len()")),
         };
         let wrap = Some((head, origin::Fragment::default()));
-        let looped = self.parse_loop_body(header, start, label, false, wrap);
+        let looped = self.parse_loop_body(header, start, label, false, wrap, Some(&outer));
         self.write_backs.truncate(write_backs);
         let inner = std::mem::replace(&mut self.bindings, outer);
         self.aliases = outer_aliases;
-        for (name, binding) in &mut self.bindings {
-            if let Some(after) = inner.get(name) {
-                binding.available = after.available;
-            }
-        }
+        self.keep_moves_from(&inner);
         looped.map(Some)
     }
 
@@ -777,8 +773,8 @@ impl Parser<'_> {
                 target: Box::new(arguments[0].clone()),
             }
         };
-        if !(self.inference.resolve(&arguments[0]) == Ty::String
-            && self.inference.resolve(&key.ty) == Ty::String)
+        if !(self.inference.resolve(&arguments[0]).is_text()
+            && self.inference.resolve(&key.ty).is_text())
         {
             self.coerce_expr(&expected, &mut key)?;
         }

@@ -236,9 +236,7 @@ impl Parser<'_> {
 
     /// A lookup's `&key` (`&str` reads as Rawr's `String`).
     fn coerce_key(&mut self, key: &Ty, argument: &mut ParsedExpr) -> Result<(), Error> {
-        if self.inference.resolve(key) == Ty::String
-            && self.inference.resolve(&argument.ty) == Ty::String
-        {
+        if self.inference.resolve(key).is_text() && self.inference.resolve(&argument.ty).is_text() {
             return Ok(());
         }
         let expected = Ty::Reference {
