@@ -47,6 +47,8 @@ const WRAPPER_ENVIRONMENT: [&str; 4] = [
     "CARGO_BUILD_RUSTC_WRAPPER",
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
+/// The dynamic loader's search path on the ELF hosts the importer supports.
+const LOADER_PATH: &str = "LD_LIBRARY_PATH";
 const INTERNAL_ENVIRONMENT_PREFIX: &str = "RAWR_IMPORT_";
 const UNSTABLE_ENVIRONMENT_PREFIX: &str = "CARGO_UNSTABLE_";
 pub(crate) const INTERNAL_ALIAS: &str = "__rawr_internal";
@@ -527,12 +529,15 @@ impl Environment {
         entry_limit: usize,
         byte_limit: usize,
     ) -> Result<Box<[(OsString, OsString)]>> {
-        let retained = self
-            .values
-            .iter()
-            .filter(|(key, _)| !IMPORTER_OVERRIDDEN.contains(&key.as_ref()));
+        let loader = self.loader_path(rustc);
+        let retained = self.values.iter().filter(|(key, _)| {
+            !IMPORTER_OVERRIDDEN.contains(&key.as_ref())
+                && !(loader.is_some() && key.as_ref() == LOADER_PATH)
+        });
         let retained_items = retained.clone().count();
-        let items = retained_items.saturating_add(4);
+        let items = retained_items
+            .saturating_add(4)
+            .saturating_add(usize::from(loader.is_some()));
         if items > entry_limit {
             return Err(Error::Limit {
                 resource: "Cargo environment entries",
@@ -551,7 +556,12 @@ impl Environment {
             .saturating_add("RUSTC".len())
             .saturating_add(rustc.as_os_str().len())
             .saturating_add("RUSTDOC".len())
-            .saturating_add(rustdoc.as_os_str().len());
+            .saturating_add(rustdoc.as_os_str().len())
+            .saturating_add(
+                loader
+                    .as_ref()
+                    .map_or(0, |value| LOADER_PATH.len().saturating_add(value.len())),
+            );
         if bytes > byte_limit {
             return Err(Error::Limit {
                 resource: "Cargo environment bytes",
@@ -573,8 +583,34 @@ impl Environment {
         values.push(("CARGO_INCREMENTAL".into(), "0".into()));
         values.push(("RUSTC".into(), rustc.as_os_str().to_owned()));
         values.push(("RUSTDOC".into(), rustdoc.as_os_str().to_owned()));
+        if let Some(loader) = loader {
+            values.push((LOADER_PATH.into(), loader));
+        }
         values.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         Ok(values.into_boxed_slice())
+    }
+
+    /// The `LD_LIBRARY_PATH` a rustup proxy would give the toolchain's Cargo:
+    /// the toolchain's `lib` ahead of the caller's value. The importer runs
+    /// that Cargo directly, without the proxy. Cargo puts the sysroot's
+    /// `lib/rustlib/<host>/lib` first on this path when it runs a build
+    /// script. With rustc-dev installed, that directory holds a second
+    /// `librustc_driver`, and that copy's `$ORIGIN/../lib` RUNPATH has no
+    /// libLLVM. A build script that runs `$RUSTC` (libc's does) loads that
+    /// copy, because `LD_LIBRARY_PATH` comes before RUNPATH. It then fails to
+    /// load libLLVM unless the toolchain's own `lib` is also on the path.
+    /// macOS needs nothing. Cargo sets `DYLD_FALLBACK_LIBRARY_PATH` there, and
+    /// the loader consults it only after rustc's `@rpath`.
+    fn loader_path(&self, rustc: &Path) -> Option<OsString> {
+        if cfg!(target_vendor = "apple") {
+            return None;
+        }
+        let mut value = rustc.parent()?.parent()?.join("lib").into_os_string();
+        if let Some(caller) = self.value(LOADER_PATH).filter(|caller| !caller.is_empty()) {
+            value.push(":");
+            value.push(caller);
+        }
+        Some(value)
     }
 
     /// One captured variable.
@@ -1476,7 +1512,7 @@ mod tests {
     use super::projection::Projection;
     use super::{
         validate_config_authority, Candidate, Dependency, Environment, NoBuildStd, Provenance,
-        State, OWNED_INPUT_CONFIG_CANDIDATES, OWNED_PROVENANCE,
+        State, LOADER_PATH, OWNED_INPUT_CONFIG_CANDIDATES, OWNED_PROVENANCE,
     };
     use crate::cargo::{digest, Limits, RequestAllocation};
     use crate::Error;
@@ -1956,8 +1992,10 @@ mod tests {
         let environment = Environment::from_pairs([("USER_VALUE", "present")])
             .expect("the retained fixture environment seals");
         let target = Path::new("/target");
-        let rustc = Path::new("/toolchain/rustc");
-        let rustdoc = Path::new("/toolchain/rustdoc");
+        let rustc = Path::new("/toolchain/bin/rustc");
+        let rustdoc = Path::new("/toolchain/bin/rustdoc");
+        let loader = (!cfg!(target_vendor = "apple")).then_some("/toolchain/lib");
+        let entries = 5 + usize::from(loader.is_some());
         let exact_bytes = "USER_VALUE"
             .len()
             .saturating_add("present".len())
@@ -1968,12 +2006,13 @@ mod tests {
             .saturating_add("RUSTC".len())
             .saturating_add(rustc.as_os_str().len())
             .saturating_add("RUSTDOC".len())
-            .saturating_add(rustdoc.as_os_str().len());
+            .saturating_add(rustdoc.as_os_str().len())
+            .saturating_add(loader.map_or(0, |value| LOADER_PATH.len() + value.len()));
 
         let values = environment
-            .command_values_with_limits(target, rustc, rustdoc, 5, exact_bytes)
+            .command_values_with_limits(target, rustc, rustdoc, entries, exact_bytes)
             .expect("the exact count and byte boundary admits all fixed entries");
-        assert_eq!(values.len(), 5);
+        assert_eq!(values.len(), entries);
         for key in [
             "CARGO_INCREMENTAL",
             "CARGO_TARGET_DIR",
@@ -1984,22 +2023,48 @@ mod tests {
             assert!(values.iter().any(|(actual, _)| actual == key));
         }
         assert!(matches!(
-            environment.command_values_with_limits(target, rustc, rustdoc, 4, exact_bytes),
+            environment.command_values_with_limits(target, rustc, rustdoc, entries - 1, exact_bytes),
             Err(Error::Limit {
                 resource: "Cargo environment entries",
-                limit: 4,
-                actual: 5,
-            })
+                limit,
+                actual,
+            }) if limit == entries - 1 && actual == entries
         ));
         let byte_limit = exact_bytes.saturating_sub(1);
         assert!(matches!(
-            environment.command_values_with_limits(target, rustc, rustdoc, 5, byte_limit),
+            environment.command_values_with_limits(target, rustc, rustdoc, entries, byte_limit),
             Err(Error::Limit {
                 resource: "Cargo environment bytes",
                 limit: error_limit,
                 actual,
             }) if error_limit == byte_limit && actual == exact_bytes
         ));
+    }
+
+    #[test]
+    fn cargo_finds_the_toolchain_libraries_as_under_rustup() {
+        let rustc = Path::new("/toolchain/bin/rustc");
+        let rustdoc = Path::new("/toolchain/bin/rustdoc");
+        let loader = |environment: Environment| {
+            environment
+                .command_values(Path::new("/target"), rustc, rustdoc)
+                .expect("the command environment builds")
+                .iter()
+                .find(|(key, _)| key == LOADER_PATH)
+                .map(|(_, value)| value.clone())
+        };
+        let caller = Environment::from_pairs([(LOADER_PATH, "/caller/lib")])
+            .expect("the caller's loader path seals");
+        let empty =
+            Environment::from_pairs([(LOADER_PATH, "")]).expect("an empty loader path seals");
+        if cfg!(target_vendor = "apple") {
+            assert_eq!(loader(Environment::empty()), None);
+            assert_eq!(loader(caller), Some("/caller/lib".into()));
+        } else {
+            assert_eq!(loader(Environment::empty()), Some("/toolchain/lib".into()));
+            assert_eq!(loader(empty), Some("/toolchain/lib".into()));
+            assert_eq!(loader(caller), Some("/toolchain/lib:/caller/lib".into()));
+        }
     }
 
     #[test]
