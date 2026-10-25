@@ -29,6 +29,7 @@
 pub mod budget;
 #[cfg(feature = "bot")]
 pub mod channels;
+pub mod click;
 pub mod message;
 pub mod motion;
 pub mod plain;

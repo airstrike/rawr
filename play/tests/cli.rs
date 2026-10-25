@@ -491,3 +491,48 @@ fn cli_runs_the_playgrounds_rust_examples() {
         );
     }
 }
+
+/// `rawr-play` run on `tests/fixtures/{name}.rs` with `args`, writing to
+/// stdout: the image's bytes and stderr's lines.
+fn render_to_stdout(name: &str, args: &[&str]) -> (Vec<u8>, Vec<String>) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let result = Command::new(env!("CARGO_BIN_EXE_rawr-play"))
+        .arg(root.join(format!("tests/fixtures/{name}.rs")))
+        .args(args)
+        .args(["-o", "-"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    (result.stdout, stderr.lines().map(str::to_owned).collect())
+}
+
+#[test]
+fn cli_steps_click_the_counter_as_its_messages_do() {
+    let (clicked, lines) =
+        render_to_stdout("counter", &["--step", "0", "--step", "0", "--step", "1"]);
+    assert_eq!(
+        lines,
+        [
+            "action: Increment",
+            "action: Decrement",
+            "click: Increment",
+            "click: Increment",
+            "click: Decrement",
+        ]
+    );
+    let (messaged, _) = render_to_stdout(
+        "counter",
+        &[
+            "--still",
+            "--message",
+            "Message::Increment",
+            "--message",
+            "Message::Increment",
+            "--message",
+            "Message::Decrement",
+        ],
+    );
+    assert!(clicked.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(clicked == messaged, "+ + - gives the PNG the messages give");
+}

@@ -1,5 +1,11 @@
 //! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
-//! [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//! [--step N]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//!
+//! `--step N` clicks a full app's target `N` after its messages, counting
+//! from 0 in the targets of the view as it then is. A full app's image
+//! comes with an `action: <label>` line for each target of its last frame,
+//! in that order, and a `click: <label>` line for each step's target; they
+//! go where the note goes.
 //!
 //! `--time-ms N` is the wall-clock budget for a render. `--animation-ms N`
 //! is a full app's budget once its view changes (never less than
@@ -35,7 +41,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
-[--message EXPR]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
+[--message EXPR]... [--step N]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -97,6 +103,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--size" => options.size = Some(rawr_play::parse_size(&value("--size")?)?),
             "--theme" => options.theme = value("--theme")?.parse()?,
             "--message" => options.messages.push(value("--message")?),
+            "--step" => {
+                let step = number(value("--step")?)?;
+                options
+                    .steps
+                    .push(usize::try_from(step).map_err(|_| format!("step {step} is too large"))?);
+            }
             "--format" => format = Some(value("--format")?.parse()?),
             "--still" => options.still = true,
             "--time-ms" => {
@@ -137,12 +149,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
     let mut output = output;
-    let mut note = None;
+    let mut lines = Vec::new();
     let (bytes, summary) = match rawr_play::run(&source, &options)
         .map_err(|error| error.to_string())?
     {
         rawr_play::Outcome::Image(image) => {
-            note = image.note;
+            lines =
+                rawr_play::message::lines(image.note.as_deref(), &image.actions, &image.clicked);
             match image.picture {
                 rawr_play::Picture::Still(png) => {
                     let bytes =
@@ -178,15 +191,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
             .write_all(&bytes)
             .and_then(|()| stdout.flush())
             .map_err(|error| format!("cannot write the result: {error}"))?;
-        if let Some(note) = note {
-            eprintln!("{}{note}", rawr_play::message::NOTE);
+        for line in lines {
+            eprintln!("{line}");
         }
     } else {
         std::fs::write(&output, &bytes)
             .map_err(|error| format!("cannot write {output}: {error}"))?;
         println!("{output} ({summary})");
-        if let Some(note) = note {
-            println!("{}{note}", rawr_play::message::NOTE);
+        for line in lines {
+            println!("{line}");
         }
     }
     Ok(())
