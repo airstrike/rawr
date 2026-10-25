@@ -44,7 +44,9 @@ fn check_struct_sizes() {
     assert_eq!(size_of::<Scope>(), 24);
     assert_eq!(size_of::<FnPtr>(), 48);
     assert_eq!(size_of::<LexError>(), 48);
-    assert_eq!(size_of::<ParseError>(), 16);
-    assert_eq!(size_of::<EvalAltResult>(), 64);
+    // The type, the position and the error as rustc prints it.
+    assert_eq!(size_of::<ParseError>(), 24);
+    // Results box it, so this is the size of an error's allocation.
+    assert_eq!(size_of::<EvalAltResult>(), 96);
     assert_eq!(size_of::<NativeCallContext>(), 56);
 }
