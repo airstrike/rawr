@@ -2068,20 +2068,42 @@ struct PendingProgram {
     program: Option<Program>,
 }
 
-fn run_protocol() -> std::io::Result<()> {
+/// The protocol's opening, before any thread owns the program: connect,
+/// authenticate, and read the parent's first frame.
+fn open_protocol() -> std::io::Result<(std::os::unix::net::UnixStream, [u8; 32], (u8, Vec<u8>))> {
     let socket = std::env::var_os("RAWR_PROTOCOL_SOCKET").ok_or_else(|| std::io::Error::other("protocol socket"))?;
     let capability = decode_hex(&std::env::var("RAWR_PROTOCOL_CAPABILITY").map_err(|_| std::io::Error::other("protocol capability"))?)?;
-    let mut key = decode_hex(&std::env::var("RAWR_GENERATION_KEY").map_err(|_| std::io::Error::other("generation key"))?)?;
-    install_arena(key);
-    let mut program: Option<Program> = None;
-    let mut pending: Option<PendingProgram> = None;
-    let mut prepared = false;
-    let mut admitted = false;
+    let key = decode_hex(&std::env::var("RAWR_GENERATION_KEY").map_err(|_| std::io::Error::other("generation key"))?)?;
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     let mut authentication = Vec::with_capacity(32 + GENERATED_MANIFEST.len());
     authentication.extend_from_slice(&capability);
     authentication.extend_from_slice(GENERATED_MANIFEST);
     send_frame(&mut stream, 1, &authentication)?;
+    let first = receive_frame(&mut stream)?;
+    Ok((stream, key, first))
+}
+
+/// Whether the first frame prepares a program whose crate root is marked,
+/// so its `main` is Rawr code and nothing native needs the main thread
+/// kept for it.
+fn marked_main(key: &[u8; 32], (tag, payload): &(u8, Vec<u8>)) -> bool {
+    *tag == 3
+        && payload.len() >= 80
+        && payload[..32] == *key
+        && decode_snapshot(&payload[80..]).is_ok_and(|snapshot| snapshot.marked_root())
+}
+
+fn run_protocol(
+    mut stream: std::os::unix::net::UnixStream,
+    mut key: [u8; 32],
+    first: (u8, Vec<u8>),
+) -> std::io::Result<()> {
+    install_arena(key);
+    let mut program: Option<Program> = None;
+    let mut pending: Option<PendingProgram> = None;
+    let mut prepared = false;
+    let mut admitted = false;
+    let mut first = Some(first);
     let (events, received) = std::sync::mpsc::channel::<Event>();
     let mut reader = stream.try_clone()?;
     let frames = events.clone();
@@ -2093,7 +2115,10 @@ fn run_protocol() -> std::io::Result<()> {
         }
     });
     loop {
-        let (tag, payload) = next_frame(&received)?;
+        let (tag, payload) = match first.take() {
+            Some(frame) => frame,
+            None => next_frame(&received)?,
+        };
         match tag {
             3 if !prepared && payload.len() >= 48 && payload[..32] == key => {
                 let nonce: [u8; 16] = payload[32..48].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
@@ -2251,16 +2276,22 @@ fn run_protocol() -> std::io::Result<()> {
                 send_frame(&mut stream, 21, &key)?;
                 // A marked `main` runs here, on the thread that owns the
                 // program, for as long as it runs; the protocol goes on
-                // beside it, and a save restarts it (D500.1).
+                // beside it, and a save restarts it (D500.1). That thread
+                // is the process's main thread, so a windowing crate's
+                // event loop runs as under `cargo run`. A panic in it ends
+                // the program with Rust's status, 101.
                 if let Some(running) = program.as_mut().filter(|program| program.marked_main) {
                     let stream = stream.try_clone()?;
                     std::thread::Builder::new()
                         .name("rawr protocol".into())
                         .spawn(move || serve_entry(stream, received, key))?;
-                    match __rawr_profile::run(running, |_| {}) {
-                        Started::Exit(status) => exit(status),
-                        Started::Entry(entry) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
-                        Started::Serving => exit(101),
+                    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        __rawr_profile::run(running, |_| {})
+                    }));
+                    match started {
+                        Ok(Started::Exit(status)) => exit(status),
+                        Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
+                        Ok(Started::Serving) | Err(_) => exit(101),
                     }
                 }
                 let calls = events.clone();
@@ -2307,25 +2338,38 @@ fn run_protocol() -> std::io::Result<()> {
     }
 }
 
-/// The protocol and the interpreter run on a thread of their own, so the
-/// process's main thread is free for a native `main`: winit's event loop
-/// must run there (D533).
+/// End the process when the protocol ends.
+fn finish(result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => exit(0),
+        Err(error) => {
+            eprintln!("runner protocol failed: {error}");
+            exit(1);
+        }
+    }
+}
+
+/// A program whose `main` is Rawr code runs its protocol and interpreter on
+/// the process's main thread, where its `main` then runs. Otherwise they
+/// run on a thread of their own, so the main thread is free for a native
+/// `main`. winit's event loop must run there either way (D533).
 fn main() {
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
+    }
+    let (stream, key, first) = match open_protocol() {
+        Ok(opened) => opened,
+        Err(error) => finish(Err(error)),
+    };
+    if marked_main(&key, &first) {
+        finish(run_protocol(stream, key, first));
     }
     let main_thread = __rawr_internal::island::keep_main_thread();
     let protocol = std::thread::Builder::new()
         .name("rawr protocol".into())
         // The stack a process's own main thread usually has.
         .stack_size(8 << 20)
-        .spawn(|| match run_protocol() {
-            Ok(()) => exit(0),
-            Err(error) => {
-                eprintln!("runner protocol failed: {error}");
-                exit(1);
-            }
-        });
+        .spawn(move || finish(run_protocol(stream, key, first)));
     if let Err(error) = protocol {
         eprintln!("runner protocol failed: {error}");
         exit(1);
@@ -7987,10 +8031,14 @@ mod tests {
         assert!(runner.contains("__rawr_profile::publish(program)"));
         assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
         // The process's main thread is kept for a native `main`, and the
-        // protocol runs beside it.
+        // protocol runs beside it. A marked `main` runs the protocol, and
+        // then itself, on the main thread.
         let main = runner.split_once("fn main() {").expect("runner main").1;
+        assert!(main.contains(
+            "if marked_main(&key, &first) {\n        finish(run_protocol(stream, key, first));"
+        ));
         assert!(main.contains("__rawr_internal::island::keep_main_thread()"));
-        assert!(main.contains(".spawn(|| match run_protocol()"));
+        assert!(main.contains(".spawn(move || finish(run_protocol(stream, key, first)))"));
         assert!(main.contains("main_thread.serve()"));
     }
 
