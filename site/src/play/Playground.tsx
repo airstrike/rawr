@@ -100,6 +100,8 @@ export default function Playground() {
     setSession(s);
     const view = createEditor({ parent: host.current!, doc: s.state.code, onChange: (code) => s.setCode(code), onRun: () => void s.go() });
     editor.current = view;
+    // The view on its element, for the browser test and a console.
+    Object.defineProperty(host.current!, "editor", { value: view, configurable: true });
     const stop = onTheme((theme: Theme) => s.setTheme(theme));
     const keys = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -191,8 +193,8 @@ export default function Playground() {
           <ToggleGroupItem className="flex-1 md:flex-none" value="server">Run on server</ToggleGroupItem>
           <ToggleGroupItem className="flex-1 md:flex-none" value="browser">Run in browser</ToggleGroupItem>
         </ToggleGroup>
-        <Button className="order-3" onClick={() => void session?.share()}>Share</Button>
-        <Button className="order-3" variant="primary" title="Ctrl/Cmd + Enter" disabled={state.busy} onClick={() => void session?.go()}>
+        <Button id="share" className="order-3" onClick={() => void session?.share()}>Share</Button>
+        <Button id="run" className="order-3" variant="primary" title="Ctrl/Cmd + Enter" disabled={state.busy} onClick={() => void session?.go()}>
           Run
         </Button>
       </div>
