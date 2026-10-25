@@ -14,7 +14,10 @@ pub mod base;
 pub mod cargo;
 pub mod cells;
 pub mod diagnostic;
+pub mod events;
+pub mod init;
 pub mod layer;
+pub mod mcp;
 pub mod new;
 pub mod supervise;
 
@@ -51,6 +54,12 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         Ok(Request::New(New::Create { path, template })) => {
             create(path, template.as_deref(), &arguments)
         }
+        Ok(Request::Mcp { path }) => serve(path),
+        Ok(Request::Init {
+            claude,
+            codex,
+            path,
+        }) => register(claude, codex, path),
         Ok(Request::Other) => forward(&arguments),
         Err(message) => {
             eprintln!("error: {message}; run `rawr --help` for usage");
@@ -76,6 +85,16 @@ enum Request {
     },
     /// `rawr new`.
     New(New),
+    /// `rawr mcp [path]`: serve agents, with relative paths from `path`.
+    Mcp {
+        path: Option<PathBuf>,
+    },
+    /// `rawr init [--claude] [--codex] [path]`.
+    Init {
+        claude: bool,
+        codex: bool,
+        path: Option<PathBuf>,
+    },
     /// A command another binary may provide.
     Other,
 }
@@ -111,6 +130,26 @@ fn parse_new(arguments: &[OsString]) -> Result<New, String> {
     }
     let path = path.ok_or("`rawr new` needs the path of the crate to create")?;
     Ok(New::Create { path, template })
+}
+
+fn parse_init(arguments: &[OsString]) -> Result<Request, String> {
+    let (mut claude, mut codex, mut path) = (false, false, None);
+    for argument in arguments {
+        match argument.to_string_lossy().as_ref() {
+            "--claude" => claude = true,
+            "--codex" => codex = true,
+            option if option.starts_with('-') => {
+                return Err(format!("unknown argument `{option}`"));
+            }
+            other if path.is_some() => return Err(format!("unexpected argument `{other}`")),
+            _ => path = Some(PathBuf::from(argument)),
+        }
+    }
+    Ok(Request::Init {
+        claude,
+        codex,
+        path,
+    })
 }
 
 /// The arguments before the first `--`, and those after it, which belong
@@ -168,7 +207,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor") if asks_help => Ok(Request::Help),
+        Some("run" | "check" | "doctor" | "mcp" | "init") if asks_help => Ok(Request::Help),
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
             check: false,
             path,
@@ -189,6 +228,8 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
+        Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
+        Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
         Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
             check: false,
@@ -223,7 +264,10 @@ fn help(installed: &[layer::Installed]) -> String {
          Usage:\n  rawr [run] [path] [-- args]   Run a program, with its arguments after `--`\n  \
          rawr check [path]             Check a program without running it\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
-         rawr doctor [path]            Report on the environment and the project\n",
+         rawr doctor [path]            Report on the environment and the project\n  \
+         rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
+         rawr init [--claude] [--codex] [path]\n                                \
+         Register `rawr mcp` in the project's agent config\n",
     );
     for binary in installed {
         help.push_str(&format!(
@@ -401,6 +445,10 @@ fn new_help(installed: &[layer::Installed]) -> String {
 /// `rawr new`: a plain crate, or the template's crate written by the
 /// installed binary that offers it.
 fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> ExitCode {
+    if let Some(refusal) = new::outside_workspace(&path) {
+        eprintln!("error: {refusal}");
+        return ExitCode::FAILURE;
+    }
     let Some(template) = template else {
         return match new::create(path, new::plain) {
             Ok(created) => {
@@ -536,8 +584,81 @@ fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
 }
 
 fn failure(report: &rawr::diagnostic::Report) -> ExitCode {
-    eprint!("{}", diagnostic::render(report));
+    diagnostic::emit(report);
     ExitCode::FAILURE
+}
+
+/// `rawr mcp [path]`.
+fn serve(path: Option<PathBuf>) -> ExitCode {
+    let root = match path.map_or_else(std::env::current_dir, Ok) {
+        Ok(root) => std::fs::canonicalize(&root).unwrap_or(root),
+        Err(error) => {
+            eprintln!("error: rawr mcp: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match mcp::serve(root) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: rawr mcp: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `rawr init`: register `rawr mcp` for the agents asked for, else for
+/// those the project's directories name.
+fn register(claude: bool, codex: bool, path: Option<PathBuf>) -> ExitCode {
+    let root = path.unwrap_or_else(|| PathBuf::from("."));
+    let (claude, codex) = if claude || codex {
+        (claude, codex)
+    } else {
+        init::detect(&root)
+    };
+    if !claude && !codex {
+        eprintln!(
+            "error: {} has no `.claude` or `.codex` directory; pass `--claude`, `--codex` or both",
+            root.display()
+        );
+        return ExitCode::from(2);
+    }
+    let entry = match init::Entry::current(&root) {
+        Ok(entry) => entry,
+        Err(error) => {
+            eprintln!("error: rawr init: {}: {error}", root.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut agents = Vec::new();
+    for (asked, write, agent) in [
+        (
+            claude,
+            init::claude as fn(&init::Entry) -> Result<init::Written, init::Error>,
+            "Claude Code",
+        ),
+        (codex, init::codex, "Codex"),
+    ] {
+        if !asked {
+            continue;
+        }
+        match write(&entry) {
+            Ok(written) => {
+                println!("{written}");
+                agents.push(agent);
+            }
+            Err(error) => {
+                eprintln!("error: rawr init: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!(
+        "It runs {} mcp in {}. Restart {} to pick up rawr's tools.",
+        entry.command.display(),
+        entry.root.display(),
+        agents.join(" and ")
+    );
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

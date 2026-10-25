@@ -13,7 +13,6 @@ pub use rawr_cli::diagnostic;
 pub mod doctor;
 #[cfg(feature = "native-runner")]
 mod import;
-pub mod init;
 pub mod layer;
 mod mcp;
 pub mod new;
@@ -40,10 +39,8 @@ pub enum Error {
     New(new::Error),
     /// `rawr cache clean` could not read or evict the store.
     Clean(String),
-    /// `rawr mcp` lost its stdio.
+    /// `rawr-iced mcp call` could not read its call.
     Mcp(std::io::Error),
-    /// `rawr init` could not read or write an agent config.
-    Init(init::Error),
 }
 
 /// Successful output from a non-interactive command.
@@ -232,28 +229,9 @@ pub fn execute(command: command::Command) -> Result<Option<Report>, Error> {
                 successful: true,
             }))
         }
-        command::Command::Mcp => {
-            mcp::serve().map_err(Error::Mcp)?;
+        command::Command::McpCall { tool } => {
+            mcp::call(&tool).map_err(Error::Mcp)?;
             Ok(None)
-        }
-        command::Command::Init {
-            claude,
-            codex,
-            path,
-        } => {
-            let root = preview::root(path.as_ref()).map_err(Error::Preview)?;
-            let mut lines = Vec::new();
-            if claude {
-                lines.push(init::claude(&root).map_err(Error::Init)?.to_string());
-            }
-            if codex {
-                lines.push(init::codex(&root).map_err(Error::Init)?.to_string());
-            }
-            Ok(Some(Report {
-                message: lines.join("\n"),
-                warning: None,
-                successful: true,
-            }))
         }
         command::Command::Doctor { path } => {
             let report = doctor::Report::examine(path);
@@ -379,12 +357,7 @@ impl Error {
             .finish(),
             Self::Mcp(error) => rawr::diagnostic::Report::error(
                 rawr::diagnostic::code::ENVIRONMENT_UNREADABLE,
-                format!("rawr mcp: {error}"),
-            )
-            .finish(),
-            Self::Init(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_UNREADABLE,
-                format!("rawr init: {error}"),
+                format!("rawr-iced mcp call: {error}"),
             )
             .finish(),
         }
@@ -401,7 +374,6 @@ impl std::error::Error for Error {
             Self::New(error) => Some(error),
             Self::Clean(_) => None,
             Self::Mcp(error) => Some(error),
-            Self::Init(error) => Some(error),
         }
     }
 }

@@ -3004,6 +3004,9 @@ dependencies = [
 name = "rawr-cli"
 version = "0.1.0"
 dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "nix 0.27.1",
  "rawr",
  "rawr-location",
  "rawr-toml-edit",

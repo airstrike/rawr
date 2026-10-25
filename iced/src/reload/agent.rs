@@ -36,9 +36,34 @@ use iced::{mouse, Element, Length, Point, Size, Task, Vector};
 use iced_runtime::core::widget::{self, Operation};
 use iced_runtime::core::{window, Event, Rectangle, SmolStr};
 
-/// The socket a live window listens on, under the project root.
+/// The socket a live window listens on: `target/rawr/agent.sock` under the
+/// project root, or, when that path is too long for a Unix socket (macOS
+/// allows 104 bytes), one named by a hash of the root in a directory of
+/// the root's owner under `/tmp`. The window, its owner and `rawr mcp` all
+/// name it through this.
 pub fn socket(root: &std::path::Path) -> PathBuf {
-    root.join("target").join("rawr").join("agent.sock")
+    let inside = root.join("target").join("rawr").join("agent.sock");
+    if inside.as_os_str().len() <= 100 {
+        return inside;
+    }
+    // FNV-1a: the same name from every binary and toolchain.
+    let hash = root
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    #[cfg(unix)]
+    let owner = {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(root).map_or(0, |metadata| metadata.uid())
+    };
+    #[cfg(not(unix))]
+    let owner = 0;
+    PathBuf::from("/tmp")
+        .join(format!("rawr-{owner}"))
+        .join(format!("agent-{hash:016x}.sock"))
 }
 
 /// One input command.
@@ -271,7 +296,11 @@ fn listen() -> impl iced::futures::Stream<Item = Call> {
         8,
         |output: iced::futures::channel::mpsc::Sender<Call>| async move {
             let path = socket(&crate::screenshot::root());
-            let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
+            let mut directory = std::fs::DirBuilder::new();
+            directory.recursive(true);
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut directory, 0o700);
+            let _ = directory.create(path.parent().unwrap_or(&path));
             let _ = std::fs::remove_file(&path);
             let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else {
                 return;
@@ -810,6 +839,21 @@ mod tests {
     use iced_runtime::user_interface::{self, UserInterface};
 
     use super::{Call, Find, Session, Step, Target};
+
+    #[test]
+    fn a_deep_project_gets_a_short_stable_socket() {
+        let shallow = std::path::Path::new("/p/app");
+        assert_eq!(
+            super::socket(shallow),
+            shallow.join("target/rawr/agent.sock")
+        );
+        let deep = std::path::PathBuf::from(format!("/{}", "deep/".repeat(20)));
+        let socket = super::socket(&deep);
+        assert!(socket.as_os_str().len() <= 100, "{}", socket.display());
+        assert!(socket.starts_with("/tmp"));
+        assert_eq!(socket, super::socket(&deep));
+        assert_ne!(socket, super::socket(&deep.join("other")));
+    }
 
     #[derive(Clone, Debug, PartialEq)]
     enum Message {

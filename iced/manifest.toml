@@ -45,4 +45,73 @@ prelude = [
     "iced::widget::void",
 ]
 templates = ["iced"]
-commands = ["preview", "snapshot", "mcp", "init", "doctor", "cache"]
+commands = ["preview", "snapshot", "doctor", "cache"]
+
+# The tools rawr-iced adds to `rawr mcp`. Core runs each call as
+# `rawr-iced mcp call <tool>`. `input` is the arguments' JSON Schema; core
+# adds the `path` every tool takes. `screenshot` shares core's name, so it
+# is not listed: core's `screenshot` asks it first, because the window's
+# own capture needs no Screen Recording permission.
+[[tool]]
+name = "list_previews"
+description = "List the project's #[preview]s as `group/name [subject] size themes`, read from the sources without rendering."
+input = '{"type": "object", "properties": {}}'
+
+[[tool]]
+name = "render_preview"
+description = "Render one #[preview] alone, headlessly, and return the PNG. A first render builds the program's Rust dependencies."
+input = '''{"type": "object", "properties": {
+    "name": {"type": "string", "description": "The preview's name, group/name, or subject#name"},
+    "theme": {"type": "string", "description": "A declared theme, or `native`; defaults to the first declared one"}
+}, "required": ["name"]}'''
+
+[[tool]]
+name = "click"
+description = "Click in the running iced window: the widget showing `text` (exact, else contained, any case; a text input's value or placeholder counts), the widget with `id`, or the logical point `x`,`y` from the top left."
+input = '''{"type": "object", "properties": {
+    "text": {"type": "string"},
+    "id": {"type": "string"},
+    "x": {"type": "number"},
+    "y": {"type": "number"},
+    "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the input"}
+}}'''
+
+[[tool]]
+name = "type_text"
+description = "Type text into the running iced window's focused widget (click a text input first, or use `do`)."
+input = '''{"type": "object", "properties": {
+    "text": {"type": "string"},
+    "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the input"}
+}, "required": ["text"]}'''
+
+[[tool]]
+name = "press_key"
+description = "Press and release a key in the running iced window: Enter, Tab, Escape, Backspace, Delete, Space, Left/Right/Up/Down, Home, End, PageUp, PageDown or one character, optionally after cmd+, ctrl+, shift+, alt+."
+input = '''{"type": "object", "properties": {
+    "key": {"type": "string"},
+    "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the input"}
+}, "required": ["key"]}'''
+
+[[tool]]
+name = "do"
+description = "Run a sequence of inputs in the running iced window, each seeing the state the last left: `actions` of click (text, id, or x and y), type (text) and key (key)."
+input = '''{"type": "object", "properties": {
+    "actions": {"type": "array", "items": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["click", "type", "key"]},
+        "text": {"type": "string"}, "id": {"type": "string"}, "key": {"type": "string"},
+        "x": {"type": "number"}, "y": {"type": "number"}
+    }, "required": ["action"]}},
+    "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the inputs"}
+}, "required": ["actions"]}'''
+
+[[tool]]
+name = "reset"
+description = "Boot the running iced window's application or preview afresh, with fresh state."
+input = '''{"type": "object", "properties": {
+    "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the reset"}
+}}'''
+
+[[tool]]
+name = "screenshot"
+description = "Capture the running iced window through its own renderer."
+input = '{"type": "object", "properties": {}}'
