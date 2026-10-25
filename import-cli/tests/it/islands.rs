@@ -90,6 +90,32 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// winit's event loop must run on the process's main thread, so the
+/// runner keeps that thread for a native `main` and runs its protocol on
+/// another one.
+#[test]
+fn a_native_main_runs_on_the_process_main_thread() {
+    const MAIN_THREAD: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-main-thread"
+    );
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("islands-main-thread");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(MAIN_THREAD), &root);
+    let mut run = start(&root, &[]);
+    let line = run.until(Duration::from_secs(900), |line| {
+        line.starts_with("main thread ")
+    });
+    assert_eq!(line, "main thread true", "{}", run.seen.join("\n"));
+    run.until(Duration::from_secs(30), |line| line == "answer 42");
+    // The interpreter keeps a `u64` in an `i64`'s bits.
+    run.until(Duration::from_secs(30), |line| {
+        line == "wide 13907096814508502785"
+    });
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 #[test]
 fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
     use std::io::Write as _;

@@ -1156,7 +1156,26 @@ pub mod __rawr_island {
             }
         )*};
     }
-    integers!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+    integers!(i8, i16, i32, i64, isize, u8, u16, u32);
+    // The interpreter keeps a `u64` or a `usize` as the `i64` with the same
+    // bits, so one past `i64::MAX` crosses too.
+    macro_rules! wide {
+        ($($ty:ty),*) => {$(
+            impl Put for $ty {
+                fn put(&self, out: &mut Out) {
+                    out.byte(INT);
+                    out.0.extend_from_slice(&(*self as u64 as i64).to_le_bytes());
+                }
+            }
+            impl Take for $ty {
+                fn take(input: &mut In<'_>) -> Self {
+                    input.expect(INT, ::std::stringify!($ty));
+                    i64::from_le_bytes(input.eight()) as u64 as $ty
+                }
+            }
+        )*};
+    }
+    wide!(u64, usize);
     impl Put for f64 {
         fn put(&self, out: &mut Out) {
             out.byte(FLOAT);

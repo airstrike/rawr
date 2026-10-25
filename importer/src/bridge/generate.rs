@@ -2307,14 +2307,30 @@ fn run_protocol() -> std::io::Result<()> {
     }
 }
 
+/// The protocol and the interpreter run on a thread of their own, so the
+/// process's main thread is free for a native `main`: winit's event loop
+/// must run there (D533).
 fn main() {
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
-    if let Err(error) = run_protocol() {
+    let main_thread = __rawr_internal::island::keep_main_thread();
+    let protocol = std::thread::Builder::new()
+        .name("rawr protocol".into())
+        // The stack a process's own main thread usually has.
+        .stack_size(8 << 20)
+        .spawn(|| match run_protocol() {
+            Ok(()) => exit(0),
+            Err(error) => {
+                eprintln!("runner protocol failed: {error}");
+                exit(1);
+            }
+        });
+    if let Err(error) = protocol {
         eprintln!("runner protocol failed: {error}");
-        std::process::exit(1);
+        exit(1);
     }
+    main_thread.serve()
 }
 "#;
 const PROFILE_RUNNER_MAIN: &[u8] = br#"
@@ -7930,6 +7946,12 @@ mod tests {
         assert!(runner.contains("__rawr_profile::run(program, forward)"));
         assert!(runner.contains("__rawr_profile::publish(program)"));
         assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
+        // The process's main thread is kept for a native `main`, and the
+        // protocol runs beside it.
+        let main = runner.split_once("fn main() {").expect("runner main").1;
+        assert!(main.contains("__rawr_internal::island::keep_main_thread()"));
+        assert!(main.contains(".spawn(|| match run_protocol()"));
+        assert!(main.contains("main_thread.serve()"));
     }
 
     #[test]
