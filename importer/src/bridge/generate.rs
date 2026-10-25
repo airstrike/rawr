@@ -7379,6 +7379,150 @@ mod tests {
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
 
+    /// A script type in a generic item crosses as `rawr::Value`, by value,
+    /// and comes back checked against the type it stands for (D513.2).
+    #[test]
+    fn an_erased_script_type_crosses_as_rawr_value_and_comes_back_checked() {
+        use crate::surface::identity::Definition;
+        let value = || Type::Nominal {
+            definition: Definition::value(),
+            arguments: Box::default(),
+        };
+        assert_eq!(
+            super::concrete_type(&value()).as_deref(),
+            Some("__rawr_internal::Value")
+        );
+        let mut take = Vec::new();
+        super::render_take(0, 1, &value(), &mut take).unwrap();
+        assert_eq!(
+            String::from_utf8(take).unwrap(),
+            "    let argument_0 = take_value(arguments, 1)?;\n"
+        );
+        let mut give = Vec::new();
+        super::render_give(&value(), "output", &mut give).unwrap();
+        assert_eq!(
+            String::from_utf8(give).unwrap(),
+            "    Ok(output.into_inner())\n"
+        );
+        // `Receiver<T>::recv` gives a future of `Option<T>`: `T` is erased at
+        // any depth, and the future's output is checked when it comes back.
+        let signature = Signature::new(
+            Box::from([Parameter::new(0, "T".into(), Kind::Type)]),
+            Box::default(),
+            Type::Nominal {
+                definition: Definition::future(),
+                arguments: Box::from([Type::Option(Box::new(Type::Parameter(0)))]),
+            },
+        );
+        let output = super::substituted(signature.output(), &signature, &[value()]).unwrap();
+        let Type::Nominal { arguments, .. } = &output else {
+            panic!("a future");
+        };
+        assert_eq!(arguments[0], Type::Option(Box::new(value())));
+        assert!(super::holds_value(&arguments[0]));
+        let mut task = Vec::new();
+        super::render_give_task(&arguments[0], "output", &mut task).unwrap();
+        let task = String::from_utf8(task).unwrap();
+        assert!(task.contains("materialize_checked(witness"), "{task}");
+        assert!(
+            task.contains("Some(inner_0) => (Ok::<Dynamic, Error>(inner_0.into_inner()))"),
+            "{task}"
+        );
+        // A native value of an erased instance is attested by its own
+        // witness, not checked as a script value.
+        let sender = Type::Nominal {
+            definition: Definition::sipper(),
+            arguments: Box::from([value()]),
+        };
+        assert!(!super::holds_value(&sender));
+    }
+
+    /// A script closure fills `F: FnOnce() -> R`: a Rust closure that calls
+    /// it with an evaluation of its own (D513.7 b).
+    #[test]
+    fn a_script_closure_fills_an_fn_once_parameter() {
+        use crate::classify::representability::callable::Call;
+        use crate::surface::identity::Definition;
+        let mut callable = Parameter::new(0, "F".into(), Kind::Type);
+        callable.mark_callable();
+        let signature = Signature::new(
+            Box::from([callable, Parameter::new(1, "R".into(), Kind::Type)]),
+            Box::from([Type::Parameter(0)]),
+            Type::Unit,
+        );
+        assert!(super::callable_parameter(&Type::Parameter(0), &signature));
+        assert!(!super::callable_parameter(&Type::Parameter(1), &signature));
+        let call = Call::new(0, Box::default(), Type::Parameter(1));
+        let value = Type::Nominal {
+            definition: Definition::value(),
+            arguments: Box::default(),
+        };
+        let mut take = Vec::new();
+        super::render_take_callable(0, 0, &call, &signature, &[value], &mut take).unwrap();
+        let take = String::from_utf8(take).unwrap();
+        assert!(
+            take.contains("__rawr_internal::future::Callable::new((**arguments.values.get_mut(0)"),
+            "{take}"
+        );
+        assert!(
+            take.contains("move || -> __rawr_internal::Value {"),
+            "{take}"
+        );
+        assert!(take.contains("let mut values = [];"), "{take}");
+        assert!(take.contains("callable.call(&mut values)"), "{take}");
+        // A closure that gives a native value can't: the arena is the owner
+        // thread's.
+        let native = Call::new(
+            0,
+            Box::default(),
+            Type::Nominal {
+                definition: Definition::sipper(),
+                arguments: Box::default(),
+            },
+        );
+        assert!(super::render_take_callable(
+            0,
+            0,
+            &native,
+            &signature,
+            &[Type::Unit],
+            &mut Vec::new()
+        )
+        .is_err());
+    }
+
+    /// The runner of a program with no host profile: a Rust future is the
+    /// core's future, a borrowed receiver is lent to its future, and a
+    /// native value drops with its last handle (D513.3, D513.6).
+    #[test]
+    fn the_plain_runner_lends_receivers_and_releases_native_values() {
+        let neutral = std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).unwrap();
+        assert!(neutral.contains("mod __rawr_profile_host {"), "{neutral}");
+        assert!(
+            neutral.contains("__rawr_internal::future::Future::native(move || {"),
+            "{neutral}"
+        );
+        assert!(
+            neutral.contains("__rawr_internal::future::facade::definition()"),
+            "{neutral}"
+        );
+        assert!(
+            neutral.contains("__rawr_internal::island::await_main(value.cast());"),
+            "{neutral}"
+        );
+        let runtime = std::str::from_utf8(RUNTIME_SOURCE).unwrap();
+        for expected in [
+            "fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {",
+            "impl<T: Send + 'static> Drop for Held<T> {",
+            "impl<T: Clone + Send + 'static> HoldClone<T> for HoldProbe<T> {",
+            "impl Drop for Release {",
+            "fn release_dropped(&mut self) {",
+            "if entry.generation == handle.generation && entry.leased {",
+        ] {
+            assert!(runtime.contains(expected), "{expected}");
+        }
+    }
+
     #[test]
     fn a_str_input_is_lent_and_a_display_output_is_its_text() {
         let mut take = Vec::new();

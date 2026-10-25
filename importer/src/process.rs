@@ -1522,6 +1522,22 @@ mod tests {
 
     use super::*;
 
+    /// rustc's E0277 for a bound `rawr::Value` lacks names the bound and
+    /// where the runner calls the item (D513.2).
+    #[test]
+    fn an_erased_bound_names_the_trait_rawr_value_lacks() {
+        let stderr = "   Compiling rawr-generated-runner v0.0.0\n\
+error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied\n   \
+--> src/rawr_adapters_demo_0.rs:12:20\n    |\n12  |     let output = demo::make::<__rawr_internal::Value>();\n";
+        let (bound, location) = erased_bound(stderr).unwrap();
+        assert_eq!(&*bound, "Default");
+        assert_eq!(&*location, "src/rawr_adapters_demo_0.rs:12:20");
+        let other = "error[E0277]: the trait `Default` is not implemented for `Vec<Rc<u8>>`\n";
+        assert!(erased_bound(other).is_none());
+        let implemented = "error[E0277]: the trait `Hash` is not implemented for `__rawr_internal::Value`\n  --> src/main.rs:3:4\n";
+        assert_eq!(&*erased_bound(implemented).unwrap().0, "Hash");
+    }
+
     #[test]
     fn sealed_tool_selection_charges_only_attempted_paths_and_canonical_storage() {
         let executable = std::env::current_exe().expect("test executable");
