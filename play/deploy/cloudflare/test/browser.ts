@@ -6,7 +6,7 @@
 // /web is rawr-web from WEB_DIR (default target/wasm/site). On the
 // playground's island it runs the Counter in the browser (the default),
 // clicks Increment three times, edits it in the editor and keeps the count,
-// runs the Stopwatch and edits it while it runs, switches the theme from the site's header and sees the app follow, runs a
+// runs the Stopwatch and edits it while it runs, runs iced's solar_system, switches the theme from the site's header and sees the app follow, runs a
 // plain program, an iced app whose task sleeps, the "Async tasks" example
 // from its #async-tasks address on the page's real clock, picks an example
 // from the menu, runs a program on a stand-in server, and checks the phone
@@ -30,6 +30,7 @@ const tasks = readFileSync(join(repo, "play/tests/fixtures/rust/tasks.rs"), "utf
 const channel = readFileSync(join(repo, "play/tests/fixtures/channel.rs"), "utf8");
 const histogram = readFileSync(join(repo, "play/tests/fixtures/rust/histogram.rs"), "utf8");
 const stopwatch = readFileSync(join(repo, "play/tests/fixtures/stopwatch.rs"), "utf8");
+const solar = readFileSync(join(repo, "play/tests/fixtures/iced/solar_system.rs"), "utf8");
 mkdirSync(shots, { recursive: true });
 
 // The site's build, served as the Worker's assets serve it.
@@ -41,6 +42,7 @@ const examples = [
   { name: "Async tasks", code: tasks, group: "Rust" },
   { name: "Counter", code: counter, messages: ["Message::Increment", "Message::Increment"], group: "iced" },
   { name: "Stopwatch", code: stopwatch, messages: ["Message::Toggle"], group: "iced" },
+  { name: "Solar system", code: solar, group: "iced" },
 ];
 const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
   snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples, sitekey: null, shared: null, og,
@@ -326,6 +328,32 @@ try {
   check(fresh < third && fresh > 0, "and runs again from its Toggle message");
   // The snippets that follow are not full apps: they take no messages.
   await clearMessages();
+
+  // iced's solar_system, unchanged: its sun, earth and moon from the
+  // playground's shipped files, its stars from rand, its orbit on the page's
+  // clock. The sun's orange fills the middle, and the earth moves.
+  count = swaps();
+  await pick("Solar system");
+  check(!(await swapped(count)).includes("started fresh"), "iced's solar_system boots in the browser");
+  await sleep(1500);
+  const orange = async () => evaluate(`(async () => {
+    const image = new Image(); image.src = "data:image/png;base64,${await out()}"; await image.decode();
+    const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+    const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) if (data[i] > 200 && data[i + 1] > 60 && data[i + 1] < 180 && data[i + 2] < 80) count++;
+    return count; })()`);
+  const sun = await orange();
+  const orbit = await out();
+  await shot("solar-system.png");
+  await sleep(1000);
+  const later = await out();
+  await shot("solar-system-later.png");
+  console.log(`solar_system: ${sun} orange pixels`);
+  check(sun > 2000, "the sun is drawn from its shipped PNG");
+  check(orbit !== later, "and the system moves on the page's clock");
+  check(!(await evaluate(`!!document.querySelector("#out pre.error")`)), "with no error under it");
 
   // A broken edit keeps the app and shows the report under it.
   await edit("fn update", "fn update(");

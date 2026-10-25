@@ -158,6 +158,13 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                     Ok(Dynamic::from(x..=y))
                 }, false)),
 
+                // Rust's `Range<f64>`, as `random_range` takes it.
+                ExclusiveRange      => Some((|_, args| {
+                    let x = args[0].$xx().unwrap() as FLOAT;
+                    let y = args[1].$yy().unwrap() as FLOAT;
+                    Ok(Dynamic::from(x..y))
+                }, false)),
+
                 _                   => None,
             }
         };

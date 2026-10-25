@@ -1764,7 +1764,9 @@ fn ty_ok(
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
             ty_ok(input, declared) && ty_ok(output, declared)
         }
-        Type::Option(element) | Type::Sequence { element, .. } => ty_ok(element, declared),
+        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+            ty_ok(element, declared)
+        }
         Type::Tuple(members) => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
@@ -1881,6 +1883,9 @@ impl Types {
             Type::Option(element) => {
                 host::type_ref::Type::option(Self::convert_charged(element, parameters)?)
             }
+            Type::Range(element) => {
+                host::type_ref::Type::range(Self::convert_charged(element, parameters)?)
+            }
             Type::Result(ok, err) => host::type_ref::Type::result(
                 Self::convert_charged(ok, parameters)?,
                 Self::convert_charged(err, parameters)?,
@@ -1947,7 +1952,83 @@ fn signature(
         builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;
     }
     builder.output(types.convert(signature.output(), signature.parameters(), allocation)?);
+    let parameters = signature.parameters();
+    for source in signature.relations() {
+        let Some(parameter) = parameters
+            .iter()
+            .find(|parameter| parameter.index() == source.parameter())
+        else {
+            continue;
+        };
+        if let Some(relation) = relation(
+            parameter.name(),
+            source.arguments(),
+            source
+                .cases()
+                .iter()
+                .map(|case| (case.this(), case.arguments())),
+            |ty| converted_pattern(ty, parameters),
+        ) {
+            builder.relation(relation)?;
+        }
+    }
     Ok(builder.finish())
+}
+
+/// A relation on `parameter`, its types made patterns by `pattern`: `None`
+/// when one of its trait arguments can't be one. A case that can't be is
+/// dropped, and a relation without cases is none.
+pub(crate) fn relation<'a, T: 'a>(
+    parameter: &str,
+    arguments: &'a [T],
+    cases: impl Iterator<Item = (&'a T, &'a [T])>,
+    pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
+) -> Option<host::signature::Relation> {
+    let arguments = arguments
+        .iter()
+        .map(&pattern)
+        .collect::<Option<Box<[_]>>>()?;
+    let cases = cases
+        .filter_map(|(this, implemented)| {
+            Some(host::signature::Case::new(
+                pattern(this)?,
+                implemented
+                    .iter()
+                    .map(&pattern)
+                    .collect::<Option<Box<[_]>>>()?,
+            ))
+        })
+        .collect::<Box<[_]>>();
+    (!cases.is_empty()).then(|| host::signature::Relation::new(parameter, arguments, cases))
+}
+
+/// A classified type as a relation's pattern.
+fn converted_pattern(
+    ty: &representability::convert::Type,
+    parameters: &[representability::signature::Parameter],
+) -> Option<host::signature::Pattern> {
+    use host::signature::Pattern;
+    use representability::convert::Type;
+    use representability::signature::IMPL_PARAMETER;
+    Some(match ty {
+        Type::Unit => Pattern::Unit,
+        Type::Parameter(index) if index & IMPL_PARAMETER != 0 => {
+            Pattern::Variable(index & !IMPL_PARAMETER)
+        }
+        Type::Parameter(index) => Pattern::Parameter(
+            parameters
+                .iter()
+                .find(|parameter| parameter.index() == *index)?
+                .name()
+                .into(),
+        ),
+        Type::Builtin(builtin) => {
+            Pattern::Builtin(host::type_ref::Builtin::primitive(builtin.rust_name()?)?)
+        }
+        Type::Range(element) => Pattern::Range(Box::new(converted_pattern(element, parameters)?)),
+        Type::Option(element) => Pattern::Option(Box::new(converted_pattern(element, parameters)?)),
+        _ => return None,
+    })
 }
 
 /// The signature of a generic item whose callable parameter takes a script
@@ -2033,6 +2114,7 @@ fn type_usage(
         }
         Type::ProfileMessage { payload, .. }
         | Type::Option(payload)
+        | Type::Range(payload)
         | Type::Sequence {
             element: payload, ..
         } => type_usage(payload, parameters)?,

@@ -1,0 +1,102 @@
+# rawr's importer on Linux: the directory reader's tests, then a real
+# `rawr run` of a project with a Cargo dependency, and of examples/grep with
+# arguments and stdin. The ?play bot never uses the importer, so without this
+# job nothing would notice a Linux regression in it (D549).
+name: Linux
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, linux]
+    paths:
+      - "src/**"
+      - "cli/**"
+      - "canonical/**"
+      - "codegen/**"
+      - "directory/**"
+      - "import-cli/**"
+      - "importer/**"
+      - "location/**"
+      - "macros/**"
+      - "toml/**"
+      - "watch/**"
+      - "examples/grep/**"
+      - "build.rs"
+      - "build.template"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/linux.yml"
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  importer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: 0
+      TOOLCHAIN: nightly-2026-07-11
+    steps:
+      - uses: actions/checkout@v5
+
+      # The importer's pinned nightly. The fixture's rust-toolchain.toml also
+      # names rustfmt and clippy, so they are installed here rather than
+      # during the run.
+      - name: Install the pinned nightly
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal \
+            --component rustc-dev,rust-src,rustfmt,clippy --no-self-update
+          rustc "+$TOOLCHAIN" -vV
+
+      # Only the registry: a release build of the importer would crowd the
+      # repository's cache, which release.yml's wasm build also uses.
+      - name: Restore the Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: linux-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-registry-
+
+      - name: Check the glibc header layout
+        run: cc -std=gnu11 -Wall -Werror -fsyntax-only directory/tests/abi-linux.c
+
+      - name: Test rawr-directory
+        run: cargo "+$TOOLCHAIN" test --locked -p rawr-directory
+
+      # rawr finds rawr-import beside itself, and rawr-import finds
+      # rawr-import-driver beside itself, as an install leaves them.
+      - name: Build rawr, rawr-import and rawr-import-driver
+        run: |
+          cargo "+$TOOLCHAIN" build --release --locked -p rawr-cli -p rawr-import-cli
+          cargo "+$TOOLCHAIN" build --release --locked -p rawr-import \
+            --features rustc-driver --bin rawr-import-driver
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      # semver has a build script, so the run enumerates the build directory
+      # the original Linux report failed on. stdin is not a terminal, so the
+      # run ends with the program instead of waiting for a save.
+      - name: rawr run a project with a Cargo dependency
+        run: |
+          project="$RUNNER_TEMP/plain-dependency"
+          cp -R import-cli/tests/fixtures/plain-dependency "$project"
+          cd "$project"
+          rawr run < /dev/null > stdout.txt
+          cat stdout.txt
+          printf 'parsed: 1.2.3\nmajor: 1\n' | diff - stdout.txt
+
+      - name: rawr run examples/grep with arguments and stdin
+        run: |
+          input='apple pie\nbanana\ncherry pie\n'
+          printf "$input" | rawr run examples/grep -- -n pie > rawr.txt
+          printf "$input" | cargo "+$TOOLCHAIN" run --locked -q -p grep -- -n pie > cargo.txt
+          cat rawr.txt
+          diff cargo.txt rawr.txt

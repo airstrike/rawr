@@ -58,3 +58,20 @@ impl Labelled for Resource {
         format!("resource {}", self.id)
     }
 }
+
+/// rand's shape: `R: SampleRange<T>` with an impl for `Range<T>`, so the
+/// call's `T` is the range's own.
+pub trait SampleRange<T> {
+    fn low(self) -> T;
+}
+
+impl<T> SampleRange<T> for std::ops::Range<T> {
+    fn low(self) -> T {
+        self.start
+    }
+}
+
+/// The range's start, of the type the range holds.
+pub fn pick<T, R: SampleRange<T>>(range: R) -> T {
+    range.low()
+}

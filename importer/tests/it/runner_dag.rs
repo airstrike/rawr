@@ -183,7 +183,7 @@ fn context(project: &std::path::Path) -> rawr_import::context::Context {
     rawr_import::context::Context::capture(
         project,
         environment,
-        "aarch64-apple-darwin",
+        rawr_import::cargo::toolchain::HOST,
         &rawr_import::cargo::Limits::standard(),
     )
     .expect("the runner DAG context seals")

@@ -22,6 +22,8 @@ struct Identity {
 }
 
 impl Identity {
+    // dev_t is i32 on macOS and u64 on Linux.
+    #[allow(clippy::unnecessary_cast)]
     fn from_stat(value: &stat::Stat) -> Self {
         Self {
             device: value.st_dev as u64,

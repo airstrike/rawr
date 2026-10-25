@@ -255,6 +255,86 @@ pub fn deny_files(reason: &'static str) {
     let _ = NO_FILES.set(reason);
 }
 
+/// Files a host ships with the programs it runs, by the exact path a
+/// program's `include_bytes!` or `include_str!` names. `?play` ships its
+/// examples' assets this way.
+static BUNDLED: std::sync::OnceLock<&'static [(&'static str, &'static [u8])]> =
+    std::sync::OnceLock::new();
+
+/// Ship `files` with this process's programs: `include_bytes!` and
+/// `include_str!` of exactly one of their paths give its bytes, read from
+/// no disk, even after [`deny_files`]. Every other path is read as before.
+pub fn bundle_files(files: &'static [(&'static str, &'static [u8])]) {
+    let _ = BUNDLED.set(files);
+}
+
+/// The index and bytes of the file shipped for `path` with [`bundle_files`].
+pub(crate) fn bundled(path: &str) -> Option<(usize, &'static [u8])> {
+    BUNDLED
+        .get()?
+        .iter()
+        .enumerate()
+        .find_map(|(index, (shipped, bytes))| (*shipped == path).then_some((index, *bytes)))
+}
+
+/// The tag of the array a shipped file's bytes are: this base plus the
+/// file's index in [`bundle_files`].
+const BUNDLE_TAG: crate::types::dynamic::Tag = 0x6200;
+
+/// The length of the shipped file whose bytes an array tagged `tag` holds,
+/// or 0 for any other tag. A data size check leaves that many items out,
+/// so a shipped file loads where the Engine's array limit is smaller, and
+/// what a program adds to it still counts.
+pub(crate) fn bundled_len(tag: crate::types::dynamic::Tag) -> usize {
+    let Some(index) = tag.checked_sub(BUNDLE_TAG) else {
+        return 0;
+    };
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| BUNDLED.get()?.get(index))
+        .map_or(0, |(_, bytes)| bytes.len())
+}
+
+/// The static module that holds the [`bundle_files`] bytes, as constants.
+pub const BUNDLE_MODULE: &str = "rawr_bundle";
+
+/// The module path of the shipped file at `index`.
+pub(crate) fn bundled_constant(index: usize) -> String {
+    format!("{BUNDLE_MODULE}::file_{index}")
+}
+
+/// The [`bundle_files`] bytes as a module of constants, one array of bytes
+/// per file, built once. An Engine that runs programs including them
+/// registers it as the static module [`BUNDLE_MODULE`]. A program reads
+/// the constant rather than parsing an array literal of its bytes, and each
+/// constant is tagged so data size checks leave its shipped bytes out
+/// ([`bundled_len`]): a shipped file loads where the Engine's array limit is
+/// smaller than it.
+#[must_use]
+pub fn bundle_module() -> crate::Module {
+    let mut module = crate::Module::new();
+    for (index, (_, bytes)) in BUNDLED
+        .get()
+        .copied()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let array = bytes
+            .iter()
+            .map(|byte| crate::Dynamic::from_int(crate::INT::from(*byte)))
+            .collect::<crate::Array>();
+        let mut value = crate::Dynamic::from_array(array);
+        let tag = crate::types::dynamic::Tag::try_from(index)
+            .ok()
+            .and_then(|index| BUNDLE_TAG.checked_add(index))
+            .expect("a host ships a few files");
+        value.set_tag(tag);
+        module.set_var(format!("file_{index}"), value);
+    }
+    module
+}
+
 /// Why programs in this process may read no file, when [`deny_files`] was
 /// called.
 #[must_use]

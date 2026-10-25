@@ -575,8 +575,10 @@ fn concrete_type_bytes(
                         })
                 })
         }
-        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
-            concrete_type_bytes(element, actual, limit).and_then(|bytes| {
+        convert::Type::Option(element)
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => concrete_type_bytes(element, actual, limit)
+            .and_then(|bytes| {
                 bytes
                     .checked_add(std::mem::size_of::<convert::Type>())
                     .ok_or(super::Error::Limit {
@@ -584,8 +586,7 @@ fn concrete_type_bytes(
                         limit: usize::MAX,
                         actual: usize::MAX,
                     })
-            })
-        }
+            }),
         convert::Type::Result(ok, err) => {
             let ok = concrete_type_bytes(ok, actual, limit)?;
             let err = concrete_type_bytes(err, actual, limit)?;

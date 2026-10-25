@@ -5912,6 +5912,13 @@ fn render_rust_type(
             render_rust_type(element, facade, output)?;
             output.write_all(b">").map_err(|_| request::Error::Encoding)
         }
+        convert::Type::Range(element) => {
+            output
+                .write_all(b"std::ops::Range<")
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(element, facade, output)?;
+            output.write_all(b">").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Result(ok, err) => {
             output
                 .write_all(b"Result<")
@@ -6449,9 +6456,9 @@ fn render_take(
         convert::Type::ProfileMessage { payload, .. } => {
             return render_take(local, index, payload, output);
         }
-        convert::Type::Option(_) | convert::Type::Result(..) => {
-            // A Rawr `Option` of the converted `T`, or a Rawr
-            // `Result` of the converted `T` and `E`.
+        convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Range(_) => {
+            // A Rawr `Option` of the converted `T`, a Rawr `Result` of the
+            // converted `T` and `E`, or a float range.
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(
@@ -6506,6 +6513,7 @@ fn render_give(
         }
         convert::Type::Option(_)
         | convert::Type::Result(..)
+        | convert::Type::Range(_)
         | convert::Type::Sequence { .. }
         | convert::Type::Tuple(_) => {
             let mut converted = String::new();
@@ -6587,6 +6595,19 @@ fn render_from_dynamic(
                 "{{ let mut {value} = {value}; match __rawr_internal::option::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ None => Ok(None), Some({inner}) => ({converted}).map(Some) }} }}"
             )
         }
+        // Rawr's `Range<f64>`, as Rust's `Range<f32>` or `Range<f64>`.
+        convert::Type::Range(element) => match element.as_ref() {
+            convert::Type::Builtin(convert::Builtin::F64) => cast(output, "std::ops::Range<f64>"),
+            convert::Type::Builtin(convert::Builtin::F32) => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::Range<f64>>().map(|range| (range.start as f32)..(range.end as f32)).map_err(|_| Error::TypeMismatch)"
+            ),
+            _ => {
+                return Err(request::Error::Drift {
+                    field: "a range of other than floats entered runtime argument decoding",
+                });
+            }
+        },
         convert::Type::Result(ok, err) => {
             let inner = format!("inner_{depth}");
             let mut ok_converted = String::new();
@@ -6651,6 +6672,20 @@ fn render_to_dynamic(
                 "match {value} {{ None => Ok(__rawr_internal::option::none()), Some({inner}) => ({converted}).map(__rawr_internal::option::some) }}"
             )
         }
+        convert::Type::Range(element) => match element.as_ref() {
+            convert::Type::Builtin(convert::Builtin::F64) => {
+                write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
+            }
+            convert::Type::Builtin(convert::Builtin::F32) => write!(
+                output,
+                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(f64::from(range.start)..f64::from(range.end))) }}"
+            ),
+            _ => {
+                return Err(request::Error::Drift {
+                    field: "a range of other than floats entered runtime output encoding",
+                });
+            }
+        },
         convert::Type::Result(ok, err) => {
             let inner = format!("inner_{depth}");
             let mut ok_converted = String::new();
@@ -6833,6 +6868,7 @@ fn substituted(
             arguments: all(arguments)?,
         },
         convert::Type::Option(element) => convert::Type::Option(one(element)?),
+        convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
         convert::Type::Sequence { element, owned } => convert::Type::Sequence {
             element: one(element)?,
@@ -7111,6 +7147,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             text
         }
         convert::Type::Option(element) => format!("Option<{}>", concrete_type(element)?),
+        convert::Type::Range(element) => format!("std::ops::Range<{}>", concrete_type(element)?),
         convert::Type::Result(ok, err) => {
             format!("Result<{}, {}>", concrete_type(ok)?, concrete_type(err)?)
         }
@@ -7188,6 +7225,7 @@ fn render_generic_arguments(
                 let concrete = match ty {
                     convert::Type::Nominal { .. }
                     | convert::Type::Option(_)
+                    | convert::Type::Range(_)
                     | convert::Type::Result(..) => concrete_type(ty),
                     _ => None,
                 };
@@ -7205,6 +7243,7 @@ fn render_generic_arguments(
                         // known; Rust infers it otherwise.
                         convert::Type::Nominal { .. }
                         | convert::Type::Option(_)
+                        | convert::Type::Range(_)
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
@@ -7582,6 +7621,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
             convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
         ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
+        convert::Type::Range(_) => "Dynamic::from(0.0_f64..0.0_f64)",
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
         | convert::Type::Nominal { .. }

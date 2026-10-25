@@ -1,15 +1,27 @@
 //! The entire production unsafe boundary. See ../SAFETY.md for ABI provenance.
+//!
+//! 64-bit macOS and 64-bit Linux share the POSIX descriptor operations. Each
+//! has its own native batch read and union answer.
 
 use std::ffi::CStr;
 use std::io;
 
-#[cfg(all(target_os = "macos", target_pointer_width = "64"))]
+#[cfg(any(
+    all(target_os = "macos", target_pointer_width = "64"),
+    all(target_os = "linux", target_pointer_width = "64")
+))]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 
-#[cfg(all(target_os = "macos", target_pointer_width = "64"))]
+#[cfg(any(
+    all(target_os = "macos", target_pointer_width = "64"),
+    all(target_os = "linux", target_pointer_width = "64")
+))]
 pub(super) struct Directory(OwnedFd);
 
-#[cfg(not(all(target_os = "macos", target_pointer_width = "64")))]
+#[cfg(not(any(
+    all(target_os = "macos", target_pointer_width = "64"),
+    all(target_os = "linux", target_pointer_width = "64")
+)))]
 pub(super) struct Directory;
 
 #[cfg(all(target_os = "macos", target_pointer_width = "64"))]
@@ -25,7 +37,10 @@ unsafe extern "C" {
     ) -> libc::size_t;
 }
 
-#[cfg(all(target_os = "macos", target_pointer_width = "64"))]
+#[cfg(any(
+    all(target_os = "macos", target_pointer_width = "64"),
+    all(target_os = "linux", target_pointer_width = "64")
+))]
 impl Directory {
     pub(super) fn open(path: &CStr) -> io::Result<Self> {
         Self::open_with(path, libc::O_NOFOLLOW)
@@ -93,7 +108,10 @@ impl Directory {
         // successful syscall initialize them. Only st_mode is inspected.
         Ok(unsafe { stat.assume_init() }.st_mode)
     }
+}
 
+#[cfg(all(target_os = "macos", target_pointer_width = "64"))]
+impl Directory {
     pub(super) fn union(&self) -> io::Result<bool> {
         let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
         // SAFETY: our live descriptor is valid, and stat is writable storage for
@@ -129,12 +147,62 @@ impl Directory {
     }
 }
 
-#[cfg(all(test, target_os = "macos", target_pointer_width = "64"))]
+/// The transfer size as the kernel's `unsigned int count`, passed as a long.
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+const COUNT: libc::c_long = {
+    assert!(crate::BUFFER_BYTES <= u32::MAX as usize);
+    crate::BUFFER_BYTES as libc::c_long
+};
+
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+impl Directory {
+    /// Linux has no MNT_UNION. Overlayfs merges its layers in the kernel and
+    /// returns each name once, without whiteouts, and mainline has no other
+    /// union mount. glibc, musl and std's ReadDir apply no union rule, so the
+    /// honest answer is an ordinary directory, with no probe to fail.
+    pub(super) fn union(&self) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    pub(super) fn read(&mut self, buffer: &mut crate::Buffer) -> io::Result<usize> {
+        // SAFETY: SYS_getdents64 takes (unsigned int fd, struct linux_dirent64
+        // *dirent, unsigned int count). Each is passed as a full long, the
+        // width glibc's and musl's variadic syscall() read every argument at.
+        // The live owned descriptor stays owned. The uniquely borrowed
+        // initialized array is writable for exactly COUNT bytes, and the
+        // kernel writes only whole records inside that extent. The call
+        // retains no pointer. Both libcs return -1 and set errno on failure.
+        let bytes = unsafe {
+            libc::syscall(
+                libc::SYS_getdents64,
+                libc::c_long::from(self.0.as_raw_fd()),
+                buffer.as_mut_ptr(),
+                COUNT,
+            )
+        };
+        if bytes < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            usize::try_from(bytes).map_err(|_| io::ErrorKind::InvalidData.into())
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "macos", target_pointer_width = "64"),
+        all(target_os = "linux", target_pointer_width = "64")
+    )
+))]
 mod tests;
 
-// The importer already constrains its compiler host. Keeping this module
-// buildable elsewhere does not turn an unimplemented ABI into a directory proof.
-#[cfg(not(all(target_os = "macos", target_pointer_width = "64")))]
+// Keeping this module buildable elsewhere does not turn an unimplemented ABI
+// into a directory proof.
+#[cfg(not(any(
+    all(target_os = "macos", target_pointer_width = "64"),
+    all(target_os = "linux", target_pointer_width = "64")
+)))]
 impl Directory {
     pub(super) fn open(_path: &CStr) -> io::Result<Self> {
         Err(io::ErrorKind::Unsupported.into())

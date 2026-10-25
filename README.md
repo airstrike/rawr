@@ -89,9 +89,10 @@ it, and says how to install it when it is missing.
 - **rawr-iced** runs [iced](https://github.com/iced-rs/iced) apps and reloads
   them when you save a marked file.
 
-Both need a Unix system and the pinned nightly `nightly-2026-07-11` with the
-`rustc-dev` and `rust-src` components. They have been tested on Apple Silicon
-Macs.
+Both need 64-bit macOS or 64-bit Linux and the pinned nightly
+`nightly-2026-07-11` with the `rustc-dev` and `rust-src` components. Both have
+been tested on Apple Silicon Macs. CI runs rawr-import on x86_64 Linux.
+rawr-iced hasn't been tried on Linux. Windows isn't supported.
 
 ```sh
 rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src

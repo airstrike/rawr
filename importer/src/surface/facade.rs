@@ -247,6 +247,54 @@ pub struct Signature {
     bounds: Bounds,
     inputs: Box<[Type]>,
     output: Type,
+    /// What its bounds tie between its type parameters
+    /// (`representability::signature::Relation`).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    relations: Box<[Relation]>,
+}
+
+/// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
+/// an argument that fills `R` with one case's self type gives `A..` that
+/// case's trait arguments.
+#[derive(Deserialize, Serialize)]
+pub struct Relation {
+    parameter: Box<str>,
+    arguments: Box<[Type]>,
+    cases: Box<[Case]>,
+}
+
+/// One implementation of a [`Relation`]'s trait, its impl parameters
+/// [`Type::Variable`]s.
+#[derive(Deserialize, Serialize)]
+pub struct Case {
+    this: Type,
+    arguments: Box<[Type]>,
+}
+
+impl Relation {
+    /// The type parameter the bound is on.
+    pub fn parameter(&self) -> &str {
+        &self.parameter
+    }
+    /// The trait's arguments in the item's terms.
+    pub const fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
+    /// The trait's implementations.
+    pub const fn cases(&self) -> &[Case] {
+        &self.cases
+    }
+}
+
+impl Case {
+    /// The implementation's self type.
+    pub const fn this(&self) -> &Type {
+        &self.this
+    }
+    /// The implementation's trait arguments.
+    pub const fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
 }
 
 /// Closed Rawr compiler type reference vocabulary.
@@ -285,6 +333,10 @@ pub enum Type {
     Array(Box<Type>),
     /// An output tuple, a Rawr tuple.
     Tuple(Box<[Type]>),
+    /// Rust's `Range<T>` of a float, a Rawr `Range<f64>` value.
+    Range(Box<Type>),
+    /// An implementation's own type parameter in a [`Case`].
+    Variable(u32),
     /// A script closure a generic item's `F: FnOnce` parameter takes, of
     /// one input (a tuple of several, or unit) and one output (D513.7 b).
     Callable { input: Box<Type>, output: Box<Type> },
@@ -311,7 +363,9 @@ impl Type {
             Self::FunctionItem { input, output }
             | Self::Callable { input, output }
             | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
-            Self::Option(element) | Self::Array(element) => element.declared(declared),
+            Self::Option(element) | Self::Array(element) | Self::Range(element) => {
+                element.declared(declared)
+            }
             Self::Tuple(members) => members.iter().all(|ty| ty.declared(declared)),
             _ => true,
         }
@@ -1857,6 +1911,10 @@ impl Signature {
     pub const fn output(&self) -> &Type {
         &self.output
     }
+    /// Return what its bounds tie between its type parameters.
+    pub const fn relations(&self) -> &[Relation] {
+        &self.relations
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -1992,6 +2050,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 bounds: Box::default(),
                 inputs: Box::default(),
                 output: ty(plan.ty(), &[])?,
+                relations: Box::default(),
             },
         ),
         Representability::Value(_)
@@ -2075,7 +2134,84 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         bounds,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), source.parameters())?,
+        relations: relations(source)?,
     })
+}
+
+/// The signature's relations, their impl parameters as variables. A
+/// relation on a parameter the signature does not keep is dropped.
+fn relations(
+    source: &representability::signature::Signature,
+) -> Result<Box<[Relation]>, super::Error> {
+    use representability::signature::IMPL_PARAMETER;
+    fn pattern(
+        source: &representability::convert::Type,
+        parameters: &[representability::signature::Parameter],
+    ) -> Result<Type, super::Error> {
+        Ok(match source {
+            representability::convert::Type::Parameter(index) if index & IMPL_PARAMETER != 0 => {
+                Type::Variable(index & !IMPL_PARAMETER)
+            }
+            representability::convert::Type::Range(element) => {
+                Type::Range(Box::new(pattern(element, parameters)?))
+            }
+            representability::convert::Type::Option(element) => {
+                Type::Option(Box::new(pattern(element, parameters)?))
+            }
+            other => ty(other, parameters)?,
+        })
+    }
+    let parameters = source.parameters();
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(source.relations().len())
+        .map_err(|_| super::Error::Allocation)?;
+    for relation in source.relations() {
+        let Some(parameter) = parameters
+            .iter()
+            .find(|parameter| parameter.index() == relation.parameter())
+        else {
+            continue;
+        };
+        let Ok(arguments) = relation
+            .arguments()
+            .iter()
+            .map(|argument| pattern(argument, parameters))
+            .collect::<Result<Box<[_]>, _>>()
+        else {
+            continue;
+        };
+        let mut cases = Vec::new();
+        cases
+            .try_reserve_exact(relation.cases().len())
+            .map_err(|_| super::Error::Allocation)?;
+        for case in relation.cases() {
+            let Ok(this) = pattern(case.this(), parameters) else {
+                continue;
+            };
+            let Ok(implemented) = case
+                .arguments()
+                .iter()
+                .map(|argument| pattern(argument, parameters))
+                .collect::<Result<Box<[_]>, _>>()
+            else {
+                continue;
+            };
+            cases.push(Case {
+                this,
+                arguments: implemented,
+            });
+        }
+        if cases.is_empty() {
+            continue;
+        }
+        output.push(Relation {
+            parameter: copy(parameter.name())?,
+            arguments,
+            cases: cases.into_boxed_slice(),
+        });
+    }
+    Ok(output.into_boxed_slice())
 }
 
 /// A generic item's signature whose callable parameter takes a script
@@ -2126,6 +2262,7 @@ fn callable_signature(
         bounds,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), all)?,
+        relations: Box::default(),
     })
 }
 
@@ -2218,6 +2355,7 @@ fn ty(
         },
         Source::ProfileMessage { payload, .. } => ty(payload, parameters)?,
         Source::Option(element) => Type::Option(Box::new(ty(element, parameters)?)),
+        Source::Range(element) => Type::Range(Box::new(ty(element, parameters)?)),
         Source::Result(ok, err) => Type::Result(
             Box::new(ty(ok, parameters)?),
             Box::new(ty(err, parameters)?),

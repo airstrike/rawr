@@ -282,6 +282,8 @@ fn name(value: &OsStr, graph: &GraphBudget) -> Result<CString, Error> {
     CString::from_vec_with_nul(bytes).map_err(|_| Error::Codec("retained lookup name contains NUL"))
 }
 
+// dev_t and mode_t are i32 and u16 on macOS, u64 and u32 on Linux.
+#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 fn matches(current: &rustix::fs::Stat, expected: &Metadata) -> bool {
     current.st_dev as u64 == expected.dev()
         && current.st_ino == expected.ino()

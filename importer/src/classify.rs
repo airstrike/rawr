@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 16;
+const CLASSIFIER_VERSION: u32 = 17;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1076,6 +1076,115 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         *parameters = extended.into_boxed_slice();
         futures
+    }
+
+    /// Each bound `R: Trait<A..>` that names another type parameter in
+    /// `A..`, with the trait's implementations in this crate whose self
+    /// type and arguments Rawr can name. rand's `random_range` has `R:
+    /// SampleRange<T>`, implemented for `Range<T>`: a call with a
+    /// `Range<f32>` fills `T` with `f32`, as rustc infers it.
+    fn relations(
+        &self,
+        generics: &model::Generics,
+    ) -> Result<Box<[representability::signature::Relation]>, Failure> {
+        use representability::convert::Type;
+        use representability::signature::{Case, Relation, IMPL_PARAMETER};
+        /// `ty` with each parameter marked as the impl's own.
+        fn marked(ty: Type) -> Type {
+            match ty {
+                Type::Parameter(index) => Type::Parameter(IMPL_PARAMETER | index),
+                Type::Range(element) => Type::Range(Box::new(marked(*element))),
+                Type::Option(element) => Type::Option(Box::new(marked(*element))),
+                Type::Nominal {
+                    definition,
+                    arguments,
+                } => Type::Nominal {
+                    definition,
+                    arguments: arguments.into_vec().into_iter().map(marked).collect(),
+                },
+                other => other,
+            }
+        }
+        /// More implementations than this are not read as cases.
+        const CASES: usize = 64;
+        let mut relations = Vec::new();
+        for predicate in generics.predicates() {
+            let model::Predicate::Bound {
+                ty: model::Type::Parameter { index, .. },
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    },
+            } = predicate
+            else {
+                continue;
+            };
+            if !binders.is_empty() || arguments.is_empty() {
+                continue;
+            }
+            let Some(converted) = arguments
+                .iter()
+                .map(|argument| match argument {
+                    model::Argument::Type(ty) => self.convert(ty).ok(),
+                    _ => None,
+                })
+                .collect::<Option<Box<[_]>>>()
+            else {
+                continue;
+            };
+            // `T: Mul<T>` ties nothing new; `R: SampleRange<T>` ties `T`.
+            if !converted.iter().any(|ty| names_other_parameter(ty, *index)) {
+                continue;
+            }
+            let mut cases = Vec::new();
+            for implementation in self.graph.implementations() {
+                let model::Trait::Trait {
+                    id,
+                    arguments: implemented,
+                } = implementation.trait_ref()
+                else {
+                    continue;
+                };
+                // An impl's trait reference names `Self` first; a bound's
+                // arguments start after it.
+                let Some(implemented) = implemented.get(1..) else {
+                    continue;
+                };
+                if id != trait_id
+                    || implementation.polarity() != model::Polarity::Positive
+                    || implemented.len() != arguments.len()
+                {
+                    continue;
+                }
+                let Ok(this) = self.convert(implementation.self_type()) else {
+                    continue;
+                };
+                let Some(implemented) = implemented
+                    .iter()
+                    .map(|argument| match argument {
+                        model::Argument::Type(ty) => self.convert(ty).ok().map(marked),
+                        _ => None,
+                    })
+                    .collect::<Option<Box<[_]>>>()
+                else {
+                    continue;
+                };
+                cases.push(Case::new(marked(this), implemented));
+                if cases.len() > CASES {
+                    break;
+                }
+            }
+            if cases.is_empty() || cases.len() > CASES {
+                continue;
+            }
+            self.retain_array::<Case>(cases.len())?;
+            relations.push(Relation::new(*index, converted, cases.into_boxed_slice()));
+        }
+        self.retain_array::<Relation>(relations.len())?;
+        Ok(relations.into_boxed_slice())
     }
 
     fn definition_name(&self, definition: &api::identity::Definition) -> Option<&str> {
@@ -2335,6 +2444,7 @@ fn field_type_nameable(
         }
         Type::ProfileMessage { payload, .. }
         | Type::Option(payload)
+        | Type::Range(payload)
         | Type::Sequence {
             element: payload, ..
         } => field_type_nameable(payload, nominal),
@@ -2497,6 +2607,7 @@ fn type_nameable(
         }
         representability::convert::Type::ProfileMessage { payload, .. }
         | representability::convert::Type::Option(payload)
+        | representability::convert::Type::Range(payload)
         | representability::convert::Type::Sequence {
             element: payload, ..
         } => type_nameable(payload, root, names),
@@ -3386,7 +3497,9 @@ impl<P: api::Phase> Context<'_, P> {
                     crate::surface::identity::Definition::of(candidate.id()) == *definition
                 })
                 .is_some_and(|index| self.implements_for_any(index, "Clone")),
-            Type::Option(element) | Type::Sequence { element, .. } => self.clones(element),
+            Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+                self.clones(element)
+            }
             Type::Result(ok, err) => self.clones(ok) && self.clones(err),
             Type::Tuple(members) => members.iter().all(|member| self.clones(member)),
             Type::FunctionItem { .. } | Type::ProfileMessage { .. } | Type::Parameter(_) => false,
@@ -3506,11 +3619,13 @@ impl<P: api::Phase> Context<'_, P> {
         }) {
             return Err(representability::reject::Kind::ScriptFutureType.into());
         }
+        let relations = self.relations(generics)?;
         let signature_plan = representability::signature::Signature::new(
             parameters,
             inputs.into_boxed_slice(),
             output,
-        );
+        )
+        .with_relations(relations);
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
             model::Receiver::Value { .. } => Some(ownership::Receiver::Owned),
@@ -3580,6 +3695,19 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
+                } else if let Some(element) = range_element(definition, arguments) {
+                    // A float range, as rand's `random_range(0.5..1.0)` takes,
+                    // or the impl parameter a relation case binds.
+                    let element = self.convert(element)?;
+                    if !matches!(
+                        element,
+                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                    ) {
+                        return Err(
+                            representability::reject::Kind::UnsupportedGenericArgument.into()
+                        );
+                    }
+                    Type::Range(Box::new(element))
                 } else if let Some(element) = option_element(definition, arguments) {
                     Type::Option(Box::new(self.convert(element)?))
                 } else if let Some((ok, err)) = result_elements(definition, arguments) {
@@ -4110,6 +4238,23 @@ fn future_projections(
     }
 }
 
+/// Whether `ty` names a type parameter other than the one at `except`.
+fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> bool {
+    use representability::convert::Type;
+    let other = |ty: &Type| names_other_parameter(ty, except);
+    match ty {
+        Type::Parameter(index) => *index != except,
+        Type::Unit | Type::Builtin(_) => false,
+        Type::Nominal { arguments, .. } | Type::Tuple(arguments) => arguments.iter().any(other),
+        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+            other(element)
+        }
+        Type::Result(ok, err) => other(ok) || other(err),
+        Type::FunctionItem { input, output } => other(input) || other(output),
+        Type::ProfileMessage { payload, .. } => other(payload),
+    }
+}
+
 /// Whether `ty` names the type parameter at `index` anywhere in it.
 fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
     use representability::convert::Type;
@@ -4119,7 +4264,9 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
         Type::Nominal { arguments, .. } => arguments
             .iter()
             .any(|argument| names_parameter(argument, index)),
-        Type::Option(element) | Type::Sequence { element, .. } => names_parameter(element, index),
+        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+            names_parameter(element, index)
+        }
         Type::Result(ok, err) => names_parameter(ok, index) || names_parameter(err, index),
         Type::Tuple(members) => members.iter().any(|member| names_parameter(member, index)),
         Type::FunctionItem { input, output } => {
@@ -4369,6 +4516,27 @@ fn is_string(definition: &model::Definition) -> bool {
     unit.authority().sysroot().is_some()
         && matches!(unit.crate_name(), "alloc" | "std")
         && definition.display_path().last() == Some("String")
+}
+
+/// `T` of core's `ops::Range<T>`, which Rawr holds as a value when `T` is
+/// a float.
+fn range_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
+    let unit = definition.id().unit();
+    let path = definition.display_path().collect::<Vec<_>>();
+    if unit.authority().sysroot().is_none()
+        || unit.crate_name() != "core"
+        || path.last() != Some(&"Range")
+        || !path.contains(&"ops")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Type(element)] => Some(element),
+        _ => None,
+    }
 }
 
 /// `T` of core's `Option<T>`, which Rawr represents as its own `Option`.

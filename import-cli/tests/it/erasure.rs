@@ -255,6 +255,21 @@ fn main() {
 ",
         "impl natives::Labelled",
     );
+    // `R: SampleRange<T>` and its `impl<T> SampleRange<T> for Range<T>`
+    // give `T` the range's floats, as rustc infers it: an `f32` from `f32`
+    // bounds and from literals an `f32` binding takes.
+    runs(
+        "
+fn main() {
+    let width: f32 = 8.0;
+    let left = natives::pick((-width / 2.0)..(width / 2.0));
+    let size: f32 = natives::pick(0.5..1.0);
+    let wide = natives::pick(2.0_f64..3.0);
+    println!(\"{left} {size} {wide}\");
+}
+",
+        "-4 0.5 2\n",
+    );
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native

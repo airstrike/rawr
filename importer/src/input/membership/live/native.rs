@@ -101,6 +101,8 @@ fn raw<T>(result: rustix::io::Result<T>) -> std::result::Result<T, i32> {
     result.map_err(rustix::io::Errno::raw_os_error)
 }
 
+// The stat field types differ by platform (u64 nanoseconds on Linux).
+#[allow(clippy::unnecessary_cast)]
 fn metadata(result: std::result::Result<stat::Stat, i32>) -> Stat {
     let metadata = match result {
         Ok(metadata) => metadata,
@@ -125,10 +127,10 @@ fn metadata(result: std::result::Result<stat::Stat, i32>) -> Stat {
         owner: metadata.st_uid,
         mode,
         length: metadata.st_size as u64,
-        modified_seconds: metadata.st_mtime,
-        modified_nanos: metadata.st_mtime_nsec,
-        changed_seconds: metadata.st_ctime,
-        changed_nanos: metadata.st_ctime_nsec,
+        modified_seconds: metadata.st_mtime as i64,
+        modified_nanos: metadata.st_mtime_nsec as i64,
+        changed_seconds: metadata.st_ctime as i64,
+        changed_nanos: metadata.st_ctime_nsec as i64,
     })
 }
 

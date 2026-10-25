@@ -34,7 +34,7 @@ impl Project {
         let context = rawr_import::context::Context::capture(
             project.path(),
             Environment::capture().expect("the P5 DAG environment captures"),
-            "aarch64-apple-darwin",
+            rawr_import::cargo::toolchain::HOST,
             &rawr_import::cargo::Limits::standard(),
         )
         .expect("the P5 DAG context captures");

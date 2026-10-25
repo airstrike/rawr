@@ -112,6 +112,9 @@ pub enum Type {
     },
     /// An output tuple: a Rawr tuple of the converted members.
     Tuple(Box<[Type]>),
+    /// Rust's `core::ops::Range<T>` of a float, as rand's `random_range`
+    /// takes: a Rawr `Range<f64>` value.
+    Range(Box<Type>),
     /// One direct compile-time imported function-item operand.
     FunctionItem {
         input: Box<Type>,

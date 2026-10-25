@@ -57,6 +57,89 @@ pub struct Signature {
     parameters: Box<[Parameter]>,
     inputs: Box<[super::convert::Type]>,
     output: super::convert::Type,
+    /// What its bounds tie between its type parameters, as rustc's trait
+    /// selection reads them.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    relations: Box<[Relation]>,
+}
+
+/// The bit that marks a pattern variable of a [`Case`]: the impl's own
+/// type parameter at its low bits.
+pub const IMPL_PARAMETER: u32 = 0x4000_0000;
+
+/// A bound `R: Trait<A..>` on the type parameter `R`, with the trait's
+/// implementations whose self types Rawr can name. rand's `random_range`
+/// has `R: SampleRange<T>`, and rand implements `SampleRange<T>` for
+/// `Range<T>`. A call whose argument fills `R` with one case's self type
+/// gives that case's trait arguments to `A..`, so `random_range(0.5..1.0)`
+/// gives the `T` of the range's floats, as rustc infers it.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Relation {
+    parameter: u32,
+    arguments: Box<[super::convert::Type]>,
+    cases: Box<[Case]>,
+}
+
+/// One implementation of a [`Relation`]'s trait: its self type and its
+/// trait arguments, with the impl's parameters as [`IMPL_PARAMETER`]
+/// variables.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Case {
+    this: super::convert::Type,
+    arguments: Box<[super::convert::Type]>,
+}
+
+impl Relation {
+    pub(crate) const fn new(
+        parameter: u32,
+        arguments: Box<[super::convert::Type]>,
+        cases: Box<[Case]>,
+    ) -> Self {
+        Self {
+            parameter,
+            arguments,
+            cases,
+        }
+    }
+
+    /// The type parameter the bound is on.
+    #[must_use]
+    pub const fn parameter(&self) -> u32 {
+        self.parameter
+    }
+
+    /// The trait's arguments in the item's terms.
+    #[must_use]
+    pub const fn arguments(&self) -> &[super::convert::Type] {
+        &self.arguments
+    }
+
+    /// The trait's implementations.
+    #[must_use]
+    pub const fn cases(&self) -> &[Case] {
+        &self.cases
+    }
+}
+
+impl Case {
+    pub(crate) const fn new(
+        this: super::convert::Type,
+        arguments: Box<[super::convert::Type]>,
+    ) -> Self {
+        Self { this, arguments }
+    }
+
+    /// The implementation's self type.
+    #[must_use]
+    pub const fn this(&self) -> &super::convert::Type {
+        &self.this
+    }
+
+    /// The implementation's trait arguments.
+    #[must_use]
+    pub const fn arguments(&self) -> &[super::convert::Type] {
+        &self.arguments
+    }
 }
 
 impl Parameter {
@@ -123,7 +206,7 @@ impl Parameter {
 }
 
 impl Signature {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         parameters: Box<[Parameter]>,
         inputs: Box<[super::convert::Type]>,
         output: super::convert::Type,
@@ -132,7 +215,19 @@ impl Signature {
             parameters,
             inputs,
             output,
+            relations: Box::new([]),
         }
+    }
+
+    pub(crate) fn with_relations(mut self, relations: Box<[Relation]>) -> Self {
+        self.relations = relations;
+        self
+    }
+
+    /// What its bounds tie between its type parameters.
+    #[must_use]
+    pub const fn relations(&self) -> &[Relation] {
+        &self.relations
     }
 
     #[must_use]

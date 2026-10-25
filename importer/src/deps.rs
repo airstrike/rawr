@@ -280,10 +280,12 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
     // The runner this build linked, and the object files its debug map names
     // (macOS keeps debug info in them, by path): a rebuilt runner's earlier
     // objects, and every output of its other unit hashes, are superseded.
+    // Without a Mach-O debug map (an ELF runner on Linux) the other hashes
+    // still go, and every object of the current one stays.
     let linked = rebuilt
         .then(|| current_runner(shared, runner))
         .flatten()
-        .and_then(|(hash, binary)| Some((hash, debug_map_objects(&binary)?)));
+        .map(|(hash, binary)| (hash, debug_map_objects(&binary)));
     let before = |entry: &fs::DirEntry| {
         entry
             .metadata()
@@ -328,7 +330,10 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
                         directory == "deps"
                             && linked.as_ref().is_some_and(|(current, objects)| {
                                 hash != current
-                                    || (file.ends_with(".rcgu.o") && !objects.contains(file))
+                                    || (file.ends_with(".rcgu.o")
+                                        && objects
+                                            .as_ref()
+                                            .is_some_and(|objects| !objects.contains(file)))
                             })
                     } else {
                         superseded

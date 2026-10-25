@@ -198,7 +198,9 @@ impl Default for Limits {
             operations: 1_000_000,
             call_depth: 32,
             string_size: 64 * 1024,
-            // A 128 by 128 RGBA pixel buffer.
+            // A 128 by 128 RGBA pixel buffer. The files the playground's
+            // examples include (`rawr_play_sandbox::bundle`) are left out of
+            // it, as the program's text is.
             array_size: 64 * 1024,
             // One rule for every collection: a `HashMap` already counts
             // against the array limit, so maps get the same 65,536 items.
@@ -329,6 +331,16 @@ pub fn iced_claims() -> &'static rawr::layer::Claims {
 /// `include_bytes!` fail with this.
 const NO_FILES: &str = "?play has no files";
 
+/// A snippet's files: none of the server's, only the playground examples'
+/// shipped assets (`rawr_play_sandbox::bundle`). rand is seeded the same
+/// for every render, as its clock is frozen the same, so a snippet's frames
+/// repeat.
+fn no_files() {
+    rawr::resolve::deny_files(NO_FILES);
+    rawr_play_sandbox::bundle::install();
+    rawr_play_sandbox::rand::seed(rawr_play_sandbox::rand::RENDER_SEED);
+}
+
 /// Run one snippet: render it when rawr-iced claims it, else run it as a
 /// plain program.
 pub fn run(source: &str, options: &Options) -> Result<Outcome, PlayError> {
@@ -342,7 +354,7 @@ pub fn run_claimed(
     claims: &rawr::layer::Claims,
 ) -> Result<Outcome, PlayError> {
     validate(options)?;
-    rawr::resolve::deny_files(NO_FILES);
+    no_files();
     let deadline = Instant::now() + options.limits.time;
     let parsed = plain::Parsed::new(source, &options.limits, deadline)?;
     if parsed.claimed(claims) {
@@ -376,7 +388,7 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         return still(source, options);
     }
     validate(options)?;
-    rawr::resolve::deny_files(NO_FILES);
+    no_files();
     let program = wrap(source, options)?;
     let start = Instant::now();
     let deadline = Deadline::new(start + options.limits.time);
@@ -446,7 +458,7 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
 /// [`render`] as an [`Image`]: a full app's has its targets.
 fn still(source: &str, options: &Options) -> Result<Image, PlayError> {
     validate(options)?;
-    rawr::resolve::deny_files(NO_FILES);
+    no_files();
     let program = wrap(source, options)?;
     let deadline = Instant::now() + options.limits.time;
     let canvas = canvas(options);
@@ -568,7 +580,11 @@ fn application(
         compiler.check_named_source(SOURCE_NAME, program)
     };
     let adapter = checked
-        .and_then(rawr_iced::application::Checked::prepare)
+        .map_err(compile)?
+        .prepare_with(
+            rawr_play_sandbox::runtime_facades()
+                .expect("the sandbox's runtime facades bind every item"),
+        )
         .map_err(compile)?
         .into_adapter();
     let messages = (0..options.messages.len())
@@ -586,6 +602,8 @@ fn application(
 fn sandbox(limits: &Limits, deadline: Deadline) -> impl FnOnce(&mut rawr::Engine) + use<> {
     let limits = limits.clone();
     move |engine| {
+        // rand and tracing_subscriber, which iced's examples name.
+        rawr_play_sandbox::install(engine).expect("the sandbox's facades install");
         let depth = engine.max_call_levels().min(limits.call_depth);
         engine
             .set_max_operations(limits.operations)

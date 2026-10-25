@@ -102,6 +102,29 @@ fn motion_a_timed_easing_moves_by_the_frame_times_and_renders_the_same_twice() {
 }
 
 #[test]
+fn motion_iced_solar_system_animates_and_renders_the_same_twice() {
+    // iced's own example, unchanged: its sun, earth and moon come from the
+    // playground's shipped files, its stars from rand with the render's
+    // seed, and its orbit from the recording's clock.
+    let first = render("iced/solar_system", "solar_system.png", &[]);
+    let gif = decode(&first.bytes);
+    assert!(!gif.looping, "an orbit that never repeats plays once");
+    assert_eq!(gif.delays.len(), 100, "five seconds at 20 frames a second");
+    assert!(
+        first.stdout.contains("Animation shown for the first 5 s."),
+        "{}",
+        first.stdout
+    );
+    assert!(
+        first.stdout.contains("action: Best Backend"),
+        "{}",
+        first.stdout
+    );
+    let second = render("iced/solar_system", "solar_system.png", &[]);
+    assert_eq!(first.bytes, second.bytes);
+}
+
+#[test]
 fn motion_a_spinner_loops_once_around() {
     let rendered = render("spinner", "spinner.png", &[]);
     let gif = decode(&rendered.bytes);
