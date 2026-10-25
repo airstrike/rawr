@@ -2478,13 +2478,12 @@ fn set_frozen(path: &Path, metadata: &fs::Metadata, directory: bool) -> Result<(
     if metadata.permissions().mode() & 0o7777 == mode {
         return Ok(());
     }
-    let result =
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
-            operation: "freeze runner bundle member",
-            path: path.to_path_buf(),
-            source,
-        });
-    result
+
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
+        operation: "freeze runner bundle member",
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(unix)]
@@ -2527,13 +2526,12 @@ fn set_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
     } else {
         metadata.mode() | 0o200
     };
-    let result =
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
-            operation: "thaw runner bundle member for cleanup",
-            path: path.to_path_buf(),
-            source,
-        });
-    result
+
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
+        operation: "thaw runner bundle member for cleanup",
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(not(unix))]

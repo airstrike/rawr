@@ -5933,7 +5933,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use iced::advanced::widget::{tree, Tree};
+    use iced::advanced::widget::Tree;
     use rawr::timing::{Outcome, Phase};
     use rawr::{host, Dynamic, Engine, EvalAltResult, Position, Shared};
 

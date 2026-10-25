@@ -105,10 +105,10 @@ fn drive_elsewhere(
     let worker = thread::spawn(move || {
         iced_test::futures::futures::executor::block_on(async move {
             while let Some(action) = stream.next().await {
-                if let iced_test::runtime::Action::Output(message) = action {
-                    if sender.send(message).is_err() {
-                        break;
-                    }
+                if let iced_test::runtime::Action::Output(message) = action
+                    && sender.send(message).is_err()
+                {
+                    break;
                 }
             }
         });

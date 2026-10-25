@@ -1135,7 +1135,7 @@ impl Parser<'_> {
                                     return Err(Error::TypeMismatch {
                                         expected: "an iterator or a collection".into(),
                                         actual: other.name(&self.models),
-                                        expression: expression,
+                                        expression,
                                     })
                                 }
                             },
@@ -1143,7 +1143,7 @@ impl Parser<'_> {
                                 return Err(Error::TypeMismatch {
                                     expected: "an iterator or a collection".into(),
                                     actual: other.name(&self.models),
-                                    expression: expression,
+                                    expression,
                                 })
                             }
                         };

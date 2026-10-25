@@ -61,7 +61,7 @@ fn order() -> Order {
     Order { customer: "Ada".into(), items: 2, discount: 0.0 }
 }
 
-fn call<T: Clone + 'static>(source: &str, name: &str, args: impl rawr::FuncArgs) -> T {
+fn call<T: Clone + Send + Sync + 'static>(source: &str, name: &str, args: impl rawr::FuncArgs) -> T {
     let engine = engine();
     let ast = engine.compile(source).unwrap_or_else(|error| panic!("{error}"));
     engine.call_fn::<T>(&mut Scope::new(), &ast, name, args).unwrap_or_else(|error| panic!("{error}"))

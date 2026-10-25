@@ -263,12 +263,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     .next(input, &tokenizer_control)
                     .expect("peeked attribute marker must exist");
 
-                if matches!(input.peek(), Some((Token::LeftBracket, _))) {
-                    if let Some(item) =
+                if matches!(input.peek(), Some((Token::LeftBracket, _)))
+                    && let Some(item) =
                         parse_item_after_attribute_marker(input, &tokenizer_control, position)?
-                    {
-                        bind_previews(item, &mut items)?;
-                    }
+                {
+                    bind_previews(item, &mut items)?;
                 }
             }
             // `private fn f()`: a name before `fn` is rustc's syntax error.

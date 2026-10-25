@@ -86,7 +86,7 @@ pub struct Image {
 #[must_use]
 pub fn seconds(time: Duration) -> String {
     let tenths = (time.as_millis() + 50) / 100;
-    if tenths % 10 == 0 {
+    if tenths.is_multiple_of(10) {
         format!("{}", tenths / 10)
     } else {
         format!("{}.{}", tenths / 10, tenths % 10)
@@ -459,7 +459,7 @@ fn resample(frame: &Frame, width: usize, height: usize) -> Vec<u8> {
                 let mut sum = [0u32; 4];
                 for y in row * factor..(row + 1) * factor {
                     let at = (y * from_width + column * factor) * 4;
-                    for pixel in frame.rgba[at..at + factor * 4].chunks_exact(4) {
+                    for pixel in frame.rgba[at..at + factor * 4].as_chunks::<4>().0 {
                         for (sum, value) in sum.iter_mut().zip(pixel) {
                             *sum += u32::from(*value);
                         }
@@ -588,12 +588,16 @@ fn changed(
         top = top.min(row);
         bottom = row + 1;
         let first = a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(b.chunks_exact(4))
             .position(|(a, b)| a != b)
             .unwrap_or(0);
         let last = a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(b.chunks_exact(4))
             .rposition(|(a, b)| a != b)
             .unwrap_or(0);

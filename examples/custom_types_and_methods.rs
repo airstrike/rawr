@@ -24,6 +24,12 @@ impl TestStruct {
     }
 }
 
+impl Default for TestStruct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn main() -> Result<(), Box<EvalAltResult>> {
     let mut app = Exports::new("app");
     app.add::<TestStruct>();

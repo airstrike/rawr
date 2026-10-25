@@ -2185,7 +2185,7 @@ mod tests {
     fn a_rust_task_crosses_as_itself_and_a_future_through_task_future() {
         use super::{Project, ViaFuture as _, ViaTask as _};
 
-        let task = (&Project::new(iced::Task::done(1_i64))).into_task();
+        let task = Project::new(iced::Task::done(1_i64)).into_task();
         assert_eq!(outputs(task), [1]);
         let future = (&Project::new(async { 2_i64 })).into_task();
         assert_eq!(outputs(future), [2]);

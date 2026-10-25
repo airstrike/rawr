@@ -2248,6 +2248,51 @@ mod preparation;
 #[cfg(test)]
 mod validation;
 
+/// Every handshake field but the run's nonce and argument digest, the unit
+/// correlation, and the artifact's path, bytes, freshness and SVH.
+/// Loaded and external crates keep their name, `StableCrateId` and
+/// artifact count, not their paths.
+fn semantic_handshake(handshake: &protocol::Handshake) -> serde_json::Value {
+    let crates = |crates: &[protocol::ExternalCrate]| {
+        crates
+            .iter()
+            .map(|item| {
+                serde_json::json!([item.crate_name, item.stable_crate_id, item.artifacts.len()])
+            })
+            .collect::<Vec<_>>()
+    };
+    let package = &handshake.package;
+    let artifact = &handshake.artifact;
+    serde_json::json!({
+        "schema": handshake.schema,
+        "package": [package.cargo_id, package.name, package.version, package.source],
+        "root": format!("{:?}", handshake.root),
+        "target": handshake.target,
+        "target_kind": handshake.target_kind,
+        "target_kinds": handshake.target_kinds,
+        "crate_types": handshake.crate_types,
+        "crate_name": handshake.crate_name,
+        "edition": handshake.edition,
+        "profile": handshake.profile,
+        "compilation": format!("{:?}", handshake.compilation),
+        "host": handshake.host,
+        "selected_target": handshake.selected_target,
+        "features": handshake.features,
+        "compiler_commit": handshake.compiler_commit,
+        "unit_key": handshake.unit_key,
+        "dependencies": handshake.dependencies,
+        "artifact": [artifact.profile, artifact.stable_crate_id, artifact.probe_alias],
+        "sysroot": handshake.sysroot.iter().map(|sysroot| serde_json::json!([
+            sysroot.compiler_commit,
+            sysroot.selected_target,
+            sysroot.crate_name,
+            sysroot.stable_crate_id,
+        ])).collect::<Vec<_>>(),
+        "loaded_crates": crates(&handshake.loaded_crates),
+        "external_crates": crates(&handshake.external_crates),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -3042,49 +3087,4 @@ mod tests {
             expected
         );
     }
-}
-
-/// Every handshake field but the run's nonce and argument digest, the unit
-/// correlation, and the artifact's path, bytes, freshness and SVH.
-/// Loaded and external crates keep their name, `StableCrateId` and
-/// artifact count, not their paths.
-fn semantic_handshake(handshake: &protocol::Handshake) -> serde_json::Value {
-    let crates = |crates: &[protocol::ExternalCrate]| {
-        crates
-            .iter()
-            .map(|item| {
-                serde_json::json!([item.crate_name, item.stable_crate_id, item.artifacts.len()])
-            })
-            .collect::<Vec<_>>()
-    };
-    let package = &handshake.package;
-    let artifact = &handshake.artifact;
-    serde_json::json!({
-        "schema": handshake.schema,
-        "package": [package.cargo_id, package.name, package.version, package.source],
-        "root": format!("{:?}", handshake.root),
-        "target": handshake.target,
-        "target_kind": handshake.target_kind,
-        "target_kinds": handshake.target_kinds,
-        "crate_types": handshake.crate_types,
-        "crate_name": handshake.crate_name,
-        "edition": handshake.edition,
-        "profile": handshake.profile,
-        "compilation": format!("{:?}", handshake.compilation),
-        "host": handshake.host,
-        "selected_target": handshake.selected_target,
-        "features": handshake.features,
-        "compiler_commit": handshake.compiler_commit,
-        "unit_key": handshake.unit_key,
-        "dependencies": handshake.dependencies,
-        "artifact": [artifact.profile, artifact.stable_crate_id, artifact.probe_alias],
-        "sysroot": handshake.sysroot.iter().map(|sysroot| serde_json::json!([
-            sysroot.compiler_commit,
-            sysroot.selected_target,
-            sysroot.crate_name,
-            sysroot.stable_crate_id,
-        ])).collect::<Vec<_>>(),
-        "loaded_crates": crates(&handshake.loaded_crates),
-        "external_crates": crates(&handshake.external_crates),
-    })
 }

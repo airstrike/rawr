@@ -430,10 +430,10 @@ fn restore_nominal(
                 if let Some(rest) = rest {
                     let mut middle = Dynamic::from_array(array[before.len()..end].to_vec());
                     restore_nominal(&mut middle, rest, names, values);
-                    if let Ok(middle) = middle.as_array_ref() {
-                        if middle.len() == end - before.len() {
-                            array[before.len()..end].clone_from_slice(&middle);
-                        }
+                    if let Ok(middle) = middle.as_array_ref()
+                        && middle.len() == end - before.len()
+                    {
+                        array[before.len()..end].clone_from_slice(&middle);
                     }
                 }
             }

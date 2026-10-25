@@ -109,7 +109,7 @@ pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error>
         });
     }
     let mut sum = 0_usize;
-    for entry in manifest[HEADER_BYTES..].chunks_exact(ENTRY_BYTES) {
+    for entry in manifest[HEADER_BYTES..].as_chunks::<ENTRY_BYTES>().0 {
         let length = usize::try_from(u64::from_le_bytes(entry[..8].try_into().unwrap_or([0; 8])))
             .ok()
             .filter(|length| (1..=MAX_PART).contains(length))
@@ -135,7 +135,7 @@ pub(crate) fn read(
     bytes
         .try_reserve_exact(total)
         .map_err(|_| node::Error::Allocation)?;
-    for entry in manifest[HEADER_BYTES..].chunks_exact(ENTRY_BYTES) {
+    for entry in manifest[HEADER_BYTES..].as_chunks::<ENTRY_BYTES>().0 {
         let length = u64::from_le_bytes(entry[..8].try_into().unwrap_or([0; 8])) as usize;
         let digest: [u8; 32] = entry[8..].try_into().unwrap_or([0; 32]);
         let path = directory.join(name(&digest));

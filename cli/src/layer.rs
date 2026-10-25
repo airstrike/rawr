@@ -178,7 +178,7 @@ pub fn catalog() -> Vec<Known> {
 
 /// Of the `manifests` that claim a program, those no other claiming one
 /// extends: a binary that extends another serves what both claim.
-fn preferred<'a, T>(claiming: Vec<&'a T>, manifest: impl Fn(&T) -> &Manifest) -> Vec<&'a T> {
+fn preferred<T>(claiming: Vec<&T>, manifest: impl Fn(&T) -> &Manifest) -> Vec<&T> {
     claiming
         .iter()
         .copied()

@@ -2085,7 +2085,7 @@ enum Message { Increment }
             crate::install(&mut engine).unwrap();
             let engine = Shared::new(engine);
             let descriptor = engine
-                .compile_application_descriptor(&format!("{state}{main}"))
+                .compile_application_descriptor(format!("{state}{main}"))
                 .unwrap();
             let mut adapter =
                 Adapter::boot(bind(engine.launch_application(descriptor).unwrap())).unwrap();

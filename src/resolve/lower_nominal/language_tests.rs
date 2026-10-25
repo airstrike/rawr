@@ -1309,7 +1309,7 @@ fn language_result_methods() {
     "#);
     assert_eq!(
         value,
-        4 + 10 + 30 + 0 + 120 + 400 + 5000 + 30000 + 600000 + 1 + 4 + 3 + 9 + 7 + 1000000
+        (4 + 10 + 30) + 120 + 400 + 5000 + 30000 + 600000 + 1 + 4 + 3 + 9 + 7 + 1000000
     );
     let shown = run_string(
         r#"
@@ -1758,7 +1758,7 @@ fn language_vec_in_signatures_fields_and_payloads() {
         }
         run()
     "#);
-    assert_eq!(value, 6 + 0 + 400 + 2000 + 0 + 0 + 100000 + 1000000);
+    assert_eq!(value, (6 + 400 + 2000) + 100000 + 1000000);
     rejected("fn f(v: Vec<i64>) -> i64 { v.len() } pub fn run() -> i64 { f(vec![true]) } run()");
     rejected("struct S { v: Vec<i64, i64> } pub fn run() -> i64 { 0 } run()");
 }
@@ -1912,7 +1912,7 @@ fn language_explicit_return() {
         }
         run()
     "#);
-    assert_eq!(value, 20 + 8 - 1 + 0 + 1 + 6 + 10 + 2);
+    assert_eq!(value, (20 + 8 - 1) + 1 + 6 + 10 + 2);
     rejected("pub fn run() -> i64 { return \"no\"; } run()");
     rejected("pub fn run() -> i64 { if true { return; } 1 } run()");
     rejected("fn f(n: i64) { return n; } pub fn run() -> i64 { f(1); 0 } run()");
@@ -2513,7 +2513,7 @@ fn language_operators_lex_as_rust() {
         }
         run()
     "#);
-    assert_eq!(value, 3 + 7 + 5 + 3 + 7 + 3 + 0 + 2 + 1);
+    assert_eq!(value, (3 + 7 + 5 + 3 + 7 + 3) + 2 + 1);
 }
 
 #[test]
@@ -7341,7 +7341,7 @@ fn language_mut_methods_through_field_and_element_places() {
         }
         run()
     "#);
-    assert_eq!(value, 5 * 100 + 1 * 10 + 20);
+    assert_eq!(value, 5 * 100 + 10 + 20);
     let error = rejected(
         r#"
         struct S { text: String }
@@ -7419,7 +7419,7 @@ fn language_patterns_on_mut_places_write_their_bindings_back() {
     "#);
     assert_eq!(
         value,
-        8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000
+        8 * 1000000 + 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000
     );
 }
 
@@ -7617,7 +7617,7 @@ fn language_let_chains() {
     "#);
     assert_eq!(
         value,
-        2 * 1000000 + 10 * 10000 + 0 + 300 + 7 * 10 + 4 * 1000 + 7 * 100000
+        (2 * 1000000 + 10 * 10000) + 300 + 7 * 10 + 4 * 1000 + 7 * 100000
     );
     let error = rejected("pub fn run() -> i64 { let a = Some(1); if let Some(x) = a && x > 0 || true { 1 } else { 0 } } run()");
     assert!(error.contains("||"), "{error}");
@@ -7658,7 +7658,7 @@ fn language_get_mut_and_iter_mut_find_lend_an_element() {
     "#);
     assert_eq!(
         value,
-        40 * 1000000 + 1 * 100000 + 1 * 10000 - 1 + 6 * 1000 + 21 * 10 + 31 - 31
+        40 * 1000000 + 100000 + 10000 - 1 + 6 * 1000 + 21 * 10 + 31 - 31
     );
 }
 
@@ -7744,7 +7744,7 @@ fn language_fieldless_enum_casts() {
     "#);
     assert_eq!(
         value,
-        0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000
+        (10 * 100) + 11 * 10000 + -3 * 1000000 + 254 * 100000000
     );
     rejected("enum E { A(i64) } pub fn run() -> i64 { E::A(1) as i64 } run()");
 }

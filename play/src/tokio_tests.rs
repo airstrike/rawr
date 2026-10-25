@@ -78,7 +78,7 @@ fn record(source: &str) -> Vec<rawr_iced::snapshot::Frame> {
         &mut |_| {},
     )
     .unwrap();
-    for entry in adapter.diagnostics() {
+    if let Some(entry) = adapter.diagnostics().iter().next() {
         panic!("{entry:?}");
     }
     recording.frames

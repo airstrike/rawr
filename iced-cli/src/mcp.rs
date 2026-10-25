@@ -554,7 +554,7 @@ fn screenshot(title: Option<&str>) -> Result<Vec<Value>, String> {
     let windows = create_description_from_array(identifiers).ok_or("cannot list windows")?;
     let field = |window: &CFDictionary<CFString, CFType>, key: &str| {
         window
-            .find(&CFString::new(key))
+            .find(CFString::new(key))
             .map(|value| (*value).clone())
     };
     let mut found = Vec::new();
@@ -576,10 +576,9 @@ fn screenshot(title: Option<&str>) -> Result<Vec<Value>, String> {
                 owner.as_str(),
                 "rawr" | "rawr-iced" | "rawr-generated-runner"
             )
+            && let Some(number) = number("kCGWindowNumber")
         {
-            if let Some(number) = number("kCGWindowNumber") {
-                found.push((number, text("kCGWindowName")));
-            }
+            found.push((number, text("kCGWindowName")));
         }
     }
     let (number, name) = title

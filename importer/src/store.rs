@@ -1535,10 +1535,9 @@ impl Store {
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<(T, [PinGuard; N]), transaction::Rejected<E>>, Error> {
         pins::recover_empty_before_new_project(publication, &self.root, self.project, recovery)?;
-        let result =
-            transaction::Transaction::bind(publication, &self.root, self.project, roles, proof)?
-                .finish(|| proof.revalidate_scoped(self, scope), operation);
-        result
+
+        transaction::Transaction::bind(publication, &self.root, self.project, roles, proof)?
+            .finish(|| proof.revalidate_scoped(self, scope), operation)
     }
 
     pub(crate) fn candidates<K: Value>(

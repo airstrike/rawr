@@ -231,7 +231,7 @@ mod tests {
     fn admitted_module_rollover_revokes_new_inputs_and_ignores_removed_inputs() {
         let project = Project::new();
         project.write("Cargo.toml", "[package]\nname = \"rollover\"\n");
-        project.write("src/main.rs", &application("old"));
+        project.write("src/main.rs", application("old"));
         project.write("src/old/mod.rs", "// rawr\npub fn value() -> i64 { 1 }\n");
         project.write("src/new/mod.rs", "// rawr\npub fn value() -> i64 { 2 }\n");
 
@@ -246,7 +246,7 @@ mod tests {
         let bootstrap = first.bind(&engine, registry()).unwrap();
         let mut slot = bootstrap.install(());
 
-        project.write("src/main.rs", &application("new"));
+        project.write("src/main.rs", application("new"));
         let target = rawr::project::Target::discover(&project.root).unwrap();
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());

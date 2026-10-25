@@ -1144,10 +1144,10 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         }))
     }
     builder
-        .bind_with_context("iced::widget::text", |call, args| new_text(call, args))
+        .bind_with_context("iced::widget::text", new_text)
         .expect("the iced facade must retain the exact text item");
     builder
-        .bind_macro_with_context("iced::widget::text", |call, args| new_text(call, args))
+        .bind_macro_with_context("iced::widget::text", new_text)
         .expect("the iced facade must retain the exact text macro");
     builder
         .bind_with_context("iced::widget::button", |call, args| {
@@ -2186,10 +2186,11 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(iced::Border::default()))
         })
         .expect("the iced facade must retain Border::default");
-    for (name, set) in [(
-        "color",
-        (|style, color| style.color(color)) as fn(Style, iced::Color) -> Style,
-    )] {
+    {
+        let (name, set) = (
+            "color",
+            (|style, color| style.color(color)) as fn(Style, iced::Color) -> Style,
+        );
         builder
             .bind(
                 format!("iced::widget::container::Style::{name}"),

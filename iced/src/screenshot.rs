@@ -70,7 +70,7 @@ fn write(path: &Path, shot: &iced::window::Screenshot) -> Saved {
         std::fs::create_dir_all(directory)
             .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
     }
-    let file = std::fs::File::create(&path)
+    let file = std::fs::File::create(path)
         .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
     let mut encoder = png::Encoder::new(
         std::io::BufWriter::new(file),

@@ -610,6 +610,18 @@ fn concrete_type_bytes(
     }
 }
 
+/// The key of one instance of a generic imported item: a digest of its
+/// type arguments in the item's declared order. Rawr keys a call by it,
+/// and the generated runner binds the instance's adapter by it.
+#[must_use]
+pub fn key(types: &[convert::Type]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"rawr.instance.key/v1");
+    digest.update(serde_json::to_vec(types).unwrap_or_default());
+    digest.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::classify::representability::convert;
@@ -638,16 +650,4 @@ mod tests {
             .expect("function items attach past the item target");
         assert!(functions.functions.is_empty());
     }
-}
-
-/// The key of one instance of a generic imported item: a digest of its
-/// type arguments in the item's declared order. Rawr keys a call by it,
-/// and the generated runner binds the instance's adapter by it.
-#[must_use]
-pub fn key(types: &[convert::Type]) -> [u8; 32] {
-    use sha2::{Digest as _, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"rawr.instance.key/v1");
-    digest.update(serde_json::to_vec(types).unwrap_or_default());
-    digest.finalize().into()
 }

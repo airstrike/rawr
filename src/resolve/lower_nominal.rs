@@ -892,7 +892,7 @@ fn lower_with_context(
             Box::new(crate::ParseErrorType::BadInput(
                 crate::LexError::ImproperSymbol(
                     "await".into(),
-                    format!("{what} is not supported in Rawr yet").into(),
+                    format!("{what} is not supported in Rawr yet"),
                 ),
             )),
             position,
@@ -1034,9 +1034,9 @@ fn write_trait_dispatchers(
                     .iter()
                     .filter(|definition| definition.trait_name() == Some(trait_name))
                 {
-                    let _ = write!(
+                    let _ = writeln!(
                         text,
-                        "if __rawr_type == {} {{ return this.{}({parameters}); }}\n",
+                        "if __rawr_type == {} {{ return this.{}({parameters}); }}",
                         owner_key(*owner),
                         method_name(definition.id())
                     );
@@ -6141,7 +6141,7 @@ impl Ty {
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
-            | Self::Script(_, ..)
+            | Self::Script(..)
             | Self::Dyn(..)
             | Self::Param(_)
             | Self::Infer(_)
@@ -6610,7 +6610,7 @@ impl Ty {
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
-            | Self::Script(_, ..)
+            | Self::Script(..)
             | Self::Param(_)
             | Self::Projection(..)
             | Self::Reference { .. }
@@ -21913,10 +21913,7 @@ impl<'a> Parser<'a> {
         &mut self,
         context: &str,
     ) -> Result<(Vec<ParsedExpr>, Position), Error> {
-        let borrow = std::mem::replace(
-            &mut self.mutable_borrow,
-            Some(self.expression_stack.len() + 1),
-        );
+        let borrow = self.mutable_borrow.replace(self.expression_stack.len() + 1);
         let arguments = self.parse_call_arguments(context);
         self.mutable_borrow = borrow;
         arguments
@@ -25725,7 +25722,7 @@ impl<'a> Parser<'a> {
             self.temporary("ord"),
             self.temporary("ord"),
         ];
-        let [x, y, z] = names.clone().map(|name| origin::Fragment::plain(name));
+        let [x, y, z] = names.clone().map(origin::Fragment::plain);
         let float = matches!(ty, Ty::Float(_));
         let compare = |this: &mut Self, lhs: &origin::Fragment, rhs: &origin::Fragment| {
             if float {
@@ -39180,7 +39177,7 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<(), Error> {
         let resolved = self.inference.resolve(output);
-        let Ty::Script(_, ..) = mapper_output else {
+        let Ty::Script(..) = mapper_output else {
             return Err(Error::InvalidHostOperation {
                 item: invocation.path().into(),
                 reason: "profile event mapper must return one exact script message type".into(),

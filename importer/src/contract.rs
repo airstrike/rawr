@@ -513,6 +513,15 @@ impl Allocation {
     }
 }
 
+/// A crate root module is spelled by its crate name alone, once in its own
+/// crate's fragment and crate-qualified (twice) in another's.
+fn crate_root(definition: &api::model::Definition) -> bool {
+    let name = definition.id().unit().crate_name();
+    matches!(definition.kind(), api::model::Kind::Module)
+        && matches!(definition.display_path().count(), 1 | 2)
+        && definition.display_path().all(|segment| segment == name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fingerprint, Allocation, Usage};
@@ -645,13 +654,4 @@ mod tests {
             .expect_err("checked overflow still refuses");
         assert_eq!(allocation.usage(), (retained.0 + 1, retained.1 + 1));
     }
-}
-
-/// A crate root module is spelled by its crate name alone, once in its own
-/// crate's fragment and crate-qualified (twice) in another's.
-fn crate_root(definition: &api::model::Definition) -> bool {
-    let name = definition.id().unit().crate_name();
-    matches!(definition.kind(), api::model::Kind::Module)
-        && matches!(definition.display_path().count(), 1 | 2)
-        && definition.display_path().all(|segment| segment == name)
 }

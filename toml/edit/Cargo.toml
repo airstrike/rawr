@@ -1,9 +1,9 @@
 # toml_edit 0.25.17 from crates.io, without its serde, visit and visit_mut
-# modules (Rawr uses none), and with one change: its tables name the
-# hasher (std's RandomState) instead of asking indexmap for its
-# `std` feature. A project's runner links this crate beside iced, whose wgpu and
-# naga use indexmap without `std`; any feature added there would make a
-# second copy of them, and with them of iced.
+# modules (Rawr uses none) or encode.rs's proptest tests (no proptest here),
+# and with one change: its tables name the hasher (std's RandomState) instead
+# of asking indexmap for its `std` feature. A project's runner links this crate
+# beside iced, whose wgpu and naga use indexmap without `std`; any feature
+# added there would make a second copy of them, and with them of iced.
 [package]
 name = "rawr-toml-edit"
 version = "0.25.17"
@@ -62,3 +62,13 @@ optional = true
 version = "1.0.0"
 optional = true
 
+
+# Upstream's code is kept as it came, so it stays diffable against toml_edit
+# 0.25.17 (D507). The Clippy findings in it are allowed here by name (D114)
+# instead of fixed in its source.
+[lints.clippy]
+get_first = "allow"
+if_same_then_else = "allow"
+let_and_return = "allow"
+needless_bool = "allow"
+result_large_err = "allow"

@@ -291,18 +291,24 @@ impl Frame {
     }
 
     /// The call's Shell, which a child's `update` publishes to directly.
-    pub(crate) fn shell(&self) -> Result<&mut Shell<'static, runtime::Message>, Error> {
+    pub(crate) fn with_shell<R>(
+        &self,
+        f: impl FnOnce(&mut Shell<'static, runtime::Message>) -> R,
+    ) -> Result<R, Error> {
         // SAFETY: as in `tree`; the Shell's own lifetime outlives the call,
-        // and the reference handed out is bounded by this frame's borrow.
-        unsafe { self.shell.as_mut() }.ok_or(Error::Missing("Shell"))
+        // and the reference handed out lives only for `f`.
+        let shell = unsafe { self.shell.as_mut() }.ok_or(Error::Missing("Shell"))?;
+        Ok(f(shell))
     }
 
     /// The operation `operate` received.
-    pub(crate) fn operation(&self) -> Result<&mut dyn Operation, Error> {
-        // SAFETY: as in `tree`.
-        self.operation
-            .map(|operation| unsafe { &mut *operation })
-            .ok_or(Error::Missing("Operation"))
+    pub(crate) fn with_operation<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Operation) -> R,
+    ) -> Result<R, Error> {
+        let operation = self.operation.ok_or(Error::Missing("Operation"))?;
+        // SAFETY: as in `tree`; the reference lives only for `f`.
+        Ok(f(unsafe { &mut *operation }))
     }
 
     pub(crate) fn children(&self) -> &Children {
@@ -318,7 +324,7 @@ impl Frame {
 
 #[cfg(test)]
 mod tests {
-    use iced::advanced::widget::{Operation, Tree};
+    use iced::advanced::widget::Tree;
 
     use super::{Children, Error, Frame, Lent, Loan};
 

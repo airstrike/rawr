@@ -49,7 +49,8 @@ fn singleton_tuple_types_are_positioned_unsupported_syntax() {
         ),
         "{error:?}"
     );
-    for source in ["pub fn broken() -> (i64,) { () }"] {
+    {
+        let source = "pub fn broken() -> (i64,) { () }";
         let error = Engine::new().compile_executable(source).unwrap_err();
         assert!(matches!(error.err_type(), ParseErrorType::MalformedTypeTuple(1, _)), "{error:?}");
         assert_eq!(error.primary_span().start().position(), Some(20));

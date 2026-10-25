@@ -1827,7 +1827,8 @@ impl ClassifiedParts {
         // The cached contract's size and recounted usage are accounting
         // targets recorded on one classification account, never refusals.
         let account = Account::new();
-        let result = (|| {
+
+        (|| {
             account.exceeded(
                 "cached classified contract bytes",
                 limits.classified_contract_bytes,
@@ -1901,8 +1902,7 @@ impl ClassifiedParts {
                 fingerprint: contract::fingerprint::Fingerprint(Sha256::digest(bytes).into()),
                 allocation,
             })
-        })();
-        result
+        })()
     }
 }
 

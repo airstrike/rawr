@@ -175,19 +175,19 @@ pub(super) fn admit_plan(
         let relative = target
             .strip_prefix(root)
             .map_err(|_| Error::OutsideRoot(target.to_path_buf()))?;
-        if bundle_execution(relative).is_some() {
-            if let Ok(record) = Record::read_bundle(target) {
-                let allocation = record.allocation();
-                let registered = |entries: &[Registered]| {
-                    entries
-                        .iter()
-                        .any(|registered| registered.allocation() == allocation)
-                };
-                if registered(registrations) {
-                    return Err(Error::CleanupRequired(
-                        "typed store retirement targeted a bundle outside the eviction journal",
-                    ));
-                }
+        if bundle_execution(relative).is_some()
+            && let Ok(record) = Record::read_bundle(target)
+        {
+            let allocation = record.allocation();
+            let registered = |entries: &[Registered]| {
+                entries
+                    .iter()
+                    .any(|registered| registered.allocation() == allocation)
+            };
+            if registered(registrations) {
+                return Err(Error::CleanupRequired(
+                    "typed store retirement targeted a bundle outside the eviction journal",
+                ));
             }
         }
     }

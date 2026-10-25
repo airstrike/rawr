@@ -527,12 +527,12 @@ pub(crate) fn declare(
         let mut join = Vec::new();
         let mut try_join = Vec::new();
         for name in names {
-            join.push(task_of(parameter(*name)?)?);
-            try_join.push(task_of(Type::result(parameter(*name)?, parameter("E")?))?);
+            join.push(task_of(parameter(name)?)?);
+            try_join.push(task_of(Type::result(parameter(name)?, parameter("E")?))?);
         }
         let outputs = names
             .iter()
-            .map(|name| parameter(*name))
+            .map(|name| parameter(name))
             .collect::<Result<Vec<_>, _>>()?;
         function(
             builder,
@@ -577,7 +577,7 @@ pub(crate) fn declare(
             names,
             options
                 .into_iter()
-                .map(|option| task_of(option))
+                .map(&task_of)
                 .collect::<Result<Vec<_>, _>>()?,
             task_of(selected)?,
         )?;
@@ -644,7 +644,7 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         &host::runtime::Call<'_>,
         &mut [&mut Dynamic],
     ) -> Result<Dynamic, Box<EvalAltResult>>| {
-        rawr.bind_with_context(&format!("rawr_iced::{path}"), move |call, args| {
+        rawr.bind_with_context(format!("rawr_iced::{path}"), move |call, args| {
             f(call, args)
         })
         .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));

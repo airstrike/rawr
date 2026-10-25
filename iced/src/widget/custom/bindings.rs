@@ -557,7 +557,7 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                     ("is_event_captured", []) => {
                         let captured = record(&path, |effects| effects.capture)?;
                         return Ok(Dynamic::from(
-                            captured || lent(frame.shell())?.is_event_captured(),
+                            captured || lent(frame.with_shell(|shell| shell.is_event_captured()))?,
                         ));
                     }
                     ("publish", [message]) => {
@@ -830,12 +830,19 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let viewport = read::<Rectangle>(viewport, path)?;
             let (frame, index) = child(element, path)?;
             let renderer = lent(frame.renderer())?;
-            let shell = lent(frame.shell())?;
-            lent(frame.tree_mut(&handle.path, |subtree| {
-                frame.children().with(index, |child| {
-                    child.update(subtree, &event, layout, cursor, renderer, shell, &viewport);
-                })
-            }))?
+            lent(
+                frame
+                    .with_shell(|shell| {
+                        frame.tree_mut(&handle.path, |subtree| {
+                            frame.children().with(index, |child| {
+                                child.update(
+                                    subtree, &event, layout, cursor, renderer, shell, &viewport,
+                                );
+                            })
+                        })
+                    })
+                    .and_then(std::convert::identity),
+            )?
             .map_err(child_error)?;
             Ok(Dynamic::UNIT)
         })
@@ -878,12 +885,17 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             }
             let (frame, index) = child(element, path)?;
             let renderer = lent(frame.renderer())?;
-            let operation = lent(frame.operation())?;
-            lent(frame.tree_mut(&handle.path, |subtree| {
-                frame.children().with(index, |child| {
-                    child.operate(subtree, layout, &viewport, renderer, operation);
-                })
-            }))?
+            lent(
+                frame
+                    .with_operation(|operation| {
+                        frame.tree_mut(&handle.path, |subtree| {
+                            frame.children().with(index, |child| {
+                                child.operate(subtree, layout, &viewport, renderer, operation);
+                            })
+                        })
+                    })
+                    .and_then(std::convert::identity),
+            )?
             .map_err(child_error)?;
             Ok(Dynamic::UNIT)
         })

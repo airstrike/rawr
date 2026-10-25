@@ -715,10 +715,10 @@ impl Find {
     }
 
     fn id(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
-        if let (Target::Id(wanted), Some(id), None) = (&self.target, id, self.exact) {
-            if *id == widget::Id::from(wanted.clone()) {
-                self.exact = Some(bounds - self.offset);
-            }
+        if let (Target::Id(wanted), Some(id), None) = (&self.target, id, self.exact)
+            && *id == widget::Id::from(wanted.clone())
+        {
+            self.exact = Some(bounds - self.offset);
         }
     }
 

@@ -19,6 +19,8 @@ pub use scalar::ScalarKind;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(u8)]
+// toml_parser's names, kept as upstream spells them (provenance.json).
+#[allow(clippy::enum_variant_names)]
 pub enum Encoding {
     LiteralString = crate::lexer::APOSTROPHE,
     BasicString = crate::lexer::QUOTATION_MARK,

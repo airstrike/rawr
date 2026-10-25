@@ -1058,7 +1058,8 @@ fn save_or_retire(
         return save(publication, root, ledger);
     }
     let target = ledger_path(root, ledger.project);
-    let result = match fs::symlink_metadata(&target) {
+
+    match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             Err(Error::Shape(target))
         }
@@ -1079,8 +1080,7 @@ fn save_or_retire(
             path: target,
             source,
         }),
-    };
-    result
+    }
 }
 
 fn save_bytes(

@@ -1016,16 +1016,15 @@ impl Builder {
                 .1
                 .iter()
                 .find(|existing| same_namespace(existing, &item))
+            && !compatible_overload(existing, &item)
         {
-            if !compatible_overload(existing, &item) {
-                return Err(host::Error::IncompatibleFacadeOverload {
-                    item: path.to_string().into(),
-                    existing_kind: existing.kind(),
-                    existing_receiver: existing.receiver(),
-                    incoming_kind: item.kind(),
-                    incoming_receiver: item.receiver(),
-                });
-            }
+            return Err(host::Error::IncompatibleFacadeOverload {
+                item: path.to_string().into(),
+                existing_kind: existing.kind(),
+                existing_receiver: existing.receiver(),
+                incoming_kind: item.kind(),
+                incoming_receiver: item.receiver(),
+            });
         }
         match self.item_index(&path) {
             Ok(index) => {

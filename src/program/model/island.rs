@@ -222,12 +222,12 @@ impl Model {
             Union::Bool(value, ..) => out.push(if *value { TRUE } else { FALSE }),
             Union::Int(value, ..) => {
                 out.push(INT);
-                out.extend_from_slice(&i64::from(*value).to_le_bytes());
+                out.extend_from_slice(&(*value).to_le_bytes());
             }
             #[cfg(not(feature = "no_float"))]
             Union::Float(value, ..) => {
                 out.push(FLOAT);
-                out.extend_from_slice(&f64::from(**value).to_le_bytes());
+                out.extend_from_slice(&(**value).to_le_bytes());
             }
             Union::Char(value, ..) => {
                 out.push(CHAR);

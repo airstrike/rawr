@@ -253,7 +253,7 @@ fn resolve_path(
             ))
     {
         let first = &first.name.text;
-        return Err(super::not_a_crate(&first, span));
+        return Err(super::not_a_crate(first, span));
     }
     if let Some(path) = std_fmt_type(&parsed) {
         return Ok(path);

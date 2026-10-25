@@ -553,7 +553,7 @@ impl Executable {
         let helpers = self
             .helper_locations
             .get(&entry)
-            .map(|entries| entries.clone())
+            .cloned()
             .unwrap_or_default();
         Positions { callables, helpers }
     }
@@ -580,7 +580,7 @@ impl ContractEvidence {
         let callables = collect_callables(program);
         let application = program
             .application()
-            .map(|entry| collect_application(entry, &callables, &program));
+            .map(|entry| collect_application(entry, &callables, program));
         Self {
             source: program.source().entry(),
             callables,

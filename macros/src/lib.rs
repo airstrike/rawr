@@ -39,18 +39,18 @@ pub fn preview(arguments: TokenStream, item: TokenStream) -> TokenStream {
             |token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace),
         );
 
-        if let Some(index) = body {
-            if let TokenTree::Group(group) = &tokens[index] {
-                let mut stream = TokenStream::new();
-                for value in used {
-                    stream.extend(statement(value));
-                }
-                stream.extend(group.stream());
-
-                let mut replaced = Group::new(Delimiter::Brace, stream);
-                replaced.set_span(group.span());
-                tokens[index] = TokenTree::Group(replaced);
+        if let Some(index) = body
+            && let TokenTree::Group(group) = &tokens[index]
+        {
+            let mut stream = TokenStream::new();
+            for value in used {
+                stream.extend(statement(value));
             }
+            stream.extend(group.stream());
+
+            let mut replaced = Group::new(Delimiter::Brace, stream);
+            replaced.set_span(group.span());
+            tokens[index] = TokenTree::Group(replaced);
         }
     }
 

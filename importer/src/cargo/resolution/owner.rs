@@ -899,7 +899,8 @@ impl Evaluation {
                 if accounts.refused {
                     return Err(node::Error::State("resolution owner account refused"));
                 }
-                let result = (|| {
+
+                (|| {
                     // Taking the Cargo account transfers actual spent ownership into the
                     // cold harness. Any failed tail remains terminal in this graph.
                     accounts.refused = true;
@@ -920,8 +921,7 @@ impl Evaluation {
                         })?;
                     }
                     run()
-                })();
-                result
+                })()
             },
         )
     }
