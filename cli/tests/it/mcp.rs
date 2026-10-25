@@ -304,3 +304,83 @@ fn new_check_and_run_make_and_run_a_plain_crate_with_arguments_and_stdin() {
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());
 }
+
+#[test]
+fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
+    let sandbox = Sandbox::new("mcp-start");
+    let mut client = Client::start(&sandbox);
+    client.request("initialize", json!({ "protocolVersion": "2025-06-18" }));
+    let made = client.call("new", json!({ "path": "app" }));
+    assert_eq!(made["isError"], false, "{made}");
+    let main = sandbox.work().join("app/src/main.rs");
+    std::fs::write(&main, "// rawr\nfn main() {\n    println!(\"one\");\n}\n").unwrap();
+
+    let started = client.call("start", json!({ "path": "app", "wait_ms": 20000 }));
+    assert_eq!(started["isError"], false, "{started}");
+    let state = started["structuredContent"]["state"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(state == "running" || state == "ended", "{started}");
+    // The program ends; `wait` returns that, with what it printed.
+    let mut seen: Vec<String> = started["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event"].as_str().unwrap().to_owned())
+        .collect();
+    let mut output = started["structuredContent"]["stdout"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !seen.iter().any(|event| event == "ended") {
+        assert!(Instant::now() < deadline, "no `ended`: {seen:?}");
+        let waited = client.call("wait", json!({ "path": "app", "timeout_ms": 5000 }));
+        output.push_str(
+            waited["structuredContent"]["stdout"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+        for event in waited["structuredContent"]["events"].as_array().unwrap() {
+            seen.push(event["event"].as_str().unwrap().to_owned());
+        }
+    }
+    assert!(output.contains("one\n"), "{output}");
+
+    // Supervised, an ended program runs again on the next save.
+    std::fs::write(&main, "// rawr\nfn main() {\n    println!(\"two\");\n}\n").unwrap();
+    let mut output = String::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !output.contains("two") {
+        assert!(
+            Instant::now() < deadline,
+            "the save did not run it again: {output}"
+        );
+        let waited = client.call("wait", json!({ "path": "app", "timeout_ms": 5000 }));
+        output.push_str(
+            waited["structuredContent"]["stdout"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+    }
+    let status = client.call("status", json!({}));
+    assert_eq!(
+        status["structuredContent"]["sessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let stopped = client.call("stop", json!({ "path": "app" }));
+    assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
+    let pid = started["structuredContent"]["pid"].to_string();
+    assert!(!Command::new("/bin/kill")
+        .args(["-0", &pid])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+    drop(client.input.take());
+    assert!(client.child.wait().unwrap().success());
+}

@@ -69,6 +69,41 @@ const RECORD: Record = Record {
 
 static STATE: Mutex<State> = Mutex::new(State::new());
 
+/// Who hears each stage and each 5% step of a launch beside the status
+/// line, such as a supervising `rawr mcp` (set by the command).
+static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+
+/// Hears a stage's name and the launch's percent.
+type Observer = fn(&str, u8);
+
+/// What the observer heard last: the stage and the 5% step.
+static OBSERVED: Mutex<Option<(usize, u8)>> = Mutex::new(None);
+
+/// Tell `observer` each launch's stage and percent as they move.
+pub fn listen(observer: fn(&str, u8)) {
+    *OBSERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(observer);
+}
+
+fn report(state: &mut State) {
+    let Some(observer) = *OBSERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    else {
+        return;
+    };
+    let percent = (state.percent(Instant::now()) * 100.0).floor() as u8;
+    let step = (state.stage, percent / 5);
+    let mut observed = OBSERVED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *observed != Some(step) {
+        *observed = Some(step);
+        observer(STAGES[state.stage.clamp(1, STAGES.len()) - 1], percent);
+    }
+}
+
 fn lock() -> std::sync::MutexGuard<'static, State> {
     STATE
         .lock()
@@ -95,6 +130,7 @@ pub fn begin(project: &Path) {
             return;
         }
         draw(&mut state);
+        report(&mut state);
     });
 }
 

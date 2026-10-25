@@ -208,11 +208,12 @@ fn handle(server: &Arc<Server>, message: Value) {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .remove(&key);
+                    // An install the call saw is told before its answer.
+                    tell_changes(&working);
                     // A cancelled request gets no answer.
                     if !cancel.is_cancelled() {
                         working.reply(id, result);
                     }
-                    tell_changes(&working);
                 });
             if let Err(error) = spawned {
                 server.error(Value::Null, -32603, &error.to_string());

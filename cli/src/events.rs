@@ -102,6 +102,20 @@ pub fn ended(status: i32) {
     emit(&json!({ "event": "ended", "status": status }));
 }
 
+/// The program ended with `status`: its code, or 128 plus its signal.
+pub fn exited(status: std::process::ExitStatus) {
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    ended(
+        status
+            .code()
+            .or_else(|| signal.map(|signal| 128 + signal))
+            .unwrap_or(1),
+    );
+}
+
 /// When the server in [`PARENT`] started this process directly, watch it
 /// from a thread: once it is gone, call `retire` to end what this process
 /// owns in other process groups (a runner and its window), then end this

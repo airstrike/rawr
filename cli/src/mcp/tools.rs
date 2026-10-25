@@ -464,7 +464,11 @@ fn run(
     command
         .arg("run")
         .arg(&place.path)
-        .arg("--")
+        .args(if arguments.is_empty() {
+            None
+        } else {
+            Some("--")
+        })
         .args(arguments)
         .current_dir(if place.root.is_dir() {
             &place.root

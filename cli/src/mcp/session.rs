@@ -158,7 +158,12 @@ impl Sessions {
         command
             .arg("run")
             .arg(path)
-            .arg("--")
+            // A host that takes no arguments refuses even an empty `--`.
+            .args(if arguments.is_empty() {
+                None
+            } else {
+                Some("--")
+            })
             .args(arguments)
             .current_dir(if root.is_dir() {
                 root
@@ -300,6 +305,9 @@ impl Session {
             let exited = child.try_wait().ok().flatten();
             self.read_events(&mut offset, &mut partial);
             if let Some(status) = exited {
+                // The last output and events in flight land first.
+                std::thread::sleep(TAIL);
+                self.read_events(&mut offset, &mut partial);
                 let mut state = self.state();
                 if state.phase != Phase::Stopped {
                     state.phase = Phase::Exited(process::code(status));
