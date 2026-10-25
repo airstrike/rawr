@@ -282,6 +282,9 @@ pub enum Type {
     Array(Box<Type>),
     /// An output tuple, a Rawr tuple.
     Tuple(Box<[Type]>),
+    /// A script closure a generic item's `F: FnOnce` parameter takes, of
+    /// one input (a tuple of several, or unit) and one output (D513.7 b).
+    Callable { input: Box<Type>, output: Box<Type> },
 }
 
 impl Signature {
@@ -302,9 +305,9 @@ impl Type {
                     || crate::surface::identity::Definition::is_projected(identity))
                     && arguments.iter().all(|ty| ty.declared(declared))
             }
-            Self::FunctionItem { input, output } | Self::Result(input, output) => {
-                input.declared(declared) && output.declared(declared)
-            }
+            Self::FunctionItem { input, output }
+            | Self::Callable { input, output }
+            | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
             Self::Option(element) | Self::Array(element) => element.declared(declared),
             Self::Tuple(members) => members.iter().all(|ty| ty.declared(declared)),
             _ => true,
@@ -1989,7 +1992,10 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Method { .. } => return Ok(None),
                 _ => return Err(super::Error::ForeignIdentity),
             },
-            signature(plan.signature())?,
+            match plan.call() {
+                Some(call) => callable_signature(plan.signature(), call)?,
+                None => signature(plan.signature())?,
+            },
         ),
         Representability::Invocation(plan) => (
             match outcome.identity().selector() {
@@ -2026,6 +2032,55 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         parameters,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), source.parameters())?,
+    })
+}
+
+/// A generic item's signature whose callable parameter takes a script
+/// closure: the parameter is the closure's type, and is no type parameter.
+fn callable_signature(
+    source: &representability::signature::Signature,
+    call: &representability::callable::Call,
+) -> Result<Signature, super::Error> {
+    let kept = source
+        .parameters()
+        .iter()
+        .filter(|parameter| parameter.index() != call.parameter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let parameters = parameters(&kept)?;
+    let all = source.parameters();
+    let closure = || -> Result<Type, super::Error> {
+        let input = match call.inputs() {
+            [] => Type::Unit,
+            [single] => ty(single, all)?,
+            many => Type::Tuple(
+                many.iter()
+                    .map(|input| ty(input, all))
+                    .collect::<Result<Box<[_]>, _>>()?,
+            ),
+        };
+        Ok(Type::Callable {
+            input: Box::new(input),
+            output: Box::new(ty(call.output(), all)?),
+        })
+    };
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(source.inputs().len())
+        .map_err(|_| super::Error::Allocation)?;
+    for input in source.inputs() {
+        inputs.push(
+            if *input == representability::convert::Type::Parameter(call.parameter()) {
+                closure()?
+            } else {
+                ty(input, all)?
+            },
+        );
+    }
+    Ok(Signature {
+        parameters,
+        inputs: inputs.into_boxed_slice(),
+        output: ty(source.output(), all)?,
     })
 }
 

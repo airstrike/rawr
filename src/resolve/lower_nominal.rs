@@ -341,6 +341,8 @@ pub(crate) struct ImportedUse {
     pub(crate) types: Box<[rawr_import::classify::representability::convert::Type]>,
     pub(crate) functions: Box<[ImportedFunctionUse]>,
     pub(crate) mappers: Box<[ImportedMapperUse]>,
+    /// The item takes a script closure for its `F: FnOnce` parameter.
+    pub(crate) callable: bool,
     pub(crate) span: Span,
 }
 
@@ -39359,6 +39361,7 @@ impl<'a> Parser<'a> {
             types: Box::default(),
             functions: Box::default(),
             mappers: Box::default(),
+            callable: false,
             span,
         });
         Ok(format!("{SENTINEL}{index}"))
@@ -39642,6 +39645,7 @@ impl<'a> Parser<'a> {
             types,
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
+            callable: item.signature().takes_callable(),
             span,
         });
         Ok(())
@@ -39674,6 +39678,7 @@ impl<'a> Parser<'a> {
             types: Box::default(),
             functions: Box::default(),
             mappers: Box::default(),
+            callable: false,
             span,
         });
         Ok(format!("{SENTINEL}{index}"))

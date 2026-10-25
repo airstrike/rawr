@@ -250,6 +250,16 @@ impl crate::future::Host for Current {
             .invoke_item(function, arguments)
             .map_err(|error| crate::future::error(error.to_string()))
     }
+
+    #[cfg(feature = "sync")]
+    fn share(&self) -> Option<crate::future::Program> {
+        let (authority, runtime) = self.bootstrap.catalog().shared();
+        Some(std::sync::Arc::new(move |function, arguments| {
+            authority
+                .invoke_bound(function, arguments, runtime.clone())
+                .map_err(|error| crate::future::error(error.to_string()))
+        }))
+    }
 }
 
 impl Current {

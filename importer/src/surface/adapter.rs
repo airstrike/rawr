@@ -55,6 +55,10 @@ pub(crate) enum Operation {
         mappers: Box<[EventMapper]>,
         container_parameters: usize,
         associated: bool,
+        /// The callable parameter a script closure fills, with its inputs
+        /// and output (D513.7 b).
+        #[serde(default)]
+        call: Option<crate::classify::representability::callable::Call>,
     },
     Method {
         receiver: ownership::Receiver,
@@ -626,6 +630,7 @@ fn clone_operation(
             mappers: clone_event_mappers(selected)?,
             container_parameters: 0,
             associated: matches!(selector, identity::Selector::AssociatedFunction { .. }),
+            call: None,
         }),
         (representability::Representability::Method(plan), identity::Selector::Method { .. }) => {
             Ok(Operation::Method {
@@ -648,6 +653,7 @@ fn clone_operation(
             mappers: clone_event_mappers(selected)?,
             container_parameters: 0,
             associated: matches!(selector, identity::Selector::AssociatedFunction { .. }),
+            call: plan.call().cloned(),
         }),
         (
             representability::Representability::Invocation(plan),
@@ -660,6 +666,7 @@ fn clone_operation(
             mappers: clone_event_mappers(selected)?,
             container_parameters: plan.container_parameters(),
             associated: true,
+            call: None,
         }),
         (
             representability::Representability::FunctionItem(plan),

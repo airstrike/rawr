@@ -208,6 +208,14 @@ impl Definition {
         &self.output
     }
 
+    /// Whether a parameter is a callable, as a closure argument is.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn takes_callable(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(|parameter| matches!(parameter.shape(), host::type_ref::Shape::Callable { .. }))
+    }
+
     /// Return the requirements attached to a declared type parameter.
     #[must_use]
     pub fn requirements(&self, parameter: &str) -> Option<capability::Set> {

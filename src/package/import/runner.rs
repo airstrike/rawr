@@ -1259,6 +1259,10 @@ fn ty(
                 arguments,
             )
         }
+        facade::Type::Callable { input, output } => host::type_ref::Type::callable(
+            ty(facade, input, profile, installed)?,
+            ty(facade, output, profile, installed)?,
+        ),
         facade::Type::FunctionItem { input, output } => {
             host::type_ref::Type::imported_function_item(
                 ty(facade, input, profile, installed)?,

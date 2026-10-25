@@ -510,13 +510,23 @@ impl crate::Engine {
                     .map_err(super::Error::import)?,
                 );
             }
-            let instance = rawr_import::surface::instance::Arguments::new(
-                used.types,
-                Box::default(),
-                Box::default(),
-                None,
-                limits,
-            )
+            // A closure argument is a one-shot callable (D513.7 b).
+            let instance = if used.callable {
+                rawr_import::surface::instance::Arguments::once(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    limits,
+                )
+            } else {
+                rawr_import::surface::instance::Arguments::new(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    None,
+                    limits,
+                )
+            }
             .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
             .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
             .map_err(Error::from)
@@ -1692,16 +1702,16 @@ fn imported_item(
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan, allocation)?,
                 )?,
                 Selector::Function { .. } => host::item::Definition::function(
                     path,
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan, allocation)?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan, allocation)?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -1765,12 +1775,18 @@ fn ty_ok(
 /// A generic item Rawr calls directly: every parameter a type, none a
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
-    plan.class().is_none()
-        && plan
-            .signature()
-            .parameters()
-            .iter()
-            .all(|parameter| parameter.kind() == representability::signature::Kind::Type)
+    let types = plan
+        .signature()
+        .parameters()
+        .iter()
+        .all(|parameter| parameter.kind() == representability::signature::Kind::Type);
+    match plan.class() {
+        None => types,
+        // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
+        // runs there (D513.7 b).
+        Some(rawr_import::surface::callable::Class::Once(_)) => plan.call().is_some(),
+        Some(_) => false,
+    }
 }
 
 fn unqualified_path_bytes(path: &str) -> Option<usize> {
@@ -1899,12 +1915,58 @@ fn signature(
     allocation.retain_checked(items, bytes)?;
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
-        builder.type_parameter(parameter.name(), &[])?;
+        if parameter.kind() == representability::signature::Kind::Type {
+            builder.type_parameter(parameter.name(), &[])?;
+        }
     }
     for input in signature.inputs() {
         builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;
     }
     builder.output(types.convert(signature.output(), signature.parameters(), allocation)?);
+    Ok(builder.finish())
+}
+
+/// The signature of a generic item whose callable parameter takes a script
+/// closure: that parameter is the closure's type, `Fn(..) -> R` of its
+/// bound's inputs and output (D513.7 b).
+fn callable_signature(
+    types: &Types,
+    plan: &representability::callable::Item,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<host::signature::Definition, Error> {
+    let Some(call) = plan.call() else {
+        return signature(types, plan.signature(), allocation);
+    };
+    let signature = plan.signature();
+    let mut builder = host::signature::Builder::new();
+    for parameter in signature.parameters() {
+        if parameter.kind() == representability::signature::Kind::Type {
+            builder.type_parameter(parameter.name(), &[])?;
+        }
+    }
+    let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {
+        types.convert(ty, signature.parameters(), allocation)
+    };
+    for input in signature.inputs() {
+        if *input == representability::convert::Type::Parameter(call.parameter()) {
+            let input = match call.inputs() {
+                [] => host::type_ref::Type::unit(),
+                [single] => convert(single, allocation)?,
+                many => host::type_ref::Type::tuple(
+                    many.iter()
+                        .map(|ty| convert(ty, allocation))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )?,
+            };
+            builder.try_parameter(host::type_ref::Type::callable(
+                input,
+                convert(call.output(), allocation)?,
+            ))?;
+        } else {
+            builder.try_parameter(convert(input, allocation)?)?;
+        }
+    }
+    builder.output(convert(signature.output(), allocation)?);
     Ok(builder.finish())
 }
 

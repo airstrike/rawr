@@ -3,7 +3,7 @@
 /// Failure before a generated manifest can be sealed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("generated overlay node failed")]
+    #[error("generated overlay node failed: {0}")]
     Node(#[source] Box<crate::node::Error>),
     #[error("normal-build proof changed during generation: {0}")]
     Native(#[from] crate::Error),

@@ -79,15 +79,31 @@ pub enum Error {
 
     /// A Rust future a task runs is not `Send`, so the runner cannot run it.
     #[error(
-        "the future `{function}` returns is not `Send` ({location}). iced runs a task's \
-         future on its thread pool, which takes only a `Send` future, as iced's own \
-         `Task::future` does. Hold `Send` values across each `.await`, such as `Arc` \
-         in place of `Rc`."
+        "the future `{function}` returns is not `Send` ({location}). Its runtime runs it \
+         on whichever thread polls it, so it takes only a `Send` future, as iced's \
+         `Task::future` and tokio's `spawn` do. Hold `Send` values across each `.await`, \
+         such as `Arc` in place of `Rc`."
     )]
     NonSendFuture {
         /// The Rust function whose future is not `Send`.
         function: Box<str>,
         /// Where its body is, as rustc reports it.
+        location: Box<str>,
+    },
+
+    /// A generic Rust item bounds a type parameter that a script type fills
+    /// by a trait `rawr::Value` lacks (D513.2).
+    #[error(
+        "a generic Rust item needs `{bound}` of the script type it is called with \
+         ({location}). Rawr passes a script value to native generic code as \
+         `rawr::Value`, which carries it but can't give native code a trait that \
+         picks behaviour by type alone, such as `Default`, `Copy` or `Deserialize`. \
+         Call it with a Rust type there."
+    )]
+    ErasedBound {
+        /// The bound `rawr::Value` doesn't meet, as rustc wrote it.
+        bound: Box<str>,
+        /// Where the generated runner calls the item.
         location: Box<str>,
     },
 

@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 12;
+const CLASSIFIER_VERSION: u32 = 13;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -973,6 +973,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     ty: model::Type::Parameter { index, .. },
                     lifetime: model::Lifetime::Static,
                 } if *index == parameter => static_owned = true,
+                // `R: 'static` of another parameter, as `spawn_blocking`'s
+                // output has: rustc checks it where the bridge names `R`.
+                model::Predicate::TypeOutlives {
+                    ty: model::Type::Parameter { .. },
+                    lifetime: model::Lifetime::Static,
+                } => {}
                 _ => return Err(representability::reject::Kind::CallableProtocol.into()),
             }
         }
@@ -3568,9 +3574,14 @@ impl<P: api::Phase> Context<'_, P> {
             return sipper;
         }
         let output = match ty {
-            model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds),
+            model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds).cloned(),
             model::Type::Definition { id, arguments } if arguments.is_empty() => {
-                self.future_impl_output(id)
+                self.future_impl_output(id).cloned()
+            }
+            // A generic type that implements `Future`, as tokio's
+            // `JoinHandle<T>` is with `Output = Result<T, JoinError>`.
+            model::Type::Definition { id, arguments } => {
+                self.generic_future_impl_output(id, arguments)
             }
             _ => None,
         };
@@ -3579,7 +3590,62 @@ impl<P: api::Phase> Context<'_, P> {
         };
         Ok(representability::convert::Type::Nominal {
             definition: crate::surface::identity::Definition::future(),
-            arguments: Box::from([self.convert(output)?]),
+            arguments: Box::from([self.convert(&output)?]),
+        })
+    }
+
+    /// The `Output` of a generic type's `impl<T> Future for Type<T>`, with
+    /// the impl's parameters replaced by `arguments`.
+    fn generic_future_impl_output(
+        &self,
+        id: &api::identity::Definition,
+        arguments: &[model::Argument],
+    ) -> Option<model::Type> {
+        self.graph.implementations().find_map(|implementation| {
+            if implementation.polarity() != model::Polarity::Positive {
+                return None;
+            }
+            let model::Type::Definition {
+                id: actual,
+                arguments: declared,
+            } = implementation.self_type()
+            else {
+                return None;
+            };
+            if actual != id || declared.len() != arguments.len() {
+                return None;
+            }
+            let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
+                return None;
+            };
+            if !self.is_core_trait(trait_id, "Future") {
+                return None;
+            }
+            let mut substitutions = Vec::new();
+            for (declared, argument) in declared.iter().zip(arguments) {
+                match (declared, argument) {
+                    (
+                        model::Argument::Type(model::Type::Parameter { owner, index }),
+                        model::Argument::Type(argument),
+                    ) => substitutions.push(((owner.clone(), *index), argument.clone())),
+                    (model::Argument::Type(_), _) => return None,
+                    _ => {}
+                }
+            }
+            let output = implementation.associated().find_map(|associated| {
+                let definition = self
+                    .graph
+                    .definition_index(associated)
+                    .and_then(|index| self.graph.definitions().nth(index))?;
+                match definition.kind() {
+                    model::Kind::AssociatedType {
+                        default: model::Default::Present(ty),
+                        ..
+                    } if definition.display_path().last() == Some("Output") => Some(ty),
+                    _ => None,
+                }
+            })?;
+            Some(substitute_parameters(output, &substitutions))
         })
     }
 
@@ -3850,6 +3916,48 @@ fn late_binders_lend_strings(signature: &model::Signature) -> bool {
             _ => true,
         })
         && !matches!(signature.output(), model::Type::Reference { .. })
+}
+
+/// `ty` with each impl parameter in `substitutions` replaced.
+fn substitute_parameters(
+    ty: &model::Type,
+    substitutions: &[((api::identity::Definition, u32), model::Type)],
+) -> model::Type {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => {
+            model::Argument::Type(substitute_parameters(ty, substitutions))
+        }
+        other => other.clone(),
+    };
+    match ty {
+        model::Type::Parameter { owner, index } => substitutions
+            .iter()
+            .find(|((candidate, at), _)| candidate == owner && at == index)
+            .map_or_else(|| ty.clone(), |(_, replacement)| replacement.clone()),
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| substitute_parameters(member, substitutions))
+                .collect(),
+        ),
+        model::Type::Slice(element) => {
+            model::Type::Slice(Box::new(substitute_parameters(element, substitutions)))
+        }
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: Box::new(substitute_parameters(ty, substitutions)),
+        },
+        other => other.clone(),
+    }
 }
 
 fn exact_definition(ty: &model::Type, id: &api::identity::Definition) -> bool {

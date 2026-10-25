@@ -229,7 +229,7 @@ pub fn run(
                 rawr_import::process::hot::Preparation::Miss(miss) => {
                     // D500.4: a new native build restarts the program, and
                     // says why in one line, once for each new build.
-                    if announced.as_ref() != Some(&next_manifests)
+                    if (announced.as_ref() != Some(&next_manifests) || manifests.restarts_on_save())
                         && let Some(reason) = manifests.restart_reason(&next_manifests)
                     {
                         eprintln!("rawr: {reason}; restarting the program");

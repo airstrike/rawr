@@ -470,6 +470,12 @@ pub trait Host {
     /// Call `function` with `arguments` in the current generation.
     fn invoke(&self, function: &item::Value, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic>;
 
+    /// The program as any thread may call it, each call with an evaluation
+    /// of its own (D490), for a script closure native code calls.
+    fn share(&self) -> Option<Program> {
+        None
+    }
+
     /// `value`'s `Debug` text as the program's types print it.
     fn debug(&self, value: &Dynamic) -> Option<String> {
         let _ = value;
@@ -479,6 +485,49 @@ pub trait Host {
 
 thread_local! {
     static HOST: RefCell<Option<Rc<dyn Host>>> = const { RefCell::new(None) };
+}
+
+/// A program any thread may call into.
+#[cfg(feature = "sync")]
+pub type Program = Arc<dyn Fn(&item::Value, &mut [Dynamic]) -> RawrResultOf<Dynamic> + Send + Sync>;
+/// A program any thread may call into.
+#[cfg(not(feature = "sync"))]
+pub type Program = Arc<dyn Fn(&item::Value, &mut [Dynamic]) -> RawrResultOf<Dynamic>>;
+
+/// A script closure native code calls (D513.7 b): `F: FnOnce() -> R` takes
+/// one, as `spawn_blocking` does. Each call runs the closure with what it
+/// captured, in an evaluation of its own on the calling thread (D490). The
+/// imported values a closure captured live on the owner thread, so a call
+/// on another thread can't reach them.
+#[derive(Clone)]
+pub struct Callable {
+    function: item::Value,
+    program: Program,
+}
+
+impl std::fmt::Debug for Callable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Callable")
+    }
+}
+
+impl Callable {
+    /// The script closure `function` holds, on the owner thread.
+    pub fn new(function: Dynamic) -> RawrResultOf<Self> {
+        let actual = function.type_name();
+        let function = function
+            .try_cast_result::<item::Value>()
+            .map_err(|_| failure(format!("expected a closure, found `{actual}`")))?;
+        let program = with_host(|host| host.share())
+            .flatten()
+            .ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
+        Ok(Self { function, program })
+    }
+
+    /// Call the closure with `arguments`.
+    pub fn call(&self, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
+        (self.program)(&self.function, arguments)
+    }
 }
 
 /// Work for the owner thread.

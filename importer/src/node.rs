@@ -1559,6 +1559,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
             | crate::Error::Limit { .. }
             | crate::Error::Process { .. }
             | crate::Error::NonSendFuture { .. }
+            | crate::Error::ErasedBound { .. }
             | crate::Error::InputAccountRefused => true,
             crate::Error::Request { .. }
             | crate::Error::Path { .. }
@@ -1583,7 +1584,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
 /// Rust code is said as it is.
 fn importer_message(error: &crate::Error) -> String {
     match error {
-        crate::Error::NonSendFuture { .. } => error.to_string(),
+        crate::Error::NonSendFuture { .. } | crate::Error::ErasedBound { .. } => error.to_string(),
         error => format!("node transform could not obtain importer authority: {error}"),
     }
 }

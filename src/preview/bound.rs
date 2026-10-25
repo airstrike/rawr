@@ -280,6 +280,16 @@ impl BoundCatalog {
         self.invoke(function, arguments)
     }
 
+    /// The program and its runtime, for calls from other threads (D490).
+    #[cfg(all(
+        feature = "rust-import",
+        feature = "sync",
+        not(feature = "no_function")
+    ))]
+    pub(crate) fn shared(&self) -> (program::Authority, Shared<host::runtime::Registry>) {
+        (self.authority.clone(), self.runtime.clone())
+    }
+
     /// Validate one value against the exact type a runtime witness proves.
     #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
     pub(crate) fn validate_witness(

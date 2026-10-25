@@ -11,9 +11,14 @@ mod tests;
 /// The exact `Cargo.toml` the admitted native owner consumed, and what
 /// native code sees of the marked modules when the crate root is native
 /// (D501). Comparing them conservatively routes any declaration edit, and
-/// any edit that changes a trampoline, to preparation.
+/// any edit that changes a trampoline, to preparation. The last field is a
+/// marked root's async `main` entry (D513.4).
 #[derive(Clone, Eq, PartialEq)]
-pub struct Manifests(Box<[(PathBuf, Box<str>)]>, Option<rawr::package::Shape>);
+pub struct Manifests(
+    Box<[(PathBuf, Box<str>)]>,
+    Option<rawr::package::Shape>,
+    Option<Box<str>>,
+);
 
 impl Manifests {
     pub fn from_graph(graph: &rawr::package::Graph) -> Self {
@@ -25,7 +30,14 @@ impl Manifests {
                 .into_iter()
                 .collect(),
             graph.island_shape(),
+            graph.entry_package().entry().map(Box::from),
         )
+    }
+
+    /// Whether every save restarts the program: an async `main` runs on
+    /// its runtime's thread, and a new generation can't reach it there.
+    pub fn restarts_on_save(&self) -> bool {
+        self.1.is_none() && self.2.is_some()
     }
 
     /// Whether the program's crate root is native and calls marked
@@ -38,6 +50,15 @@ impl Manifests {
     /// preparation is `next`, in one line. `None` for a program without
     /// islands, whose host says what a new runner means.
     pub fn restart_reason(&self, next: &Self) -> Option<String> {
+        // An async `main` runs on its runtime's own thread: a save restarts
+        // it with the new code (D500.1, D513.7).
+        if self.1.is_none() && self.2.is_some() {
+            return Some(if next.2.is_some() {
+                "the source changed".to_owned()
+            } else {
+                "`main` is no longer async".to_owned()
+            });
+        }
         let (Some(shape), Some(next_shape)) = (&self.1, &next.1) else {
             return None;
         };

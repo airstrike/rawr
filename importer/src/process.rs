@@ -651,6 +651,30 @@ fn non_send_future(stderr: &str) -> Option<(Box<str>, Box<str>)> {
     Some((function.into(), location.trim().into()))
 }
 
+/// The bound a script type, erased to `rawr::Value`, failed in a
+/// generated runner: rustc's E0277 naming `Value` (D513.2).
+fn erased_bound(stderr: &str) -> Option<(Box<str>, Box<str>)> {
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("error[E0277]") && line.contains("Value"))?;
+    let bound = if let Some(rest) = line.split("the trait bound `").nth(1) {
+        let bound = &rest[..rest.find('`')?];
+        bound.split(": ").nth(1).unwrap_or(bound)
+    } else {
+        let rest = line.split("the trait `").nth(1)?;
+        &rest[..rest.find('`')?]
+    };
+    if !line.contains("rawr_internal::Value") && !line.contains("rawr::Value") {
+        return None;
+    }
+    let start = stderr.find(line)?;
+    let location = stderr[start..]
+        .lines()
+        .find_map(|line| line.trim_start().strip_prefix("--> "))
+        .unwrap_or("the generated runner");
+    Some((bound.into(), location.trim().into()))
+}
+
 impl Output {
     pub(crate) fn checked(self, program: Program) -> Result<Box<[u8]>> {
         if self.success {
@@ -659,6 +683,9 @@ impl Output {
         let stderr = String::from_utf8_lossy(&self.stderr);
         if let Some((function, location)) = non_send_future(&stderr) {
             return Err(Error::NonSendFuture { function, location });
+        }
+        if let Some((bound, location)) = erased_bound(&stderr) {
+            return Err(Error::ErasedBound { bound, location });
         }
         Err(Error::Process {
             program: program.as_str(),

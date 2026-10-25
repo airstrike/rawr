@@ -4400,6 +4400,7 @@ fn render_adapter(
             mappers,
             container_parameters,
             associated,
+            call,
         } => {
             if !mappers.is_empty() && replay.is_none() {
                 return Err(request::Error::Drift {
@@ -4412,8 +4413,8 @@ fn render_adapter(
                     substitutions,
                     functions,
                     mappers,
-                    0,
                     Some(profile),
+                    call.as_ref(),
                     output,
                 )?;
             } else {
@@ -4422,8 +4423,8 @@ fn render_adapter(
                     substitutions,
                     functions,
                     mappers,
-                    0,
                     None,
+                    call.as_ref(),
                     output,
                 )?;
             }
@@ -4849,6 +4850,7 @@ fn render_builder(
                 mappers,
                 container_parameters,
                 associated: true,
+                ..
             } if step.is_construct() => {
                 if !functions.is_empty() {
                     return Err(request::Error::Drift {
@@ -5767,11 +5769,11 @@ fn render_function_arguments(
     substitutions: &[convert::Type],
     functions: &[crate::surface::adapter::FunctionItem],
     mappers: &[crate::surface::adapter::EventMapper],
-    offset: usize,
     profile: Option<&crate::profile::Proof>,
+    call: Option<&crate::classify::representability::callable::Call>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let mut runtime = offset;
+    let mut runtime = 0;
     let mut selected = functions.iter().peekable();
     let mut mapped = mappers.iter().peekable();
     for (position, ty) in signature.inputs().iter().enumerate() {
@@ -5805,11 +5807,24 @@ fn render_function_arguments(
                 });
             }
             _ => {
-                let ty = substitute(ty, signature, substitutions)?;
-                if let Some(profile) = profile {
-                    render_take_profile(position, runtime, ty, profile, output)?;
+                if let Some(call) =
+                    call.filter(|call| *ty == convert::Type::Parameter(call.parameter()))
+                {
+                    render_take_callable(
+                        position,
+                        runtime,
+                        call,
+                        signature,
+                        substitutions,
+                        output,
+                    )?;
                 } else {
-                    render_take(position, runtime, ty, output)?;
+                    let ty = substitute(ty, signature, substitutions)?;
+                    if let Some(profile) = profile {
+                        render_take_profile(position, runtime, ty, profile, output)?;
+                    } else {
+                        render_take(position, runtime, ty, output)?;
+                    }
                 }
                 runtime = runtime.checked_add(1).ok_or(request::Error::Limit {
                     resource: "adapter argument cardinality",
@@ -5878,6 +5893,10 @@ fn function_argument_list(
                     field: "generated static operand position",
                 });
             }
+            // A script closure, made a Rust closure (D513.7 b).
+            _ if callable_parameter(ty, signature) => {
+                write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+            }
             _ => {
                 let ty = substitute(ty, signature, substitutions)?;
                 if profile.is_some_and(|proof| is_projection_target(ty, proof)) {
@@ -5942,6 +5961,7 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
         container_parameters,
         associated,
         signature,
+        ..
     } = plan.operation()
     else {
         return Err(request::Error::Drift {
@@ -6049,6 +6069,73 @@ fn render_arguments_with(
         )?;
     }
     Ok(())
+}
+
+/// Whether `ty` is a callable type parameter of `signature`, as `F` of
+/// `F: FnOnce() -> R` is.
+fn callable_parameter(
+    ty: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+) -> bool {
+    let convert::Type::Parameter(index) = ty else {
+        return false;
+    };
+    signature.parameters().iter().any(|parameter| {
+        parameter.index() == *index
+            && parameter.kind() == crate::classify::representability::signature::Kind::Callable
+    })
+}
+
+/// A script closure where a generic item takes `F: FnOnce(..) -> R`
+/// (D513.7 b): a Rust closure that calls it, on whichever thread calls the
+/// closure, with an evaluation of its own (D490). Its inputs and output
+/// cross by value; a native value can't, since the arena is the owner
+/// thread's.
+fn render_take_callable(
+    local: usize,
+    index: usize,
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let by_value = |ty: &convert::Type| {
+        !matches!(ty, convert::Type::Nominal { .. }) || is_value(ty) || is_duration(ty)
+    };
+    let inputs = call
+        .inputs()
+        .iter()
+        .map(|input| substituted(input, signature, substitutions))
+        .collect::<Result<Vec<_>, _>>()?;
+    let returned = substituted(call.output(), signature, substitutions)?;
+    if !inputs.iter().all(by_value) || !by_value(&returned) {
+        return Err(request::Error::Drift {
+            field: "a closure that takes or gives a native value",
+        });
+    }
+    let mut parameters = Vec::new();
+    let mut values = Vec::new();
+    for (position, input) in inputs.iter().enumerate() {
+        let rust = concrete_type(input).ok_or(request::Error::Drift {
+            field: "closure input type",
+        })?;
+        parameters.push(format!("input_{position}: {rust}"));
+        let mut converted = String::new();
+        render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
+        values.push(format!("({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure's input can't cross: {{error:?}}\"))"));
+    }
+    let rust = concrete_type(&returned).ok_or(request::Error::Drift {
+        field: "closure output type",
+    })?;
+    let mut converted = String::new();
+    render_from_dynamic(&returned, "value", 0, &mut converted)?;
+    writeln!(
+        output,
+        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;\n        move |{}| -> {rust} {{\n            let mut values = [{}];\n            let value = callable.call(&mut values).unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            ({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
+        parameters.join(", "),
+        values.join(", "),
+    )
+    .map_err(|_| request::Error::Encoding)
 }
 
 fn render_fields(
