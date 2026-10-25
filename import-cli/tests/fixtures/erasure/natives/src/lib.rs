@@ -75,3 +75,208 @@ impl<T> SampleRange<T> for std::ops::Range<T> {
 pub fn pick<T, R: SampleRange<T>>(range: R) -> T {
     range.low()
 }
+
+/// Whether this runs on the process's main thread, where winit's event
+/// loop must run.
+#[cfg(target_os = "macos")]
+pub fn on_main_thread() -> bool {
+    unsafe extern "C" {
+        fn pthread_main_np() -> i32;
+    }
+    // SAFETY: it only reads which thread calls it.
+    unsafe { pthread_main_np() == 1 }
+}
+
+/// Whether this runs on the process's main thread, where winit's event
+/// loop must run.
+#[cfg(not(target_os = "macos"))]
+pub fn on_main_thread() -> bool {
+    unsafe extern "C" {
+        fn getpid() -> i32;
+        fn gettid() -> i32;
+    }
+    // SAFETY: both only read the calling process's and thread's ids.
+    unsafe { getpid() == gettid() }
+}
+
+/// A native panic, as winit's when its event loop is made off the main
+/// thread.
+pub fn fail(message: String) -> i64 {
+    panic!("{message}")
+}
+
+// ---- Freya shapes (D551.6) ----
+
+/// Freya's `VirtualScrollView<D, B>`: a builder whose type names its
+/// callable parameter, with a method returning `Self`.
+pub struct Lazy<B: Fn() -> i64> {
+    build: B,
+    flag: bool,
+}
+
+impl<B: Fn() -> i64> Lazy<B> {
+    pub fn new(build: B) -> Self {
+        Self { build, flag: false }
+    }
+
+    pub fn flag(mut self, flag: bool) -> Self {
+        self.flag = flag;
+        self
+    }
+
+    pub fn run(&self) -> i64 {
+        (self.build)() + i64::from(self.flag)
+    }
+}
+
+/// An element, as Freya's `Element`.
+pub struct Element {
+    pub text: String,
+}
+
+/// Freya's `IntoElement`.
+pub trait IntoElement {
+    fn into_element(self) -> Element;
+}
+
+impl IntoElement for &str {
+    fn into_element(self) -> Element {
+        Element {
+            text: self.to_owned(),
+        }
+    }
+}
+
+impl IntoElement for String {
+    fn into_element(self) -> Element {
+        Element { text: self }
+    }
+}
+
+/// Freya's `LayoutExt`: what the extension traits build on.
+pub trait LayoutExt: Sized {
+    fn get_layout(&mut self) -> &mut Layout;
+}
+
+#[derive(Default, Clone)]
+pub struct Layout {
+    pub width: i64,
+    pub centered: bool,
+}
+
+/// Freya's `ContainerExt` and `ContainerSizeExt`: a blanket impl over a
+/// marker trait, with default methods returning `Self`.
+pub trait ContainerExt: LayoutExt {}
+
+pub trait ContainerSizeExt: LayoutExt {
+    fn expanded(mut self) -> Self {
+        self.get_layout().width = 100;
+        self
+    }
+}
+
+impl<T: ContainerExt> ContainerSizeExt for T {}
+
+/// Freya's `ContainerWithContentExt`: a default method a concrete impl
+/// keeps.
+pub trait ContainerWithContentExt: LayoutExt {
+    fn center(mut self) -> Self {
+        self.get_layout().centered = true;
+        self
+    }
+}
+
+/// Freya's `ChildrenExt`: a generic default method.
+pub trait ChildrenExt: Sized {
+    fn get_children(&mut self) -> &mut Vec<Element>;
+
+    fn child<C: IntoElement>(mut self, child: C) -> Self {
+        self.get_children().push(child.into_element());
+        self
+    }
+}
+
+#[derive(Default)]
+pub struct Rect {
+    layout: Layout,
+    children: Vec<Element>,
+}
+
+pub fn rect() -> Rect {
+    Rect::default()
+}
+
+impl Rect {
+    pub fn describe(&self) -> String {
+        let texts = self
+            .children
+            .iter()
+            .map(|child| child.text.as_str())
+            .collect::<Vec<_>>();
+        format!(
+            "rect {} {} [{}]",
+            self.layout.width,
+            self.layout.centered,
+            texts.join(", ")
+        )
+    }
+}
+
+impl LayoutExt for Rect {
+    fn get_layout(&mut self) -> &mut Layout {
+        &mut self.layout
+    }
+}
+
+impl ContainerExt for Rect {}
+impl ContainerWithContentExt for Rect {}
+
+impl ChildrenExt for Rect {
+    fn get_children(&mut self) -> &mut Vec<Element> {
+        &mut self.children
+    }
+}
+
+impl IntoElement for Rect {
+    fn into_element(self) -> Element {
+        Element {
+            text: self.describe(),
+        }
+    }
+}
+
+/// Freya's `AppComponent`, made from any `Fn() -> impl IntoElement`.
+pub struct AppComponent {
+    render: Box<dyn Fn() -> Element>,
+}
+
+impl<F, E> From<F> for AppComponent
+where
+    F: Fn() -> E + 'static,
+    E: IntoElement,
+{
+    fn from(render: F) -> Self {
+        AppComponent {
+            render: Box::new(move || render().into_element()),
+        }
+    }
+}
+
+/// Freya's `WindowConfig::new(impl Into<AppComponent>)`.
+pub struct WindowConfig {
+    app: AppComponent,
+}
+
+impl WindowConfig {
+    pub fn new(app: impl Into<AppComponent>) -> Self {
+        Self { app: app.into() }
+    }
+
+    /// Render the app `times` times, as an event loop would.
+    pub fn launch(self, times: i64) -> String {
+        (0..times)
+            .map(|_| (self.app.render)().text)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}

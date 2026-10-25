@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 17;
+const CLASSIFIER_VERSION: u32 = 18;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -276,6 +276,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     retained_items: Cell<usize>,
     retained_bytes: Cell<usize>,
     scratch_bytes: Cell<usize>,
+    /// The implementation whose self type a trait's `Self` stands for, while
+    /// a default method of that trait is classified as its member.
+    trait_self: Cell<Option<usize>>,
     /// The classification account the retained and scratch targets record on.
     account: Account,
 }
@@ -529,6 +532,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             retained_items: Cell::new(graph.allocation().items),
             retained_bytes: Cell::new(graph.allocation().bytes),
             scratch_bytes: Cell::new(0),
+            trait_self: Cell::new(None),
             account: Account::new(),
         };
         let initialized = (|| {
@@ -2961,6 +2965,11 @@ impl<P: api::Phase> Context<'_, P> {
             (_, _, _, true) => Some(reject::Kind::DefaultImplementation),
             _ => None,
         };
+        // A trait's default method, as Freya's `ContainerSizeExt::expanded(self)
+        // -> Self`, is one definition every implementation shares. As a
+        // member of this one, its `Self` is this implementation's type.
+        let default_method = matches!(definition.owner(), model::Owner::Definition(_))
+            && matches!(definition.kind(), model::Kind::Function { .. });
         match rejected {
             Some(kind) => {
                 self.retain_span(implementation.span())?;
@@ -2972,12 +2981,65 @@ impl<P: api::Phase> Context<'_, P> {
                     )),
                 )))
             }
+            None if default_method => {
+                let index = self
+                    .graph
+                    .implementation_index(implementation.id())
+                    .ok_or(Error::Cardinality)?;
+                let outer = self.trait_self.replace(Some(index));
+                let evidence = if implementation.generics().parameters().len() == 0
+                    && implementation.generics().predicates().len() == 0
+                {
+                    self.classify_default_method(implementation, definition)
+                } else {
+                    self.classify_inherent_invocation(implementation, definition)
+                };
+                self.trait_self.set(outer);
+                evidence
+            }
             None if implementation.generics().parameters().len() == 0
                 && implementation.generics().predicates().len() == 0 =>
             {
                 plan_evidence(definitions, definition)
             }
             None => self.classify_inherent_invocation(implementation, definition),
+        }
+    }
+
+    /// A trait's default method as a member of the non-generic
+    /// `implementation`, with the trait's `Self` as its type.
+    fn classify_default_method(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let model::Kind::Function {
+            signature,
+            generics,
+        } = definition.kind()
+        else {
+            return Err(Error::Cardinality);
+        };
+        match self.function(signature, generics) {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(implementation.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        implementation.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
         }
     }
 
@@ -3619,6 +3681,20 @@ impl<P: api::Phase> Context<'_, P> {
         }) {
             return Err(representability::reject::Kind::ScriptFutureType.into());
         }
+        // A script closure fills a callable parameter `B` as a type Rawr
+        // has no name for, as it does a future parameter, so a signature
+        // can name `B` only as the input that takes the closure. Freya's
+        // `VirtualScrollView<D, B>::auto_hide_scrollbars(self, bool) -> Self`
+        // names it in its receiver and output.
+        if let Some((callable, ..)) = &call
+            && inputs
+                .iter()
+                .filter(|input| **input != representability::convert::Type::Parameter(*callable))
+                .chain([&output])
+                .any(|ty| names_parameter(ty, *callable))
+        {
+            return Err(representability::reject::Kind::CallableProtocol.into());
+        }
         let relations = self.relations(generics)?;
         let signature_plan = representability::signature::Signature::new(
             parameters,
@@ -3735,7 +3811,19 @@ impl<P: api::Phase> Context<'_, P> {
             }
             model::Type::Parameter { index, .. } => Type::Parameter(*index),
             model::Type::SelfType(id) => {
-                if let Some(index) = self.graph.implementation_index(id) {
+                let index = self.graph.implementation_index(id).or_else(|| {
+                    // A trait's `Self` in a default method classified as a
+                    // member of one implementation is that type.
+                    self.trait_self.get().filter(|_| {
+                        self.graph
+                            .definition_index(id)
+                            .and_then(|index| self.graph.definitions().nth(index))
+                            .is_some_and(|definition| {
+                                matches!(definition.kind(), model::Kind::Trait { .. })
+                            })
+                    })
+                });
+                if let Some(index) = index {
                     let implementation = self
                         .graph
                         .implementations()

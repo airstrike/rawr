@@ -270,6 +270,48 @@ fn main() {
 ",
         "-4 0.5 2\n",
     );
+    // A marked `main` runs on the process's main thread, where winit's
+    // event loop must run, and a native panic it meets is reported with
+    // Rust's status instead of aborting (D551.6 d, e).
+    runs(
+        "
+fn main() {
+    println!(\"main thread {}\", natives::on_main_thread());
+}
+",
+        "main thread true\n",
+    );
+    let (success, stdout, stderr) = run("
+fn main() {
+    let text = String::from(\"boom\");
+    let size = text.len() as i64;
+    println!(\"wrong {}\", natives::fail(text) + size);
+}
+");
+    assert!(
+        !success
+            && !stdout.contains("wrong")
+            && stderr.contains("boom")
+            && !stderr.contains("ArgBackup"),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // Freya's builder shapes (D551.6). A glob import brings `Lazy<B>`,
+    // whose `flag(self, bool) -> Self` names its callable parameter `B`:
+    // that item is refused, and the rest of the crate installs. A trait's
+    // default method returning `Self` is a method of each type the trait
+    // is implemented for, through a blanket implementation (`expanded`),
+    // an empty one (`center`), or with a generic parameter (`child`).
+    runs(
+        "
+use natives::*;
+
+fn main() {
+    let made = rect().expanded().center().child(\"Hello\").child(String::from(\"World\"));
+    println!(\"{}\", made.describe());
+}
+",
+        "rect 100 true [Hello, World]\n",
+    );
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native

@@ -4336,7 +4336,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     mutability,
                     ty: *ty,
                 },
-                ty @ Type::Definition { .. } => Receiver::Value { ty },
+                // A trait's `self` is `Self`, as in Freya's default
+                // `fn expanded(self) -> Self`.
+                ty @ (Type::Definition { .. } | Type::SelfTy { .. }) => Receiver::Value { ty },
                 ty => Receiver::Explicit { ty },
             }
         } else {
