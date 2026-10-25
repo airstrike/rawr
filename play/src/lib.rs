@@ -219,6 +219,10 @@ pub struct Options {
     /// Messages applied, in order, to a full app's default State before the
     /// view renders, e.g. `Message::Increment`.
     pub messages: Vec<String>,
+    /// Clicks on a full app after its messages, in order: each the index
+    /// of a target in the reading order of the view as it then is (see
+    /// [`Image::actions`]).
+    pub steps: Vec<usize>,
     /// Per-render limits.
     pub limits: Limits,
     /// Render the last frame as a still image, never an animation.
@@ -254,6 +258,7 @@ impl Default for Options {
             scale: 2,
             theme: Theme::default(),
             messages: Vec::new(),
+            steps: Vec::new(),
             limits: Limits::default(),
             still: false,
         }
@@ -350,7 +355,7 @@ pub fn run_claimed(
         }
         None => parsed.run(source, &options.limits)?,
     };
-    if !options.messages.is_empty() {
+    if !options.messages.is_empty() || !options.steps.is_empty() {
         let note = output
             .note
             .take()
@@ -366,10 +371,7 @@ pub fn run_claimed(
 /// [`Options::still`] is set) as a still PNG.
 pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
     if options.still || shape(source) != Shape::App {
-        return render(source, options).map(|png| Image {
-            picture: Picture::Still(png),
-            note: None,
-        });
+        return still(source, options);
     }
     validate(options)?;
     rawr::resolve::deny_files(NO_FILES);
@@ -394,12 +396,14 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         extended: start + budget,
         cut: Some(&CUT),
         animation_scale: Some(motion::SCALE),
+        still: false,
     };
     let mut loops = motion::Loops::default();
     let mut encoder = motion::Encoder::new(motion::SCALE);
     let recording = rawr_iced::snapshot::record_application(
         &mut adapter,
         messages,
+        &options.steps,
         canvas,
         bound,
         theme,
@@ -429,8 +433,16 @@ fn canvas(options: &Options) -> rawr_iced::snapshot::Canvas {
 }
 
 /// Check, evaluate, and render one iced snippet to a PNG: a full app once
-/// its view settles after its boot and messages.
+/// its view settles after its boot, messages and steps.
 pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+    still(source, options).map(|image| match image.picture {
+        Picture::Still(png) => png,
+        Picture::Animated(_) => unreachable!("a still render draws a PNG"),
+    })
+}
+
+/// [`render`] as an [`Image`]: a full app's has its targets.
+fn still(source: &str, options: &Options) -> Result<Image, PlayError> {
     validate(options)?;
     rawr::resolve::deny_files(NO_FILES);
     let program = wrap(source, options)?;
@@ -458,22 +470,28 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     if Instant::now() >= deadline {
         return Err(PlayError::Limit(TIME_LIMIT.into()));
     }
-    rendered
+    rendered.map(|png| Image {
+        picture: Picture::Still(png),
+        note: None,
+        actions: Vec::new(),
+        clicked: Vec::new(),
+    })
 }
 
 /// A full app runs as `rawr run` would show it, headless: booted, given
-/// the options' messages, and drawn once its view settles. It runs on the
-/// simulated clock as a recording does, so its timers fire and the image
-/// is the recording's last frame: the one a GIF ends on. The recording
-/// keeps the still budget, and a recording the budget cuts shows its last
-/// frame.
+/// the options' messages and steps, and drawn once its view settles. It
+/// runs on the simulated clock as a recording does, so its timers fire and
+/// the image is the recording's last frame: the one a GIF ends on, drawn
+/// at the still's scale over the same widget trees, so its targets are
+/// what it shows. The recording keeps the still budget, and a recording
+/// the budget cuts shows its last frame.
 fn render_application(
     program: &str,
     source: &str,
     options: &Options,
     canvas: rawr_iced::snapshot::Canvas,
     deadline: Instant,
-) -> Result<Png, PlayError> {
+) -> Result<Image, PlayError> {
     // The app boots on the simulated clock, so the times it reads are on it.
     let _clock = rawr_iced::snapshot::clock::freeze();
     let (mut adapter, messages) = application(program, source, options, Deadline::new(deadline))?;
@@ -491,13 +509,13 @@ fn render_application(
         // Frames after the view changes are drawn small, and the last one
         // again at the still's scale.
         animation_scale: Some(motion::SCALE),
+        still: true,
     };
     let mut loops = motion::Loops::default();
-    let classified =
-        |error: rawr_iced::snapshot::Error| classify(&error.to_string(), &options.limits);
-    rawr_iced::snapshot::record_application(
+    let recording = rawr_iced::snapshot::record_application(
         &mut adapter,
         messages,
+        &options.steps,
         canvas,
         bound,
         theme,
@@ -505,9 +523,21 @@ fn render_application(
         &mut |frames| loops.check(frames),
         &mut |_| {},
     )
-    .map_err(classified)?;
-    rawr_iced::snapshot::render_application(&mut adapter, Vec::new(), canvas, bound, theme)
-        .map_err(classified)
+    .map_err(|error| classify(&error.to_string(), &options.limits))?;
+    let last = recording
+        .frames
+        .last()
+        .ok_or_else(|| PlayError::Limit(TIME_LIMIT.into()))?;
+    Ok(Image {
+        picture: Picture::Still(motion::png(last)?),
+        note: None,
+        actions: recording
+            .targets
+            .into_iter()
+            .map(|target| target.label)
+            .collect(),
+        clicked: recording.clicked,
+    })
 }
 
 /// A full app checked and booted, and the options' messages for it.
@@ -872,7 +902,7 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
     );
     let themes = "themes = [rawr_play_theme]";
     let shape = shape(source);
-    if !options.messages.is_empty() && shape != Shape::App {
+    if (!options.messages.is_empty() || !options.steps.is_empty()) && shape != Shape::App {
         return Err(PlayError::Options(
             "messages need a full app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
         ));
@@ -2054,6 +2084,112 @@ impl App {
         };
         assert!(error.contains("unknown function `nonexistent`"), "{error}");
         assert!(error.contains("play.rs:1:1-1:12"), "{error}");
+    }
+
+    /// The image and targets [`super::animate`] gives `source`.
+    fn clicked(source: &str, options: &Options) -> super::Image {
+        super::animate(source, options).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    #[test]
+    fn clicks_on_the_counter_match_its_messages() {
+        let source = include_str!("../tests/fixtures/counter.rs");
+        let steps = Options {
+            steps: vec![0, 0, 1],
+            ..Options::default()
+        };
+        let image = clicked(source, &steps);
+        assert_eq!(image.actions, ["Increment", "Decrement"]);
+        assert_eq!(image.clicked, ["Increment", "Increment", "Decrement"]);
+        // Only the last click's frames are recorded, and it settles at once.
+        let super::Picture::Still(png) = image.picture else {
+            panic!("a settled click is a still");
+        };
+        let messages = Options {
+            messages: vec![
+                "Message::Increment".into(),
+                "Message::Increment".into(),
+                "Message::Decrement".into(),
+            ],
+            ..Options::default()
+        };
+        let expected = render(source, &messages).unwrap();
+        assert!(
+            png.bytes == expected.bytes,
+            "+ + - shows what the messages do"
+        );
+        let unclicked = render(source, &Options::default()).unwrap();
+        assert!(png.bytes != unclicked.bytes, "the clicks change the view");
+    }
+
+    #[test]
+    fn targets_are_labelled_in_reading_order() {
+        let source = r#"
+use iced::widget::{Widget, button, column, row, text};
+
+#[derive(Default)]
+struct State { value: i64 }
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Add(i64), Reset }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Add(by) => self.value += by,
+            Message::Reset => self.value = 0,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            row![
+                button("+").on_press(Message::Add(1)),
+                button("-").on_press(Message::Add(-1)),
+                button("+").on_press(Message::Add(10)),
+            ]
+            .spacing(8),
+            text(self.value),
+            button("Reset").on_press(Message::Reset),
+            button("Off"),
+        ]
+        .spacing(8)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        assert_eq!(
+            image.actions,
+            ["+ (1)", "-", "+ (2)", "Reset"],
+            "Off is disabled"
+        );
+        // The second `+` adds 10; the first then adds 1.
+        let steps = |steps: Vec<usize>| Options {
+            steps,
+            still: true,
+            ..Options::default()
+        };
+        let messages = |messages: &[&str]| Options {
+            messages: messages.iter().map(|m| (*m).to_owned()).collect(),
+            still: true,
+            ..Options::default()
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        assert!(
+            png(&steps(vec![2, 0])) == png(&messages(&["Message::Add(10)", "Message::Add(1)"])),
+            "steps index the targets in reading order"
+        );
+        let image = clicked(source, &steps(vec![2, 0, 3]));
+        assert_eq!(image.clicked, ["+ (2)", "+ (1)", "Reset"]);
+        let error = render(source, &steps(vec![4])).unwrap_err();
+        assert!(
+            error
+                .text()
+                .contains("step 1 clicks target 4, but the app shows 4 targets"),
+            "{error}"
+        );
+        let plain = render("column![text(\"hi\")]", &steps(vec![0])).unwrap_err();
+        assert!(plain.text().contains("need a full app"), "{plain}");
     }
 
     #[test]
