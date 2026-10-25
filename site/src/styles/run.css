@@ -5,7 +5,7 @@
 .run.has-run { padding-right: 44px; }
 .runbtn { float: right; position: sticky; right: 6px; width: 26px; height: 26px; margin: -4px -38px -26px -26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--pink); background: var(--bg); color: var(--pink); cursor: pointer; }
 .runbtn[hidden] { display: none; }
-.runbtn:hover { background: var(--pink); color: var(--bg); }
+.runbtn:hover { background: var(--pink); color: var(--on-pink); }
 .runbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .runbtn svg { display: block; width: 12px; height: 12px; }
 .runbtn .busy { display: none; }
@@ -19,7 +19,7 @@
 .run .pending { visibility: hidden; }
 /* A live result: stdout, stderr and the exit status inline; a frame as an image. */
 .run .live span, .run span span { display: inline; }
-.run span.err { color: #ff8fc4; }
+.run span.err { color: var(--err); }
 .run span.exit { color: var(--dim); }
 .run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }
 

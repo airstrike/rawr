@@ -1,5 +1,5 @@
 // The snippets POST /play/run accepts: the text of every `<code data-run>`
-// element in the site's HTML pages (site/public), with the `?play` options in
+// element in the site's HTML pages (site/dist), with the `?play` options in
 // its `data-play` attribute. build.mjs writes the SHA-256 of each snippet's
 // canonical form (code, theme, size and messages) to src/runnable.gen.ts,
 // which the Worker imports. So the allow-list and the Worker's cache key

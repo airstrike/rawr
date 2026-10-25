@@ -1,61 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How it works | rawr docs</title>
 <meta name="description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
-<meta property="og:title" content="How it works | rawr docs">
-<meta property="og:description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/how-it-works">
-<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/how-it-works">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
-<link rel="stylesheet" href="/docs/docs.css">
-</head>
-<body>
-<header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
-  <nav class="links cap" aria-label="Site">
-    <a href="/docs" aria-current="true">Docs</a>
-    <a href="/play">Playground</a>
-    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
-  </nav>
-</header>
-<div class="docs">
-<nav class="side" aria-label="Docs">
-  <p class="grp" data-here>Guides</p>
-  <ol data-here>
-    <li><a href="/docs/start">Start</a></li>
-    <li><a href="/docs/run">Run</a></li>
-    <li><a href="/docs/agents">Agents</a></li>
-    <li><a href="/docs/imports">Imports</a></li>
-    <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
-    <li><a href="/docs/ratatui">ratatui</a></li>
-    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works" aria-current="page">How it works</a><ol class="secs"><li><a href="#interpreter">What kind of interpreter is rawr?</a></li><li><a href="#speed">How fast is it?</a></li><li><a href="#borrowing">How does rawr handle borrow checking?</a></li><li><a href="#generics">How are generics handled?</a></li><li><a href="#miri">Why not use Miri or interpret rustc&rsquo;s MIR?</a></li></ol></li>
-  </ol>
-  <p class="grp">API Reference</p>
-  <ol>
-    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
-    <li><a href="/docs/reference/iced">iced</a></li>
-    <li><a href="/docs/reference/play">Play</a></li>
-    <li><a href="/docs/reference/commands">Commands</a></li>
-    <li><a href="/docs/reference/requirements">Requirements</a></li>
-  </ol>
-</nav>
-<main>
 <article>
 <h1>How it works</h1>
 <p class="lede">How rawr runs Rust without compiling it, and why it is built this way.</p>
@@ -85,18 +28,4 @@
 <p>Miri cannot call native code, so it cannot drive iced, wgpu or the window system. Miri is also slow on purpose, because it checks each operation for undefined behaviour.</p>
 <p>An interpreter for rustc&rsquo;s MIR would have two problems. Native iced code is compiled for concrete message types, and a type defined in interpreted code has no compiled copy of iced to call. rustc&rsquo;s front end would also run on each edit. That takes much longer than a reload does today.</p>
 <p>Using rustc&rsquo;s typed output as rawr&rsquo;s front end is a possible future direction.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/troubleshooting">Previous<b>Troubleshooting</b></a><a class="next" href="/docs/reference/overview">Next<b>Overview</b></a></nav>
 </article>
-</main>
-</div>
-<footer>
-  <div class="wrap cap">
-    <span>MIT or Apache-2.0</span>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
-    <a href="https://airstrike.fyi">airstrike.fyi</a>
-  </div>
-</footer>
-<script src="/docs/docs.js"></script>
-</body>
-</html>

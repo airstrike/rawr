@@ -15,10 +15,21 @@
 //
 // After a run the play icon becomes an ×, which clears the output. A Reset
 // button at the code's top-right shows while the code differs from the
-// original, and restores it.
-(() => {
+// original, and restores it. An edited snippet is highlighted again when it
+// loses focus, by the build's highlighter, loaded only then.
+
+/** What the script touches, so a test can hand it a stand-in DOM. */
+export interface Env {
+  document: Document;
+  window: Window & { turnstile?: any };
+  fetch: typeof fetch;
+}
+
+const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+
+export function setup({ document, window, fetch }: Env): void {
   const SVG = "http://www.w3.org/2000/svg";
-  const icon = (cls, d) => {
+  const icon = (cls: string, d: string) => {
     const svg = document.createElementNS(SVG, "svg");
     svg.setAttribute("viewBox", "0 0 12 12");
     svg.setAttribute("aria-hidden", "true");
@@ -32,13 +43,13 @@
   };
 
   // The playground's browser check, loaded only for an edited run.
-  const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-  let gate = null;
+  type Gate = { sitekey: string | null; pass: boolean };
+  let gate: Promise<Gate> | null = null;
   const gateInfo = () =>
     (gate ??= fetch("/play/gate", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { sitekey: null, pass: false }))
       .catch(() => ({ sitekey: null, pass: false })));
-  let script = null;
+  let script: Promise<unknown> | null = null;
   const loadTurnstile = () =>
     (script ??= new Promise((resolve, reject) => {
       const js = document.createElement("script");
@@ -50,7 +61,7 @@
     }));
   // A Turnstile token, or null when no check is needed. The widget stays
   // invisible unless Cloudflare asks for an interaction, shown under `strip`.
-  const token = async (strip) => {
+  const token = async (strip: Element): Promise<string | null> => {
     const info = await gateInfo();
     if (!info.sitekey || info.pass) return null;
     await loadTurnstile();
@@ -58,13 +69,13 @@
     box.className = "runcheck";
     strip.after(box);
     try {
-      return await new Promise((resolve, reject) => {
+      return await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("the browser check timed out")), 60000);
         window.turnstile.render(box, {
           sitekey: info.sitekey,
           appearance: "interaction-only",
-          theme: "dark",
-          callback: (t) => (clearTimeout(timer), resolve(t)),
+          theme: document.documentElement?.dataset.theme === "light" ? "light" : "dark",
+          callback: (t: string) => (clearTimeout(timer), resolve(t)),
           "error-callback": () => (clearTimeout(timer), reject(new Error("the browser check failed"))),
         });
       });
@@ -72,9 +83,10 @@
       box.remove();
     }
   };
+  type Snippet = { code: string; play?: string };
   // POST an edited source to the playground's endpoint. A refused pass falls
   // back to Turnstile once.
-  const render = async (snippet, strip) => {
+  const render = async (snippet: Snippet, strip: Element) => {
     const send = async () =>
       fetch("/play/render", {
         method: "POST",
@@ -97,17 +109,17 @@
   probe.contentEditable = "plaintext-only";
   const PLAIN = probe.contentEditable === "plaintext-only";
 
-  for (const button of document.querySelectorAll(".runbtn")) {
-    const out = document.getElementById(button.dataset.out);
-    const source = document.getElementById(button.dataset.source);
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".runbtn")) {
+    const out = document.getElementById(button.dataset.out ?? "");
+    const source = document.getElementById(button.dataset.source ?? "");
     if (!out || !source) continue;
-    const strip = out.closest(".run");
+    const strip = out.closest(".run")!;
     const name = source.dataset.run || "this snippet";
     const label = button.getAttribute("aria-label") || `Run ${name} on rawr's server`;
-    const original = source.textContent;
+    const original = source.textContent ?? "";
     // The `?play` options, the same for the original and an edit.
     const play = source.dataset.play;
-    const snippet = (code) => (play === undefined ? { code } : { code, play });
+    const snippet = (code: string): Snippet => (play === undefined ? { code } : { code, play });
     const originalHtml = source.innerHTML;
     const staticOut = [...out.childNodes].map((node) => node.cloneNode(true));
     const staticClass = out.className;
@@ -123,7 +135,7 @@
     if (!PLAIN) {
       source.addEventListener("paste", (e) => {
         e.preventDefault();
-        document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
+        document.execCommand("insertText", false, (e as ClipboardEvent).clipboardData?.getData("text/plain") ?? "");
       });
     }
     // innerText reads the line breaks an edit inserts as elements.
@@ -155,15 +167,12 @@
     // strip doesn't change height when the same output arrives.
     out.classList.add("pending");
 
-    let state = "idle";
-    const setState = (next) => {
+    type State = "idle" | "running" | "done";
+    let state: State = "idle";
+    const setState = (next: State) => {
       state = next;
       button.dataset.state = next;
-      const say = {
-        idle: label,
-        running: `Running ${name}…`,
-        done: `Clear the output of ${name}`,
-      }[next];
+      const say = { idle: label, running: `Running ${name}…`, done: `Clear the output of ${name}` }[next];
       button.setAttribute("aria-label", say);
       button.title = say;
       if (next === "running") button.setAttribute("aria-disabled", "true");
@@ -175,9 +184,12 @@
     const highlight = () => {
       if (highlighted) return;
       const code = text();
-      source.textContent = code;
-      window.rawrHighlight?.(source);
       highlighted = true;
+      source.textContent = code;
+      import("../lib/highlight.ts").then(({ highlightRust }) => {
+        // Only if nothing was typed while the highlighter loaded.
+        if (highlighted && source.textContent === code && document.activeElement !== source) source.innerHTML = highlightRust(code);
+      }, () => {});
     };
     const restore = () => {
       source.innerHTML = originalHtml;
@@ -208,14 +220,14 @@
       source.focus();
     });
 
-    const show = (node) => {
+    const show = (node: Node) => {
       const live = document.createElement("span");
       live.className = "live";
       live.append(node);
       out.replaceChildren(live);
       out.classList.remove("pending", "quiet");
     };
-    const fail = (message) => {
+    const fail = (message: string) => {
       const span = document.createElement("span");
       span.className = "err";
       span.textContent = message;
@@ -225,7 +237,7 @@
     const run = async () => {
       setState("running");
       // In a compare slider the output is on the right-hand file, so show it.
-      button.closest(".compare")?.querySelector('.tabs button[data-to="0"]')?.click();
+      button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
       const code = text();
       try {
         const response = edited()
@@ -239,7 +251,7 @@
         if (response.ok && type.startsWith("application/json")) {
           const result = await response.json();
           const lines = document.createDocumentFragment();
-          const add = (value, cls) => {
+          const add = (value: string, cls: string) => {
             const span = document.createElement("span");
             span.textContent = value;
             if (cls) span.className = cls;
@@ -247,7 +259,7 @@
           };
           for (const chunk of result.output || []) add(chunk.text, chunk.stream === "stderr" ? "err" : "");
           const last = lines.lastChild;
-          if (last) last.textContent = last.textContent.replace(/\n$/, "");
+          if (last) last.textContent = (last.textContent ?? "").replace(/\n$/, "");
           if (result.status !== 0) add((last ? "\n" : "") + "exit status " + result.status, "exit");
           show(lines);
         } else if (response.ok && type.startsWith("image/")) {
@@ -264,7 +276,8 @@
         }
       } catch (error) {
         // fetch throws a TypeError when the network fails.
-        fail(error instanceof TypeError ? "rawr's server could not be reached. " + error.message : "The code could not run. " + error.message);
+        const message = error instanceof Error ? error.message : String(error);
+        fail(error instanceof TypeError ? "rawr's server could not be reached. " + message : "The code could not run. " + message);
       }
       setState("done");
     };
@@ -280,4 +293,4 @@
       run();
     });
   }
-})();
+}

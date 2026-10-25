@@ -1,0 +1,34 @@
+/* The playground's page: a full-height column on wide screens, and the output's views. */
+@media (min-width: 768px) {
+  html:has(body.play), body.play { height: 100%; }
+  body.play { display: flex; flex-direction: column; overflow: hidden; }
+}
+body.play { font: 15px/1.5 var(--sans); }
+body.play a { color: var(--ink); }
+body.play .bar a { color: var(--dim); }
+body.play .bar a:hover, body.play .bar a[aria-current] { color: var(--text); }
+#playground { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.playcap, .playfoot { font: 11px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+.playfoot a { color: var(--ink); }
+
+/* The theme's control is the page's theme, so it reads <html data-theme> before the island runs. */
+[data-theme="light"] .theme-toggle [data-theme-item="light"],
+[data-theme="dark"] .theme-toggle [data-theme-item="dark"] { background: var(--pink); border-color: var(--pink); color: var(--on-pink); }
+[data-theme="light"] .theme-toggle [data-theme-item="dark"],
+[data-theme="dark"] .theme-toggle [data-theme-item="light"] { background: var(--raised); border-color: var(--line); color: var(--text); }
+
+.editor { display: flex; flex-direction: column; min-width: 0; }
+.editor > .cm-editor { flex: 1; min-height: 0; }
+
+.out { flex: 1; min-height: 200px; border: 1px solid var(--line); background: var(--inset); display: grid; place-items: center; overflow: auto; padding: 16px; }
+@media (min-width: 768px) { .out { min-height: 240px; } }
+.out img { max-width: 100%; height: auto; }
+.out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); color: var(--text); }
+.out pre.error { border-left: 2px solid var(--pink); padding-left: 12px; }
+.out .note { color: var(--dim); }
+.out.has-live { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.live { flex: 1; min-height: 240px; width: 100%; }
+.live.sized { flex: none; min-height: 0; margin: 16px auto; }
+.out.has-live > pre.error { flex: none; max-height: 40%; overflow: auto; margin: 0; padding: 12px; border-top: 1px solid var(--line); }
+.term .err { color: var(--err); }
+.term .exit, .term .none, .term .note { color: var(--dim); }

@@ -1,62 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>iced | rawr API Reference</title>
 <meta name="description" content="The iced APIs a marked file can use, and what isn&#x27;t available yet.">
-<meta property="og:title" content="iced | rawr API Reference">
-<meta property="og:description" content="The iced APIs a marked file can use, and what isn&#x27;t available yet.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/iced">
-<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/iced">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
-<link rel="stylesheet" href="/docs/docs.css">
-<link rel="stylesheet" href="/run.css">
-</head>
-<body>
-<header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
-  <nav class="links cap" aria-label="Site">
-    <a href="/docs" aria-current="true">Docs</a>
-    <a href="/play">Playground</a>
-    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
-  </nav>
-</header>
-<div class="docs">
-<nav class="side" aria-label="Docs">
-  <p class="grp">Guides</p>
-  <ol>
-    <li><a href="/docs/start">Start</a></li>
-    <li><a href="/docs/run">Run</a></li>
-    <li><a href="/docs/agents">Agents</a></li>
-    <li><a href="/docs/imports">Imports</a></li>
-    <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
-    <li><a href="/docs/ratatui">ratatui</a></li>
-    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How it works</a></li>
-  </ol>
-  <p class="grp" data-here>API Reference</p>
-  <ol data-here>
-    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
-    <li><a href="/docs/reference/iced" aria-current="page">iced</a><ol class="secs"><li><a href="#views">Views and elements</a></li><li><a href="#rust-crates">Rust crates in an iced app</a></li><li><a href="#async">Async code</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
-    <li><a href="/docs/reference/play">Play</a></li>
-    <li><a href="/docs/reference/commands">Commands</a></li>
-    <li><a href="/docs/reference/requirements">Requirements</a></li>
-  </ol>
-</nav>
-<main>
 <article>
 <h1>iced</h1>
 <p class="lede">The parts of iced that work in marked files today, and what isn&rsquo;t available yet.</p>
@@ -396,19 +338,4 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
 <p>iced master has 56 examples. 36 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>clock</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>ferris</code>, <code>geometry</code>, <code>gradient</code>, <code>layout</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>sandpiles</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code> and <code>vectorial_text</code>. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/std">Previous<b>std</b></a><a class="next" href="/docs/reference/play">Next<b>Play</b></a></nav>
 </article>
-</main>
-</div>
-<footer>
-  <div class="wrap cap">
-    <span>MIT or Apache-2.0</span>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
-    <a href="https://airstrike.fyi">airstrike.fyi</a>
-  </div>
-</footer>
-<script src="/docs/docs.js"></script>
-<script src="/run.js"></script>
-</body>
-</html>
