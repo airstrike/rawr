@@ -44,7 +44,8 @@ const MAX_ITEMS: usize = 2_500_000;
 const CANONICAL_ITEMS: usize = 19_000_000;
 const CANONICAL_BYTES: usize = 1_207_959_552;
 const MAX_STRING: usize = 1024 * 1024;
-const CANONICAL_PATH_BYTES: usize = 1024;
+// The host's PATH_MAX: 1024 on macOS, 4096 on Linux.
+const CANONICAL_PATH_BYTES: usize = libc::PATH_MAX as usize;
 const RUST_MIN_STACK_VALUE: &str = "67108864";
 
 #[derive(Deserialize)]

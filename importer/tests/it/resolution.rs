@@ -8,7 +8,7 @@ use rawr_import::extract::Policy;
 use rawr_import::process::Native;
 use rawr_import::Error;
 
-const HOST: &str = "aarch64-apple-darwin";
+const HOST: &str = rawr_import::cargo::toolchain::HOST;
 const GIT_REV: &str = "be88873d38544455e26c7a104eb757da2cbbac6b";
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
 

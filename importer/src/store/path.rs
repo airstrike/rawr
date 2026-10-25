@@ -1,4 +1,4 @@
-//! Prospective allocation admission for the pinned macOS standard-library paths.
+//! Prospective allocation admission for the pinned standard-library paths.
 
 use std::path::{Path, PathBuf};
 
@@ -14,8 +14,10 @@ const STACK_INPUT_BYTES: usize = 384;
 // that libc buffer; OsString and PathBuf then take ownership without another copy.
 // Apple Libc 71bbe350ab79eef58113991d817ccc6165061a64, realpath.c:107-108,
 // 340-344; installed libc UUID 66EBD321-6899-3863-BA24-5CFC3076A0CB agrees
-// (realpath's NULL branch allocates 0x400 bytes at 0x1803e952c).
-const CANONICAL_BUFFER_BYTES: usize = 1024;
+// (realpath's NULL branch allocates 0x400 bytes at 0x1803e952c). On Linux,
+// glibc and musl return at most PATH_MAX (4096) bytes, so the host's PATH_MAX
+// bounds both.
+const CANONICAL_BUFFER_BYTES: usize = libc::PATH_MAX as usize;
 
 /// Admit one std pathname-to-CStr conversion before its filesystem operation.
 /// Descriptor-based operations and the raw directory reader do not use this seam.

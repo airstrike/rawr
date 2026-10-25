@@ -685,6 +685,13 @@ fn screenshot(
             reasons.push(format!("{}: {reason}", offered.extension));
         }
     }
+    // rawr's own capture asks macOS for the window. Elsewhere only an
+    // extension's screenshot tool can capture one.
+    if !cfg!(target_os = "macos") {
+        reasons
+            .push("a window capture without an extension's screenshot tool needs macOS".to_owned());
+        return Err(reasons.join("\n"));
+    }
     let Some(session) = session else {
         reasons.push(format!(
             "nothing was started for {}: call `start`",

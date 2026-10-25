@@ -63,7 +63,7 @@ impl Identity {
     /// The identity of a regular file from a raw `fstat`.
     #[cfg(unix)]
     // The stat field types differ by platform (u64 nanoseconds on Linux).
-    #[allow(clippy::unnecessary_cast)]
+    #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
     pub(crate) fn of_stat(stat: &rustix::fs::Stat) -> Option<Self> {
         let kind = u32::from(stat.st_mode) & u32::from(libc::S_IFMT);
         (kind == u32::from(libc::S_IFREG)).then_some(Self {

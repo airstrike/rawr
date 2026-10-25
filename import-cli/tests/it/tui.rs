@@ -232,6 +232,8 @@ impl Terminal {
             .stderr(tty());
         // SAFETY: only async-signal-safe calls between fork and exec. The
         // child leads a new session whose controlling terminal is the pty.
+        // TIOCSCTTY is a u32 on macOS and already the request type on Linux.
+        #[allow(clippy::useless_conversion)]
         unsafe {
             command.pre_exec(|| {
                 nix::unistd::setsid()?;
