@@ -254,9 +254,10 @@ builds only the bot). The memory cap applies on Linux only.
 ## Deploy on Cloudflare Containers
 
 The renderer is tiny-skia on the CPU with the Fira Sans font compiled in.
-It needs no GPU, no system fonts and no CA bundle (rustls ships its roots),
-and the bot only makes outbound connections (Discord's gateway), so one
-always-on container runs it. `play/deploy/cloudflare` is a Worker whose
+It needs no GPU and no system fonts. Its TLS is OpenSSL through native-tls.
+The distroless runtime image already ships libssl3 and a CA bundle. The bot
+only makes outbound connections (Discord's gateway), so one always-on
+container runs it. `play/deploy/cloudflare` is a Worker whose
 `PlayBot` Durable Object owns that container: it never sleeps, and a
 five-minute cron (and `GET /bot/health`) starts it again if it stopped. The
 container has no disk: the bot keeps `/play-channel` choices in the Durable

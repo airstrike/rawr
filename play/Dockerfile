@@ -5,15 +5,20 @@
 # for the target platform (amd64 or arm64) when it differs, so no emulation is
 # needed, and build natively when it matches (GitHub Actions on x86-64).
 # Rendering is tiny-skia on the CPU with the embedded Fira Sans font: the
-# runtime needs no GPU, no fonts and no CA bundle (rustls bundles its roots).
+# runtime needs no GPU and no fonts. TLS (Discord's gateway and API) is
+# OpenSSL through native-tls: the build links the target's libssl-dev, and
+# the distroless cc runtime already ships libssl3 and the CA bundle.
 
 FROM --platform=$BUILDPLATFORM rust:1.99.0-slim-bookworm AS toolchain
 ARG TARGETARCH
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols \
     CARGO_PROFILE_RELEASE_LTO=thin \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
-# A native build (amd64 on an x86-64 host) uses the image's own gcc. A cross
-# build installs the target's gcc and names it in /cross.env.
+# A native build (amd64 on an x86-64 host) uses the image's own gcc and
+# libssl-dev, found through pkg-config. A cross build installs the target's
+# gcc and, through Debian multiarch, the target's libssl-dev, and names them
+# in /cross.env. The cross gcc searches /usr/include/<triplet>, where the
+# target's openssl/configuration.h lives.
 RUN set -eu; \
     case "$TARGETARCH" in \
       amd64) arch=x86_64 gcc=x86-64 ;; \
@@ -21,13 +26,17 @@ RUN set -eu; \
       *) echo "unsupported TARGETARCH $TARGETARCH" >&2; exit 1 ;; \
     esac; \
     : > /cross.env; \
-    if [ "$(uname -m)" != "$arch" ]; then \
+    if [ "$(uname -m)" = "$arch" ]; then \
       apt-get update; \
-      apt-get install -y --no-install-recommends "gcc-$gcc-linux-gnu" "libc6-dev-$TARGETARCH-cross"; \
-      rm -rf /var/lib/apt/lists/*; \
+      apt-get install -y --no-install-recommends libssl-dev pkg-config; \
+    else \
+      dpkg --add-architecture "$TARGETARCH"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends "gcc-$gcc-linux-gnu" "libc6-dev-$TARGETARCH-cross" "libssl-dev:$TARGETARCH"; \
       upper="$(echo "$arch" | tr a-z A-Z)"; \
-      echo "export CARGO_TARGET_${upper}_UNKNOWN_LINUX_GNU_LINKER=$arch-linux-gnu-gcc CC_${arch}_unknown_linux_gnu=$arch-linux-gnu-gcc" > /cross.env; \
+      echo "export CARGO_TARGET_${upper}_UNKNOWN_LINUX_GNU_LINKER=$arch-linux-gnu-gcc CC_${arch}_unknown_linux_gnu=$arch-linux-gnu-gcc ${upper}_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/$arch-linux-gnu ${upper}_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include" > /cross.env; \
     fi; \
+    rm -rf /var/lib/apt/lists/*; \
     rustup target add "$arch-unknown-linux-gnu"; \
     echo "$arch-unknown-linux-gnu" > /target; \
     cargo install cargo-chef --locked

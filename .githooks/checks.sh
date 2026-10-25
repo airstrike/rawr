@@ -11,11 +11,8 @@ fmt_toolchain=${RAWR_FMT_TOOLCHAIN:-stable}
 export CARGO_INCREMENTAL=0
 
 # Advisories cargo audit may report without failing. Each needs a reason and
-# goes when its reason does.
-#   serenity 0.12.5 (rawr-play's `bot` feature, the newest serenity) pins
-#   tokio-tungstenite 0.21, and with it rustls 0.22 and rustls-webpki 0.102:
-#   RUSTSEC-2026-0346, -0349 (rustls); -0049, -0098, -0099, -0104, -0382 (webpki).
-audit_ignore="RUSTSEC-2026-0346 RUSTSEC-2026-0349 RUSTSEC-2026-0049 RUSTSEC-2026-0098 RUSTSEC-2026-0099 RUSTSEC-2026-0104 RUSTSEC-2026-0382"
+# goes when its reason does. None at present.
+audit_ignore=""
 
 check_audit() {
     if ! cargo audit --version >/dev/null 2>&1; then
