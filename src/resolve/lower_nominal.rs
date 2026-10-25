@@ -25309,12 +25309,31 @@ impl<'a> Parser<'a> {
                                 {
                                     return Ok(index);
                                 }
-                                // Rust 2021's inline argument: a local of
-                                // that name.
+                                // Rust 2021's inline argument: any value of
+                                // that name in scope. A local is borrowed
+                                // below; any other name (a `const`, a
+                                // `static`, an imported constant) is read
+                                // as the expression `name` reads, followed
+                                // by a `,` so nothing after the macro
+                                // continues it.
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
-                                    return Err(invalid(format!(
-                                        "cannot find value `{name}` in this scope"
-                                    )));
+                                    let at = expression.start();
+                                    this.splice_tokens(vec![
+                                        (Token::Identifier(Box::new(name.as_str().into())), at),
+                                        (Token::Comma, at),
+                                    ]);
+                                    let captured = match this.parse_expr() {
+                                        Ok(captured) => captured,
+                                        Err(Error::UnknownVariable { .. }) => {
+                                            return Err(invalid(format!(
+                                                "cannot find value `{name}` in this scope"
+                                            )));
+                                        }
+                                        Err(error) => return Err(error),
+                                    };
+                                    this.expect(Token::Comma, "an inline `format!` argument")?;
+                                    arguments.push((Some(name.as_str().into()), captured));
+                                    return Ok(arguments.len() - 1);
                                 };
                                 if !binding.available || !binding.moved_fields.is_empty() {
                                     return Err(Error::MovedValue {

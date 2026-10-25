@@ -9308,3 +9308,39 @@ println!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", a.0.cmp(b.0), a.0.cmp(&
     let error = rejected(r#"let a = "b"; a.cmp(1); 0"#);
     assert!(error.contains("mismatch"), "{error}");
 }
+
+/// An inline `format!` argument names any value in scope, as rustc
+/// resolves it: a `const`, a `static` and an imported constant, with a
+/// width or precision of their own or from a `const`. rustc prints
+/// `hello 10`, `   hello|0010|6.3`, `3 hello`, `1 3.14 ["a", "b"] [     7]`.
+#[test]
+fn language_inline_format_arguments_name_consts_and_statics() {
+    assert_eq!(
+        printed(
+            r#"
+use std::f64::consts::PI;
+const GREETING: &str = "hello";
+static LIMIT: u32 = 10;
+const PI2: f64 = 6.28;
+const WIDTH: usize = 6;
+const NAMES: [&str; 2] = ["a", "b"];
+fn main() {
+    println!("{GREETING} {LIMIT}");
+    println!("{GREETING:>8}|{LIMIT:04}|{PI2:.1}");
+    let local = 3;
+    println!("{local} {GREETING}");
+    let n = format!("{WIDTH}").len();
+    println!("{n} {PI:.2} {NAMES:?} [{:>WIDTH$}]", 7);
+}
+main();
+"#
+        ),
+        "hello 10\n   hello|0010|6.3\n3 hello\n1 3.14 [\"a\", \"b\"] [     7]\n"
+    );
+    // A name that is no value in scope: rustc's E0425 text.
+    let error = rejected(r#"fn main() { println!("{MISSING}"); } 0"#);
+    assert!(
+        error.contains("cannot find value `MISSING` in this scope"),
+        "{error}"
+    );
+}
