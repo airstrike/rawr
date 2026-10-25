@@ -1120,6 +1120,21 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)))
         })
         .expect("the iced facade must retain Instant::duration_since");
+    type Pick = fn(iced::time::Instant, iced::time::Instant) -> iced::time::Instant;
+    for (path, pick) in [
+        ("iced::time::Instant::min", std::cmp::min as Pick),
+        ("iced::time::Instant::max", std::cmp::max as Pick),
+    ] {
+        builder
+            .bind(path, move |args| {
+                let (lhs, rhs) =
+                    pair::<marker::Instant, marker::Instant>(path, args)?.ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
+                Ok(Dynamic::from(marker::Instant(pick(lhs.0, rhs.0))))
+            })
+            .expect("the iced facade must retain Instant::min and Instant::max");
+    }
     // `a - b` of two instants is a `Duration`; `instant ± duration` an
     // `Instant`.
     builder

@@ -1101,6 +1101,7 @@ fn collect_application(
         entry.theme_type().cloned(),
         entry.subscription_type().cloned(),
         entry.widget().cloned(),
+        entry.instant().cloned(),
         entry.span(),
     )
 }

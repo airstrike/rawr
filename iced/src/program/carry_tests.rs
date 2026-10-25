@@ -47,7 +47,7 @@ pub fn main() -> iced::Result {{
     )
 }
 
-fn boot(source: &str) -> Adapter {
+pub(super) fn boot(source: &str) -> Adapter {
     let mut engine = Engine::new();
     crate::install(&mut engine).unwrap();
     let engine = Shared::new(engine);
@@ -154,15 +154,15 @@ fn malformed_bytes_boot_fresh() {
 const STOPWATCH: &str = include_str!("../../../play/tests/fixtures/stopwatch.rs");
 
 #[test]
-fn a_running_stopwatch_carries_in_process_but_not_as_bytes() {
+fn a_running_stopwatch_carries_in_process_and_as_bytes() {
     let mut old = boot(STOPWATCH);
     let mut simulator = iced_test::simulator(old.view());
     simulator.click("Start").unwrap();
     let message = simulator.into_messages().next().unwrap();
     old.update(message).unwrap();
     assert!(shows(&old, "Stop"));
-    // Its `Duration` and `Instant` are native values: no bytes carry them.
-    assert!(export(&old).is_none());
+    // Its `Duration` and `Instant` carry as bytes too.
+    assert!(export(&old).is_some());
 
     let edited = STOPWATCH.replace("\"Reset\"", "\"Clear\"");
     let mut new = boot(&edited);

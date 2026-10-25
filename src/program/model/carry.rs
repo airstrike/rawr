@@ -4,10 +4,12 @@
 //! Primitives, strings, arrays, maps, blobs, `Option`, `Result`, `Reverse`
 //! and script structs and enums are encoded; a struct or enum carries its type
 //! key, its variant and the digest of its schema. A host value is encoded when
-//! its facade made its type `Carry` (its bytes and its Rust type name).
-//! Anything else (a native handle, an imported Rust value, a closure, a
-//! timestamp) is not plain data, and the value is not carried. Decoding rebuilds each script value in the new
-//! program's model, and only when its schema digest is unchanged.
+//! its facade made its type `Carry` (its bytes and its Rust type name), as
+//! the iced facade does for `Color`, `Theme`, `Duration` and `Instant`.
+//! Anything else (a native handle, an imported Rust value, a closure) is not
+//! plain data, and the value is not carried. Decoding rebuilds each script
+//! value in the new program's model, and only when its schema digest is
+//! unchanged.
 
 use super::{Model, Shape};
 use crate::types::dynamic::Union;

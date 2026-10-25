@@ -30,6 +30,9 @@ impl Artifact {
         theme: Theme,
         renderer: &mut headless::Renderer,
     ) -> Result<Self, Error> {
+        // The preview's `Instant::now()` and its frames read one frozen
+        // clock, so a picture of an animation is the same on every run.
+        let _frozen = super::clock::now().is_none().then(super::clock::freeze);
         let identity = definition.key().to_string();
         let fingerprint = definition
             .digest()

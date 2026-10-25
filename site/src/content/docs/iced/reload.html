@@ -8,6 +8,7 @@
 
 <h2 id="state">What a reload keeps</h2>
 <p>A change to the state&rsquo;s own types can make the old state incompatible. Then the app boots again.</p>
+<p>A <code>Duration</code> and an <code>Instant</code> in the State survive a restart of the app&rsquo;s runner. A <code>Duration</code> carries exactly. An <code>Instant</code> carries as its distance from the present, so a running stopwatch keeps its elapsed time.</p>
 <p>A value of an imported type in the State survives an edit to a marked file. An edit to the dependency&rsquo;s Rust code starts a new app from its default State. The window names the imported type that did not carry over.</p>
 
 <h2 id="failed">A save that fails the check</h2>

@@ -186,4 +186,8 @@ impl Todos {
   <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
 </figure>
 <p><code>use rawr::preview;</code> comes from the <code>rawr-macros</code> dependency, as <a href="/docs/iced/previews#previews">Previews</a> describes.</p>
+<h3 id="timed">Timed applications</h3>
+<p><code>iced::application::timed(boot, update, subscription, view)</code> passes <code>update</code> the <code>Instant</code> of each message, as in <code>fn update(&amp;mut self, message: Message, now: Instant)</code>. An animation can then read time from its messages and never call <code>Instant::now()</code> in <code>update</code>.</p>
+<p>The subscription is the third argument. A <code>.subscription(..)</code> after it fails the check. The other builders above work as they do on <code>iced::application</code>.</p>
+<p>Under <code>rawr run</code>, the <code>Instant</code> is the present when the message reaches <code>update</code>. <code>?play</code> reads it from the recording&rsquo;s clock instead. An animation there moves by the recording&rsquo;s frame times, so it renders the same on every run.</p>
 </article>

@@ -2647,7 +2647,7 @@ impl<'proof> Decoration<'proof> {
     }
 
     fn semantic_item(path: &str) -> bool {
-        matches!(path, "run" | "application")
+        matches!(path, "run" | "application" | "application::timed")
             || SEMANTIC_ITEMS.contains(&path)
             || SEMANTIC_ITEM_ROOTS
                 .iter()

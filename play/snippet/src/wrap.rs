@@ -192,10 +192,16 @@ fn view_message(view: &str) -> Option<String> {
     (!message.is_empty()).then(|| message.to_owned())
 }
 
-/// Whether `source` starts its own app with `iced::run` or
-/// `iced::application`.
+/// Whether `source` starts its own app with `iced::run`,
+/// `iced::application` or `iced::application::timed`.
 fn runs_itself(source: &str) -> bool {
-    source.contains("iced::run(") || source.contains("iced::application(")
+    [
+        "iced::run(",
+        "iced::application(",
+        "iced::application::timed(",
+    ]
+    .iter()
+    .any(|entry| source.contains(entry))
 }
 
 /// Whether a line of `source` outside every brace declares an inline
@@ -263,7 +269,31 @@ fn message_type(source: &str) -> Option<String> {
         }
         _ => None,
     })?;
-    last_parameter_type(&rest[..end])
+    let parameters = &rest[..end];
+    // A timed update takes the message's `Instant` after its Message.
+    let parameters = if source.contains("iced::application::timed(") {
+        &parameters[..last_comma(parameters)?]
+    } else {
+        parameters
+    };
+    last_parameter_type(parameters)
+}
+
+/// Where the last top-level `,` of `parameters` is.
+fn last_comma(parameters: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    parameters
+        .char_indices()
+        .filter(|(_, c)| {
+            match c {
+                '(' | '<' | '[' => depth += 1,
+                ')' | '>' | ']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            *c == ',' && depth == 0
+        })
+        .last()
+        .map(|(at, _)| at)
 }
 
 /// The last parameter type of the first closure after `iced::run(` or
@@ -288,19 +318,7 @@ fn closure_message_type(source: &str) -> Option<String> {
 
 /// The type of the last of `parameters`, as `name: Type` or `_: Type`.
 fn last_parameter_type(parameters: &str) -> Option<String> {
-    let mut depth = 0usize;
-    let last = parameters
-        .char_indices()
-        .filter(|(_, c)| {
-            match c {
-                '(' | '<' | '[' => depth += 1,
-                ')' | '>' | ']' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            *c == ',' && depth == 0
-        })
-        .last()
-        .map_or(parameters, |(at, _)| &parameters[at + 1..]);
+    let last = last_comma(parameters).map_or(parameters, |at| &parameters[at + 1..]);
     let (_, ty) = last.split_once(':')?;
     let ty = ty.trim();
     (!ty.is_empty()).then(|| ty.to_owned())

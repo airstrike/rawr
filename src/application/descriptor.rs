@@ -551,6 +551,13 @@ impl Update {
         &self.callback
     }
 
+    /// Whether the update also takes the `Instant` of each message, as
+    /// `iced::application::timed`'s does.
+    #[must_use]
+    pub fn timed(&self) -> bool {
+        self.callback.parameters.len() == 2
+    }
+
     /// Return the normalized update task output contract.
     #[must_use]
     pub const fn task(&self) -> &Task {
@@ -578,7 +585,26 @@ impl Contract {
         let update = checked_callback(executable, entry.update(), "update")?;
         require_kind(&update, &[item::Kind::Method], "a method")?;
         require_receiver(&update, Some(receiver::Mode::Mutable), "`&mut State`")?;
-        require_arity(&update, 1)?;
+        // A timed update also takes the message's `iced::time::Instant`.
+        let timed = entry.form() == application::Form::Timed;
+        require_arity(&update, if timed { 2 } else { 1 })?;
+        if timed {
+            let instant = entry
+                .instant()
+                .ok_or(application::Error::InvalidFacadeContract {
+                    required: "iced::time::Instant",
+                    entry: entry.span(),
+                })?;
+            let parameter = &update.signature.parameters[1];
+            if !parameter.matches_host(instant, &[]) {
+                return Err(application::Error::TypeMismatch {
+                    role: "timed update instant",
+                    expected: "iced::time::Instant".into(),
+                    actual: parameter.display_name().into(),
+                    signature: update.signature.parameter_spans[1],
+                });
+            }
+        }
 
         let state = update
             .signature

@@ -294,6 +294,31 @@ fn bind_canonical(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::B
         })
         .expect("the iced facade must retain Rectangle::new");
     builder
+        .bind("iced::window::Settings::default", |_| {
+            Ok(Dynamic::from(iced::window::Settings::default()))
+        })
+        .expect("the iced facade must retain window::Settings::default");
+    builder
+        .bind("iced::window::Settings::size", |args| {
+            expect_arity("window::Settings::size", args, 1)?;
+            let settings = args[0]
+                .read_lock::<iced::window::Settings>()
+                .ok_or_else(|| {
+                    runtime_error("`window::Settings::size` read another type".into())
+                })?;
+            Ok(Dynamic::from(settings.size))
+        })
+        .expect("the iced facade must retain window::Settings::size");
+    builder
+        .bind("iced::Rectangle::with_radius", |args| {
+            expect_arity("Rectangle::with_radius", args, 1)?;
+            Ok(Dynamic::from(iced::Rectangle::with_radius(nonnegative(
+                args[0],
+                "Rectangle::with_radius radius",
+            )?)))
+        })
+        .expect("the iced facade must retain Rectangle::with_radius");
+    builder
         .bind("iced::Size::new", |args| {
             expect_arity("Size::new", args, 2)?;
             Ok(Dynamic::from(iced::Size::new(

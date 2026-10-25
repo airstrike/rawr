@@ -32,6 +32,7 @@ import stopwatch from "../../../tests/fixtures/stopwatch.rs";
 import styling from "../../../tests/fixtures/styling.rs";
 import table from "../../../tests/fixtures/table.rs";
 import text from "../../../tests/fixtures/text.rs";
+import timed from "../../../tests/fixtures/timed.rs";
 import tooltip from "../../../tests/fixtures/tooltip.rs";
 import vectorialText from "../../../tests/fixtures/vectorial_text.rs";
 
@@ -55,6 +56,7 @@ const ICED: Example[] = [
   { name: "Progress bar", code: progressBar },
   { name: "Tooltip", code: tooltip },
   { name: "Stopwatch", code: stopwatch, messages: ["Message::Toggle"] },
+  { name: "Timed easing", code: timed, messages: ["Message::Toggle"] },
   {
     name: "Component",
     code: component,

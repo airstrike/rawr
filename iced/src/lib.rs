@@ -188,6 +188,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     register_debug();
     let mut builder = facade::Builder::new("iced", facade::Abi::new(16)?)?;
     builder.module("alignment")?;
+    builder.module("application")?;
     builder.module("animation")?;
     builder.module("border")?;
     builder.module("font")?;
@@ -310,7 +311,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()
-        .carried::<theme::CarryTheme>();
+        .carried::<theme::CarryTheme>()
+        .carried::<marker::CarryDuration>()
+        .carried::<marker::CarryInstant>();
     builder.value_type::<iced::Length>("Length", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Padding>(
         "Padding",
@@ -549,6 +552,18 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    // `window::Settings::default().size`: the size a window opens at.
+    builder.default_type::<iced::window::Settings>(
+        "window::Settings",
+        &[],
+        &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<iced::event::Status>("event::Status", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
@@ -789,6 +804,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.item(item::Definition::intrinsic_function(
         "application",
         application_signature()?,
+    )?)?;
+    // iced's `application::timed(boot, update, subscription, view)`, whose
+    // update also takes the `Instant` of each message.
+    builder.item(item::Definition::intrinsic_function(
+        "application::timed",
+        timed_signature()?,
     )?)?;
     builder.item(
         item::Definition::associated_function("Task::none", task_none_signature()?)?
@@ -1736,6 +1757,25 @@ fn application_signature() -> Result<signature::Definition, host::Error> {
     signature.parameter(type_ref::Type::parameter("Boot")?);
     signature.parameter(type_ref::Type::parameter("Update")?);
     signature.parameter(type_ref::Type::parameter("View")?);
+    signature.output(type_ref::Type::applied(
+        "Application",
+        [
+            type_ref::Type::parameter("State")?,
+            type_ref::Type::parameter("Message")?,
+        ],
+    )?);
+    Ok(signature.finish())
+}
+
+fn timed_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    state_message_parameters(&mut signature)?;
+    for name in ["Boot", "Update", "Subscription", "View"] {
+        signature.type_parameter(name, &[])?;
+    }
+    for name in ["Boot", "Update", "Subscription", "View"] {
+        signature.parameter(type_ref::Type::parameter(name)?);
+    }
     signature.output(type_ref::Type::applied(
         "Application",
         [
@@ -2744,6 +2784,17 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         receiver::Mode::Shared,
         since.finish(),
     )?)?;
+    // `start.min(now)`: the earlier of two instants, as `Ord` gives it.
+    for name in ["min", "max"] {
+        let mut pick = signature::Builder::new();
+        pick.parameter(instant()?);
+        pick.output(instant()?);
+        builder.item(item::Definition::method(
+            format!("time::Instant::{name}"),
+            receiver::Mode::Owned,
+            pick.finish(),
+        )?)?;
+    }
     // `size.width`, `point.x` and kin, read as fields.
     for (owner, fields) in [
         ("Size", &["width", "height"][..]),
@@ -3275,6 +3326,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         &[],
         copied_default,
     )?;
+    builder.default_type::<iced::widget::canvas::LineDash<'static>>(
+        "widget::canvas::LineDash",
+        &[],
+        copied_default,
+    )?;
     builder.value_type::<iced::widget::canvas::Style>(
         "widget::canvas::Style",
         &[],
@@ -3521,6 +3577,47 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             signature(inputs, output),
         )?)?;
     }
+    // `frame.draw_image(bounds, &handle)`, and `canvas::Image::new(handle)`
+    // with its `rotation` and `opacity`.
+    #[cfg(feature = "image")]
+    if features::on(Feature::Image) {
+        builder.value_type::<iced::widget::canvas::Image>(
+            "widget::canvas::Image",
+            &[],
+            &[
+                capability::Kind::Debug,
+                capability::Kind::Clone,
+                capability::Kind::PartialEq,
+                capability::Kind::Send,
+                capability::Kind::Static,
+            ],
+        )?;
+        let image = || ty("widget::canvas::Image");
+        let handle = || ty("widget::image::Handle");
+        builder.item(item::Definition::associated_function(
+            "widget::canvas::Image::new",
+            signature(vec![handle()?], image()?),
+        )?)?;
+        for (name, input) in [
+            ("rotation", f64_()),
+            ("rotation", ty("Radians")?),
+            ("rotation", ty("Degrees")?),
+            ("opacity", f64_()),
+        ] {
+            builder.item(item::Definition::method(
+                format!("widget::canvas::Image::{name}"),
+                receiver::Mode::Owned,
+                signature(vec![input], image()?),
+            )?)?;
+        }
+        for drawn in [image()?, handle()?] {
+            builder.item(item::Definition::method(
+                "widget::canvas::Frame::draw_image",
+                receiver::Mode::Shared,
+                signature(vec![ty("Rectangle")?, drawn], unit()?),
+            )?)?;
+        }
+    }
     let mut with_save = signature::Builder::new();
     with_save.type_parameter("R", &[])?;
     with_save.parameter(type_ref::Type::callable(
@@ -3591,11 +3688,36 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "widget::canvas::Stroke::default",
         signature(Vec::new(), stroke()?),
     )?)?;
+    // `LineDash { segments: &[3.0, 6.0], offset: 0 }`.
+    let line_dash = || ty("widget::canvas::LineDash");
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::LineDash::default",
+        signature(Vec::new(), line_dash()?),
+    )?)?;
+    for (name, field) in [
+        (
+            "segments",
+            type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::F32)),
+        ),
+        ("offset", type_ref::Type::builtin(type_ref::Builtin::Usize)),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::LineDash::{name}"),
+            receiver::Mode::Shared,
+            signature(Vec::new(), field.clone()),
+        )?)?;
+        builder.item(item::Definition::method(
+            format!("widget::canvas::LineDash::{name}"),
+            receiver::Mode::Owned,
+            signature(vec![field], line_dash()?),
+        )?)?;
+    }
     for (name, field) in [
         ("width", f64_()),
         ("style", ty("widget::canvas::Style")?),
         ("line_cap", ty("widget::canvas::LineCap")?),
         ("line_join", ty("widget::canvas::LineJoin")?),
+        ("line_dash", line_dash()?),
     ] {
         builder.item(item::Definition::method(
             format!("widget::canvas::Stroke::{name}"),
@@ -5826,6 +5948,22 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
     builder.item(item::Definition::associated_function(
         "Rectangle::new",
         rectangle.finish(),
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "window::Settings::default",
+        output_signature("window::Settings")?,
+    )?)?;
+    builder.item(item::Definition::method(
+        "window::Settings::size",
+        receiver::Mode::Shared,
+        output_signature("Size")?,
+    )?)?;
+    let mut with_radius = signature::Builder::new();
+    with_radius.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+    with_radius.output(type_ref::Type::registered("Rectangle")?);
+    builder.item(item::Definition::associated_function(
+        "Rectangle::with_radius",
+        with_radius.finish(),
     )?)?;
 
     let mut size = signature::Builder::new();

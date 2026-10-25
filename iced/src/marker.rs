@@ -479,6 +479,80 @@ impl Instant {
     }
 }
 
+/// A `Duration` in State outlives a runner restart: its whole seconds, then
+/// its nanoseconds, little-endian.
+pub(crate) struct CarryDuration;
+
+impl rawr::host::value::Carry for CarryDuration {
+    type Value = std::time::Duration;
+
+    fn encode(duration: &std::time::Duration, out: &mut Vec<u8>) {
+        out.extend_from_slice(&duration.as_secs().to_le_bytes());
+        out.extend_from_slice(&duration.subsec_nanos().to_le_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Option<std::time::Duration> {
+        let (seconds, nanos) = (bytes.len() == 12).then(|| bytes.split_at(8))?;
+        let nanos = u32::from_le_bytes(nanos.try_into().ok()?);
+        (nanos < 1_000_000_000).then_some(())?;
+        Some(std::time::Duration::new(
+            u64::from_le_bytes(seconds.try_into().ok()?),
+            nanos,
+        ))
+    }
+}
+
+/// An `Instant` in State outlives a runner restart. An `Instant` means
+/// nothing outside its process, so it is carried as the wall-clock time it
+/// stood for at export, in nanoseconds from the Unix epoch. The new process
+/// rebuilds it as far from its own present. A stopwatch keeps its elapsed time
+/// to within the two clock readings.
+pub(crate) struct CarryInstant;
+
+impl CarryInstant {
+    /// The wall clock now, in nanoseconds from the Unix epoch.
+    fn wall() -> i128 {
+        match iced::time::SystemTime::now().duration_since(iced::time::SystemTime::UNIX_EPOCH) {
+            Ok(since) => since.as_nanos() as i128,
+            Err(before) => -(before.duration().as_nanos() as i128),
+        }
+    }
+
+    /// `nanos` as a Duration and whether it is negative.
+    fn split(nanos: i128) -> Option<(std::time::Duration, bool)> {
+        let magnitude = nanos.unsigned_abs();
+        let seconds = u64::try_from(magnitude / 1_000_000_000).ok()?;
+        let duration = std::time::Duration::new(seconds, (magnitude % 1_000_000_000) as u32);
+        Some((duration, nanos < 0))
+    }
+}
+
+impl rawr::host::value::Carry for CarryInstant {
+    type Value = Instant;
+
+    fn encode(instant: &Instant, out: &mut Vec<u8>) {
+        let now = Instant::now().0;
+        // How long before now the instant was: negative when it is ahead.
+        let ago = match now.checked_duration_since(instant.0) {
+            Some(ago) => ago.as_nanos() as i128,
+            None => -((instant.0 - now).as_nanos() as i128),
+        };
+        out.extend_from_slice(&(Self::wall() - ago).to_le_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Instant> {
+        let at = i128::from_le_bytes(bytes.try_into().ok()?);
+        let now = Instant::now().0;
+        let (distance, ahead) = Self::split(Self::wall() - at)?;
+        let instant = if ahead {
+            now.checked_add(distance)
+        } else {
+            now.checked_sub(distance)
+        };
+        instant.map(Instant)
+    }
+}
+
 /// iced's `tooltip(content, tooltip, position)`.
 #[derive(Clone)]
 pub(crate) struct Tooltip {
@@ -696,6 +770,9 @@ pub(crate) enum Draw {
     Rotate(f32),
     Scale(f32),
     ScaleNonuniform(iced::Vector),
+    /// `draw_image(bounds, image)`.
+    #[cfg(feature = "image")]
+    Image(iced::Rectangle, iced::widget::canvas::Image),
 }
 
 #[cfg(feature = "canvas")]

@@ -17,6 +17,89 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_frames(builder);
     bind_styles(builder);
     bind_bounds(builder);
+    #[cfg(feature = "image")]
+    if crate::features::on(crate::features::Feature::Image) {
+        bind_images(builder);
+    }
+}
+
+/// `frame.draw_image(bounds, image)`, and `canvas::Image::new(handle)` with
+/// its `rotation` and `opacity`.
+#[cfg(feature = "image")]
+fn bind_images(builder: &mut host::runtime::Builder) {
+    use iced::widget::image::Handle;
+    /// iced's `impl Into<Image>`: an `Image`, or a `Handle` drawn as it is.
+    fn image(value: &Dynamic, path: &str) -> Result<canvas::Image, Box<EvalAltResult>> {
+        if let Some(handle) = value.read_lock::<Handle>() {
+            return Ok(canvas::Image::new(handle.clone()));
+        }
+        read::<canvas::Image>(value, path)
+    }
+    builder
+        .bind("iced::widget::canvas::Frame::draw_image", |args| {
+            const PATH: &str = "Frame::draw_image";
+            let [frame, bounds, drawn] = args else {
+                return Err(arity(PATH, 3, args.len()));
+            };
+            let frame = read::<marker::Frame>(frame, PATH)?;
+            let draw = marker::Draw::Image(read(bounds, PATH)?, image(drawn, PATH)?);
+            record(&frame, draw, PATH)
+        })
+        .expect("the iced facade must retain Frame::draw_image");
+    builder
+        .bind("iced::widget::canvas::Image::new", |args| {
+            let [handle] = args else {
+                return Err(arity("Image::new", 1, args.len()));
+            };
+            Ok(Dynamic::from(canvas::Image::new(read::<Handle>(
+                handle,
+                "Image::new",
+            )?)))
+        })
+        .expect("the iced facade must retain canvas::Image::new");
+    for name in ["rotation", "opacity"] {
+        let path = format!("iced::widget::canvas::Image::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [receiver, operand] = args else {
+                    return Err(arity(&path, 2, args.len()));
+                };
+                let image = read::<canvas::Image>(receiver, &path)?;
+                Ok(Dynamic::from(match name {
+                    // iced's `rotation(impl Into<Radians>)`: radians as a
+                    // number, or an angle.
+                    "rotation" => image.rotation(match operand.as_float() {
+                        Ok(radians) => iced::Radians(radians as f32),
+                        Err(_) => super::angle::radians(operand)?,
+                    }),
+                    _ => image.opacity(pixels(operand, &path)?),
+                }))
+            })
+            .expect("the iced facade must retain every canvas::Image builder");
+    }
+}
+
+/// `segments` as the `'static` slice a `LineDash` holds: one per distinct
+/// pattern, kept for the process, so a pattern drawn on every frame is
+/// allocated once.
+fn segments(values: Vec<f32>) -> Result<&'static [f32], Box<EvalAltResult>> {
+    static PATTERNS: Mutex<Vec<&'static [f32]>> = Mutex::new(Vec::new());
+    let mut patterns = PATTERNS
+        .lock()
+        .map_err(|_| runtime_error("`LineDash::segments` found its patterns poisoned".into()))?;
+    let bits = |pattern: &[f32]| {
+        pattern
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    };
+    let wanted = bits(&values);
+    if let Some(pattern) = patterns.iter().find(|pattern| bits(pattern) == wanted) {
+        return Ok(pattern);
+    }
+    let pattern: &'static [f32] = Box::leak(values.into_boxed_slice());
+    patterns.push(pattern);
+    Ok(pattern)
 }
 
 fn bind_program(builder: &mut host::runtime::Builder) {
@@ -536,6 +619,56 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
     );
     value(
         builder,
+        "iced::widget::canvas::LineDash::default",
+        canvas::LineDash::<'static>::default(),
+    );
+    // A dash pattern's fields, read or set
+    // (`LineDash { segments: &[3.0, 6.0], offset: 0 }`).
+    for name in ["segments", "offset"] {
+        let path = format!("iced::widget::canvas::LineDash::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let Some((receiver, operands)) = args.split_first_mut() else {
+                    return Err(arity(&path, 1, 0));
+                };
+                let mut dash = read::<canvas::LineDash<'static>>(receiver, &path)?;
+                let [operand] = operands else {
+                    return Ok(match name {
+                        "segments" => Dynamic::from(
+                            dash.segments
+                                .iter()
+                                .map(|segment| Dynamic::from(f64::from(*segment)))
+                                .collect::<rawr::Array>(),
+                        ),
+                        _ => Dynamic::from(dash.offset as rawr::INT),
+                    });
+                };
+                match name {
+                    "segments" => {
+                        let values = operand
+                            .read_lock::<rawr::Array>()
+                            .ok_or_else(|| {
+                                runtime_error(format!("`{path}` expected a slice of numbers"))
+                            })?
+                            .iter()
+                            .map(|segment| pixels(segment, &path))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        dash.segments = segments(values)?;
+                    }
+                    _ => {
+                        dash.offset =
+                            usize::try_from(operand.as_int().map_err(|_| {
+                                runtime_error(format!("`{path}` expected a usize"))
+                            })?)
+                            .map_err(|_| runtime_error(format!("`{path}` expected a usize")))?;
+                    }
+                }
+                Ok(Dynamic::from(dash))
+            })
+            .expect("the iced facade must retain every LineDash field");
+    }
+    value(
+        builder,
         "iced::widget::canvas::Text::default",
         canvas::Text::default(),
     );
@@ -628,7 +761,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
 
     // A stroke's fields, read or set (`Stroke { width, ..Stroke::default() }`),
     // and its `with_*` builders.
-    for name in ["width", "style", "line_cap", "line_join"] {
+    for name in ["width", "style", "line_cap", "line_join", "line_dash"] {
         let path = format!("iced::widget::canvas::Stroke::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -641,6 +774,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                         "width" => Dynamic::from(f64::from(stroke.width)),
                         "style" => Dynamic::from(stroke.style),
                         "line_cap" => Dynamic::from(stroke.line_cap),
+                        "line_dash" => Dynamic::from(stroke.line_dash),
                         _ => Dynamic::from(stroke.line_join),
                     });
                 };
@@ -648,6 +782,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                     "width" => stroke.width = pixels(operand, &path)?,
                     "style" => stroke.style = read(operand, &path)?,
                     "line_cap" => stroke.line_cap = read(operand, &path)?,
+                    "line_dash" => stroke.line_dash = read(operand, &path)?,
                     _ => stroke.line_join = read(operand, &path)?,
                 }
                 Ok(Dynamic::from(stroke))
@@ -1059,5 +1194,7 @@ fn replay(frame: &mut canvas::Frame, draw: &marker::Draw) {
         marker::Draw::Rotate(angle) => frame.rotate(*angle),
         marker::Draw::Scale(scale) => frame.scale(*scale),
         marker::Draw::ScaleNonuniform(scale) => frame.scale_nonuniform(*scale),
+        #[cfg(feature = "image")]
+        marker::Draw::Image(bounds, image) => frame.draw_image(*bounds, image.clone()),
     }
 }
