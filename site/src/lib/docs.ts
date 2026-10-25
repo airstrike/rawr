@@ -149,7 +149,7 @@ export function toc(html: string): string {
   const list = sections(html);
   const lede = /<p class="lede">[\s\S]*?<\/p>/.exec(html);
   if (list.length <= 2 || !lede) return html;
-  const items = list.map(([id, text]) => `<li><a href="#${id}">${text.replace(/<[^>]+>/g, "")}</a></li>`).join("");
+  const items = list.map(([id, text]) => `<li><a href="#${id}">${text.replace(/<a class="anchor"[^>]*>#<\/a>/, "").replace(/<[^>]+>/g, "")}</a></li>`).join("");
   const at = lede.index + lede[0].length;
   return `${html.slice(0, at)}\n<details class="toc"><summary>On this page</summary><ol>${items}</ol></details>${html.slice(at)}`;
 }

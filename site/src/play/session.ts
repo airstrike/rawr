@@ -133,15 +133,12 @@ export interface Deps {
 
 export const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
-/** An example's name as the URL's hash names it: "Async tasks" is "async-tasks". */
-export function slug(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
 /** The latest snippet stays in this browser, as on the Rust Playground. */
 const DRAFT = "rawr-play-draft";
 
 export class Session {
+  readonly data: PlayData;
+  readonly deps: Deps;
   state: State;
   private listeners = new Set<(state: State) => void>();
   private path: string;
@@ -158,7 +155,9 @@ export class Session {
   private typing: unknown = null;
   private saving: unknown = null;
 
-  constructor(readonly data: PlayData, readonly deps: Deps, theme: Theme) {
+  constructor(data: PlayData, deps: Deps, theme: Theme) {
+    this.data = data;
+    this.deps = deps;
     const { location } = deps;
     this.pass = Boolean(data.sitekey && data.pass);
     this.path = location.pathname;

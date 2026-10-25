@@ -34,7 +34,7 @@
 // pages, with the `?play` options of its `data-play`, in canonical form.
 // build.mjs collects those hashes into src/runnable.gen.ts, so the
 // list is the deployed pages'. Results are cached per image version. A
-// snippet edited on the site is the visitor's own code: run.js sends it to
+// snippet edited on the site is the visitor's own code: run.ts sends it to
 // POST /play/render with the playground's Turnstile, pass and limits, and
 // learns the site key and whether it holds a pass from GET /play/gate.
 
@@ -117,8 +117,8 @@ const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "
  * Docs pages that moved. The FAQ's answers went to /docs/how-it-works and
  * elsewhere. rawr-iced's and ?play's pages became directories. The reference
  * pages went under /docs/reference, and /docs/language became its overview
- * and one page per topic. A redirect keeps the URL's #anchor, and docs.js
- * sends an anchor that moved on to its new page.
+ * and one page per topic. A redirect keeps the URL's #anchor, and the page
+ * sends an anchor that moved on to its new page (the site's lib/moved.ts).
  */
 export const DOCS_MOVED: Record<string, string> = {
   "/docs/faq": "/docs/how-it-works",
@@ -775,7 +775,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     return landingRun(request, env, ctx);
   }
   if (path === "/play/gate" && request.method === "GET") {
-    // What the site's run.js needs to send an edited snippet to
+    // What the site's run.ts needs to send an edited snippet to
     // /play/render: the Turnstile site key, and whether this browser holds a
     // pass (the cookie is HttpOnly, so the page can't read it).
     return Response.json(

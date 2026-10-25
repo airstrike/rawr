@@ -1,4 +1,4 @@
-/* Run buttons on terminal strips (run.js), for the landing page and the docs. */
+/* Run buttons on terminal strips (run.ts), for the landing page and the docs. */
 /* The button floats at the strip's top-right corner and takes no layout space: */
 /* its negative margins leave it a zero-size footprint. It is the strip's first */
 /* child. Sticky keeps it in view when the strip is wider than its scroller. */
@@ -23,7 +23,7 @@
 .run span.exit { color: var(--dim); }
 .run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }
 
-/* The code of a runnable snippet is editable (run.js). */
+/* The code of a runnable snippet is editable (run.ts). */
 code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--pink); }
 pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px var(--dim); }
 /* After a run the play icon becomes an ×, which clears only the output. */

@@ -7,7 +7,8 @@
 # for a new image version), a 500 or 10013 (an assets upload session's
 # "unknown error", which passed on a re-run each time), waits for the bot to report the image
 # named by PLAY_VERSION, and runs the landing page's own snippets and the
-# docs' through /play/run. Logs go to target/logs.
+# docs' through /play/run. Logs go to target/logs. The site needs its
+# packages: `npm ci` in site/.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
@@ -18,10 +19,14 @@ cd "$here"
 
 want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
 
+# The site's build (site/dist) comes first: the tests read its pages, and
+# wrangler deploy then merges it as built (SITE_BUILT) instead of building again.
+node build.mjs >"$logs/release-build.log" 2>&1 || { echo "the build failed; see $logs/release-build.log" >&2; exit 1; }
 npm test >"$logs/release-test.log" 2>&1 || { echo "npm test failed; see $logs/release-test.log" >&2; exit 1; }
+npm --prefix "$repo/site" test >"$logs/release-site-test.log" 2>&1 || { echo "the site's tests failed; see $logs/release-site-test.log" >&2; exit 1; }
 
 attempt=1
-until npx wrangler deploy --containers-rollout=immediate >"$logs/release-deploy.log" 2>&1; do
+until SITE_BUILT=1 npx wrangler deploy --containers-rollout=immediate >"$logs/release-deploy.log" 2>&1; do
   # Since 2026-10-24 Cloudflare answers 100146 to wrangler's last request even
   # though the upload and the rollout went through. The bot's poll below proves
   # whether the new image runs, so a 100146 after the upload is not a failure.
@@ -72,7 +77,7 @@ node --input-type=module -e '
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);
-    // A block sends its ?play options (data-play) with its code, as run.js does.
+    // A block sends its ?play options (data-play) with its code, as run.ts does.
     // A block whose shown output is an error (class="err") is expected to
     // fail to compile, so its 422 is its right answer.
     for (const match of found) {
@@ -106,4 +111,4 @@ node --input-type=module -e '
     }
   }
   console.log("ran " + sources.size + " distinct site snippets from " + pages.length + " pages");
-' "$site" "$repo/site/public"
+' "$site" "$repo/site/dist"
