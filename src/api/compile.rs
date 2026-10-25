@@ -92,7 +92,7 @@ impl Engine {
                     && key.name() == "main"
             })
             .map(|item| crate::resolve::lower_nominal::private_function_name(item.key()));
-        Ok((executable.into_ast(), main))
+        Ok((executable.into_hosted_ast(), main))
     }
 
     /// Compile one immutable reload candidate from a static package graph.
@@ -244,7 +244,7 @@ impl Engine {
             Some(&Scope::new()),
             self.optimization_level,
         )
-        .map(program::Executable::into_ast)
+        .map(program::Executable::into_hosted_ast)
     }
 
     /// [`Engine::compile_unit`], with the [`program::Positions`] that map a

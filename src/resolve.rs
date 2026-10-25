@@ -1142,9 +1142,9 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
     // the facade's, which reads that clock too, and its `Duration` is std's.
     const REEXPORTS: [(&str, &str); 8] = [
         ("std::time", "iced::time"),
-        ("std::path", "rawr_iced::path"),
-        ("std::ffi", "rawr_iced::ffi"),
-        ("std::io", "rawr_iced::io"),
+        ("std::path", "rawr_std::path"),
+        ("std::ffi", "rawr_std::ffi"),
+        ("std::io", "rawr_std::io"),
         ("core::time", "iced::time"),
         ("tokio::time::Instant", "iced::time::Instant"),
         ("tokio::time::Duration", "iced::time::Duration"),

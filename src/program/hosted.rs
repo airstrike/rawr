@@ -42,14 +42,43 @@ impl Hosted {
     }
 
     /// This program's runtime generation of `engine`'s registry, bound on
-    /// first use. `None` when the engine exports nothing, which leaves each
-    /// host call to report its missing binding.
+    /// first use. An engine that exports nothing binds a program that names
+    /// only std's types to a registry of its own (`std_facade`). `None` when
+    /// the program names anything else, which leaves each host call to
+    /// report its missing binding.
     pub(crate) fn bind(
         &self,
         engine: &crate::Engine,
     ) -> Result<Option<Shared<host::runtime::Registry>>, Box<EvalAltResult>> {
+        let validate = |registry: &host::runtime::Registry| {
+            registry
+                .validate(
+                    &self.dependencies,
+                    &self.requirements,
+                    &self.projections,
+                    &self.widgets,
+                    &[],
+                )
+                .map_err(|error| -> Box<EvalAltResult> {
+                    EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE).into()
+                })
+        };
         let Some(registry) = engine.host_runtime.as_ref() else {
-            return Ok(None);
+            if !self
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.root() == crate::std_facade::ROOT)
+            {
+                return Ok(None);
+            }
+            // Every build's std facade is the same, so any engine's program
+            // binds to it.
+            let bound = self.bound.get_or_try_init(|| {
+                let registry = host::runtime::Registry::new();
+                validate(&registry)?;
+                Ok::<_, Box<EvalAltResult>>(Shared::new(registry))
+            })?;
+            return Ok(Some(bound.clone()));
         };
         if engine.origin() != self.origin {
             return Err(EvalAltResult::ErrorRuntime(
@@ -59,21 +88,10 @@ impl Hosted {
             )
             .into());
         }
-        let bind = || -> Result<Shared<host::runtime::Registry>, Box<EvalAltResult>> {
-            registry
-                .validate(
-                    &self.dependencies,
-                    &self.requirements,
-                    &self.projections,
-                    &self.widgets,
-                    &[],
-                )
-                .map_err(|error| {
-                    EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE)
-                })?;
-            Ok(Shared::new(registry.next_generation()))
-        };
-        let bound = self.bound.get_or_try_init(bind)?;
+        let bound = self.bound.get_or_try_init(|| {
+            validate(registry)?;
+            Ok::<_, Box<EvalAltResult>>(Shared::new(registry.next_generation()))
+        })?;
         Ok(Some(bound.clone()))
     }
 }
@@ -82,9 +100,9 @@ impl crate::Engine {
     /// Freeze the exports when a compiled program depends on one of them.
     pub(crate) fn freeze_exports(&self, dependencies: &[host::facade::Dependency]) {
         if let Some(registry) = &self.host_runtime
-            && dependencies
-                .iter()
-                .any(|dependency| registry.contains(dependency.root()))
+            && dependencies.iter().any(|dependency| {
+                dependency.root() != crate::std_facade::ROOT && registry.contains(dependency.root())
+            })
         {
             self.exports_frozen
                 .store(true, core::sync::atomic::Ordering::Release);

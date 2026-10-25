@@ -160,6 +160,7 @@ pub mod serde;
 pub mod signature;
 /// Source text retained by parsed compilation units.
 pub mod source;
+mod std_facade;
 mod tests;
 /// Host-requested timing observations.
 pub mod timing;

@@ -171,7 +171,7 @@ pub(crate) fn snapshot(
     let sources = graph.diagnostic_sources();
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
-    snapshot_executable(engine, program, &sources).map(program::Executable::into_ast)
+    snapshot_executable(engine, program, &sources).map(program::Executable::into_hosted_ast)
 }
 
 #[cfg(feature = "rust-import")]

@@ -323,6 +323,12 @@ impl Engine {
         // Register the standard package
         engine.register_global_module(StandardPackage::new().as_shared_module());
 
+        // std's `path`, `ffi` and `io` types (`std_facade`).
+        engine
+            .host_registry
+            .install(crate::std_facade::definition())
+            .expect("a new engine has no other std facade");
+
         engine
     }
 
