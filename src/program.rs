@@ -11,6 +11,7 @@ pub(crate) mod model;
 pub(crate) mod origin;
 mod path;
 pub mod schema;
+pub(crate) mod signatures;
 pub(crate) mod source;
 
 pub use authority::Authority;
