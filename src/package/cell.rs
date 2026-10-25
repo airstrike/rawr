@@ -46,6 +46,9 @@ fn stamp() -> String {
     )
 }
 
+/// Each source's latest parse by path, with the digest of the text it parsed.
+type Remembered = BTreeMap<PathBuf, ([u8; 32], parse::Unit)>;
+
 /// The parse cells of one program, in one directory.
 #[derive(Debug)]
 pub struct Cells {
@@ -55,7 +58,7 @@ pub struct Cells {
     parsed: Cell<usize>,
     stale: Cell<usize>,
     /// Each source's latest parse by path, when remembering.
-    memory: Option<RefCell<BTreeMap<PathBuf, ([u8; 32], parse::Unit)>>>,
+    memory: Option<RefCell<Remembered>>,
 }
 
 /// What loading a program through [`Cells`] did.

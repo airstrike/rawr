@@ -1208,7 +1208,6 @@ pub use lower_nominal::cell::Cell;
 /// A `RefCell` of `value`, for a host type whose values are cells, as
 /// rawr-iced's tokio `Mutex` is.
 #[doc(hidden)]
-#[must_use]
 pub fn cell_new(value: crate::Dynamic) -> crate::Dynamic {
     lower_nominal::cell_new(value)
 }
@@ -2373,7 +2372,7 @@ fn resolve_methods(
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
                 if from_trait {
-                    definition = definition.as_trait_default();
+                    definition = definition.into_trait_default();
                     if let Some(text) = &declared.declaration {
                         definition = definition.with_body_text(text.clone());
                     }
@@ -2646,7 +2645,7 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
         path.push(name.clone());
         let mut all_bounds = own.supertraits.0;
         let mut all: Vec<crate::item::Name> = Vec::new();
-        let mut arguments: Vec<(ImmutableString, Box<[type_ref::Type]>)> = Vec::new();
+        let mut arguments: Vec<item::TraitArgument> = Vec::new();
         for parent in own.supertraits.1.iter() {
             if path.contains(&parent.text) {
                 return Err(LocatedError::primary(
@@ -2751,10 +2750,10 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
     type Supers = (
         crate::capability::Set,
         Box<[crate::item::Name]>,
-        Vec<(ImmutableString, Box<[type_ref::Type]>)>,
+        Vec<item::TraitArgument>,
     );
     fn push_arguments(
-        arguments: &mut Vec<(ImmutableString, Box<[type_ref::Type]>)>,
+        arguments: &mut Vec<item::TraitArgument>,
         trait_name: &ImmutableString,
         types: Box<[type_ref::Type]>,
     ) {
@@ -2779,80 +2778,79 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
     // A bound `T: Both<i64>` implies `T: Convert<i64>`: the closure's
     // arguments with the trait's parameters replaced by the bound's and
     // `Self` by the bounded type.
-    let elaborate =
-        |bounded: Option<&crate::item::Name>,
-         bounds: &mut crate::capability::Set,
-         traits: &mut Box<[crate::item::Name]>,
-         trait_arguments: Option<&mut Box<[(ImmutableString, Box<[type_ref::Type]>)]>>| {
-            let mut all = traits.to_vec();
-            let mut implied = Vec::new();
-            for name in traits.iter() {
-                let Some((parent_bounds, parent_traits, parent_arguments)) = closed.get(&name.text)
-                else {
-                    continue;
-                };
-                *bounds = union(*bounds, *parent_bounds);
-                for parent in parent_traits.iter() {
-                    if !all.iter().any(|known| known.text == parent.text) {
-                        all.push(parent.clone());
-                    }
+    let elaborate = |bounded: Option<&crate::item::Name>,
+                     bounds: &mut crate::capability::Set,
+                     traits: &mut Box<[crate::item::Name]>,
+                     trait_arguments: Option<&mut Box<[item::TraitArgument]>>| {
+        let mut all = traits.to_vec();
+        let mut implied = Vec::new();
+        for name in traits.iter() {
+            let Some((parent_bounds, parent_traits, parent_arguments)) = closed.get(&name.text)
+            else {
+                continue;
+            };
+            *bounds = union(*bounds, *parent_bounds);
+            for parent in parent_traits.iter() {
+                if !all.iter().any(|known| known.text == parent.text) {
+                    all.push(parent.clone());
                 }
-                let (Some(bounded), Some(written)) = (bounded, trait_arguments.as_deref()) else {
-                    continue;
-                };
-                if parent_arguments.is_empty() {
-                    continue;
-                }
-                let self_ty = type_ref::Type::Path(type_ref::Path {
-                    name: bounded.text.clone(),
-                    target: type_ref::Target::Parameter,
-                    arguments: Box::default(),
-                    span: bounded.span,
-                });
-                let own_parameters = declared
-                    .get(&name.text)
-                    .map(|(_, own)| {
-                        own.generics
-                            .iter()
-                            .map(|generic| generic.name.text.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let mut lists: Vec<Box<[type_ref::Type]>> = written
-                    .iter()
-                    .filter(|(trait_name, _)| *trait_name == name.text)
-                    .map(|(_, types)| types.clone())
-                    .collect();
-                if lists.is_empty() {
-                    lists.push(Box::default());
-                }
-                for list in lists {
-                    let mut parameters = own_parameters
+            }
+            let (Some(bounded), Some(written)) = (bounded, trait_arguments.as_deref()) else {
+                continue;
+            };
+            if parent_arguments.is_empty() {
+                continue;
+            }
+            let self_ty = type_ref::Type::Path(type_ref::Path {
+                name: bounded.text.clone(),
+                target: type_ref::Target::Parameter,
+                arguments: Box::default(),
+                span: bounded.span,
+            });
+            let own_parameters = declared
+                .get(&name.text)
+                .map(|(_, own)| {
+                    own.generics
                         .iter()
-                        .cloned()
-                        .zip(list.iter().cloned())
-                        .collect::<Vec<_>>();
-                    parameters.push(("Self".into(), self_ty.clone()));
-                    for (parent, types) in parent_arguments {
-                        implied.push((
-                            parent.clone(),
-                            types
-                                .iter()
-                                .map(|ty| substitute_parameters(ty, &parameters))
-                                .collect::<Box<[_]>>(),
-                        ));
-                    }
+                        .map(|generic| generic.name.text.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut lists: Vec<Box<[type_ref::Type]>> = written
+                .iter()
+                .filter(|(trait_name, _)| *trait_name == name.text)
+                .map(|(_, types)| types.clone())
+                .collect();
+            if lists.is_empty() {
+                lists.push(Box::default());
+            }
+            for list in lists {
+                let mut parameters = own_parameters
+                    .iter()
+                    .cloned()
+                    .zip(list.iter().cloned())
+                    .collect::<Vec<_>>();
+                parameters.push(("Self".into(), self_ty.clone()));
+                for (parent, types) in parent_arguments {
+                    implied.push((
+                        parent.clone(),
+                        types
+                            .iter()
+                            .map(|ty| substitute_parameters(ty, &parameters))
+                            .collect::<Box<[_]>>(),
+                    ));
                 }
             }
-            *traits = all.into_boxed_slice();
-            if let Some(trait_arguments) = trait_arguments {
-                let mut arguments = trait_arguments.to_vec();
-                for (parent, types) in implied {
-                    push_arguments(&mut arguments, &parent, types);
-                }
-                *trait_arguments = arguments.into_boxed_slice();
+        }
+        *traits = all.into_boxed_slice();
+        if let Some(trait_arguments) = trait_arguments {
+            let mut arguments = trait_arguments.to_vec();
+            for (parent, types) in implied {
+                push_arguments(&mut arguments, &parent, types);
             }
-        };
+            *trait_arguments = arguments.into_boxed_slice();
+        }
+    };
     let generics = |generics: &mut [item::Generic]| {
         for generic in generics {
             elaborate(
@@ -4017,6 +4015,13 @@ fn resolve_functions(items: &mut [item::Shell]) -> Result<(), LocatedError> {
     Ok(())
 }
 
+/// The type names in scope inside an item declaring generics (when it
+/// declares any), and its parameters with their bounds.
+type GenericScope = (
+    Option<BTreeMap<ImmutableString, type_ref::Target>>,
+    Box<[item::Generic]>,
+);
+
 /// The type names in scope inside an item declaring `generics` (when it
 /// declares any), and its parameters with their bounds. Rawr's bounds are
 /// the built-in derivable traits; it has no user traits.
@@ -4025,13 +4030,7 @@ fn generic_scope(
     types: &BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
     #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
-) -> Result<
-    (
-        Option<BTreeMap<ImmutableString, type_ref::Target>>,
-        Box<[item::Generic]>,
-    ),
-    Error,
-> {
+) -> Result<GenericScope, Error> {
     if generics.is_empty() {
         return Ok((None, Box::default()));
     }
@@ -4089,7 +4088,7 @@ fn generic_scope(
     // `T: Convert<U>`: each generic trait's arguments, with every parameter
     // in scope.
     for (generic, arguments) in resolved.iter_mut().zip(arguments) {
-        let mut resolved_arguments = Vec::<(ImmutableString, Box<[type_ref::Type]>)>::new();
+        let mut resolved_arguments = Vec::<item::TraitArgument>::new();
         for (trait_name, types) in arguments {
             let types = types
                 .into_iter()

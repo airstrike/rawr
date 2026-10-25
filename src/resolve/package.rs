@@ -12,6 +12,9 @@ type UnitBindings = (
     BTreeMap<ImmutableString, (source::Id, Span)>,
 );
 
+/// A name a `use` binds, and the path it names.
+type UsePath = (crate::item::Name, Box<[ImmutableString]>);
+
 #[derive(Debug)]
 pub(crate) struct Failure {
     pub(crate) primary: source::Id,
@@ -828,7 +831,7 @@ impl<'a> Resolver<'a> {
         context: &Context,
         parsed: &crate::item::Use,
         occupied: &BTreeMap<ImmutableString, (source::Id, Span)>,
-    ) -> Result<Vec<(crate::item::Name, Box<[ImmutableString]>)>, Failure> {
+    ) -> Result<Vec<UsePath>, Failure> {
         let crate::item::UseTree::Glob { prefix, span } = &parsed.tree else {
             return Ok(Vec::new());
         };
@@ -1773,7 +1776,7 @@ fn header(parsed: &crate::item::Parsed) -> Option<&crate::item::Header> {
     }
 }
 
-fn use_paths(item: &crate::item::Use) -> Vec<(crate::item::Name, Box<[ImmutableString]>)> {
+fn use_paths(item: &crate::item::Use) -> Vec<UsePath> {
     item.bindings()
 }
 

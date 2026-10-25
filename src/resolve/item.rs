@@ -5,6 +5,10 @@ use crate::{item, type_def, Span};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
 
+/// A generic trait's name and its type arguments: `(Convert, [i64])` of
+/// `Convert<i64>`.
+pub type TraitArgument = (crate::ImmutableString, Box<[type_ref::Type]>);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shell {
     pub id: item::Id,
@@ -85,7 +89,7 @@ pub(crate) struct Generic {
     pub projections: Box<[(crate::item::Name, crate::item::Name, type_ref::Type)]>,
     /// The type arguments of each generic trait among `traits`: `i64` of
     /// `T: Convert<i64>`, as `(trait, arguments)`.
-    pub trait_arguments: Box<[(crate::ImmutableString, Box<[type_ref::Type]>)]>,
+    pub trait_arguments: Box<[TraitArgument]>,
     /// A trait parameter's default type: `Self` of `trait Add<Rhs = Self>`.
     pub default: Option<type_ref::Type>,
     /// The function's signature names this parameter inside a host type
@@ -112,7 +116,7 @@ pub(crate) struct Trait {
     /// The type arguments of each generic trait among each of
     /// `associated_bounds`, in this trait's parameters and `Self`:
     /// `String` of `type Item: Into<String>;`.
-    pub associated_bound_arguments: Box<[Box<[(crate::ImmutableString, Box<[type_ref::Type]>)]>]>,
+    pub associated_bound_arguments: Box<[Box<[TraitArgument]>]>,
     /// Supertraits (`trait Named: Shape + Clone`): their capabilities and
     /// user traits. Every impl of this trait needs them, and a bound by it
     /// implies them.
@@ -121,7 +125,7 @@ pub(crate) struct Trait {
     /// this trait's parameters and `Self`: `T` of `trait Both<T>:
     /// Convert<T>`, `Self` of `trait Ord2: PartialOrd2<Self>`; made
     /// transitive and substituted by elaboration.
-    pub supertrait_arguments: Box<[(crate::ImmutableString, Box<[type_ref::Type]>)]>,
+    pub supertrait_arguments: Box<[TraitArgument]>,
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
     /// The declaration of a facade trait (iced's `canvas::Program`), whose

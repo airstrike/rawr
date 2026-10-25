@@ -1182,7 +1182,7 @@ pub fn run() -> i64 {
 
     let mut engine = Engine::new();
     engine.register_host_facade(option_facade()).unwrap();
-    engine
+    let _ = engine
         .compile_executable("use opt::bump; pub fn run() -> i64 { bump(Some(true)).unwrap() }")
         .expect_err("Rust rejects `Option<bool>` where `Option<i64>` is expected");
 }
@@ -1490,7 +1490,7 @@ pub fn run() -> i64 {
 
     let mut engine = Engine::new();
     engine.register_host_facade(result_facade()).unwrap();
-    engine
+    let _ = engine
         .compile_executable("use res::bump; pub fn run() -> i64 { bump(Ok(true)).unwrap() }")
         .expect_err("Rust rejects `Result<bool, _>` where `Result<i64, String>` is expected");
 }
@@ -6770,6 +6770,8 @@ fn language_debug_escapes_strings_and_chars() {
 /// Every float method the checker accepts runs, and gives Rust's value.
 #[test]
 fn language_every_accepted_float_method_runs() {
+    /// What a float method's call prints, as Rust computes it.
+    type Expected = Box<dyn Fn(f64) -> String>;
     let unary = |name: &str, x: f64| -> String {
         match name {
             "abs" => format!("{:?}", x.abs()),
@@ -6802,11 +6804,11 @@ fn language_every_accepted_float_method_runs() {
             other => panic!("`{other}` is accepted on floats but this test does not know it"),
         }
     };
-    let mut calls: Vec<(String, Box<dyn Fn(f64) -> String>)> = super::FLOAT_UNARY_METHODS
+    let mut calls: Vec<(String, Expected)> = super::FLOAT_UNARY_METHODS
         .iter()
         .map(|(name, _)| {
             let name = name.to_string();
-            let expected: Box<dyn Fn(f64) -> String> = Box::new({
+            let expected: Expected = Box::new({
                 let name = name.clone();
                 move |x| unary(&name, x)
             });

@@ -210,7 +210,7 @@ impl Definition {
     }
 
     /// This function as the trait's default body for the impl's owner.
-    pub(crate) fn as_trait_default(mut self) -> Self {
+    pub(crate) fn into_trait_default(mut self) -> Self {
         self.trait_default = true;
         self
     }
