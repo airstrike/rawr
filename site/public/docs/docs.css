@@ -40,6 +40,7 @@ code.nw { white-space: nowrap; }
 .side ol ol { margin: 2px 0 6px; }
 .side ol ol a { font-size: 14px; padding-left: 24px; }
 .side .secs a { font-size: 13px; color: var(--dim); }
+.side li code { background: none; border: 0; padding: 0; color: inherit; font-size: 0.95em; }
 .side .kids .secs a { padding-left: 36px; }
 .side .grp { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--text); margin: 18px 0 6px; }
 .side .grp:first-child { margin-top: 0; }
