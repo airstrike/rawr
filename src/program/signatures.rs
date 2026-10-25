@@ -4,8 +4,6 @@
 use crate::{host, resolve, ImmutableString, Span};
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Each visible free function's name and its typed signature.
 #[derive(Debug, Default)]
