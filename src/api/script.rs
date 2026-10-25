@@ -17,7 +17,7 @@ use crate::host::export::Value;
 use crate::program::signatures::{self, Signatures, Ty};
 use crate::types::{ParseErrorType, Rendered};
 use crate::{
-    host, resolve, Dynamic, Engine, EvalAltResult, FnArgsVec, ImmutableString, Position,
+    host, resolve, CallFnOptions, Dynamic, Engine, EvalAltResult, ImmutableString, Position,
     RawrResult, Scope, Shared, AST, ERR,
 };
 use std::marker::PhantomData;
@@ -202,36 +202,16 @@ impl Engine {
         function: &ScriptFuncDef,
         arguments: &mut [Dynamic],
     ) -> RawrResult {
-        let global = &mut self.new_global_runtime_state();
-        self.bind_exports(ast, global)?;
-        global.source = ast.source_raw().cloned();
-        global.lib.push(ast.shared_lib().clone());
-        global.lib.push(ast.shared_support().clone());
-        #[cfg(not(feature = "no_module"))]
-        {
-            global.embedded_module_resolver = ast.resolver.clone();
-        }
-        let arguments = &mut arguments.iter_mut().collect::<FnArgsVec<_>>();
-        #[cfg(not(feature = "no_closure"))]
-        crate::func::ensure_no_data_race(&function.name, arguments, false)?;
-        self.call_script_fn(
-            global,
-            &mut Caches::new(),
+        self.call_fn_in(
+            CallFnOptions::new().eval_ast(false),
             &mut Scope::new(),
-            None,
-            None,
-            function,
+            ast,
+            &function.name,
+            Some(function),
             arguments,
-            true,
-            Position::NONE,
+            &mut self.new_global_runtime_state(),
+            &mut Caches::new(),
         )
-        .or_else(|error| match *error {
-            ERR::Exit(value, ..) => Ok(value),
-            ERR::ErrorInFunctionCall(name, _, inner, _) if name == function.name.as_str() => {
-                Err(inner)
-            }
-            _ => Err(error),
-        })
     }
 }
 
