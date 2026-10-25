@@ -5,15 +5,17 @@
 // target/wasm/site), runs the Counter in the browser (the default), clicks
 // Increment three times, makes an edit that keeps the count, runs a plain
 // program, an iced app whose task sleeps, and the "Async tasks" example from
-// its #async-tasks address on the page's real clock, and saves window
-// screenshots in SHOTS_DIR (default target/web-check).
+// its #async-tasks address on the page's real clock. Then it opens the docs'
+// Play page from site/public and checks that run.js posts the app snippet
+// with its ?play options. It saves window screenshots in SHOTS_DIR (default
+// target/web-check).
 // CHROME names the browser when it is not in the usual place.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
-import { webAsset } from "../src/play.ts";
+import { parseSnippet, webAsset } from "../src/play.ts";
 import { render } from "../src/playpage.ts";
 
 const repo = resolve(import.meta.dirname, "../../../..");
@@ -28,9 +30,30 @@ mkdirSync(shots, { recursive: true });
 const og = { title: "rawr playground", description: "", url: "http://localhost/play", image: "", alt: "" };
 const brotli: string[] = [];
 const page = render({ snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples: [{ name: "Async tasks", code: tasks, group: "Rust" }], sitekey: null, shared: null, og });
+// The site's own pages, for run.js: what each Run button posts to /play/run.
+const site = join(repo, "site/public");
+const siteRuns: unknown[] = [];
+const types: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
 const server = createServer((request, response) => {
   const path = new URL(request.url ?? "/", "http://localhost").pathname;
   if (path === "/play") return response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page);
+  if (path === "/play/run" && request.method === "POST") {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      siteRuns.push(JSON.parse(body));
+      response.writeHead(200, { "content-type": "image/png" }).end(readFileSync(join(site, "img/docs-play-counter.png")));
+    });
+    return;
+  }
+  if (/^\/(docs|img)\/|^\/run\.(js|css)$/.test(path)) {
+    const file = join(site, path.endsWith("/") || !extname(path) ? `${path.replace(/\/$/, "")}${extname(path) ? "" : "/index.html"}` : path);
+    try {
+      return response.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" }).end(readFileSync(file));
+    } catch {
+      return response.writeHead(404).end(`no ${path}`);
+    }
+  }
   if (path.startsWith("/web/")) {
     // The Worker's own /web handler, over the files in WEB_DIR.
     const assets = {
@@ -227,6 +250,18 @@ try {
   check(shown("fetch at") < shown("3 jobs in") - 150 && shown("3 jobs in") >= 290 && shown("3 jobs in") < 600, "its lines show as they are written, the last about 300 ms after the run");
   check(await evaluate(`location.hash === "#async-tasks" && location.search === ""`), "the address keeps the example and the default mode");
   check(brotli.includes("/web/rawr_web_bg.wasm"), "the module comes as its brotli copy");
+
+  // The docs' app snippet: its Run button posts the code with the ?play
+  // options its header shows, and shows the frame that comes back.
+  await on("Page.navigate", { url: `http://127.0.0.1:${port}/docs/play#app` });
+  await until("the docs' Run button", `!!document.querySelector('.runbtn[data-source="src-increment"]:not([hidden])')`, 10000);
+  await evaluate(`document.querySelector('.runbtn[data-source="src-increment"]').click()`);
+  await until("the docs' frame", `!!document.querySelector("#out-increment img.frame")`, 10000);
+  await shot("docs-app.png");
+  const sent = siteRuns.at(-1) as { code: string; play?: string };
+  check(sent?.play === "light msg=Message::Increment msg=Message::Increment" && sent.code.includes("struct Counter"), "the docs' app snippet posts its ?play options with its code");
+  const snippet = parseSnippet(sent);
+  check(typeof snippet !== "string" && snippet.messages.length === 2 && snippet.theme === "light", "those options are two Increment messages in the light theme");
 } catch (error) {
   check(false, String(error));
 } finally {
