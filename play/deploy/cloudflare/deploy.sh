@@ -67,22 +67,38 @@ node --input-type=module -e '
     .map((path) => (path.length > 1 ? path.replace(/\/$/, "") : path));
   const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
   const sources = new Set();
+  const failing = new Set();
   for (const path of pages) {
     const page = await (await fetch(process.argv[1] + path)).text();
-    const found = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
+    const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);
-    for (const [, html] of found) sources.add(text(html));
+    // A block sends its ?play options (data-play) with its code, as run.js does.
+    // A block whose shown output is an error (class="err") is expected to
+    // fail to compile, so its 422 is its right answer.
+    for (const match of found) {
+      const [whole, attributes, html] = match;
+      const play = /\bdata-play="([^"]*)"/.exec(attributes);
+      const after = page.slice(match.index + whole.length);
+      const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
+      const body = JSON.stringify(play ? { code: text(html), play: text(play[1]) } : { code: text(html) });
+      if (strip.includes("class=\"err\"")) failing.add(body);
+      sources.add(body);
+    }
   }
   // Each distinct source once. Landing runs are rate limited per IP, so a
   // 429 waits as long as it asks and tries again.
-  for (const code of sources) {
+  for (const body of sources) {
     for (;;) {
-      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body });
       if (response.status === 429) {
         const wait = Number(/(\d+) s/.exec(await response.text())?.[1] ?? 30);
         console.log("rate limited; waiting " + wait + " s");
         await new Promise((resolve) => setTimeout(resolve, (wait + 1) * 1000));
         continue;
+      }
+      if (response.status === 422 && failing.has(body)) {
+        console.log("ran a site snippet: its compile error, as the page shows");
+        break;
       }
       if (!response.ok) throw new Error("run failed: " + response.status + " " + (await response.text()).slice(0, 200));
       console.log("ran a site snippet:", response.headers.get("content-type"));
