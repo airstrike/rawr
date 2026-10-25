@@ -399,3 +399,95 @@ fn cli_renders_the_playgrounds_iced_examples() {
         assert!(colors(&png) > 16, "{name} drew a blank frame");
     }
 }
+
+#[test]
+fn cli_runs_the_playgrounds_rust_examples() {
+    // Each is a plain program in the playground's Rust group (examples.ts),
+    // with the stdout rustc's build of it prints. The async one runs on the
+    // simulated clock; a debug build needs more than the default budget.
+    let examples: [(&str, &str, &str); 8] = [
+        (
+            // D504: a tuple struct pattern collects through its `FromIterator`.
+            "histogram",
+            include_str!("fixtures/rust/histogram.rs"),
+            "a ##\ne ####\nh ###\nn ###\no ####\np ##\nr ##\ns ##\nt ###\nu ##\n",
+        ),
+        (
+            "moves",
+            include_str!("fixtures/rust/moves.rs"),
+            "FERRIS\n[\"ferris\", \"ferris\"]\nferris and ferris\n",
+        ),
+        (
+            "enums",
+            include_str!("fixtures/rust/enums.rs"),
+            "2 3 + 4 * = 20\n      1 + : + needs two values\n    6 7 x : not a command: \"x\"\n          : empty program\n",
+        ),
+        (
+            "traits",
+            include_str!("fixtures/rust/traits.rs"),
+            "circle r=2.5     19.63\nrect 2x9.5       19.00\n",
+        ),
+        (
+            "iterators",
+            include_str!("fixtures/rust/iterators.rs"),
+            "squares: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]\neven sum: 220\nunder 30: 5\nlengths: 1:5 2:6 3:6\nticked to 9\n",
+        ),
+        (
+            "word_count",
+            include_str!("fixtures/rust/word_count.rs"),
+            " the 4\n  on 2\n sat 2\n8 distinct words\n",
+        ),
+        (
+            // D515: a `&str` loop pattern passed by value, then used again.
+            "strings",
+            include_str!("fixtures/rust/strings.rs"),
+            "ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n",
+        ),
+        (
+            "tasks",
+            include_str!("fixtures/rust/tasks.rs"),
+            "fetch at 100 ms\nparse at 200 ms\nrender at 300 ms\n3 jobs in 300 ms\n",
+        ),
+    ];
+    for (name, source, expected) in examples {
+        let output = text_result(source, &["--time-ms", "20000"]);
+        assert_eq!(
+            (output.text().as_str(), output.status),
+            (expected, 0),
+            "{name}"
+        );
+    }
+
+    // The error example fails as rustc does, with E0382 at the use.
+    let result = run_stdin(include_str!("fixtures/rust/use_after_move.rs"), &[]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("use of moved value: `words`")
+            && stderr.contains("play.rs:10:5")
+            && stderr.contains("value moved here"),
+        "{stderr}"
+    );
+
+    // Every Rust example is here, and examples.ts lists each one.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let menu = std::fs::read_to_string(root.join("deploy/cloudflare/src/examples.ts")).unwrap();
+    let mut files: Vec<String> = std::fs::read_dir(root.join("tests/fixtures/rust"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    let mut tested: Vec<String> = examples
+        .iter()
+        .map(|(name, ..)| format!("{name}.rs"))
+        .chain(["use_after_move.rs".to_owned()])
+        .collect();
+    tested.sort();
+    assert_eq!(files, tested);
+    for file in files {
+        assert!(
+            menu.contains(&format!("\"../../../tests/fixtures/rust/{file}\"")),
+            "examples.ts does not import {file}"
+        );
+    }
+}

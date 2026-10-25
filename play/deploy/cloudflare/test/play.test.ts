@@ -188,6 +188,27 @@ test("the page's inline script parses", () => {
   assert.ok(html.includes('<option value="reset">Reset</option>'));
 });
 
+test("the examples menu groups Rust before iced, each option by its index", () => {
+  const html = render({
+    snippet: snippet(),
+    examples: [
+      { name: "Letter histogram", code: "fn main() {}", group: "Rust" },
+      { name: "Word count", code: "fn main() {}", group: "Rust" },
+      { name: "Counter", code: "x", messages: ["Message::Increment"], group: "iced" },
+    ],
+    sitekey: null,
+    shared: null,
+    og: OG,
+  });
+  assert.ok(
+    html.includes(
+      '<option value="">Examples</option><optgroup label="Rust"><option value="0">Letter histogram</option>' +
+        '<option value="1">Word count</option></optgroup><optgroup label="iced"><option value="2">Counter</option>' +
+        '</optgroup><option value="reset">Reset</option>',
+    ),
+  );
+});
+
 test("link preview tags", () => {
   const tags = ogTags({ ...OG, description: 'say "hi" <b>' }, escape);
   assert.ok(tags.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/play/abcDEF1234.png">'));

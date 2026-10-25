@@ -13,6 +13,8 @@ export interface Example {
   messages?: string[];
   /** The canvas size, WxH, when the default would cut the view off. */
   size?: string;
+  /** The menu group: "Rust" or "iced". */
+  group?: string;
 }
 
 export interface Page {
@@ -38,9 +40,19 @@ function scriptJson(value: unknown): string {
 export function render(page: Page): string {
   const { snippet, examples, sitekey, shared } = page;
   const pass = Boolean(sitekey && page.pass);
-  const options = examples
-    .map((e, i) => `<option value="${i}">${escape(e.name)}</option>`)
-    .join("");
+  // Each run of examples in one group is an <optgroup>. An option's value is
+  // its index in `examples`, which the inline script reads.
+  let options = "";
+  let group: string | undefined;
+  examples.forEach((e, i) => {
+    if (e.group !== group) {
+      if (group !== undefined) options += "</optgroup>";
+      group = e.group;
+      if (group !== undefined) options += `<optgroup label="${escape(group)}">`;
+    }
+    options += `<option value="${i}">${escape(e.name)}</option>`;
+  });
+  if (group !== undefined) options += "</optgroup>";
   const theme = (t: string) =>
     `<label><input type="radio" name="theme" value="${t}"${snippet.theme === t ? " checked" : ""}><span>${t}</span></label>`;
   return `<!DOCTYPE html>

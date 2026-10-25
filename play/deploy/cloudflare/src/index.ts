@@ -38,7 +38,7 @@
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
-import { COUNTER, EXAMPLES } from "./examples.ts";
+import { EXAMPLES, FIRST } from "./examples.ts";
 import {
   ID_PATTERN,
   KEEP_DAYS,
@@ -576,10 +576,10 @@ function validConfig(json: string): boolean {
 }
 
 const EMPTY: Snippet = {
-  code: COUNTER.code,
+  code: FIRST.code,
   theme: "dark",
   size: "",
-  messages: COUNTER.messages ?? [],
+  messages: FIRST.messages ?? [],
 };
 
 const html = (body: string, status = 200) =>
