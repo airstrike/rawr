@@ -43,9 +43,33 @@ type Project = fn(
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>;
 struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dynamic], arena: &'arena mut Arena }
 
-#[derive(Clone, Copy)]
-struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+/// A script value's handle on one arena slot. Every script copy of it
+/// shares one [`Release`], so the slot's native value is dropped with the
+/// last copy, as Rust drops a value with its last owner: a channel closes
+/// when its last sender goes (D513).
+#[derive(Clone)]
+struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64, release: Option<std::sync::Arc<Release>> }
+
+/// The claim the copies of one handle share on its slot.
+struct Release { epoch: [u8; 32], slot: u32, generation: u64 }
+
+/// Slots whose last handle was dropped, freed on the owner thread the next
+/// time it has the arena.
+static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        RELEASES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((self.epoch, self.slot, self.generation));
+        // A handle may be dropped on any thread; the arena is the owner's.
+        __rawr_internal::future::on_owner(|| {
+            let _ = with_arena(|_| Ok(()));
+        });
+    }
+}
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -227,8 +251,8 @@ macro_rules! insert_native {
         };
         let handle = $arena.insert_debug(value, debug, clone);
         if let Ok(handle) = &handle {
-            $arena.set_display(*handle, display);
-            $arena.set_relations(*handle, relations);
+            $arena.set_display(handle.clone(), display);
+            $arena.set_relations(handle.clone(), relations);
         }
         handle
     }};
@@ -240,7 +264,7 @@ impl std::fmt::Display for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = NATIVE_ARENA.with(|arena| {
             let arena = arena.try_borrow().ok()?;
-            arena.as_ref()?.display(*self)
+            arena.as_ref()?.display(self.clone())
         });
         match text {
             Some(text) => f.write_str(&text),
@@ -254,7 +278,7 @@ impl std::fmt::Debug for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = NATIVE_ARENA.with(|arena| {
             let arena = arena.try_borrow().ok()?;
-            arena.as_ref()?.debug(*self)
+            arena.as_ref()?.debug(self.clone())
         });
         match text {
             Some(text) => f.write_str(&text),
@@ -280,6 +304,10 @@ enum Error {
     Stale,
     /// A number that does not fit the Rust type it crosses into.
     OutOfRange { value: String, ty: &'static str },
+    /// The value is lent to a future that is still running (D513.6).
+    Leased,
+    /// A script value an erased generic gave back is not of its type.
+    Value(String),
 }
 
 impl std::fmt::Debug for Error {
@@ -295,6 +323,10 @@ impl std::fmt::Debug for Error {
             Self::MissingAdapter => f.write_str("MissingAdapter"),
             Self::Stale => f.write_str("Stale"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
+            Self::Leased => f.write_str(
+                "cannot borrow this value: a future that borrows it mutably is still running (E0499)",
+            ),
+            Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
         }
     }
 }
@@ -312,6 +344,8 @@ impl Error {
             Self::MissingAdapter => 8,
             Self::Stale => 9,
             Self::OutOfRange { .. } => 10,
+            Self::Leased => 11,
+            Self::Value(_) => 12,
         }
     }
 }
@@ -354,13 +388,14 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
                 slot
             }
         };
         let entry = self.slots.get_mut(slot as usize).ok_or(Error::StaleHandle)?;
         if entry.value.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
+        entry.leased = false;
         entry.debug = None;
         entry.display = None;
         entry.clone = None;
@@ -368,7 +403,8 @@ impl Arena {
         entry.witness = None;
         entry.project = None;
         entry.mapper = None;
-        Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation })
+        let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
+        Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
     }
 
     fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>, clone: Option<CloneValue>) -> Result<NativeHandle, Error> {
@@ -455,10 +491,13 @@ impl Arena {
         Ok(handle)
     }
 
-    fn index<T: 'static>(&self, handle: NativeHandle) -> Result<usize, Error> {
+    fn index<T: 'static>(&self, handle: &NativeHandle) -> Result<usize, Error> {
         if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
         let index = handle.slot as usize;
         let entry = self.slots.get(index).ok_or(Error::StaleHandle)?;
+        if entry.generation == handle.generation && entry.leased {
+            return Err(Error::Leased);
+        }
         if entry.generation != handle.generation || entry.value.is_none() {
             return Err(Error::StaleHandle);
         }
@@ -469,7 +508,7 @@ impl Arena {
     }
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
-        let index = self.index::<T>(handle)?;
+        let index = self.index::<T>(&handle)?;
         // A script copies a handle where it copies the value, so a `Clone`
         // value is cloned out and its slot stays valid for every copy.
         if let Some(clone) = self.slots[index].clone {
@@ -532,7 +571,10 @@ impl Arena {
     fn witness(&self, handle: NativeHandle) -> Option<&__rawr_internal::host::runtime::Witness> {
         let index = handle.slot as usize;
         let entry = self.slots.get(index)?;
-        (handle.epoch == self.epoch && handle.generation == entry.generation && entry.value.is_some())
+        // A value lent to a future keeps its witness.
+        (handle.epoch == self.epoch
+            && handle.generation == entry.generation
+            && (entry.value.is_some() || entry.leased))
             .then_some(entry.witness.as_ref())
             .flatten()
     }
@@ -551,12 +593,73 @@ impl Arena {
         Ok(())
     }
 
+    /// Lend the value to a future (D513.6): it leaves its slot, which
+    /// refuses every use until the future gives it back.
+    #[allow(dead_code)]
+    fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        self.slots[index].leased = true;
+        let value = value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)?;
+        Ok(Held::Leased { value: Some(value), handle })
+    }
+
+    /// Free each slot whose last handle was dropped. Dropping a native value
+    /// may drop handles it holds, which are freed in the next round.
+    fn release_dropped(&mut self) {
+        loop {
+            let batch = std::mem::take(
+                &mut *RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            if batch.is_empty() {
+                return;
+            }
+            let mut dropped = Vec::with_capacity(batch.len());
+            for (epoch, slot, generation) in batch {
+                if epoch != self.epoch {
+                    continue;
+                }
+                let Some(entry) = self.slots.get_mut(slot as usize) else {
+                    continue;
+                };
+                if entry.generation != generation {
+                    continue;
+                }
+                dropped.push(entry.value.take());
+                entry.leased = false;
+                entry.witness = None;
+                entry.project = None;
+                entry.mapper = None;
+                match entry.generation.checked_add(1) {
+                    Some(next) => {
+                        entry.generation = next;
+                        self.free.push(slot);
+                    }
+                    None => entry.generation = u64::MAX,
+                }
+            }
+            drop(dropped);
+        }
+    }
+
+    /// The value a future borrowed, back in its slot.
+    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any>) {
+        if handle.epoch != self.epoch { return; }
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize)
+            && entry.generation == handle.generation
+            && entry.leased
+        {
+            entry.value = Some(value);
+            entry.leased = false;
+        }
+    }
+
     fn shared<T: 'static, R>(
         &self,
         handle: NativeHandle,
         call: impl FnOnce(&T) -> R,
     ) -> Result<R, Error> {
-        let index = self.index::<T>(handle)?;
+        let index = self.index::<T>(&handle)?;
         let value = self.slots[index]
             .value
             .as_ref()
@@ -570,7 +673,7 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut T) -> R,
     ) -> Result<R, Error> {
-        let index = self.index::<T>(handle)?;
+        let index = self.index::<T>(&handle)?;
         let value = self.slots[index]
             .value
             .as_mut()
@@ -589,8 +692,82 @@ fn install_arena(epoch: [u8; 32]) {
 fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
     NATIVE_ARENA.with(|arena| {
         let mut arena = arena.try_borrow_mut().map_err(|_| Error::Stale)?;
-        call(arena.as_mut().ok_or(Error::Stale)?)
+        let arena = arena.as_mut().ok_or(Error::Stale)?;
+        arena.release_dropped();
+        let result = call(arena);
+        arena.release_dropped();
+        result
     })
+}
+
+/// A receiver an async method borrows, held by its future (D513.6): a copy
+/// of a `Clone` value for `&self`, or the value itself, lent from its slot,
+/// which it goes back to when the future ends or is dropped.
+#[allow(dead_code)]
+enum Held<T: Send + 'static> {
+    Cloned(T),
+    Leased { value: Option<T>, handle: NativeHandle },
+}
+
+#[allow(dead_code)]
+impl<T: Send + 'static> Held<T> {
+    fn get_mut(&mut self) -> &mut T {
+        match self {
+            Self::Cloned(value) => value,
+            Self::Leased { value, .. } => value.as_mut().expect("a lent value is held until dropped"),
+        }
+    }
+}
+
+impl<T: Send + 'static> Drop for Held<T> {
+    fn drop(&mut self) {
+        if let Self::Leased { value, handle } = self
+            && let Some(value) = value.take()
+        {
+            let handle = handle.clone();
+            // The arena is the owner thread's; a future may end anywhere.
+            __rawr_internal::future::on_owner(move || {
+                let _ = with_arena(|arena| {
+                    arena.restore(handle, Box::new(value));
+                    Ok(())
+                });
+            });
+        }
+    }
+}
+
+/// Chooses a copy of a `Clone` receiver for a `&self` async method, and a
+/// lease otherwise, by method resolution on a concrete `T`.
+#[allow(dead_code)]
+struct HoldProbe<T>(std::marker::PhantomData<T>);
+
+#[allow(dead_code)]
+impl<T> HoldProbe<T> {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+#[allow(dead_code)]
+trait HoldClone<T: Send + 'static> {
+    fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error>;
+}
+
+impl<T: Clone + Send + 'static> HoldClone<T> for HoldProbe<T> {
+    fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error> {
+        arena.shared::<T, _>(handle, |value| Held::Cloned(value.clone()))
+    }
+}
+
+#[allow(dead_code)]
+trait HoldLease<T: Send + 'static> {
+    fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error>;
+}
+
+impl<T: Send + 'static> HoldLease<T> for &HoldProbe<T> {
+    fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error> {
+        arena.lease::<T>(handle)
+    }
 }
 
 /// Turn one value a Rust task or future yielded into a Rawr value, on the
@@ -605,12 +782,24 @@ fn materialize(
         let mut values: [&mut Dynamic; 0] = [];
         let mut arguments = Arguments { values: &mut values, arena };
         let output = convert(&mut arguments)?;
-        if let (Some(handle), Some(witness)) = (output.read_lock::<NativeHandle>().map(|value| *value), witness) {
+        if let (Some(handle), Some(witness)) = (output.read_lock::<NativeHandle>().map(|value| value.clone()), witness) {
             arguments.arena.attest(handle, witness.clone())?;
         }
         Ok(output)
     })
     .map_err(|error| format!("{error:?}"))
+}
+
+/// [`materialize`] of an output that holds script values an erased generic
+/// gave back: each is checked against the script type it stands for.
+#[allow(dead_code)]
+fn materialize_checked(
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+    convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, String> {
+    let output = materialize(witness, convert)?;
+    check_values(witness, &output).map_err(|error| format!("{error:?}"))?;
+    Ok(output)
 }
 
 fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
@@ -654,6 +843,26 @@ fn native_handle(
     }
 }
 
+/// A script value an erased generic takes, as it is (D513.2).
+#[allow(dead_code)]
+fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::Value, Error> {
+    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    Ok(__rawr_internal::Value::from((**value).take()))
+}
+
+/// Check script values that came back from an erased generic against the
+/// script type they stand for, on the thread that owns the program.
+#[allow(dead_code)]
+fn check_values(
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+    value: &Dynamic,
+) -> Result<(), Error> {
+    match witness {
+        Some(witness) => __rawr_internal::island::validate(witness, value).map_err(Error::Value),
+        None => Ok(()),
+    }
+}
+
 fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
@@ -687,7 +896,7 @@ fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
             let epoch = take_bytes(input, 32)?.try_into().map_err(|_| Error::Malformed)?;
             let slot = u32::from_le_bytes(take_bytes(input, 4)?.try_into().map_err(|_| Error::Malformed)?);
             let generation = u64::from_le_bytes(take_bytes(input, 8)?.try_into().map_err(|_| Error::Malformed)?);
-            Dynamic::from(NativeHandle { epoch, slot, generation })
+            Dynamic::from(NativeHandle { epoch, slot, generation, release: None })
         }
         7 => match take_bytes(input, 1)?[0] {
             0 => __rawr_internal::option::none(),
@@ -799,6 +1008,10 @@ fn runtime_error(error: impl std::fmt::Debug) -> Box<__rawr_internal::EvalAltRes
     .into()
 }
 
+/// The witness-mode bit of an adapter whose output holds script values an
+/// erased generic gave back, which are checked against the call's witness.
+const CHECK_VALUES: u8 = 0x80;
+
 fn runtime_invoke(
     adapter: Adapter,
     call: &__rawr_internal::host::runtime::Call<'_>,
@@ -807,7 +1020,7 @@ fn runtime_invoke(
     with_arena(|arena| {
         let receiver = values
             .first()
-            .and_then(|value| value.read_lock::<NativeHandle>().map(|value| *value))
+            .and_then(|value| value.read_lock::<NativeHandle>().map(|value| value.clone()))
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
         let output = (adapter.invoke)(&mut arguments)?;
@@ -823,13 +1036,18 @@ fn runtime_invoke(
                             .as_ref()
                             .and_then(|witness| call.transform_native_witness(witness).ok())
                     })
+                    // An async method that borrows its receiver (D513.6).
+                    .or_else(|| call.borrowed_output_witness().ok())
                     .ok_or(Error::Stale)?;
                 pending.witness(witness).ok_or(Error::Stale)?
             }
             Err(output) => output,
         };
-        if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| *value) {
-            let witness = match adapter.witness {
+        if adapter.witness & CHECK_VALUES != 0 {
+            check_values(call.output_witness().ok().as_ref(), &output)?;
+        }
+        if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| value.clone()) {
+            let witness = match adapter.witness & !CHECK_VALUES {
                 1 => call.output_witness().ok(),
                 2 => receiver
                     .as_ref()
@@ -868,7 +1086,7 @@ fn attest_inner(
         None
     };
     if let Some((inner, index)) = inner
-        && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| *value)
+        && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| value.clone())
         && let Some(witness) = witness.argument_witness(index)
     {
         arena.attest(handle, witness)?;
@@ -877,7 +1095,7 @@ fn attest_inner(
     {
         // A variant's fields, as its matcher gives them.
         for (member, element) in inner.iter().enumerate() {
-            if let Some(handle) = element.read_lock::<NativeHandle>().map(|value| *value)
+            if let Some(handle) = element.read_lock::<NativeHandle>().map(|value| value.clone())
                 && let Some(witness) = tuple.argument_witness(member)
             {
                 arena.attest(handle, witness)?;
@@ -906,7 +1124,7 @@ fn attest_elements(
         else {
             continue;
         };
-        match element.read_lock::<NativeHandle>().map(|value| *value) {
+        match element.read_lock::<NativeHandle>().map(|value| value.clone()) {
             Some(handle) => arena.attest(handle, witness)?,
             None => attest_elements(element, &witness, arena)?,
         }
@@ -951,7 +1169,7 @@ fn native_attestation(
     value: &Dynamic,
     expected: &__rawr_internal::host::runtime::Instantiation<'_>,
 ) -> Option<__rawr_internal::host::runtime::Attested> {
-    let handle = value.read_lock::<NativeHandle>().map(|value| *value)?;
+    let handle = value.read_lock::<NativeHandle>().map(|value| value.clone())?;
     NATIVE_ARENA.with(|arena| {
         let arena = arena.try_borrow().ok()?;
         expected.attest_native_witness(arena.as_ref()?.witness(handle))
@@ -960,15 +1178,15 @@ fn native_attestation(
 
 /// `==` of two imported values by their Rust type's `PartialEq`.
 fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
-    let lhs = lhs.read_lock::<NativeHandle>().map(|value| *value)?;
-    let rhs = rhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
+    let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.equal(lhs, rhs))
 }
 
 /// The order of two imported values that key a hashed collection.
 fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
-    let lhs = lhs.read_lock::<NativeHandle>().map(|value| *value)?;
-    let rhs = rhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
+    let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.compare(lhs, rhs))
 }
 
@@ -3505,7 +3723,7 @@ fn render_source(
                 ", bound: {}, root: {:?}, witness: {}",
                 plan.selector().is_some(),
                 plan.export().root_alias(),
-                witness_mode(plan)
+                witness_mode(plan) | if returns_values(plan) { 0x80 } else { 0 }
             )
             .map_err(|_| request::Error::Encoding)?;
             writeln!(
@@ -3891,6 +4109,50 @@ fn render_profile_projection_bindings(
         .map_err(|_| request::Error::Encoding)
 }
 
+/// Whether the plan's output, outside a future, holds a script value an
+/// erased generic gives back (D513.2).
+fn returns_values(plan: &Plan) -> bool {
+    let output = match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            ..
+        }
+        | Operation::Method {
+            signature,
+            substitutions,
+            ..
+        } => substituted(signature.output(), signature, substitutions).ok(),
+        Operation::StructField { field, .. } => Some(field.ty().clone()),
+        _ => None,
+    };
+    output.is_some_and(|output| !is_future(&output) && holds_value(&output))
+}
+
+/// Whether `ty` holds a script value an erased generic gives back.
+fn holds_value(ty: &convert::Type) -> bool {
+    match ty {
+        // A native value, `Sender<rawr::Value>` too, is attested by its own
+        // witness; only a script value in its place comes back as itself.
+        convert::Type::Nominal { definition, .. } => {
+            *definition == crate::surface::identity::Definition::value()
+        }
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
+            holds_value(element)
+        }
+        convert::Type::Result(ok, err) => holds_value(ok) || holds_value(err),
+        convert::Type::Tuple(members) => members.iter().any(holds_value),
+        convert::Type::ProfileMessage { payload, .. } => holds_value(payload),
+        _ => false,
+    }
+}
+
+/// A script value an erased generic takes or gives (D513.2).
+fn is_value(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if *definition == crate::surface::identity::Definition::value())
+}
+
 fn witness_mode(plan: &Plan) -> u8 {
     match plan.operation() {
         Operation::StructConstructor { .. }
@@ -4242,7 +4504,7 @@ fn render_adapter(
                         b");\n".as_slice()
                     })
                     .map_err(|_| request::Error::Encoding)?;
-                let returned = substitute(signature.output(), signature, substitutions)?;
+                let returned = &substituted(signature.output(), signature, substitutions)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
                     render_give_sipper(sipped, progress, "output", output)?;
                 } else if let Some(element) = facade_task_output(returned, facade) {
@@ -4348,6 +4610,77 @@ fn render_adapter(
                     .write_all(b"));\n")
                     .map_err(|_| request::Error::Encoding)?;
                 render_replay_insert(replay, facade, output)?;
+            } else if !matches!(receiver, Receiver::Owned)
+                && is_future(substitute(signature.output(), signature, substitutions)?)
+            {
+                // An async method that borrows its receiver (D513.6): its
+                // future holds a copy of a `Clone` receiver for `&self`, or
+                // the receiver lent from its slot, and is made when first
+                // polled, where its runtime is.
+                writeln!(
+                    output,
+                    "    let receiver = native_handle(arguments, 0, false)?;"
+                )
+                .map_err(|_| request::Error::Encoding)?;
+                output
+                    .write_all(b"    let held: Held<")
+                    .map_err(|_| request::Error::Encoding)?;
+                render_container_path(
+                    &path,
+                    signature,
+                    substitutions,
+                    constants,
+                    *container_parameters,
+                    true,
+                    output,
+                )?;
+                if matches!(receiver, Receiver::Mutable) {
+                    output
+                        .write_all(
+                            b"> = arguments.arena.lease(receiver)?;
+",
+                        )
+                        .map_err(|_| request::Error::Encoding)?;
+                } else {
+                    output
+                        .write_all(
+                            b"> = {
+        #[allow(unused_imports)]
+        use {HoldClone as _, HoldLease as _};
+        (&HoldProbe::new()).hold(arguments.arena, receiver)?
+    };
+",
+                        )
+                        .map_err(|_| request::Error::Encoding)?;
+                }
+                write!(
+                    output,
+                    "    let output = __rawr_profile_host::task::lazy(move || async move {{
+        let mut held = held;
+        held.get_mut().{}",
+                    plan.name()
+                )
+                .map_err(|_| request::Error::Encoding)?;
+                render_item_turbofish(
+                    signature,
+                    substitutions,
+                    constants,
+                    *container_parameters,
+                    output,
+                )?;
+                output
+                    .write_all(b"(")
+                    .map_err(|_| request::Error::Encoding)?;
+                argument_list(signature.inputs().len(), 1, output)?;
+                output
+                    .write_all(b").await\n    });\n")
+                    .map_err(|_| request::Error::Encoding)?;
+                let returned = &substituted(signature.output(), signature, substitutions)?;
+                let element =
+                    facade_task_output(returned, facade).ok_or(request::Error::Drift {
+                        field: "borrowed async method output",
+                    })?;
+                render_give_task(element, "output", output)?;
             } else {
                 match receiver {
                     Receiver::Owned => {
@@ -4420,7 +4753,7 @@ fn render_adapter(
                 }
                 // A method that takes `self` by value may give a Rust
                 // future, as `Response::text` does.
-                let returned = substitute(signature.output(), signature, substitutions)?;
+                let returned = &substituted(signature.output(), signature, substitutions)?;
                 match facade_task_output(returned, facade) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
                         render_give_task(element, "output", output)?;
@@ -5749,6 +6082,7 @@ fn render_take(
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
         ty if is_duration(ty) => "take_primitive",
+        ty if is_value(ty) => "take_value",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -5790,6 +6124,7 @@ fn render_give(
 ) -> Result<(), request::Error> {
     match ty {
         ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
+        ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -5880,6 +6215,10 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
         ty if is_duration(ty) => cast(output, "std::time::Duration"),
+        ty if is_value(ty) => write!(
+            output,
+            "Ok::<__rawr_internal::Value, Error>(__rawr_internal::Value::from({value}))"
+        ),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
@@ -5934,6 +6273,7 @@ fn render_to_dynamic(
         ty if is_duration(ty) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
+        ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
@@ -6005,6 +6345,12 @@ fn render_to_dynamic(
         }
     }
     .map_err(|_| request::Error::Encoding)
+}
+
+/// A Rust future, which no crate's type names.
+fn is_future(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if *definition == crate::surface::identity::Definition::future())
 }
 
 /// Rust's `std::time::Duration`, which crosses by value.
@@ -6085,9 +6431,14 @@ fn render_give_task(
 ) -> Result<(), request::Error> {
     let mut converted = String::new();
     render_to_dynamic(element, "value", 0, &mut converted)?;
+    let materialize = if holds_value(element) {
+        "materialize_checked"
+    } else {
+        "materialize"
+    };
     writeln!(
         output,
-        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| materialize(witness, move |arguments| {converted}))\n    }})))"
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
     )
     .map_err(|_| request::Error::Encoding)
 }
@@ -6099,10 +6450,53 @@ fn render_give_with(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     render_give(
-        substitute(signature.output(), signature, substitutions)?,
+        &substituted(signature.output(), signature, substitutions)?,
         value,
         output,
     )
+}
+
+/// `ty` with every type parameter the signature declares replaced by its
+/// substitution, at any depth: a future of `Option<T>` is a future of
+/// `Option<rawr::Value>` where `T` is erased (D513.2).
+fn substituted(
+    ty: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<convert::Type, request::Error> {
+    let all = |types: &[convert::Type]| {
+        types
+            .iter()
+            .map(|ty| substituted(ty, signature, substitutions))
+            .collect::<Result<Box<[_]>, _>>()
+    };
+    let one = |ty: &convert::Type| substituted(ty, signature, substitutions).map(Box::new);
+    Ok(match ty {
+        convert::Type::Parameter(_) => substitute(ty, signature, substitutions)?.clone(),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: *definition,
+            arguments: all(arguments)?,
+        },
+        convert::Type::Option(element) => convert::Type::Option(one(element)?),
+        convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
+        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+            element: one(element)?,
+            owned: *owned,
+        },
+        convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
+        convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
+            input: one(input)?,
+            output: one(output)?,
+        },
+        convert::Type::ProfileMessage { mapper, payload } => convert::Type::ProfileMessage {
+            mapper: *mapper,
+            payload: one(payload)?,
+        },
+        convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
+    })
 }
 
 fn substitute<'a>(
@@ -6333,6 +6727,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             "std::ops::RangeInclusive<i64>".to_owned()
         }
         convert::Type::Builtin(builtin) => builtin.rust_name()?.to_owned(),
+        convert::Type::Nominal { definition, .. }
+            if *definition == crate::surface::identity::Definition::value() =>
+        {
+            "__rawr_internal::Value".to_owned()
+        }
         convert::Type::Nominal {
             definition,
             arguments,

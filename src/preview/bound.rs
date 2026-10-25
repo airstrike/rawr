@@ -280,6 +280,17 @@ impl BoundCatalog {
         self.invoke(function, arguments)
     }
 
+    /// Validate one value against the exact type a runtime witness proves.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn validate_witness(
+        &self,
+        witness: &host::runtime::Witness,
+        value: &Dynamic,
+    ) -> Result<(), host::runtime::ValueError> {
+        self.authority
+            .validate_witness(witness, value, &self.runtime)
+    }
+
     /// Validate one value against an exact argument carried by a runtime witness.
     #[cfg(not(feature = "no_function"))]
     pub fn validate_witness_argument(

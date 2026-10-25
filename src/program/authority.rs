@@ -180,6 +180,19 @@ impl Authority {
             })
     }
 
+    /// Validate `value` against the exact type `witness` proves.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn validate_witness(
+        &self,
+        witness: &crate::host::runtime::Witness,
+        value: &Dynamic,
+        runtime: &crate::host::runtime::Registry,
+    ) -> Result<(), crate::host::runtime::ValueError> {
+        witness
+            .ty()
+            .validate(value, self.executable.model(), runtime)
+    }
+
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn validate_witness_argument(
         &self,

@@ -15,6 +15,51 @@ pub struct Item {
     class: Option<crate::surface::callable::Class>,
     binders: Box<[crate::surface::instance::Binder]>,
     predicates: Box<[super::predicate::Bound]>,
+    /// The callable parameter's `Fn*` inputs and output, as its bound and
+    /// its `Output` projection write them (`F: FnOnce() -> R`).
+    #[serde(default)]
+    call: Option<Call>,
+}
+
+/// What a generic item's callable parameter takes and gives: a script
+/// closure passed there runs with these (D513.7 b).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Call {
+    parameter: u32,
+    inputs: Box<[super::convert::Type]>,
+    output: super::convert::Type,
+}
+
+impl Call {
+    pub(crate) const fn new(
+        parameter: u32,
+        inputs: Box<[super::convert::Type]>,
+        output: super::convert::Type,
+    ) -> Self {
+        Self {
+            parameter,
+            inputs,
+            output,
+        }
+    }
+
+    /// The index of the callable type parameter.
+    #[must_use]
+    pub const fn parameter(&self) -> u32 {
+        self.parameter
+    }
+
+    /// The callable's inputs, in order.
+    #[must_use]
+    pub fn inputs(&self) -> &[super::convert::Type] {
+        &self.inputs
+    }
+
+    /// The callable's output.
+    #[must_use]
+    pub const fn output(&self) -> &super::convert::Type {
+        &self.output
+    }
 }
 
 /// One finite generic inherent operation declaration.
@@ -41,7 +86,19 @@ impl Item {
             class,
             binders,
             predicates,
+            call: None,
         }
+    }
+
+    pub(crate) fn with_call(mut self, call: Option<Call>) -> Self {
+        self.call = call;
+        self
+    }
+
+    /// The callable parameter's inputs and output, when it has one.
+    #[must_use]
+    pub const fn call(&self) -> Option<&Call> {
+        self.call.as_ref()
     }
 
     #[must_use]

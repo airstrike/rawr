@@ -103,6 +103,12 @@ impl Witness {
         Some(Self::issue(self.authority, ty))
     }
 
+    /// The exact logical type this witness proves.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn ty(&self) -> &Type {
+        &self.ty
+    }
+
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn argument(&self, index: usize) -> Option<&Type> {
         self.ty.arguments().get(index)

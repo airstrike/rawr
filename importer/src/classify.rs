@@ -29,6 +29,8 @@ struct FunctionParameters {
     callable: Option<crate::surface::callable::Class>,
     binders: Box<[crate::surface::instance::Binder]>,
     predicates: Box<[representability::predicate::Bound]>,
+    /// The callable parameter, its `Fn*` inputs and its `Output`.
+    call: Option<(u32, Box<[model::Type]>, model::Type)>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -826,6 +828,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 callable: None,
                 binders: Box::default(),
                 predicates: Box::default(),
+                call: None,
             });
         }
         let mut selected = None;
@@ -900,6 +903,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 callable: None,
                 binders: Box::default(),
                 predicates: predicates.into_boxed_slice(),
+                call: None,
             });
         };
         let callable_parameter = parameters
@@ -929,6 +933,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         let mut static_owned = false;
         let mut output = false;
+        let mut returned = None;
         for predicate in generics.predicates() {
             match predicate {
                 model::Predicate::Bound {
@@ -962,6 +967,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         return Err(representability::reject::Kind::EscapingBorrow.into());
                     }
                     output = true;
+                    returned = Some(ty.clone());
                 }
                 model::Predicate::TypeOutlives {
                     ty: model::Type::Parameter { index, .. },
@@ -993,11 +999,20 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
             _ => return Err(representability::reject::Kind::CallableProtocol.into()),
         };
+        // `Fn(A, B)` is written `Fn<(A, B)>`: its one argument is the tuple
+        // of the callable's inputs.
+        let inputs = match arguments {
+            [model::Argument::Type(model::Type::Tuple(inputs))] => Some(inputs.clone()),
+            _ => None,
+        };
         Ok(FunctionParameters {
             parameters,
             callable: Some(class),
             binders: binders.into_boxed_slice(),
             predicates: Box::default(),
+            call: inputs
+                .zip(returned)
+                .map(|(inputs, returned)| (parameter, inputs, returned)),
         })
     }
 
@@ -1387,6 +1402,13 @@ impl DriverAudit {
                 self.signature(item.signature())?;
                 self.add(0, std::mem::size_of_val(item.binders()))?;
                 self.add(0, std::mem::size_of_val(item.predicates()))?;
+                if let Some(call) = item.call() {
+                    self.add(0, std::mem::size_of_val(call.inputs()))?;
+                    for input in call.inputs() {
+                        self.ty(input)?;
+                    }
+                    self.ty(call.output())?;
+                }
             }
             R::Invocation(item) => {
                 self.signature(item.signature())?;
@@ -3330,14 +3352,6 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.safety() != model::Safety::Safe {
             return Err(representability::reject::Kind::UnsafeFunction.into());
         }
-        // An `async fn` method that borrows its receiver holds the borrow
-        // across its awaits, so it does not cross; one that takes `self`
-        // by value crosses as a `Task`, as a free `async fn` does.
-        if signature.async_function()
-            && matches!(signature.receiver(), model::Receiver::Reference { .. })
-        {
-            return Err(representability::reject::Kind::AsyncFunction.into());
-        }
         if signature.variadic() {
             return Err(representability::reject::Kind::VariadicFunction.into());
         }
@@ -3353,6 +3367,7 @@ impl<P: api::Phase> Context<'_, P> {
             callable: callable_class,
             binders,
             predicates,
+            call,
         } = self.function_parameters(generics, &strings)?;
         let mut inputs = Vec::new();
         self.retain_array::<representability::convert::Type>(signature.inputs().len())?;
@@ -3369,11 +3384,17 @@ impl<P: api::Phase> Context<'_, P> {
                 input => self.convert_input(input)?,
             });
         }
-        // A Rust future crosses as iced's `Task<T>` from a free function, or
+        // A Rust future crosses as a host's future from a free function, or
         // from a method that takes `self` by value and so owns what the
-        // future holds.
+        // future holds. An `async fn` method that borrows its receiver holds
+        // the borrow across its awaits: its future holds a copy of a `Clone`
+        // receiver or the receiver itself, lent from Rawr until the future
+        // ends (D513.6).
         let output = match signature.receiver() {
             model::Receiver::None | model::Receiver::Value { .. } => {
+                self.convert_output(signature.output())
+            }
+            model::Receiver::Reference { .. } if signature.async_function() => {
                 self.convert_output(signature.output())
             }
             _ => self.convert_value(signature.output()),
@@ -3401,13 +3422,26 @@ impl<P: api::Phase> Context<'_, P> {
             }
         };
         if !signature_plan.parameters().is_empty() {
-            return Ok(Representability::FunctionItem(callable::Item::new(
-                signature_plan,
-                receiver,
-                callable_class,
-                binders,
-                predicates,
-            )));
+            // A callable's inputs and output it can name; one it can't is
+            // left unnamed, and Rawr does not call the item.
+            let call = call.and_then(|(parameter, inputs, returned)| {
+                let inputs = inputs
+                    .iter()
+                    .map(|input| self.convert_value(input).ok())
+                    .collect::<Option<Box<[_]>>>()?;
+                let returned = self.convert_value(&returned).ok()?;
+                Some(callable::Call::new(parameter, inputs, returned))
+            });
+            return Ok(Representability::FunctionItem(
+                callable::Item::new(
+                    signature_plan,
+                    receiver,
+                    callable_class,
+                    binders,
+                    predicates,
+                )
+                .with_call(call),
+            ));
         }
         Ok(match receiver {
             Some(receiver) => Representability::Method(method::Plan::new(receiver, signature_plan)),
@@ -4850,23 +4884,6 @@ mod tests {
         );
         let function_cases = [
             (unsafe_signature, Kind::UnsafeFunction),
-            // A free `async fn` and one that takes `self` by value cross as
-            // a `Task`; one that borrows its receiver holds the borrow
-            // across its awaits and does not.
-            (
-                safe(
-                    true,
-                    false,
-                    "\"Rust\"",
-                    Box::default(),
-                    model::Receiver::Reference {
-                        lifetime: model::Lifetime::Static,
-                        mutability: model::Mutability::Shared,
-                        ty: model::Type::Tuple(Box::default()),
-                    },
-                ),
-                Kind::AsyncFunction,
-            ),
             (
                 safe(
                     false,
@@ -4907,6 +4924,23 @@ mod tests {
         for (signature, expected) in function_cases {
             assert_eq!(rejection(context.function(&signature, &empty)), expected);
         }
+        // An `async fn` that borrows its receiver crosses too: its future
+        // holds a copy of the receiver, or the receiver lent (D513.6).
+        let borrowing = safe(
+            true,
+            false,
+            "\"Rust\"",
+            Box::default(),
+            model::Receiver::Reference {
+                lifetime: model::Lifetime::Static,
+                mutability: model::Mutability::Mutable,
+                ty: model::Type::Tuple(Box::default()),
+            },
+        );
+        assert!(matches!(
+            context.function(&borrowing, &empty),
+            Ok(Representability::Method(_))
+        ));
 
         let lifetime_generics = model::Generics::new(
             Box::from([model::Parameter::new(

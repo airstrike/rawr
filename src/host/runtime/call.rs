@@ -186,6 +186,29 @@ impl<'a> Call<'a> {
         Ok(Witness::issue(self.authority, output.clone()))
     }
 
+    /// The output witness of a method that borrows its receiver, whose
+    /// output is a new value, as an async method's future is (D513.6). An
+    /// owned builder's output carries its receiver's witness instead.
+    #[doc(hidden)]
+    pub fn borrowed_output_witness(&self) -> Result<Witness, Error> {
+        let (output, receiver) = match &self.operation {
+            Operation::Item {
+                output, receiver, ..
+            }
+            | Operation::Structural {
+                output, receiver, ..
+            } => (*output, *receiver),
+            Operation::Projection { .. } => return Err(Error::OutputRequiresConstructor),
+        };
+        if !matches!(
+            receiver,
+            Some(receiver::Mode::Shared | receiver::Mode::Mutable)
+        ) {
+            return Err(Error::OutputRequiresConstructor);
+        }
+        Ok(Witness::issue(self.authority, output.clone()))
+    }
+
     /// Transform a carried receiver witness into this exact item's output witness.
     ///
     /// The authority exists only for the current launch-bound invocation. The

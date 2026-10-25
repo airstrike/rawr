@@ -171,7 +171,9 @@ enum Poller {
         running: Option<Native>,
         made: Option<Arc<Slot>>,
     },
-    Join(Vec<(Poller, Option<Dynamic>)>),
+    /// Each part until it ends, then its output: a part that ended is
+    /// dropped then, with what it captured, as `join!` drops it.
+    Join(Vec<(Option<Poller>, Option<Dynamic>)>),
     Ready(Option<Dynamic>),
     Failed(Option<Box<EvalAltResult>>),
 }
@@ -191,9 +193,12 @@ impl From<&Future> for Poller {
                 running: None,
                 made: None,
             },
-            Some(Kind::Join(parts)) => {
-                Self::Join(parts.iter().map(|part| (Self::from(part), None)).collect())
-            }
+            Some(Kind::Join(parts)) => Self::Join(
+                parts
+                    .iter()
+                    .map(|part| (Some(Self::from(part)), None))
+                    .collect(),
+            ),
             Some(Kind::Ready(value)) => Self::Ready(Some(value)),
         }
     }
@@ -236,13 +241,16 @@ impl Poller {
             }
             Self::Join(parts) => {
                 let mut pending = false;
-                for (poller, output) in parts.iter_mut() {
-                    if output.is_some() {
+                for (part, output) in parts.iter_mut() {
+                    let Some(poller) = part.as_mut() else {
                         continue;
-                    }
+                    };
                     match poller.poll(cx) {
                         Pending => pending = true,
-                        Ready(Ok(value)) => *output = Some(value),
+                        Ready(Ok(value)) => {
+                            *output = Some(value);
+                            *part = None;
+                        }
                         Ready(Err(error)) => return Ready(Err(error)),
                     }
                 }
@@ -274,7 +282,9 @@ struct Stepper {
 }
 
 struct Step {
-    step: item::Value,
+    /// The step function, with what the body captured; dropped when the
+    /// body ends, as Rust drops a finished future's state.
+    step: Option<item::Value>,
     /// The suspended body, once it has awaited.
     frame: Option<Frame>,
     /// The awaited future's output, to resume with.
@@ -300,7 +310,7 @@ impl Stepper {
     fn new(step: item::Value) -> Self {
         Self {
             shared: Arc::new(Mutex::new(Step {
-                step,
+                step: Some(step),
                 frame: None,
                 input: None,
                 state: State::Idle,
@@ -381,11 +391,16 @@ fn run(shared: &Mutex<Step>) {
             (Some(frame), input) => frame.resume(input.unwrap_or(Dynamic::UNIT)),
             (None, _) => Dynamic::UNIT,
         };
-        (state.step.clone(), argument)
+        let Some(step) = state.step.clone() else {
+            state.state = State::Done(Err(failure("rawr: a future was polled after it ended")));
+            return;
+        };
+        (step, argument)
     };
     let result = with_host(|host| host.invoke(&step, &mut [argument]))
         .unwrap_or_else(|| Err(failure("rawr: no program runs async code on this thread")));
     let mut state = lock(shared);
+    let state = &mut *state;
     state.state = match result {
         Err(error) => State::Done(Err(error)),
         // A body that never awaits gives its output as it is.
@@ -403,6 +418,10 @@ fn run(shared: &Mutex<Step>) {
             }
         },
     };
+    if matches!(state.state, State::Done(_)) {
+        state.step = None;
+        state.frame = None;
+    }
 }
 
 /// A native output made a Rawr value on the owner thread.
@@ -488,6 +507,17 @@ pub fn serve(host: Rc<dyn Host>) {
 /// owner thread, which [`Job::run`]s it. Set once.
 pub fn forward(forward: impl Fn(Job) + Send + Sync + 'static) {
     let _ = FORWARD.set(Box::new(forward));
+}
+
+/// Run `work` on the owner thread: here when this is it, and else as a
+/// [`Job`] it runs next. A native value that leaves its slot for a future
+/// goes back this way when the future ends on another thread (D513.6).
+pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
+    if owns() {
+        work();
+    } else {
+        send(Job::new(work));
+    }
 }
 
 /// Whether this thread runs async steps.

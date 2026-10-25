@@ -11,6 +11,7 @@ const EXPORT_DOMAIN: &[u8] = b"rawr.identity.export/v1";
 const IMPLEMENTATION_DOMAIN: &[u8] = b"rawr.identity.implementation/v1";
 const OPERATION_DOMAIN: &[u8] = b"rawr.identity.operation/v3";
 const SIPPER_DOMAIN: &[u8] = b"rawr.identity.sipper/v1";
+const VALUE_DOMAIN: &[u8] = b"rawr.identity.value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
 
@@ -216,11 +217,22 @@ impl Definition {
         Self(Framed::new(DURATION_DOMAIN).finish())
     }
 
+    /// A script value where a generic item is instantiated at a script type
+    /// (D513.2): the runner builds the item at `rawr::Value`, and each value
+    /// that comes back is checked against the script type it stands for.
+    #[must_use]
+    pub fn value() -> Self {
+        Self(Framed::new(VALUE_DOMAIN).finish())
+    }
+
     /// Whether these bytes name a type the iced facade declares for a Rust
     /// value no imported crate declares: a future, a sipper or a duration.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
-        *bytes == Self::future().0 || *bytes == Self::sipper().0 || *bytes == Self::duration().0
+        *bytes == Self::future().0
+            || *bytes == Self::sipper().0
+            || *bytes == Self::duration().0
+            || *bytes == Self::value().0
     }
 
     /// Reconstitute one semantic definition digest carried by an authenticated

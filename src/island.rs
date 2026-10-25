@@ -167,6 +167,18 @@ pub fn invoke_main() -> Option<Result<Dynamic, program::Error>> {
     current()?.bootstrap.invoke_main()
 }
 
+/// Check `value`, which native code gave back where a script type was
+/// erased to [`crate::Value`] (D513.2), against the exact type `witness`
+/// proves, in the generation published on this thread.
+pub fn validate(witness: &crate::host::runtime::Witness, value: &Dynamic) -> Result<(), String> {
+    let current = current().ok_or("no generation is published on this thread")?;
+    current
+        .bootstrap
+        .catalog()
+        .validate_witness(witness, value)
+        .map_err(|error| error.to_string())
+}
+
 /// Whether the program's native `main` runs, so each new generation must
 /// be published for its calls.
 #[must_use]

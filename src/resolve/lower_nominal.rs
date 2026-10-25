@@ -437,6 +437,14 @@ fn imported_surface_type(
                 arguments: converted.into_boxed_slice(),
             }
         }
+        Ty::Time(Time::Duration) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::duration(),
+            arguments: Box::default(),
+        },
+        ty if erased(ty) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::value(),
+            arguments: Box::default(),
+        },
         _ => {
             return Err(Error::InvalidHostOperation {
                 item: "<imported generic instance>".into(),
@@ -445,6 +453,27 @@ fn imported_surface_type(
             });
         }
     })
+}
+
+/// A value type Rust can't name in the runner, as a script struct or a
+/// tuple holding one: a generic Rust item takes it as `rawr::Value`
+/// (D513.2), which carries it as it is.
+#[cfg(feature = "rust-import")]
+fn erased(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Script(..)
+            | Ty::Array { .. }
+            | Ty::Tuple(_)
+            | Ty::Option(_)
+            | Ty::Result(..)
+            | Ty::Keyed(..)
+            | Ty::Boxed(..)
+            | Ty::Reverse(_)
+            | Ty::Cell(_)
+            | Ty::Ordering
+            | Ty::Time(Time::Instant)
+    )
 }
 
 /// An instance type as `imported_surface_type` converts it, without
@@ -487,6 +516,14 @@ fn instance_surface_type(
                 .iter()
                 .map(|argument| instance_surface_type(inference, argument))
                 .collect::<Option<_>>()?,
+        },
+        Ty::Time(Time::Duration) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::duration(),
+            arguments: Box::default(),
+        },
+        ty if erased(ty) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::value(),
+            arguments: Box::default(),
         },
         _ => return None,
     })
