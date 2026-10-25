@@ -21,6 +21,9 @@ pub(crate) enum Rejected<E> {
     },
 }
 
+/// An admitted operation's value with the pin guards that hold it, or its rejection.
+pub(crate) type Admitted<T, E, const N: usize> = Result<(T, [lock::Guard; N]), Rejected<E>>;
+
 /// Replacement roots whose durable binding can still restore its exact predecessor.
 #[must_use = "a pin transaction must finish its post-bind validation and admission"]
 pub(in crate::store) struct Transaction<'publication, 'store, const N: usize> {
@@ -201,7 +204,7 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
         mut self,
         validate: impl FnOnce() -> Result<(), Error>,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [lock::Guard; N]), Rejected<E>>, Error> {
+    ) -> Result<Admitted<T, E, N>, Error> {
         if let Err(failure) = checkpoint(Stage::PostBind).and_then(|()| validate()) {
             let Self {
                 guards,

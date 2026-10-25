@@ -1642,7 +1642,10 @@ fn join_logs<B>(inner: &mut Inner<B>) -> Result<(), Error> {
     Ok(())
 }
 
-fn take_logs<B>(inner: &mut Inner<B>) -> Result<(Box<[u8]>, Box<[u8]>), Error> {
+/// A child's stdout and stderr logs.
+type Logs = (Box<[u8]>, Box<[u8]>);
+
+fn take_logs<B>(inner: &mut Inner<B>) -> Result<Logs, Error> {
     fn take(
         reader: &mut Option<thread::JoinHandle<std::io::Result<Box<[u8]>>>>,
     ) -> Result<Box<[u8]>, Error> {

@@ -42,7 +42,8 @@ fn patterns(dfa: &Dfa, bytes: &[u8], capacity: usize) -> Vec<u32> {
 
 #[test]
 fn completed_queries_match_whole_paths_empty_eoi_and_arbitrary_bytes() {
-    let cases: &[(&str, &[&[u8]], &[&[u8]])] = &[
+    type Paths<'a> = &'a [&'a [u8]];
+    let cases: &[(&str, Paths, Paths)] = &[
         ("", &[b""], &[b"a", b"\xff"]),
         (
             "*",

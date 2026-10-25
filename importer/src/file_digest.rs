@@ -92,9 +92,12 @@ const CAPACITY: usize = 1 << 18;
 /// Identity (7 words), domain (tag, kind, schema), digest, 8-byte check.
 const RECORD: usize = 56 + 6 + 32 + 8;
 
+/// What a memoized digest is keyed by.
+type Key = (Identity, Domain);
+
 #[derive(Default)]
 struct Memo {
-    digests: HashMap<(Identity, Domain), [u8; 32]>,
+    digests: HashMap<Key, [u8; 32]>,
     table: Option<File>,
 }
 
@@ -130,7 +133,7 @@ fn record(identity: Identity, domain: Domain, digest: [u8; 32]) -> [u8; RECORD] 
     record
 }
 
-fn parse(record: &[u8; RECORD]) -> Option<((Identity, Domain), [u8; 32])> {
+fn parse(record: &[u8; RECORD]) -> Option<(Key, [u8; 32])> {
     if Sha256::digest(&record[..94])[..8] != record[94..] {
         return None;
     }
@@ -185,7 +188,7 @@ pub(crate) fn attach(path: &Path) {
 }
 
 /// Every record of a whole, checked table that fits the memo.
-fn load(table: &mut File) -> Option<Vec<((Identity, Domain), [u8; 32])>> {
+fn load(table: &mut File) -> Option<Vec<(Key, [u8; 32])>> {
     let mut bytes = Vec::new();
     table.read_to_end(&mut bytes).ok()?;
     if bytes.len() % RECORD != 0 || bytes.len() / RECORD >= CAPACITY {

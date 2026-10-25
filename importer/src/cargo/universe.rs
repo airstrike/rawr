@@ -291,6 +291,13 @@ struct ProjectedPackage {
 }
 
 type DependencyIndex = BTreeMap<Box<str>, Option<Key>>;
+/// Reachable unit indices and the package ids they reach.
+type Reachability = (Budgeted<BTreeSet<usize>>, Budgeted<BTreeSet<Arc<str>>>);
+/// Canonical metadata bytes and the protected packages they project.
+type MetadataProjection = (
+    Budgeted<Box<[u8]>>,
+    Budgeted<BTreeMap<Arc<str>, ProtectedPackage>>,
+);
 
 impl BuildProjection {
     /// Domain and payload bytes fed to the projection hash.
@@ -1570,10 +1577,7 @@ fn metadata_projection_from_observation(
     limits: &Limits,
     allocation: &mut JsonAllocation,
     universe: &mut UniverseAccount,
-) -> Result<(
-    Budgeted<Box<[u8]>>,
-    Budgeted<BTreeMap<Arc<str>, ProtectedPackage>>,
-)> {
+) -> Result<MetadataProjection> {
     let mut protected_ownership = JsonOwnership::collection();
     allocation.acquire(protected_ownership, limits)?;
     let mut protected = BTreeMap::new();
@@ -2323,7 +2327,7 @@ fn unit_reachability(
     limits: &Limits,
     allocation: &mut JsonAllocation,
     universe: &mut UniverseAccount,
-) -> Result<(Budgeted<BTreeSet<usize>>, Budgeted<BTreeSet<Arc<str>>>)> {
+) -> Result<Reachability> {
     unit_reachability_rooted(value, ROOT_PACKAGE, packages, limits, allocation, universe)
 }
 
@@ -2334,7 +2338,7 @@ fn unit_reachability_rooted(
     limits: &Limits,
     allocation: &mut JsonAllocation,
     universe: &mut UniverseAccount,
-) -> Result<(Budgeted<BTreeSet<usize>>, Budgeted<BTreeSet<Arc<str>>>)> {
+) -> Result<Reachability> {
     let object = json_object(value, "protected Cargo unit root")?;
     let units = json_array(object.get("units"), "Cargo units")?;
     // Unit and edge counts are accounting targets recorded on the
@@ -3573,9 +3577,16 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use std::{path::PathBuf, sync::Arc};
 
+    /// Lowers one target of a set of limits.
+    type Lower = fn(&mut Limits);
+    /// Adjusts a set of limits for one case.
+    type Adjust<'a> = &'a dyn Fn(&mut Limits);
+    /// The axes a case exceeds, with their targets and peaks.
+    type Exceeded<'a> = &'a [(&'a str, usize, usize)];
+
     /// Floors: one unit under each measured JSON peak, paired with the
     /// epoch axis the lowered target records on.
-    const FLOORS: [(fn(&mut Limits), &str); 4] = [
+    const FLOORS: [(Lower, &str); 4] = [
         (
             |limits: &mut Limits| limits.items = limits.items.saturating_sub(1),
             "Cargo aggregate retained items",
@@ -4040,7 +4051,7 @@ mod tests {
             limits.string_bytes = SPELLING;
         };
         assert!(!exercise(&exact).is_exceeded());
-        let cases: [(&dyn Fn(&mut Limits), &str, usize, usize); 4] = [
+        let cases: [(Adjust, &str, usize, usize); 4] = [
             (
                 &|limits: &mut Limits| {
                     exact(limits);
@@ -4309,7 +4320,7 @@ mod tests {
         let (bytes, record) = exercise(&exact).expect("exact targets project");
         assert_eq!(bytes, standard);
         assert!(!record.is_exceeded());
-        let cases: [(&dyn Fn(&mut Limits), &[(&str, usize, usize)]); 5] = [
+        let cases: [(Adjust, Exceeded); 5] = [
             (
                 &|limits: &mut Limits| {
                     exact(limits);
@@ -5072,13 +5083,10 @@ mod tests {
 
     #[test]
     fn canonical_projection_precharges_sort_keys_and_buffer_and_records_floor_exceedances() {
+        type Usage = (usize, usize, usize, usize);
         fn exercise(
             limits: &Limits,
-        ) -> crate::Result<(
-            Box<[u8]>,
-            (usize, usize, usize, usize),
-            crate::exceedance::Record,
-        )> {
+        ) -> crate::Result<(Box<[u8]>, Usage, crate::exceedance::Record)> {
             let value = serde_json::json!([
                 {"b": "second", "a": [2, 1]},
                 {"b": "first", "a": [1, 2]}

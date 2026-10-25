@@ -937,7 +937,8 @@ mod tests {
             limits.string_bytes = path_bytes;
         };
         assert!(!exercise(&exact).is_exceeded());
-        let cases: [(&dyn Fn(&mut crate::cargo::Limits), &str, usize, usize); 2] = [
+        type Adjust<'a> = &'a dyn Fn(&mut crate::cargo::Limits);
+        let cases: [(Adjust, &str, usize, usize); 2] = [
             (
                 &|limits| {
                     exact(limits);

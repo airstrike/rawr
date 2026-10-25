@@ -1,12 +1,15 @@
 use super::*;
 use crate::input::membership::manifest::{reference, value, Error, Stop};
 
+/// Each selected target's name and path.
+type Selected = Vec<(Option<String>, Option<PathBuf>)>;
+
 fn selection(
     source: &str,
     inferred: &[(&str, &str)],
     edition: u16,
     autodiscover: Option<bool>,
-) -> (Vec<(Option<String>, Option<PathBuf>)>, Vec<String>, bool) {
+) -> (Selected, Vec<String>, bool) {
     let document = document::parse(source, 80, &mut reference::Account).unwrap();
     let mut account = reference::Account;
     let mut session = Session::new(&mut account);

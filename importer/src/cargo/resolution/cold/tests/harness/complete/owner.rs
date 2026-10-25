@@ -1254,7 +1254,8 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
 fn staged_owner_record_refuses_record_drift_between_replays() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let drifts: [(&str, fn(&mut Vec<u8>)); 3] = [
+    type Drift = fn(&mut Vec<u8>);
+    let drifts: [(&str, Drift); 3] = [
         ("same-length change", |bytes| {
             *bytes.last_mut().unwrap() ^= 1
         }),

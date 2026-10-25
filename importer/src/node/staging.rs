@@ -218,6 +218,20 @@ impl<K: Value> Recipe<K> {
     }
 }
 
+/// Three promoted outputs, each validated with its own recipe.
+pub(crate) type PromotedThree<A, B, C> = (Validated<A>, Validated<B>, Validated<C>);
+/// Four promoted outputs, each validated with its own recipe.
+pub(crate) type PromotedFour<A, B, C, D> = (Validated<A>, Validated<B>, Validated<C>, Validated<D>);
+/// Five promoted outputs, each validated with its own recipe.
+#[cfg(feature = "rustc-driver")]
+pub(crate) type PromotedFive<A, B, C, D, E> = (
+    Validated<A>,
+    Validated<B>,
+    Validated<C>,
+    Validated<D>,
+    Validated<E>,
+);
+
 /// Genuine consumer boundary for an exact branch. Seals the union once and
 /// returns each output with its own original semantic recipe and closure.
 pub(crate) fn promote_three<A: Value, B: Value, C: Value>(
@@ -225,7 +239,7 @@ pub(crate) fn promote_three<A: Value, B: Value, C: Value>(
     second: Owned<B>,
     third: Owned<C>,
     store: &crate::store::Store,
-) -> Result<(Validated<A>, Validated<B>, Validated<C>), Error> {
+) -> Result<PromotedThree<A, B, C>, Error> {
     super::replay::promote_three(first, second, third, store)
 }
 
@@ -235,7 +249,7 @@ pub(crate) fn promote_four<A: Value, B: Value, C: Value, D: Value>(
     third: Owned<C>,
     fourth: Owned<D>,
     store: &crate::store::Store,
-) -> Result<(Validated<A>, Validated<B>, Validated<C>, Validated<D>), Error> {
+) -> Result<PromotedFour<A, B, C, D>, Error> {
     super::replay::promote_four(first, second, third, fourth, store)
 }
 #[cfg(feature = "rustc-driver")]
@@ -246,16 +260,7 @@ pub(crate) fn promote_five<A: Value, B: Value, C: Value, D: Value, E: Value>(
     fourth: Owned<D>,
     fifth: Owned<E>,
     store: &crate::store::Store,
-) -> Result<
-    (
-        Validated<A>,
-        Validated<B>,
-        Validated<C>,
-        Validated<D>,
-        Validated<E>,
-    ),
-    Error,
-> {
+) -> Result<PromotedFive<A, B, C, D, E>, Error> {
     super::replay::promote_five(first, second, third, fourth, fifth, store)
 }
 

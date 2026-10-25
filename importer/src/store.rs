@@ -1380,7 +1380,7 @@ impl Store {
         proof: &crate::node::ReadSetProof,
         retention: &crate::node::read_set::Retention,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [PinGuard; 2]), transaction::Rejected<E>>, Error> {
+    ) -> Result<transaction::Admitted<T, E, 2>, Error> {
         self.with_retained_pin_roles(
             [PinRole::Live, PinRole::LastGood],
             proof,
@@ -1397,7 +1397,7 @@ impl Store {
         retention: &crate::node::read_set::Retention,
         scope: crate::node::read_set::Scope,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [PinGuard; N]), transaction::Rejected<E>>, Error> {
+    ) -> Result<transaction::Admitted<T, E, N>, Error> {
         retention.require_proof(proof)?;
         lease::with_project(&self.root, self.project, || {
             retention.validate_storage(self)?;
@@ -1449,7 +1449,7 @@ impl Store {
         &self,
         proof: &crate::node::ReadSetProof,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [PinGuard; 2]), transaction::Rejected<E>>, Error> {
+    ) -> Result<transaction::Admitted<T, E, 2>, Error> {
         lease::with_project(&self.root, self.project, || {
             self.with_pin_roles(
                 [PinRole::Live, PinRole::LastGood],
@@ -1466,7 +1466,7 @@ impl Store {
         proof: &crate::node::ReadSetProof,
         scope: crate::node::read_set::Scope,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [PinGuard; N]), transaction::Rejected<E>>, Error> {
+    ) -> Result<transaction::Admitted<T, E, N>, Error> {
         proof.revalidate(self)?;
         lease::with_publication(&self.root, |publication| {
             let mut recovery = recovery::Budget::new();
@@ -1533,7 +1533,7 @@ impl Store {
         recovery: &mut recovery::Budget,
         scope: crate::node::read_set::Scope,
         operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<(T, [PinGuard; N]), transaction::Rejected<E>>, Error> {
+    ) -> Result<transaction::Admitted<T, E, N>, Error> {
         pins::recover_empty_before_new_project(publication, &self.root, self.project, recovery)?;
 
         transaction::Transaction::bind(publication, &self.root, self.project, roles, proof)?

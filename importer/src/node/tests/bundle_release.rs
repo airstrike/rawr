@@ -292,7 +292,8 @@ fn candidate_matrix() -> Vec<Mutation> {
 
 #[test]
 fn candidate_sites_reject_the_matrix_as_corruption_and_inventory_checks_placement() {
-    let mut cases: Vec<(&str, &str, Box<dyn Fn(&Path)>)> = candidate_matrix()
+    type Apply = Box<dyn Fn(&Path)>;
+    let mut cases: Vec<(&str, &str, Apply)> = candidate_matrix()
         .into_iter()
         .map(|(name, fact, apply)| {
             let apply: Box<dyn Fn(&Path)> = Box::new(move |bundle: &Path| mutate(bundle, apply));

@@ -108,7 +108,7 @@ pub(super) fn promote_three<A: Value, B: Value, C: Value>(
     second: super::staging::Owned<B>,
     third: super::staging::Owned<C>,
     store: &crate::store::Store,
-) -> Result<(Validated<A>, Validated<B>, Validated<C>), Error> {
+) -> Result<super::staging::PromotedThree<A, B, C>, Error> {
     use super::content::Edge;
     use super::staging::Owned;
     let fragments = [first.read_set(), second.read_set(), third.read_set()];
@@ -131,7 +131,7 @@ pub(super) fn promote_four<A: Value, B: Value, C: Value, D: Value>(
     third: super::staging::Owned<C>,
     fourth: super::staging::Owned<D>,
     store: &crate::store::Store,
-) -> Result<(Validated<A>, Validated<B>, Validated<C>, Validated<D>), Error> {
+) -> Result<super::staging::PromotedFour<A, B, C, D>, Error> {
     use super::content::Edge;
     use super::staging::Owned;
     let fragments = [
@@ -166,16 +166,7 @@ pub(super) fn promote_five<A: Value, B: Value, C: Value, D: Value, E: Value>(
     fourth: super::staging::Owned<D>,
     fifth: super::staging::Owned<E>,
     store: &crate::store::Store,
-) -> Result<
-    (
-        Validated<A>,
-        Validated<B>,
-        Validated<C>,
-        Validated<D>,
-        Validated<E>,
-    ),
-    Error,
-> {
+) -> Result<super::staging::PromotedFive<A, B, C, D, E>, Error> {
     use super::content::Edge;
     use super::staging::Owned;
     let fragments = [

@@ -16,11 +16,10 @@ const CONTEXT: Context = Context {
     nightly_features_allowed: true,
 };
 
-fn inspect(
-    source: &str,
-    embedded: bool,
-    context: Context,
-) -> (Result<(bool, Option<String>), Tag>, Vec<String>) {
+/// Whether the manifest is a workspace root and a member's root, or the failure's tag.
+type Inspected = Result<(bool, Option<String>), Tag>;
+
+fn inspect(source: &str, embedded: bool, context: Context) -> (Inspected, Vec<String>) {
     let document = document::parse(source, 80, &mut reference::Account).unwrap();
     let mut account = reference::Account;
     let mut session = session::Session::new(&mut account);

@@ -1795,10 +1795,9 @@ mod tests {
         let (seal, record) = exercise(&exact);
         assert_eq!(seal, standard);
         assert!(!record.is_exceeded());
-        let cases: [(
-            &dyn Fn(&mut super::super::super::Limits),
-            &[(&str, usize, usize)],
-        ); 4] = [
+        type Adjust<'a> = &'a dyn Fn(&mut super::super::super::Limits);
+        type Exceeded<'a> = &'a [(&'a str, usize, usize)];
+        let cases: [(Adjust, Exceeded); 4] = [
             (
                 &|limits| {
                     exact(limits);

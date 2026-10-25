@@ -2767,10 +2767,13 @@ fn main() {
 }
 "#;
 
+/// A file's digest and length.
+type FileDigest = ([u8; 32], usize);
+
 pub(crate) struct Expected {
     aggregate: [u8; 32],
-    files: Vec<(Box<str>, ([u8; 32], usize))>,
-    source_map: ([u8; 32], usize),
+    files: Vec<(Box<str>, FileDigest)>,
+    source_map: FileDigest,
     entries: [u8; 32],
 }
 
@@ -3018,7 +3021,7 @@ fn expected_parts<B>(
     source: &[u8],
     source_map_bytes: &[u8],
 ) -> Result<Expected, request::Error> {
-    let mut files: Vec<(Box<str>, ([u8; 32], usize))> = vec![
+    let mut files: Vec<(Box<str>, FileDigest)> = vec![
         (LOCK_PATH.into(), digest(lock)),
         (MANIFEST_PATH.into(), digest(manifest)),
         (BUILD_PATH.into(), digest(BUILD_SCRIPT)),
@@ -6744,7 +6747,7 @@ fn signature(plan: &Plan) -> Result<[u8; 32], request::Error> {
     Ok(writer.0.finalize().into())
 }
 
-fn digest(bytes: &[u8]) -> ([u8; 32], usize) {
+fn digest(bytes: &[u8]) -> FileDigest {
     (Sha256::digest(bytes).into(), bytes.len())
 }
 
