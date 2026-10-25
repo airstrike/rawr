@@ -35648,6 +35648,50 @@ impl<'a> Parser<'a> {
                 return self.parse_host_struct(definition, path_span);
             }
         }
+        // `iced::Degrees(90.0)`: a facade tuple struct's constructor named
+        // in full, which the facade declares as the type's `from`, as an
+        // imported `Degrees(90.0)` reads it.
+        if matches!(self.peek(), Token::LeftParen)
+            && self.models.qualified_owner(path_span).is_none()
+        {
+            let full = match self.models.import(&segments[0].0) {
+                Some(binding)
+                    if matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    ) =>
+                {
+                    format!(
+                        "{}{}::{member}",
+                        binding.qualified,
+                        &owner[segments[0].0.len()..]
+                    )
+                }
+                _ => format!("{owner}::{member}"),
+            };
+            if let Some(definition) = self.models.host.source_type(&full)
+                && definition.identity().imported().is_none()
+                && self
+                    .models
+                    .host_items(&format!("{}::from", definition.path()))
+                    .is_some()
+            {
+                let at = member_span.start();
+                let mut tokens = Vec::new();
+                for (name, name_span) in segments.iter().skip(1).chain([&(member, member_span)]) {
+                    tokens.push((Token::DoubleColon, name_span.start()));
+                    tokens.push((
+                        Token::Identifier(Box::new(name.as_str().into())),
+                        name_span.start(),
+                    ));
+                }
+                tokens.push((Token::DoubleColon, at));
+                tokens.push((Token::Identifier(Box::new("from".into())), at));
+                self.splice_tokens(tokens);
+                let (first, first_span) = segments.swap_remove(0);
+                return self.parse_qualified(first, first_span);
+            }
+        }
         // `module::S`, `module::W(x)`, `module::W`.
         if !matches!(self.peek(), Token::DoubleColon | Token::LeftBrace)
             && let Some(model) = self.models.qualified_owner(path_span).cloned()
