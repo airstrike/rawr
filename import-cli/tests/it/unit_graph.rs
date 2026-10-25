@@ -221,7 +221,7 @@ const RUNNER_WITH_TOKIO: &str = r#"use __rawr_internal as rawr;
 #[tokio::main]
 async fn main() {
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<rawr::Value>(8);
-    let task = tokio::spawn(rawr::future::Script::ready(rawr::Value::from(rawr::Dynamic::UNIT)));
+    let task = tokio::spawn(rawr::future::Future::ready(rawr::Dynamic::UNIT).into_script());
     sender.send(task.await.unwrap()).await.unwrap();
     let _ = receiver.recv().await;
 }
