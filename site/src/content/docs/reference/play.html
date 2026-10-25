@@ -176,7 +176,7 @@ impl Dots {
   <tr><td>Operations</td><td>1,000,000 per evaluation. Booting, each update and each view are separate evaluations.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
   <tr><td>Strings</td><td>65,536 bytes.</td></tr>
-  <tr><td>Arrays, vectors and maps</td><td>65,536 items.</td></tr>
+  <tr><td>Arrays, vectors and maps</td><td>131,072 items.</td></tr>
   <tr><td>Program output</td><td>64 KiB. Longer output ends with <code>&hellip; output truncated</code>, and the program is stopped.</td></tr>
   <tr><td>Canvas</td><td>2048 logical pixels per side.</td></tr>
   <tr><td>Frames</td><td>100 per recording. 5 seconds of simulated time after the last message. 20 frames after the boot or a message before the next message.</td></tr>
@@ -212,8 +212,9 @@ impl Dots {
 <p>A snippet has no <code>Cargo.toml</code>, no files and no window. <code>?play</code> fills those gaps with stand-ins and shortcuts.</p>
 
 <h3 id="images">Images in memory</h3>
-<p>An image or svg path draws as a missing file. <code>include_bytes!</code> fails. An app&rsquo;s window settings in <code>main</code> are the exception. ?play skips <code>.fonts(..)</code>, <code>.font(..)</code>, <code>.window_size(..)</code> and iced&rsquo;s other window settings. Their arguments are never compiled. So <code>.fonts([include_bytes!("icons.ttf").as_slice()])</code> gives no error. The font isn&rsquo;t loaded, so text set in it falls back to another font.</p>
-<p>Write the image&rsquo;s bytes into the snippet instead. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel. Bytes are an array at runtime, so they can be at most 65,536 bytes long. An RGBA image of that size is 128 by 128 pixels.</p>
+<p>An image or svg path draws as a missing file. <code>include_bytes!</code> fails, except for the files the playground&rsquo;s examples include. An app&rsquo;s window settings in <code>main</code> are the exception. ?play skips <code>.fonts(..)</code>, <code>.font(..)</code>, <code>.window_size(..)</code> and iced&rsquo;s other window settings. Their arguments are never compiled. So <code>.fonts([include_bytes!("icons.ttf").as_slice()])</code> gives no error. The font isn&rsquo;t loaded, so text set in it falls back to another font.</p>
+<p>Write the image&rsquo;s bytes into the snippet instead. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel. Bytes are an array at runtime, so they can be at most 131,072 bytes long. An RGBA image of that size is 256 by 128 pixels.</p>
+<p>The playground ships the files its examples include, inside the server and inside rawr-web. They are iced&rsquo;s <code>solar_system</code> images: <code>../assets/sun.png</code>, <code>../assets/earth.png</code> and <code>../assets/moon.png</code>. <code>include_bytes!</code> of exactly one of those paths gives the shipped file. Each file is pinned by its SHA-256. No other path is read, and no path reaches a disk.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>
   <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">let circle = r#"&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"&gt;
@@ -224,8 +225,13 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <div class="run"><button type="button" class="runbtn" data-source="src-circle" data-out="out-circle" data-alt="A pink circle, drawn by rawr-iced on the server" aria-label="Run circle.rs" hidden></button><span class="quiet" id="out-circle" aria-live="polite">(draws a pink circle)</span></div>
 </div>
 
-<h3 id="crates">No crates</h3>
-<p>A snippet can use only rawr&rsquo;s std, iced and <a href="#tokio">?play&rsquo;s tokio</a>. Use <code>rawr run</code> for a program that needs another crate.</p>
+<h3 id="crates">Crates</h3>
+<p>A snippet can use rawr&rsquo;s std, iced, <a href="#tokio">?play&rsquo;s tokio</a>, and the parts of rand and tracing-subscriber that iced&rsquo;s examples use. Use <code>rawr run</code> for a program that needs another crate.</p>
+<ul>
+  <li><code>rand::rng()</code> gives a handle to rand&rsquo;s own <code>StdRng</code>. Its <code>random_range</code> takes <code>a..b</code> of floats, or <code>a..=b</code> of floats or integers. <code>random_bool(p)</code> works too. <code>use rand::RngExt;</code> is accepted.</li>
+  <li>A render seeds that generator the same way every time, as it freezes its clock the same way. So a snippet gives the same image each time it runs. The browser seeds it from the page.</li>
+  <li><code>tracing_subscriber::fmt::init()</code> installs tracing-subscriber&rsquo;s own <code>fmt</code> subscriber. In the browser, its lines go to the console. A render on the server has no terminal, so its lines go nowhere.</li>
+</ul>
 
 <h3 id="prelude">The prelude</h3>
 <p>A bare expression or a view with no top-level <code>use</code> gets rawr-iced&rsquo;s prelude imported for it. The prelude has iced&rsquo;s widget functions and macros. <code>text</code>, <code>button</code>, <code>column!</code> and <code>svg</code> are some of them. It also has iced&rsquo;s common types. <code>Color</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code>, <code>Theme</code>, <code>Shadow</code>, <code>Rectangle</code>, <code>Radians</code> and <code>Widget</code> are some of those. It has the modules iced&rsquo;s examples use most in a view: <code>border</code>, <code>padding</code>, <code>alignment</code>, <code>font</code>, <code>gradient</code>, <code>mouse</code> and <code>theme</code>. It has the <code>color!</code> macro and the <code>rule</code> widgets too.</p>
@@ -365,7 +371,7 @@ impl Sum {
   <tr><td><code>render time limit exceeded</code></td><td>An iced snippet ran past its time budget. An app that drew frames by then gets them with a note instead. A plain program gets <code>time limit exceeded</code>.</td></tr>
   <tr><td><code>operation limit exceeded: more than 1000000 operations (an endless loop?)</code></td><td>One evaluation ran more than 1,000,000 operations.</td></tr>
   <tr><td><code>call depth limit exceeded: deeper than 32 calls (endless recursion?)</code></td><td>Calls nested more than 32 deep.</td></tr>
-  <tr><td><code>size limit exceeded: .. (strings up to 65536 bytes, arrays and maps up to 65536 items)</code></td><td>A string, array, vector or map grew past its limit.</td></tr>
+  <tr><td><code>size limit exceeded: .. (strings up to 65536 bytes, arrays and maps up to 131072 items)</code></td><td>A string, array, vector or map grew past its limit.</td></tr>
   <tr><td><code>render timed out after 80000 ms</code></td><td>The whole run took more than 80 seconds, so its process was stopped.</td></tr>
   <tr><td><code>render stopped: out of memory or crashed</code></td><td>The process ran out of its 256 MB, or it crashed without a message.</td></tr>
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The renderer panicked. The line after it is the panic&rsquo;s message.</td></tr>

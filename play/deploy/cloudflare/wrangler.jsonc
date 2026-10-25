@@ -47,7 +47,7 @@
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
     "PLAY_VERSION": "bdf44e242d63"
   },
-  // /play's examples (play/tests/fixtures/*.rs), as text.
+  // /play's examples (play/tests/fixtures/**/*.rs), as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
   // dist/ is site/dist (the Astro build: the landing page, the docs, /play's page) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, which

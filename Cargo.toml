@@ -15,6 +15,7 @@ members = [
     "examples/tui",
     "iced",
     "play",
+    "play/sandbox",
     "importer",
     "location",
     "toml",

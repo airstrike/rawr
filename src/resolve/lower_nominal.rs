@@ -35512,6 +35512,19 @@ impl<'a> Parser<'a> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
         if name == "include_bytes" {
+            // A file the host ships is read from its bundle's module, as the
+            // constant the host built once: its bytes are the program's, as
+            // its text is, and no array literal of them is parsed.
+            if let Some((index, bytes)) = crate::resolve::bundled(&text) {
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(Ty::Array {
+                        element: Box::new(Ty::Int(Int::U8)),
+                        length: Some(bytes.len()),
+                    }),
+                };
+                return Ok(self.literal(crate::resolve::bundled_constant(index), ty, at));
+            }
             let bytes = self.include(name, &text, at)?;
             return Ok(self.byte_literal(&bytes, at));
         }
@@ -35745,6 +35758,11 @@ impl<'a> Parser<'a> {
             reason: reason.into(),
             operation: at,
         };
+        // A file the host ships with its programs, as `?play` ships its
+        // examples' assets.
+        if let Some((_, bytes)) = crate::resolve::bundled(path) {
+            return Ok(bytes.to_vec());
+        }
         if let Some(reason) = crate::resolve::files_denied() {
             return Err(error(reason.into()));
         }

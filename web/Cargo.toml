@@ -25,6 +25,8 @@ rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
 # How a snippet becomes a program, shared with rawr-play.
 rawr-snippet = { path = "../play/snippet" }
+# rand, tracing_subscriber and the examples' shipped files, shared with rawr-play.
+rawr-play-sandbox = { path = "../play/sandbox" }
 wasm-bindgen = "0.2.105"
 wasm-bindgen-futures = "0.4.78"
 # The deadline of an `async fn main` program, on the page's timer.

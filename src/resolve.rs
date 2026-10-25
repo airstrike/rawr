@@ -254,6 +254,60 @@ pub fn deny_files(reason: &'static str) {
     let _ = NO_FILES.set(reason);
 }
 
+/// Files a host ships with the programs it runs, by the exact path a
+/// program's `include_bytes!` or `include_str!` names. `?play` ships its
+/// examples' assets this way.
+static BUNDLED: std::sync::OnceLock<&'static [(&'static str, &'static [u8])]> =
+    std::sync::OnceLock::new();
+
+/// Ship `files` with this process's programs: `include_bytes!` and
+/// `include_str!` of exactly one of their paths give its bytes, read from
+/// no disk, even after [`deny_files`]. Every other path is read as before.
+pub fn bundle_files(files: &'static [(&'static str, &'static [u8])]) {
+    let _ = BUNDLED.set(files);
+}
+
+/// The index and bytes of the file shipped for `path` with [`bundle_files`].
+pub(crate) fn bundled(path: &str) -> Option<(usize, &'static [u8])> {
+    BUNDLED
+        .get()?
+        .iter()
+        .enumerate()
+        .find_map(|(index, (shipped, bytes))| (*shipped == path).then_some((index, *bytes)))
+}
+
+/// The static module that holds the [`bundle_files`] bytes, as constants.
+pub const BUNDLE_MODULE: &str = "rawr_bundle";
+
+/// The module path of the shipped file at `index`.
+pub(crate) fn bundled_constant(index: usize) -> String {
+    format!("{BUNDLE_MODULE}::file_{index}")
+}
+
+/// The [`bundle_files`] bytes as a module of constants, one array of bytes
+/// per file, built once. An Engine that runs programs including them
+/// registers it as the static module [`BUNDLE_MODULE`]. A program reads
+/// the constant rather than parsing an array literal of its bytes, so a
+/// shipped file larger than the Engine's array literal limit still loads.
+#[must_use]
+pub fn bundle_module() -> crate::Module {
+    let mut module = crate::Module::new();
+    for (index, (_, bytes)) in BUNDLED
+        .get()
+        .copied()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let array = bytes
+            .iter()
+            .map(|byte| crate::Dynamic::from_int(crate::INT::from(*byte)))
+            .collect::<crate::Array>();
+        module.set_var(format!("file_{index}"), array);
+    }
+    module
+}
+
 /// Why programs in this process may read no file, when [`deny_files`] was
 /// called.
 #[must_use]
