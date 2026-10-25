@@ -20,6 +20,14 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
 pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     runtime
         .bind(format!("{}::env::args", super::ROOT), |_| {
+            // A process that denies files to its programs, such as ?play,
+            // runs a snippet, not a command: its own arguments name server
+            // paths, so the snippet sees only its name.
+            if crate::resolve::files_denied().is_some() {
+                return Ok(Dynamic::from(vec![Dynamic::from(ImmutableString::from(
+                    "play",
+                ))]));
+            }
             Ok(Dynamic::from(
                 std::env::args_os()
                     .map(|argument| {

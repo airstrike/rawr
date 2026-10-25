@@ -2003,6 +2003,24 @@ impl State {
     }
 
     #[test]
+    fn play_programs_see_their_name_and_no_files() {
+        let output = text(
+            r#"fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    println!("{args:?}");
+    match std::fs::read_to_string("/etc/hosts") {
+        Ok(text) => println!("read {}", text.len()),
+        Err(error) => println!("{error}"),
+    }
+}"#,
+        );
+        assert_eq!(
+            (output.text().as_str(), output.status),
+            ("[\"play\"]\n?play has no files\n", 0)
+        );
+    }
+
+    #[test]
     fn play_endless_loop_runs_to_a_limit() {
         let source = r#"let mut iteration = 0; loop { iteration += 1; println!("Iteration No{iteration}"); }"#;
         let output = text(source);
