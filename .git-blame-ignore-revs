@@ -1,0 +1,5 @@
+# Commits that only reformat code. Use with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# D507: cargo fmt over the workspace and the mod.rs renames.
+04fab39a30d53f2777f5fbf3c0d188ec8ad4e283
