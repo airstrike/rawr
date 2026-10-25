@@ -88,6 +88,15 @@ pub enum Error {
         /// Targets the interface had then.
         count: usize,
     },
+    /// A recording's step types text into a target that is not a text
+    /// input.
+    #[error("step {step} types text into target {target}, but that target is not a text input")]
+    StepText {
+        /// One-based step number.
+        step: usize,
+        /// Zero-based target index the step names.
+        target: usize,
+    },
     /// The pinned software renderer could not initialize.
     #[error("the pinned tiny-skia snapshot renderer could not initialize")]
     Renderer,

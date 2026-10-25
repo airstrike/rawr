@@ -44,9 +44,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-pub use motion::{Gif, Image, Picture};
+pub use motion::{Action, Gif, Image, Picture};
 pub use plain::Output;
 use rawr_iced::snapshot::Deadline;
+pub use rawr_iced::snapshot::Step;
 
 /// Set to stop an animation's recording before its next frame. The
 /// `rawr-play` binary sets it on `SIGUSR1`, which the bot sends when
@@ -223,7 +224,7 @@ pub struct Options {
     /// Clicks on a full app after its messages, in order: each the index
     /// of a target in the reading order of the view as it then is (see
     /// [`Image::actions`]).
-    pub steps: Vec<usize>,
+    pub steps: Vec<Step>,
     /// Per-render limits.
     pub limits: Limits,
     /// Render the last frame as a still image, never an animation.
@@ -536,11 +537,7 @@ fn render_application(
     Ok(Image {
         picture: Picture::Still(motion::png(last)?),
         note: None,
-        actions: recording
-            .targets
-            .into_iter()
-            .map(|target| target.label)
-            .collect(),
+        actions: recording.targets.into_iter().map(Action::from).collect(),
         clicked: recording.clicked,
     })
 }
@@ -1616,15 +1613,29 @@ impl App {
         super::animate(source, options).unwrap_or_else(|error| panic!("{error}"))
     }
 
+    /// The labels of `image`'s targets.
+    fn labels(image: &super::Image) -> Vec<&str> {
+        image
+            .actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect()
+    }
+
+    /// Clicks on targets `targets`, in order.
+    fn clicks(targets: &[usize]) -> Vec<super::Step> {
+        targets.iter().copied().map(super::Step::click).collect()
+    }
+
     #[test]
     fn clicks_on_the_counter_match_its_messages() {
         let source = include_str!("../tests/fixtures/counter.rs");
         let steps = Options {
-            steps: vec![0, 0, 1],
+            steps: clicks(&[0, 0, 1]),
             ..Options::default()
         };
         let image = clicked(source, &steps);
-        assert_eq!(image.actions, ["Increment", "Decrement"]);
+        assert_eq!(labels(&image), ["Increment", "Decrement"]);
         assert_eq!(image.clicked, ["Increment", "Increment", "Decrement"]);
         // Only the last click's frames are recorded, and it settles at once.
         let super::Picture::Still(png) = image.picture else {
@@ -1684,13 +1695,13 @@ impl State {
 "#;
         let image = clicked(source, &Options::default());
         assert_eq!(
-            image.actions,
+            labels(&image),
             ["+ (1)", "-", "+ (2)", "Reset"],
             "Off is disabled"
         );
         // The second `+` adds 10; the first then adds 1.
         let steps = |steps: Vec<usize>| Options {
-            steps,
+            steps: clicks(&steps),
             still: true,
             ..Options::default()
         };
@@ -1759,12 +1770,12 @@ impl State {
 "#;
         let image = clicked(source, &Options::default());
         assert_eq!(
-            image.actions,
+            labels(&image),
             ["Dark mode", "Small", "Large", "Done", "#5"],
             "a disabled toggler is no target, a bare checkbox is numbered"
         );
         let steps = |steps: Vec<usize>| Options {
-            steps,
+            steps: clicks(&steps),
             still: true,
             ..Options::default()
         };
@@ -1816,7 +1827,7 @@ impl State {
 }
 "#;
         let image = clicked(source, &Options::default());
-        assert_eq!(image.actions, ["Slider −", "Slider +"]);
+        assert_eq!(labels(&image), ["Slider −", "Slider +"]);
         let still = |options: Options| Options {
             still: true,
             ..options
@@ -1824,7 +1835,7 @@ impl State {
         let png = |options: &Options| render(source, options).unwrap().bytes;
         assert!(
             png(&still(Options {
-                steps: vec![1, 1, 0],
+                steps: clicks(&[1, 1, 0]),
                 ..Options::default()
             })) == png(&still(Options {
                 messages: vec!["Message::Changed(6)".into()],
@@ -1835,20 +1846,121 @@ impl State {
         let image = clicked(
             source,
             &Options {
-                steps: vec![0; 6],
+                steps: clicks(&[0; 6]),
                 ..Options::default()
             },
         );
         assert_eq!(image.clicked.len(), 6);
         assert!(
             png(&still(Options {
-                steps: vec![0; 6],
+                steps: clicks(&[0; 6]),
                 ..Options::default()
             })) == png(&still(Options {
                 messages: vec!["Message::Changed(0)".into()],
                 ..Options::default()
             })),
             "a slider stops at its start"
+        );
+    }
+
+    #[test]
+    fn a_step_types_into_a_text_input_and_submits() {
+        let source = r#"
+use iced::widget::{Widget, button, column, text, text_input};
+
+#[derive(Default)]
+struct State { name: String, sent: Vec<String>, secret: String }
+
+#[derive(Debug, Clone)]
+enum Message { Name(String), Send, Secret(String), Clear }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Name(name) => self.name = name,
+            Message::Send => self.sent.push(self.name.clone()),
+            Message::Secret(secret) => self.secret = secret,
+            Message::Clear => self.name.clear(),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text_input("Name", &self.name)
+                .on_input(Message::Name)
+                .on_submit(Message::Send),
+            text_input("Password", &self.secret)
+                .on_input(Message::Secret)
+                .secure(true),
+            text_input("Locked", ""),
+            button("Clear").on_press(Message::Clear),
+            text(self.sent.join(", ")),
+        ]
+        .spacing(8)
+        .width(240)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        let inputs: Vec<(&str, bool)> = image
+            .actions
+            .iter()
+            .map(|action| (action.label.as_str(), action.input))
+            .collect();
+        assert_eq!(
+            inputs,
+            [("Name", true), ("Password", true), ("Clear", false)],
+            "a disabled input is no target"
+        );
+        let still = |steps: Vec<super::Step>| Options {
+            steps,
+            still: true,
+            ..Options::default()
+        };
+        // The messages, then a click that focuses the input, as typing
+        // leaves it.
+        let messages = |messages: &[&str]| Options {
+            messages: messages.iter().map(|m| (*m).to_owned()).collect(),
+            steps: clicks(&[0]),
+            still: true,
+            ..Options::default()
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        let typed = |target, text: &str| super::Step::typed(target, text);
+        assert!(
+            png(&still(vec![typed(0, "Ada")]))
+                == png(&messages(&[
+                    "Message::Name(\"Ada\".to_string())",
+                    "Message::Send"
+                ])),
+            "the text is typed, then ⏎ submits it"
+        );
+        assert!(
+            png(&still(vec![typed(0, "Ada"), typed(0, "Bo")]))
+                == png(&messages(&[
+                    "Message::Name(\"Ada\".to_string())",
+                    "Message::Send",
+                    "Message::Name(\"Bo\".to_string())",
+                    "Message::Send"
+                ])),
+            "a second text replaces the first"
+        );
+        let image = clicked(source, &still(vec![typed(1, "hunter2"), typed(0, "Ada")]));
+        assert_eq!(
+            image.clicked,
+            ["Password: \"•••••••\"", "Name: \"Ada\""],
+            "a secure input's text is hidden"
+        );
+        assert_eq!(
+            image.actions[1].label, "Password",
+            "a label is the placeholder, never the value"
+        );
+        let error = render(source, &still(vec![typed(2, "x")])).unwrap_err();
+        assert!(
+            error
+                .text()
+                .contains("step 1 types text into target 2, but that target is not a text input"),
+            "{error}"
         );
     }
 

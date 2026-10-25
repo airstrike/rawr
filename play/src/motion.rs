@@ -73,6 +73,25 @@ pub enum Picture {
     Animated(Gif),
 }
 
+/// A target of a full app's last frame, as `rawr-play` reports it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Action {
+    /// Its label: its text, a control's own label, or `#n`.
+    pub label: String,
+    /// Whether it is a text input, which a step types into (see
+    /// [`crate::Step::text`]).
+    pub input: bool,
+}
+
+impl From<rawr_iced::snapshot::Target> for Action {
+    fn from(target: rawr_iced::snapshot::Target) -> Self {
+        Self {
+            input: matches!(target.action, rawr_iced::snapshot::Action::Type { .. }),
+            label: target.label,
+        }
+    }
+}
+
 /// What an iced snippet rendered, with a note to show beside it.
 #[derive(Clone, Debug)]
 pub struct Image {
@@ -80,9 +99,9 @@ pub struct Image {
     pub picture: Picture,
     /// A note for the reader, such as why an animation was cut.
     pub note: Option<String>,
-    /// A full app's targets in its last frame, by label in reading order:
-    /// what [`crate::Options::steps`] index.
-    pub actions: Vec<String>,
+    /// A full app's targets in its last frame, in reading order: what
+    /// [`crate::Options::steps`] index.
+    pub actions: Vec<Action>,
     /// The label of the target each step clicked, in order.
     pub clicked: Vec<String>,
 }
@@ -188,7 +207,7 @@ pub fn picture(
         targets,
         clicked,
     } = recording;
-    let actions: Vec<String> = targets.into_iter().map(|target| target.label).collect();
+    let actions: Vec<Action> = targets.into_iter().map(Action::from).collect();
     let last = frames
         .last()
         .ok_or_else(|| PlayError::Limit(crate::TIME_LIMIT.into()))?;

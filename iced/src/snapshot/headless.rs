@@ -318,23 +318,54 @@ impl Renderer {
     /// Act on `target` in the interface the last frame settled, as a
     /// person would and as `iced_test`'s `Simulator` does: the cursor
     /// moves to its centre, then for a click the left button is pressed
-    /// and released there, and for a slider's step ↓ or ↑ is tapped. Gives
-    /// the messages its widgets published.
+    /// and released there, and for a slider's step ↓ or ↑ is tapped. A
+    /// text input is clicked, and with `text` its content is selected
+    /// with ⌘A (Ctrl+A off macOS), `text` is typed a key at a time and ⏎
+    /// is tapped. Gives the messages its widgets published.
     pub(super) fn act(
         &mut self,
         trees: &mut Trees,
         target: &super::Target,
+        text: Option<&str>,
     ) -> Vec<runtime::Message> {
         let interface = trees.drawn.as_mut().expect("a frame settled before a step");
         let at = target.bounds.center();
         let mut events = vec![Event::Mouse(mouse::Event::CursorMoved { position: at })];
         match target.action {
-            super::Action::Click => events.extend([
+            super::Action::Click | super::Action::Type { .. } => events.extend([
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
             ]),
-            super::Action::Decrease => events.extend(tap(keyboard::key::Named::ArrowDown)),
-            super::Action::Increase => events.extend(tap(keyboard::key::Named::ArrowUp)),
+            super::Action::Decrease => events.extend(tap(
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown),
+                None,
+                keyboard::Modifiers::default(),
+            )),
+            super::Action::Increase => events.extend(tap(
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp),
+                None,
+                keyboard::Modifiers::default(),
+            )),
+        }
+        if let (super::Action::Type { .. }, Some(text)) = (target.action, text) {
+            events.extend(tap(
+                keyboard::Key::Character("a".into()),
+                None,
+                keyboard::Modifiers::COMMAND,
+            ));
+            for character in text.chars() {
+                let typed = iced_runtime::core::SmolStr::new(character.encode_utf8(&mut [0; 4]));
+                events.extend(tap(
+                    keyboard::Key::Character(typed.clone()),
+                    Some(typed),
+                    keyboard::Modifiers::default(),
+                ));
+            }
+            events.extend(tap(
+                keyboard::Key::Named(keyboard::key::Named::Enter),
+                None,
+                keyboard::Modifiers::default(),
+            ));
         }
         let mut messages = shell::Bus::new();
         let _ = interface.update(
@@ -439,10 +470,13 @@ impl Renderer {
     }
 }
 
-/// The events of tapping `key`, pressed and released with no modifiers,
-/// as `iced_test`'s `tap_key` sends them.
-fn tap(key: keyboard::key::Named) -> [Event; 2] {
-    let key = keyboard::Key::Named(key);
+/// The events of tapping `key` with `modifiers` held, producing `text`,
+/// as `iced_test`'s `tap_key` sends them: pressed, then released.
+fn tap(
+    key: keyboard::Key,
+    text: Option<iced_runtime::core::SmolStr>,
+    modifiers: keyboard::Modifiers,
+) -> [Event; 2] {
     let physical = keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
     [
         Event::Keyboard(keyboard::Event::KeyPressed {
@@ -450,8 +484,8 @@ fn tap(key: keyboard::key::Named) -> [Event; 2] {
             modified_key: key.clone(),
             physical_key: physical,
             location: keyboard::Location::Standard,
-            modifiers: keyboard::Modifiers::default(),
-            text: None,
+            modifiers,
+            text,
             repeat: false,
         }),
         Event::Keyboard(keyboard::Event::KeyReleased {
@@ -459,7 +493,7 @@ fn tap(key: keyboard::key::Named) -> [Event; 2] {
             modified_key: key,
             physical_key: physical,
             location: keyboard::Location::Standard,
-            modifiers: keyboard::Modifiers::default(),
+            modifiers,
         }),
     ]
 }
@@ -554,6 +588,8 @@ pub(super) struct Candidate {
     pointer: bool,
     /// Whether it is a slider, which keys step: two targets, ↓ and ↑.
     slider: bool,
+    /// For a text input, which a step types into, whether it is secure.
+    input: Option<bool>,
 }
 
 /// The texts, containers and controls an interface reports, in the order it reports
@@ -584,6 +620,7 @@ impl Candidates {
             clickable: false,
             pointer: false,
             slider: false,
+            input: None,
         });
         self.found.last_mut()
     }
@@ -621,15 +658,18 @@ impl Operation for Candidates {
         let _ = self.push(bounds, Some(collapsed(&state.text())));
     }
 
-    // A toggler, a radio, a label-less checkbox or a slider reports itself
-    // through `widget::reported`, labelled by its own label (empty for
-    // none).
+    // A toggler, a radio, a label-less checkbox, a slider or a text input
+    // reports itself through `widget::reported`, labelled by its own label
+    // (a text input's placeholder; empty for none).
     fn custom(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
         use crate::widget::reported::{Kind, Report};
         if let Some(report) = state.downcast_ref::<Report>()
             && let Some(candidate) = self.push(bounds, Some(collapsed(&report.label)))
         {
             candidate.slider = report.kind == Kind::Slider;
+            if let Kind::Input { secure } = report.kind {
+                candidate.input = Some(secure);
+            }
         }
     }
 }
@@ -654,6 +694,8 @@ fn collapsed(text: &str) -> String {
 ///   container, or a control without a label, is labelled by its number.
 /// - A slider is two targets, one step down and one up, labelled `−` and
 ///   `+` after its label, or after `Slider` when it has none.
+/// - A text input is a target a step types into, labelled by its
+///   placeholder.
 /// - Reading order is by lines, top to bottom, each left to right. A
 ///   target whose centre is above the bottom of a line's first target is
 ///   on that line.
@@ -706,6 +748,8 @@ pub(super) fn arrange(candidates: Vec<Candidate>) -> Vec<super::Target> {
                     target(format!("{name} −"), super::Action::Decrease),
                     target(format!("{name} +"), super::Action::Increase),
                 ]
+            } else if let Some(secure) = candidate.input {
+                vec![target(label, super::Action::Type { secure })]
             } else {
                 vec![target(label, super::Action::Click)]
             }
@@ -765,6 +809,7 @@ mod target_tests {
             clickable,
             pointer: clickable,
             slider: false,
+            input: None,
         }
     }
 
@@ -875,6 +920,29 @@ mod target_tests {
                 "Slider + (1)",
                 "Slider − (2)",
                 "Slider + (2)"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_text_input_is_a_target_to_type_into() {
+        use crate::snapshot::Action;
+        let mut name = at(0.0, 0.0, 100.0, 30.0, Some("Name"), true);
+        name.pointer = false;
+        name.input = Some(false);
+        let mut password = at(0.0, 40.0, 100.0, 30.0, Some(""), true);
+        password.pointer = false;
+        password.input = Some(true);
+        let targets = arrange(vec![name, password]);
+        let found: Vec<(&str, Action)> = targets
+            .iter()
+            .map(|target| (target.label.as_str(), target.action))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("Name", Action::Type { secure: false }),
+                ("#2", Action::Type { secure: true }),
             ]
         );
     }

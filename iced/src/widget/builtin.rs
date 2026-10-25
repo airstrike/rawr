@@ -111,7 +111,15 @@ impl widget::Descriptor for marker::TextInput {
             Ok(None) => {}
             Err(diagnostic) => return diagnostic,
         }
-        input.boxed()
+        // Labelled by its placeholder for the headless renderer's targets,
+        // never by its value.
+        widget::reported::reported(
+            input.boxed(),
+            Some(&self.placeholder),
+            widget::reported::Kind::Input {
+                secure: self.secure,
+            },
+        )
     }
 
     fn identity(&self) -> widget::Identity {

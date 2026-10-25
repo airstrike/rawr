@@ -7,7 +7,8 @@
 //! Every other method goes to the control as it is, with the control's own
 //! tree tag and state, so its widget tree, layout, drawing and events are
 //! iced's. Operations that don't know a [`Report`] skip it, as they skip
-//! any custom state they don't know.
+//! any custom state they don't know. A text input reports itself too,
+//! labelled by its placeholder, since iced reports it with its value.
 
 use iced::advanced::widget::{tree, Meta, Tree};
 use iced::advanced::{layout, overlay, renderer, Layout, Shell, Widget};
@@ -27,6 +28,14 @@ pub(crate) enum Kind {
     /// A slider: with the cursor over it, ↓ moves it one step down and ↑
     /// one step up, as iced's slider reads its keys.
     Slider,
+    /// A text input, labelled by its placeholder: a click focuses it and
+    /// keys type into it. iced's text input reports itself to an
+    /// `Operation` with its value, which a label must not show (a secure
+    /// input's), so it reports itself here too.
+    Input {
+        /// Whether it hides what is typed, as a password's does.
+        secure: bool,
+    },
 }
 
 /// What a [`Reported`] control tells an `Operation` about itself.

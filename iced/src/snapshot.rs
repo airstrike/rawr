@@ -278,8 +278,44 @@ pub struct Recording {
     /// Where a click lands in the last frame, in reading order: what a
     /// step after this recording's steps would index.
     pub targets: Vec<Target>,
-    /// The label of the target each step clicked, in order.
+    /// The label of the target each step clicked, in order. A step that
+    /// typed text has it after the label: `Name: "Ada"`.
     pub clicked: Vec<String>,
+}
+
+/// One step of a recording: the index of a target in the reading order
+/// of the interface as it then is (see [`Recording::targets`]), and for a
+/// text input, the text typed into it.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Step {
+    /// The target's index.
+    pub target: usize,
+    /// The text typed over a text input's content, then ⏎. `None` only
+    /// clicks the target, which focuses a text input.
+    pub text: Option<String>,
+}
+
+impl Step {
+    /// A click on target `target`.
+    #[must_use]
+    pub fn click(target: usize) -> Self {
+        Self { target, text: None }
+    }
+
+    /// `text` typed into the text input `target`.
+    #[must_use]
+    pub fn typed(target: usize, text: impl Into<String>) -> Self {
+        Self {
+            target,
+            text: Some(text.into()),
+        }
+    }
+}
+
+impl From<usize> for Step {
+    fn from(target: usize) -> Self {
+        Self::click(target)
+    }
 }
 
 /// A place in a drawn interface where a click does something: a widget
@@ -306,6 +342,14 @@ pub enum Action {
     Decrease,
     /// ↑ is tapped over a slider: one step up.
     Increase,
+    /// A text input is clicked, which focuses it. A step with text then
+    /// selects its content with ⌘A (Ctrl+A off macOS), types the text over
+    /// it a key at a time, and taps ⏎, as a person would.
+    Type {
+        /// Whether the input hides what is typed, as a password's does:
+        /// [`Recording::clicked`] then shows each character as `•`.
+        secure: bool,
+    },
 }
 
 /// Record a booted application on a simulated clock: a frame every
@@ -317,7 +361,8 @@ pub enum Action {
 /// interface as it then is: `steps[i]` indexes the targets in reading
 /// order (see [`Recording::targets`]), and the cursor moves to its centre,
 /// presses and releases there, as `iced_test`'s `Simulator::click` does.
-/// A slider's step taps ↓ or ↑ there instead (see [`Action`]).
+/// A slider's step taps ↓ or ↑ there instead, and a text input's step
+/// types its text (see [`Action`]).
 /// What its widgets publish is applied as any frame's messages are. With
 /// steps, the boot, the messages and every step but the last run their
 /// frames without drawing them, and the frames recorded are the last
@@ -334,7 +379,7 @@ pub enum Action {
 pub fn record_application(
     adapter: &mut crate::program::Adapter,
     messages: Vec<crate::runtime::Message>,
-    steps: &[usize],
+    steps: &[Step],
     canvas: Canvas,
     bound: (u32, u32),
     theme: Option<&str>,
@@ -381,15 +426,32 @@ pub fn record_application(
             }
             if phase > delivered {
                 let step = phase - delivered;
-                let index = steps[step - 1];
+                let Step {
+                    target: index,
+                    text,
+                } = &steps[step - 1];
+                let index = *index;
                 let targets = renderer.targets(&mut trees, &stopped);
                 let target = targets.get(index).ok_or(Error::Step {
                     step,
                     target: index,
                     count: targets.len(),
                 })?;
-                clicked.push(target.label.clone());
-                let published = renderer.act(&mut trees, target);
+                let text = text.as_deref();
+                if text.is_some() && !matches!(target.action, Action::Type { .. }) {
+                    return Err(Error::StepText {
+                        step,
+                        target: index,
+                    });
+                }
+                clicked.push(match (text, target.action) {
+                    (Some(text), Action::Type { secure: true }) => {
+                        format!("{}: {:?}", target.label, "•".repeat(text.chars().count()))
+                    }
+                    (Some(text), _) => format!("{}: {text:?}", target.label),
+                    (None, _) => target.label.clone(),
+                });
+                let published = renderer.act(&mut trees, target, text);
                 adapter.deliver(published);
             }
             // With steps, only the last one's frames are drawn.
