@@ -84,16 +84,21 @@ fn main() {
 </div>
 <h2 id="capture">Captures</h2>
 <p>A closure that changes what it captures is <code>FnMut</code>. A <code>move</code> closure takes what it captures. A closure that moves a captured value out, as <code>|| drop(s)</code> does, can be called once.</p>
-<div class="block"><pre><code data-lang="rust">let mut count = 0;
+<div class="block">
+  <pre><code data-lang="rust" data-run="capture.rs" id="src-capture">let mut count = 0;
 let mut tick = || count += 1;
 tick();
 tick();
 
 let name = String::from("rawr");
-let greet = move || format!("hi, {name}");</code></pre></div>
+let greet = move || format!("hi, {name}");
+println!("{count} {}", greet());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-capture" data-out="out-capture" aria-label="Run capture.rs" hidden></button><b>rawr run capture.rs</b><span id="out-capture" aria-live="polite">2 hi, rawr</span></div>
+</div>
 <h2 id="passing">Passing and returning closures</h2>
 <p>A function takes a closure as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. It returns one as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
-<div class="block"><pre><code data-lang="rust">struct Button {
+<div class="block">
+  <pre><code data-lang="rust" data-run="boxed-fn.rs" id="src-boxed-fn">struct Button {
     on_click: Box&lt;dyn Fn() -&gt; String&gt;,
 }
 
@@ -102,15 +107,23 @@ fn twice&lt;F: Fn(i64) -&gt; i64&gt;(f: F, x: i64) -&gt; i64 {
 }
 
 let b = Button { on_click: Box::new(|| String::from("clicked")) };
-let four = twice(|x| x * 2, 1);</code></pre></div>
+let four = twice(|x| x * 2, 1);
+println!("{} {four}", (b.on_click)());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-boxed-fn" data-out="out-boxed-fn" aria-label="Run boxed-fn.rs" hidden></button><b>rawr run boxed-fn.rs</b><span id="out-boxed-fn" aria-live="polite">clicked 4</span></div>
+</div>
 <h2 id="values">Closures as values</h2>
 <p>A closure in a variable can be passed to a function, copied to another variable, or called from another closure. A closure that holds a value that is not <code>Copy</code> is not <code>Copy</code>, so <code>let g = f;</code> moves it. A parameter can be <code>_</code> or another pattern.</p>
-<div class="block"><pre><code data-lang="rust">let add = |(a, b): (i64, i64)| a + b;
+<div class="block">
+  <pre><code data-lang="rust" data-run="copy-closure.rs" id="src-copy-closure">let add = |(a, b): (i64, i64)| a + b;
 let also_add = add;
-let sums: Vec&lt;i64&gt; = vec![(1, 2), (3, 4)].into_iter().map(also_add).collect();</code></pre></div>
+let sums: Vec&lt;i64&gt; = vec![(1, 2), (3, 4)].into_iter().map(also_add).collect();
+println!("{sums:?} {}", add((5, 6)));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-copy-closure" data-out="out-copy-closure" aria-label="Run copy-closure.rs" hidden></button><b>rawr run copy-closure.rs</b><span id="out-copy-closure" aria-live="polite">[3, 7] 11</span></div>
+</div>
 <h2 id="inference">Parameter types</h2>
 <p>A closure&rsquo;s parameters take their types from where it is passed.</p>
-<div class="block"><pre><code data-lang="rust">#[derive(Clone, Copy)]
+<div class="block">
+  <pre><code data-lang="rust" data-run="struct-update.rs" id="src-struct-update">#[derive(Clone, Copy)]
 struct Color {
     r: f32,
     g: f32,
@@ -121,7 +134,10 @@ fn shade(f: impl Fn(f32) -&gt; Color) -&gt; Color {
 }
 
 let base = Color { r: 0.0, g: 1.0 };
-let c = shade(|r| Color { r, ..base });</code></pre></div>
+let c = shade(|r| Color { r, ..base });
+println!("{} {}", c.r, c.g);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-struct-update" data-out="out-struct-update" aria-label="Run struct-update.rs" hidden></button><b>rawr run struct-update.rs</b><span id="out-struct-update" aria-live="polite">0.5 1</span></div>
+</div>
 <h2 id="async">Async code</h2>
 <p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. <a href="/docs/reference/iced#async">iced</a> describes how an app runs them. In <code>?play</code>, a program whose <code>main</code> is <code>async</code> runs the same way. <a href="/docs/reference/play#tokio">Play</a> lists its tokio. Other programs can&rsquo;t use <code>async</code> yet.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/moves">Previous<b>Moves</b></a><a class="next" href="/docs/reference/macros">Next<b>Macros</b></a></nav>

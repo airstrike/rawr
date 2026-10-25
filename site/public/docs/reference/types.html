@@ -21,6 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -59,54 +60,91 @@
 <p class="lede">The built-in types, and how values convert between them.</p>
 <h2 id="integers">Integers</h2>
 <p><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>isize</code>, <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code> and <code>usize</code>. Overflow panics, as in a Rust debug build. The <code>wrapping_*</code>, <code>checked_*</code>, <code>saturating_*</code> and <code>overflowing_*</code> methods work. <code>i128</code> and <code>u128</code> aren&rsquo;t supported yet.</p>
-<div class="block"><pre><code data-lang="rust">let a: u8 = 250;
+<div class="block">
+  <pre><code data-lang="rust" data-run="integers.rs" id="src-integers">let a: u8 = 250;
 let b = a.checked_add(10); // None
 let c = a.wrapping_add(10); // 4
-let d = a.saturating_add(10); // 255</code></pre></div>
+let d = a.saturating_add(10); // 255
+println!("{b:?} {c} {d}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-integers" data-out="out-integers" aria-label="Run integers.rs" hidden></button><b>rawr run integers.rs</b><span id="out-integers" aria-live="polite">None 4 255</span></div>
+</div>
 <h2 id="floats">Floats</h2>
 <p><code>f32</code> and <code>f64</code>, with methods such as <code>sqrt</code>, <code>powi</code>, <code>floor</code>, <code>round</code> and <code>trunc</code>.</p>
-<div class="block"><pre><code data-lang="rust">let side = 2.0_f64.sqrt();
-let area = side.powi(2).round(); // 2.0</code></pre></div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="sqrt.rs" id="src-sqrt">let side = 2.0_f64.sqrt();
+let area = side.powi(2).round(); // 2.0
+println!("{side} {area:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-sqrt" data-out="out-sqrt" aria-label="Run sqrt.rs" hidden></button><b>rawr run sqrt.rs</b><span id="out-sqrt" aria-live="polite">1.4142135623730951 2.0</span></div>
+</div>
 <h2 id="text"><code>bool</code>, <code>char</code> and strings</h2>
-<div class="block"><pre><code data-lang="rust">let ok: bool = true;
+<div class="block">
+  <pre><code data-lang="rust" data-run="text.rs" id="src-text">let ok: bool = true;
 let initial: char = 'r';
 let name: String = String::from("rawr");
-let rest: &amp;str = &amp;name[1..];</code></pre></div>
+let rest: &amp;str = &amp;name[1..];
+println!("{ok} {initial} {name} {rest}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-text" data-out="out-text" aria-label="Run text.rs" hidden></button><b>rawr run text.rs</b><span id="out-text" aria-live="polite">true r rawr awr</span></div>
+</div>
 <h2 id="sequences">Tuples, arrays, slices and <code>Vec</code></h2>
 <p>Indexing takes a <code>usize</code>.</p>
-<div class="block"><pre><code data-lang="rust">let pair = (1, "one");
+<div class="block">
+  <pre><code data-lang="rust" data-run="tuples.rs" id="src-tuples">let pair = (1, "one");
 let zeros = [0; 3];
 let v = vec![1, 2, 3, 4];
-let middle = &amp;v[1..3];</code></pre></div>
+let middle = &amp;v[1..3];
+println!("{pair:?} {zeros:?} {middle:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-tuples" data-out="out-tuples" aria-label="Run tuples.rs" hidden></button><b>rawr run tuples.rs</b><span id="out-tuples" aria-live="polite">(1, "one") [0, 0, 0] [2, 3]</span></div>
+</div>
 <h2 id="option-result"><code>Option</code> and <code>Result</code></h2>
 <p>Their usual methods work, and so does the <code>?</code> operator.</p>
-<div class="block"><pre><code data-lang="rust">fn first_even(xs: &amp;[i64]) -&gt; Option&lt;i64&gt; {
+<div class="block">
+  <pre><code data-lang="rust" data-run="option.rs" id="src-option">fn first_even(xs: &amp;[i64]) -&gt; Option&lt;i64&gt; {
     let x = xs.iter().find(|x| *x % 2 == 0)?;
     Some(*x * 10)
-}</code></pre></div>
+}
+
+println!("{:?} {:?}", first_even(&amp;[1, 4]), first_even(&amp;[3]));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-option" data-out="out-option" aria-label="Run option.rs" hidden></button><b>rawr run option.rs</b><span id="out-option" aria-live="polite">Some(40) None</span></div>
+</div>
 <h2 id="pointers"><code>Box</code>, <code>Rc</code> and <code>Arc</code></h2>
 <p><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code> work. <code>Rc</code> and <code>Arc</code> are imported with <code>use</code>. Fields and methods reach through them, and <code>&amp;Arc&lt;String&gt;</code> passes where <code>&amp;str</code> is expected. Cloning one gives another handle to the same value.</p>
-<div class="block"><pre><code data-lang="rust">use std::rc::Rc;
+<div class="block">
+  <pre><code data-lang="rust" data-run="rc.rs" id="src-rc">use std::rc::Rc;
 
 let shared = Rc::new(vec![1, 2, 3]);
 let other = Rc::clone(&amp;shared);
-println!("{}", other.len()); // 3</code></pre></div>
+println!("{}", other.len()); // 3</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-rc" data-out="out-rc" aria-label="Run rc.rs" hidden></button><b>rawr run rc.rs</b><span id="out-rc" aria-live="polite">3</span></div>
+</div>
 <h2 id="impl-trait"><code>impl Trait</code></h2>
 <p>In argument and return position.</p>
-<div class="block"><pre><code data-lang="rust">fn evens(n: i64) -&gt; impl Iterator&lt;Item = i64&gt; {
+<div class="block">
+  <pre><code data-lang="rust" data-run="impl-iter.rs" id="src-impl-iter">fn evens(n: i64) -&gt; impl Iterator&lt;Item = i64&gt; {
     (0..n).filter(|x| x % 2 == 0)
-}</code></pre></div>
+}
+
+println!("{:?}", evens(7).collect::&lt;Vec&lt;_&gt;&gt;());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-impl-iter" data-out="out-impl-iter" aria-label="Run impl-iter.rs" hidden></button><b>rawr run impl-iter.rs</b><span id="out-impl-iter" aria-live="polite">[0, 2, 4, 6]</span></div>
+</div>
 <h2 id="fn-pointers">Function pointers</h2>
-<div class="block"><pre><code data-lang="rust">fn double(x: i64) -&gt; i64 {
+<div class="block">
+  <pre><code data-lang="rust" data-run="fn-pointer.rs" id="src-fn-pointer">fn double(x: i64) -&gt; i64 {
     x * 2
 }
 
-let f = double as fn(i64) -&gt; i64;</code></pre></div>
+let f = double as fn(i64) -&gt; i64;
+println!("{}", f(21));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-fn-pointer" data-out="out-fn-pointer" aria-label="Run fn-pointer.rs" hidden></button><b>rawr run fn-pointer.rs</b><span id="out-fn-pointer" aria-live="polite">42</span></div>
+</div>
 <h2 id="casts">Casts</h2>
 <p><code>as</code> converts between numbers. It truncates and saturates as Rust does. Mixing numeric types without a cast fails the check, as in Rust.</p>
-<div class="block"><pre><code data-lang="rust">let x = 300_i64 as u8; // 44
+<div class="block">
+  <pre><code data-lang="rust" data-run="casts.rs" id="src-casts">let x = 300_i64 as u8; // 44
 let y = -1.5_f64 as u32; // 0
-let c = 65_u8 as char; // 'A'</code></pre></div>
+let c = 65_u8 as char; // 'A'
+println!("{x} {y} {c:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-casts" data-out="out-casts" aria-label="Run casts.rs" hidden></button><b>rawr run casts.rs</b><span id="out-casts" aria-live="polite">44 0 'A'</span></div>
+</div>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/items">Previous<b>Items</b></a><a class="next" href="/docs/reference/generics">Next<b>Generics</b></a></nav>
 </article>
 </main>
@@ -120,5 +158,6 @@ let c = 65_u8 as char; // 'A'</code></pre></div>
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>

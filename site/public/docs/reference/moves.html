@@ -21,6 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -64,7 +65,8 @@ let b = a + "wr";
 println!("{a}"); // error: `a` was moved</code></pre></div>
 <h2 id="partial">Partial moves</h2>
 <p>Moving one field out of a struct leaves its other fields usable. Assigning the field again makes it usable. A <code>let</code> or <code>match</code> pattern moves each part it binds by value.</p>
-<div class="block"><pre><code data-lang="rust">struct Person {
+<div class="block">
+  <pre><code data-lang="rust" data-run="partial-move.rs" id="src-partial-move">struct Person {
     name: String,
     city: String,
 }
@@ -75,20 +77,30 @@ println!("{}", p.city); // fine: only p.name moved
 
 let pair = (String::from("a"), String::from("b"));
 let (first, _) = pair;
-println!("{}", pair.1); // fine: only pair.0 moved</code></pre></div>
+println!("{}", pair.1); // fine: only pair.0 moved</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-partial-move" data-out="out-partial-move" aria-label="Run partial-move.rs" hidden></button><b>rawr run partial-move.rs</b><span id="out-partial-move" aria-live="polite">Rio
+b</span></div>
+</div>
 <h2 id="out-of">Moving out of an index or a reference</h2>
 <p>Moving a value out of an index, or out of a field behind a reference, fails the check as rustc&rsquo;s E0507 does. Borrow it or clone it instead.</p>
-<div class="block"><pre><code data-lang="rust">let v = vec![String::from("x")];
-let s = v[0].clone(); // `let s = v[0];` is E0507</code></pre></div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="clone-out.rs" id="src-clone-out">let v = vec![String::from("x")];
+let s = v[0].clone(); // `let s = v[0];` is E0507
+println!("{s}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-clone-out" data-out="out-clone-out" aria-label="Run clone-out.rs" hidden></button><b>rawr run clone-out.rs</b><span id="out-clone-out" aria-live="polite">x</span></div>
+</div>
 <h2 id="shared">Clones of <code>Rc</code> and <code>Arc</code></h2>
 <p>A clone of an <code>Rc</code> or <code>Arc</code> is another handle to the same value. A change through a <code>RefCell</code> inside it shows through every clone.</p>
-<div class="block"><pre><code data-lang="rust">use std::cell::RefCell;
+<div class="block">
+  <pre><code data-lang="rust" data-run="rc-refcell.rs" id="src-rc-refcell">use std::cell::RefCell;
 use std::rc::Rc;
 
 let log = Rc::new(RefCell::new(Vec::new()));
 let writer = Rc::clone(&amp;log);
 writer.borrow_mut().push("saved");
-println!("{:?}", log.borrow()); // ["saved"]</code></pre></div>
+println!("{:?}", log.borrow()); // ["saved"]</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-rc-refcell" data-out="out-rc-refcell" aria-label="Run rc-refcell.rs" hidden></button><b>rawr run rc-refcell.rs</b><span id="out-rc-refcell" aria-live="polite">["saved"]</span></div>
+</div>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/patterns">Previous<b>Patterns</b></a><a class="next" href="/docs/reference/closures">Next<b>Closures</b></a></nav>
 </article>
 </main>
@@ -102,5 +114,6 @@ println!("{:?}", log.borrow()); // ["saved"]</code></pre></div>
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>
