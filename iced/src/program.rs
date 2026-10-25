@@ -886,6 +886,12 @@ impl Adapter {
     /// ends as the clock passes it. A failing update stays in the
     /// diagnostics.
     pub fn deliver(&mut self, messages: impl IntoIterator<Item = runtime::Message>) {
+        self.settle(messages);
+    }
+
+    /// [`Adapter::deliver`], and whether every running task then waits:
+    /// `false` when it stopped at [`DELIVERED`] with messages still ready.
+    pub(crate) fn settle(&mut self, messages: impl IntoIterator<Item = runtime::Message>) -> bool {
         let startup = self.take_startup_plan();
         let mut queue = self.ready(startup);
         queue.extend(messages);
@@ -893,7 +899,7 @@ impl Adapter {
         loop {
             while let Some(message) = queue.pop_front() {
                 if delivered == DELIVERED {
-                    return;
+                    return false;
                 }
                 delivered += 1;
                 if let Ok(transition) = self.update(message) {
@@ -904,7 +910,7 @@ impl Adapter {
             // A script step that just ran may have let a running task go on.
             queue.extend(self.poll_running());
             if queue.is_empty() {
-                return;
+                return true;
             }
         }
     }

@@ -121,23 +121,25 @@ pub fn render_application(
 
 /// Run a booted application's boot Task, and each task it starts, to the
 /// end on the simulated clock, drawing nothing: how `?play` runs a plain
-/// program's `async fn main`. While a task runs, the clock moves a
-/// millisecond at a time, so tokio's timers end when they would. Returns
-/// `false` when `deadline` passed first. Freeze the clock with
-/// [`clock::freeze`] before the application boots, so its boot reads the
-/// same clock.
+/// program's `async fn main`. Once every task waits, the clock moves
+/// straight to the next timer's end, so tokio's timers end when they would
+/// and a sleep costs no wall time however long it is. Returns `false` when
+/// `deadline` passed first. Freeze the clock with [`clock::freeze`] before
+/// the application boots, so its boot reads the same clock.
 pub fn run_tasks(adapter: &mut crate::program::Adapter, deadline: &Deadline) -> bool {
-    const STEP: std::time::Duration = std::time::Duration::from_millis(1);
+    /// The farthest the clock moves at once when no timer is set: every
+    /// task waits on something else, such as a channel nothing sends on.
+    const IDLE: std::time::Duration = std::time::Duration::from_secs(1);
     let _frozen = clock::now().is_none().then(clock::freeze);
-    let mut now = clock::now().expect("the clock is frozen");
-    adapter.deliver(Vec::new());
+    let mut waiting = adapter.settle(Vec::new());
     while adapter.is_running() {
         if deadline.past() {
             return false;
         }
-        now += STEP;
-        clock::set(now);
-        adapter.deliver(Vec::new());
+        if waiting {
+            clock::advance(IDLE);
+        }
+        waiting = adapter.settle(Vec::new());
     }
     true
 }

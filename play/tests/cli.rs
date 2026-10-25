@@ -252,6 +252,34 @@ fn cli_stops_an_endless_plain_program_at_the_time_limit() {
 }
 
 #[test]
+fn cli_sleeps_on_the_simulated_clock_at_no_cost() {
+    // The clock moves straight to each timer's end: 10 s of sleeps, then an
+    // hour, end well within the default budget.
+    let slept = text_result(
+        "use std::time::Duration;\nuse tokio::time::{sleep, Instant};\n\n#[tokio::main]\nasync fn main() {\n    let start = Instant::now();\n    for _ in 0..10 {\n        sleep(Duration::from_secs(1)).await;\n    }\n    println!(\"{} s\", start.elapsed().as_secs());\n    sleep(Duration::from_secs(3600)).await;\n    println!(\"{} s\", start.elapsed().as_secs());\n}\n",
+        &[],
+    );
+    assert_eq!(
+        (slept.text().as_str(), slept.status, slept.limit),
+        ("10 s\n3610 s\n", 0, false)
+    );
+}
+
+#[test]
+fn cli_reports_the_time_limit_when_it_cuts_an_async_programs_boot() {
+    // A 1 ms budget ends the run as the program boots: the reply names the
+    // limit, not the engine's "Script terminated" at the closing brace.
+    let result = run_stdin(include_str!("fixtures/rust/tasks.rs"), &["--time-ms", "1"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    let cut = rawr_play::Output::from_json(&result.stdout).unwrap();
+    assert_eq!(
+        (cut.text().as_str(), cut.status, cut.limit),
+        ("time limit exceeded\n", 1, true)
+    );
+}
+
+#[test]
 fn cli_still_writes_an_image_for_a_prelude_only_snippet() {
     let result = run_stdin(
         "column![text(\"hi\"), button(\"go\")]",
@@ -450,7 +478,7 @@ fn cli_runs_the_playgrounds_rust_examples() {
         ),
     ];
     for (name, source, expected) in examples {
-        let output = text_result(source, &["--time-ms", "20000"]);
+        let output = text_result(source, &[]);
         assert_eq!(
             (output.text().as_str(), output.status),
             (expected, 0),

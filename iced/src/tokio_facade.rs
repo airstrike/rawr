@@ -43,18 +43,27 @@ fn background() -> &'static tokio::runtime::Handle {
     })
 }
 
-/// A future made and polled inside `handle`'s runtime.
+/// A future made and polled inside `handle`'s runtime. On a recording's
+/// clock its wakes also tell the clock that a timer ended.
 struct Entered<F> {
     handle: tokio::runtime::Handle,
     future: Pin<Box<F>>,
+    fired: Option<clock::Fired>,
 }
 
 impl<F: Future> Future for Entered<F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<F::Output> {
-        let _entered = self.handle.enter();
-        self.future.as_mut().poll(context)
+        let this = &mut *self;
+        let _entered = this.handle.enter();
+        match &this.fired {
+            Some(fired) => {
+                let waker = fired.waker(context.waker());
+                this.future.as_mut().poll(&mut Context::from_waker(&waker))
+            }
+            None => this.future.as_mut().poll(context),
+        }
     }
 }
 
@@ -73,11 +82,16 @@ where
     F: Future + Send + 'static,
 {
     let armed = clock::now().is_some().then(clock::Armed::new);
+    let fired = clock::now().and_then(|_| clock::fired());
     let future = {
         let _entered = handle.enter();
         Box::pin(make())
     };
-    let future = Entered { handle, future };
+    let future = Entered {
+        handle,
+        future,
+        fired,
+    };
     Box::pin(async move {
         let output = future.await;
         drop(armed);

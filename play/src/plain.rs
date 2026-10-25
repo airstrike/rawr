@@ -497,29 +497,40 @@ pub fn run_async(
     // The program boots on the simulated clock, so the times it reads are
     // on it.
     let _clock = rawr_iced::snapshot::clock::freeze();
-    let mut adapter = compiler
+    let prepared = compiler
         .check_named_source(SOURCE_NAME, &program)
-        .and_then(rawr_iced::application::Checked::prepare)
-        .map_err(|error| {
-            PlayError::Compile(crate::report(
-                &error.report(diagnostic(&program)),
-                &program,
-                &source,
-            ))
-        })?
-        .into_adapter();
-    let finished =
-        rawr_iced::snapshot::run_tasks(&mut adapter, &rawr_iced::snapshot::Deadline::new(deadline));
-    let status = adapter
-        .refresh_title()
-        .ok()
-        .and_then(|status| status.parse::<i32>().ok());
-    let failures = adapter
-        .diagnostics()
-        .iter()
-        .map(|entry| entry.report().clone())
-        .collect::<Vec<_>>();
-    drop(adapter);
+        .and_then(rawr_iced::application::Checked::prepare);
+    // The engine's progress callback ends a boot that runs past the
+    // deadline (or the output cap): that is the limit, not an error in the
+    // program.
+    let (finished, status, failures) = match prepared {
+        Ok(prepared) => {
+            let mut adapter = prepared.into_adapter();
+            let finished = rawr_iced::snapshot::run_tasks(
+                &mut adapter,
+                &rawr_iced::snapshot::Deadline::new(deadline),
+            );
+            let status = adapter
+                .refresh_title()
+                .ok()
+                .and_then(|status| status.parse::<i32>().ok());
+            let failures = adapter
+                .diagnostics()
+                .iter()
+                .map(|entry| entry.report().clone())
+                .collect::<Vec<_>>();
+            (finished, status, failures)
+        }
+        Err(error) => {
+            let report = error.report(diagnostic(&program));
+            if !terminated(&report) {
+                return Err(PlayError::Compile(crate::report(
+                    &report, &program, &source,
+                )));
+            }
+            (false, None, Vec::new())
+        }
+    };
     drop(compiler);
     let mut output = sink.lock().unwrap().clone();
     if let Some(report) = failures.first() {
@@ -540,7 +551,7 @@ pub fn run_async(
             };
             output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));
         }
-    } else if !finished {
+    } else if !finished && !output.truncated {
         output.status = 1;
         output.limit = true;
         output.push(Stream::Stderr, &format!("{TIME_LIMIT}\n"));
@@ -557,6 +568,13 @@ pub fn run_async(
         output.limit = true;
     }
     Ok(output)
+}
+
+/// Whether `report` is the engine's progress callback ending a run: the
+/// time limit or the output cap, never the program's own error.
+fn terminated(report: &rawr::diagnostic::Report) -> bool {
+    report.code() == rawr::diagnostic::code::RUNTIME_EVALUATION
+        && report.message() == "Script terminated"
 }
 
 /// The program a snippet runs as. One with items runs as written. One of
