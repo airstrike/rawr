@@ -20,6 +20,7 @@ extern crate alloc;
 mod macros;
 
 #[cfg(any())]
+#[rustfmt::skip] // Its file is left out (provenance.json), so rustfmt must not look for it.
 pub(crate) mod debug;
 pub mod document;
 mod error;
