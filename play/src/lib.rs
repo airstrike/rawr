@@ -299,8 +299,8 @@ impl fmt::Display for PlayError {
 
 impl std::error::Error for PlayError {}
 
-/// Identity used for the wrapped source in diagnostics.
-pub const SOURCE_NAME: &str = "play.rs";
+use rawr_snippet::{app_theme, has_top_level_mod, without_positions, without_tests, MESSAGE};
+pub use rawr_snippet::{shape, Shape, SOURCE_NAME};
 
 /// What a snippet gave: an iced snippet's image, or a plain program's
 /// output.
@@ -610,9 +610,6 @@ fn sandbox(limits: &Limits, deadline: Deadline) -> impl FnOnce(&mut rawr::Engine
     }
 }
 
-/// The function a full app's `index`th message is wrapped as.
-const MESSAGE: &str = "rawr_play_message_";
-
 const TIME_LIMIT: &str = "render time limit exceeded";
 
 fn validate(options: &Options) -> Result<(), PlayError> {
@@ -648,178 +645,9 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
     rawr::diagnostic::Source::new(SOURCE_NAME, program).ok()
 }
 
-/// A report as the user's own source shows it: what [`wrap`] added to a
-/// line (the imports and `#[preview]` on the first) is cut from the quoted
-/// line, its marker and its columns. A position on a line the wrapping
-/// added after the source moves to the end of the source's last line.
+/// A report as the user's own source shows it (see [`rawr_snippet::report`]).
 fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
-    let text = rawr::diagnostic::render(report);
-    let source = without_tests(source);
-    let own: Vec<&str> = source.split('\n').collect();
-    // The last line with text: a source ending in a newline ends on it.
-    let last = own
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map_or(1, |at| at + 1);
-    let end = own[last - 1].chars().count();
-    let added = program
-        .split('\n')
-        .zip(source.split('\n'))
-        .enumerate()
-        .filter_map(|(index, (wrapped, own))| {
-            added_span(wrapped, own).map(|span| (index + 1, span))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let mut out = String::with_capacity(text.len());
-    // The quoted line's added span, and whether it was moved to `last`.
-    let mut quoted = None;
-    let mut moved = false;
-    for line in text.lines() {
-        let rewritten = if let Some(location) = line
-            .strip_prefix(" --> ")
-            .or_else(|| line.strip_prefix(" ::: "))
-            .and_then(|rest| rest.strip_prefix(SOURCE_NAME))
-            .and_then(|rest| rest.strip_prefix(':'))
-        {
-            quoted = None;
-            moved = false;
-            let arrow = &line[..5];
-            let location = shift_location(location, &added, last, end);
-            format!("{arrow}{SOURCE_NAME}:{location}")
-        } else if let Some((number, rest)) = quoted_line(line) {
-            let gutter = &line[..line.len() - rest.len()];
-            moved = number > last;
-            quoted = if moved {
-                None
-            } else {
-                added.get(&number).copied()
-            };
-            if moved {
-                let width = gutter.len() - 3;
-                format!("{last:>width$} | {}", own[last - 1])
-            } else {
-                match quoted {
-                    Some(span) => format!("{gutter}{}", cut(rest, span)),
-                    None => line.to_owned(),
-                }
-            }
-        } else if let Some(at) = line.find('|')
-            && line[..at].trim().is_empty()
-            && (moved || quoted.is_some())
-        {
-            let marker = line.get(at + 2..).unwrap_or_default();
-            let rest = if std::mem::take(&mut moved) {
-                format!("{}^", " ".repeat(end))
-            } else {
-                cut(marker, quoted.take().expect("a quoted span"))
-            };
-            format!("{}{rest}", &line[..at + 2])
-        } else {
-            without_positions(line)
-        };
-        out.push_str(&rewritten);
-        out.push('\n');
-    }
-    out
-}
-
-/// `line` without a runtime error's ` (line 2, position 1)`: it counts in
-/// the wrapped program, and the ` --> ` line shows where it is.
-fn without_positions(line: &str) -> String {
-    let mut out = line.to_owned();
-    while let Some(at) = out.find(" (line ") {
-        let rest = &out[at + " (line ".len()..];
-        let digits =
-            |text: &str| text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        let line_digits = digits(rest);
-        let Some(after) = rest[line_digits..].strip_prefix(", position ") else {
-            break;
-        };
-        let position_digits = digits(after);
-        if line_digits == 0 || position_digits == 0 || !after[position_digits..].starts_with(')') {
-            break;
-        }
-        let end = out.len() - after.len() + position_digits + 1;
-        out.replace_range(at..end, "");
-    }
-    out
-}
-
-/// Whether `line` and `column` (1-based, in `program`) fall in text the
-/// user wrote. Text that [`wrap`] or a plain program's wrapping added is
-/// not theirs.
-fn in_source(program: &str, source: &str, line: usize, column: usize) -> bool {
-    let source = without_tests(source);
-    let Some(index) = line.checked_sub(1) else {
-        return false;
-    };
-    let (Some(wrapped), Some(own)) = (
-        program.split('\n').nth(index),
-        source.split('\n').nth(index),
-    ) else {
-        return false;
-    };
-    added_span(wrapped, own)
-        .is_none_or(|(start, length)| column <= start || column > start + length)
-}
-
-/// Where `wrapped` adds text to `own`: the char column it starts at and its
-/// length in chars.
-fn added_span(wrapped: &str, own: &str) -> Option<(usize, usize)> {
-    let wrapped: Vec<char> = wrapped.chars().collect();
-    let own: Vec<char> = own.chars().collect();
-    if wrapped.len() <= own.len() {
-        return None;
-    }
-    let start = wrapped.iter().zip(&own).take_while(|(a, b)| a == b).count();
-    let length = wrapped.len() - own.len();
-    (wrapped[start + length..] == own[start..]).then_some((start, length))
-}
-
-/// ` 12 | text`: the quoted line's number and text.
-fn quoted_line(line: &str) -> Option<(usize, &str)> {
-    let (gutter, rest) = line.split_once(" | ")?;
-    let number = gutter.trim().parse().ok()?;
-    Some((number, rest))
-}
-
-fn cut(text: &str, (start, length): (usize, usize)) -> String {
-    text.chars()
-        .enumerate()
-        .filter(|(index, _)| *index < start || *index >= start + length)
-        .map(|(_, c)| c)
-        .collect()
-}
-
-/// `1:310-1:324` with the added columns taken out, and a line past `last`
-/// moved to its end, column `end + 1`.
-fn shift_location(
-    location: &str,
-    added: &std::collections::BTreeMap<usize, (usize, usize)>,
-    last: usize,
-    end: usize,
-) -> String {
-    location
-        .split('-')
-        .map(|point| {
-            let Some((line, column)) = point.split_once(':') else {
-                return point.to_owned();
-            };
-            let (Ok(number), Ok(column)) = (line.parse::<usize>(), column.parse::<usize>()) else {
-                return point.to_owned();
-            };
-            if number > last {
-                return format!("{last}:{}", end + 1);
-            }
-            let column = match added.get(&number) {
-                Some(&(start, length)) if column > start + length => column - length,
-                Some(&(start, _)) if column > start => start + 1,
-                _ => column,
-            };
-            format!("{number}:{column}")
-        })
-        .collect::<Vec<_>>()
-        .join("-")
+    rawr_snippet::report(&rawr::diagnostic::render(report), program, source)
 }
 
 fn classify(text: &str, limits: &Limits) -> PlayError {
@@ -849,326 +677,24 @@ fn classify(text: &str, limits: &Limits) -> PlayError {
     PlayError::Limit(reason)
 }
 
-/// The snippet shape [`wrap`] recognized.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Shape {
-    /// The source declares its own `#[preview]`; refused.
-    Preview,
-    /// A type with `fn view(&self)`.
-    App,
-    /// A stateless `fn view()`.
-    View,
-    /// A bare expression.
-    Expression,
-}
-
-/// Classify a snippet without wrapping it.
-#[must_use]
-pub fn shape(source: &str) -> Shape {
-    if source.contains("#[preview") {
-        Shape::Preview
-    } else if runs_itself(source) {
-        // `iced::run(|state: &mut u32, message: Message| .., |state: &u32| ..)`
-        // has no `fn view` of its own.
-        Shape::App
-    } else if let Some(at) = find_view(source) {
-        let parameters = source[at..]
-            .split_once('(')
-            .and_then(|(_, rest)| rest.split_once(')'))
-            .map_or("", |(parameters, _)| parameters.trim());
-        if !parameters.is_empty() {
-            Shape::App
-        } else {
-            Shape::View
-        }
-    } else {
-        Shape::Expression
-    }
-}
-
 /// Wrap a snippet into a program: a view or an expression gets one
-/// `#[preview]`; a full app runs as itself, given a `main` when it has none
-/// and each message as a function returning its Message.
-///
-/// User lines keep their line numbers: added imports and attributes share
-/// the first line or the `fn view` line, and helpers go after the source.
+/// `#[preview]`; a full app runs as itself (see [`rawr_snippet::wrap`]).
 pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
-    let (width, height) = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
-    let size = format!("size = ({width}, {height})");
-    let source = &without_tests(source);
-    let source = source.as_str();
-    let theme_fn = format!(
-        "\nfn rawr_play_theme() -> iced::Theme {{ iced::Theme::{} }}\n",
-        options.theme.variant()
-    );
-    let themes = "themes = [rawr_play_theme]";
-    let shape = shape(source);
-    if (!options.messages.is_empty() || !options.steps.is_empty()) && shape != Shape::App {
-        return Err(PlayError::Options(
-            "messages need a full app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
-        ));
+    // Steps click a full app's targets, as messages reach a full app.
+    if !options.steps.is_empty() && shape(&without_tests(source)) != Shape::App {
+        return Err(PlayError::Options(rawr_snippet::NEEDS_APP.into()));
     }
-    // rawr-iced's prelude, for `fn view()` and expression snippets that
-    // import nothing themselves. A `use` inside a function body imports
-    // only there.
-    let prelude = if has_top_level_use(source) {
-        String::new()
-    } else {
-        iced_claims().prelude_imports()
-    };
-    Ok(match shape {
-        // A hand-written `#[preview]` could pick any canvas size.
-        Shape::Preview => {
-            return Err(PlayError::Options(
-                "?play adds `#[preview]` itself; remove it and use size=WxH".into(),
-            ));
-        }
-        Shape::Expression => format!(
-            "{prelude}#[preview({size}, {themes})] fn view() -> impl iced::widget::Widget<()> {{ {source}\n}}{theme_fn}"
-        ),
-        Shape::View => {
-            let at = find_view(source).expect("view shape has a view fn");
-            format!(
-                "{prelude}{}#[preview({size}, {themes})] {}{theme_fn}",
-                &source[..at],
-                &source[at..]
-            )
-        }
-        // A full app runs as itself: given a `main` when it has none, and
-        // each message as a function of its Message type.
-        Shape::App => {
-            let mut program = source.to_owned();
-            if !runs_itself(source) {
-                let at = find_view(source).expect("app shape has a view fn");
-                let state = app_state(source, at).ok_or_else(|| {
-                    PlayError::Options("cannot find the State type that owns `fn view`".into())
-                })?;
-                let callbacks = if view_signature(&source[at..]).contains("self") {
-                    format!("{state}::update, {state}::view")
-                } else {
-                    "update, view".into()
-                };
-                program.push_str(&format!(
-                    "\npub fn main() -> iced::Result {{ iced::run({callbacks}) }}\n"
-                ));
-            }
-            if !options.messages.is_empty() {
-                let message = message_type(source).ok_or_else(|| {
-                    PlayError::Options("cannot find the Message type `fn update` takes".into())
-                })?;
-                for (index, expression) in options.messages.iter().enumerate() {
-                    program.push_str(&format!(
-                        "\nfn {MESSAGE}{index}() -> {message} {{ {expression} }}\n"
-                    ));
-                }
-            }
-            program
-        }
-    })
-}
-
-/// Whether `source` starts its own app with `iced::run` or
-/// `iced::application`.
-fn runs_itself(source: &str) -> bool {
-    source.contains("iced::run(") || source.contains("iced::application(")
-}
-
-/// Whether a line of `source` outside every brace declares an inline
-/// module: `mod name {` or `pub mod name {`.
-fn has_top_level_mod(source: &str) -> bool {
-    let mut depth = 0usize;
-    for line in source.lines() {
-        let item = line.trim_start();
-        let item = item.strip_prefix("pub ").unwrap_or(item);
-        if depth == 0 && item.starts_with("mod ") && item.contains('{') {
-            return true;
-        }
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-        }
-    }
-    false
-}
-
-/// Whether a line of `source` outside every brace starts with `use `.
-fn has_top_level_use(source: &str) -> bool {
-    let mut depth = 0usize;
-    for line in source.lines() {
-        if depth == 0 && line.trim_start().starts_with("use ") {
-            return true;
-        }
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-        }
-    }
-    false
-}
-
-/// The parameters of the `fn view` at the start of `view`.
-fn view_signature(view: &str) -> &str {
-    view.split_once('(')
-        .and_then(|(_, rest)| rest.split_once(')'))
-        .map_or("", |(parameters, _)| parameters)
-}
-
-/// The type of `fn update`'s last parameter, or of the update closure's
-/// that `iced::run` takes: the app's Message.
-fn message_type(source: &str) -> Option<String> {
-    let Some((_, rest)) = source.split_once("fn update(") else {
-        return closure_message_type(source);
-    };
-    let mut depth = 0usize;
-    let end = rest.char_indices().find_map(|(at, c)| match c {
-        '(' | '<' | '[' => {
-            depth += 1;
-            None
-        }
-        ')' if depth == 0 => Some(at),
-        ')' | '>' | ']' => {
-            depth = depth.saturating_sub(1);
-            None
-        }
-        _ => None,
-    })?;
-    last_parameter_type(&rest[..end])
-}
-
-/// The last parameter type of the first closure after `iced::run(` or
-/// `iced::application(` that takes `&mut` state: its update's Message.
-fn closure_message_type(source: &str) -> Option<String> {
-    let start = source
-        .find("iced::run(")
-        .or_else(|| source.find("iced::application("))?;
-    let rest = &source[start..];
-    let mut from = 0;
-    while let Some(open) = rest[from..].find('|') {
-        let open = from + open + 1;
-        let close = open + rest[open..].find('|')?;
-        let parameters = &rest[open..close];
-        if parameters.contains("&mut") {
-            return last_parameter_type(parameters);
-        }
-        from = close + 1;
-    }
-    None
-}
-
-/// The type of the last of `parameters`, as `name: Type` or `_: Type`.
-fn last_parameter_type(parameters: &str) -> Option<String> {
-    let mut depth = 0usize;
-    let last = parameters
-        .char_indices()
-        .filter(|(_, c)| {
-            match c {
-                '(' | '<' | '[' => depth += 1,
-                ')' | '>' | ']' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            *c == ',' && depth == 0
-        })
-        .last()
-        .map_or(parameters, |(at, _)| &parameters[at + 1..]);
-    let (_, ty) = last.split_once(':')?;
-    let ty = ty.trim();
-    (!ty.is_empty()).then(|| ty.to_owned())
-}
-
-/// `source` with each `#[cfg(test)]` item (such as `mod tests { .. }`)
-/// blanked, keeping line numbers: a pasted example often ends with tests.
-fn without_tests(source: &str) -> String {
-    const ATTRIBUTE: &str = "#[cfg(test)]";
-    let mut out = source.to_owned();
-    let mut from = 0;
-    while let Some(found) = out[from..].find(ATTRIBUTE) {
-        let start = from + found;
-        let mut depth = 0usize;
-        let mut end = out.len();
-        for (offset, c) in out[start + ATTRIBUTE.len()..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' if depth > 0 => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = start + ATTRIBUTE.len() + offset + 1;
-                        break;
-                    }
-                }
-                ';' if depth == 0 => {
-                    end = start + ATTRIBUTE.len() + offset + 1;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        let blank: String = out[start..end]
-            .chars()
-            .map(|c| if c == '\n' { c } else { ' ' })
-            .collect();
-        out.replace_range(start..end, &blank);
-        from = start + blank.len();
-    }
-    out
-}
-
-/// Byte offset of `fn view` (or `pub fn view`) followed by `(`.
-fn find_view(source: &str) -> Option<usize> {
-    let mut from = 0;
-    while let Some(found) = source[from..].find("fn view") {
-        let at = from + found;
-        let after = source[at + "fn view".len()..].trim_start();
-        let boundary = at == 0
-            || !source[..at]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_');
-        if boundary && after.starts_with('(') {
-            let before = source[..at].trim_end();
-            return Some(match before.strip_suffix("pub") {
-                Some(rest) => rest.len(),
-                None => at,
-            });
-        }
-        from = at + 1;
-    }
-    None
-}
-
-/// The State type for a view at `at`: the nearest preceding `impl Name`, or
-/// the `&Name` parameter of a free `fn view(state: &Name)`.
-/// The path an app passes to `.theme(..)`, such as `App::theme` or `ink`.
-fn app_theme(source: &str) -> Option<&str> {
-    let (_, rest) = source.split_once(".theme(")?;
-    let path = rest[..rest.find(')')?].trim();
-    let valid = !path.is_empty()
-        && path
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == ':');
-    valid.then_some(path)
-}
-
-fn app_state(source: &str, at: usize) -> Option<String> {
-    let ident = |text: &str| -> String {
-        text.chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect()
-    };
-    let view = view_signature(&source[at..]);
-    if !view.contains("self") {
-        let (_, rest) = view.split_once('&')?;
-        let name = ident(rest.trim_start());
-        return (!name.is_empty()).then_some(name);
-    }
-    let impl_at = source[..at].rfind("impl ")?;
-    let name = ident(source[impl_at + "impl ".len()..].trim_start());
-    (!name.is_empty()).then_some(name)
+    let messages = &options.messages;
+    rawr_snippet::wrap(
+        source,
+        &rawr_snippet::Options {
+            size: options.size.unwrap_or((MAX_SIDE, MAX_SIDE)),
+            theme: options.theme.variant(),
+            messages,
+            prelude: &iced_claims().prelude_imports(),
+        },
+    )
+    .map_err(PlayError::Options)
 }
 
 #[cfg(test)]
@@ -1455,12 +981,6 @@ fn view() -> impl Widget<()> {
     fn a_use_in_a_function_body_keeps_the_prelude() {
         let source = "fn view() -> impl Widget<()> {\n    use iced::widget::column;\n    column![text(\"hi\")]\n}\n";
         render(source, &Options::default()).unwrap();
-        assert!(super::has_top_level_use(
-            "use iced::widget::text;\nfn view() {}"
-        ));
-        assert!(!super::has_top_level_use(
-            "fn view() {\n    use iced::widget::text;\n}"
-        ));
     }
 
     /// The prelude has the modules and types iced's examples use most in a
@@ -1628,9 +1148,9 @@ fn view() -> impl Widget<()> {
         );
         // The wrapping's own text is never a position in the user's.
         let program = super::plain::program("1 + 2");
-        assert!(!super::in_source(&program, "1 + 2", 1, 3));
-        assert!(super::in_source(&program, "1 + 2", 1, 25));
-        assert!(!super::in_source(&program, "1 + 2", 3, 1));
+        assert!(!rawr_snippet::in_source(&program, "1 + 2", 1, 3));
+        assert!(rawr_snippet::in_source(&program, "1 + 2", 1, 25));
+        assert!(!rawr_snippet::in_source(&program, "1 + 2", 3, 1));
     }
 
     #[test]

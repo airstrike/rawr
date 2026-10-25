@@ -27,10 +27,12 @@ import {
   USER_HEADER,
   same,
   shareId,
+  webAsset,
+  webHeaders,
   type Snippet,
 } from "../src/play.ts";
 import { escape } from "../src/dashboard.ts";
-import { render } from "../src/playpage.ts";
+import { render, WEB_MODULE } from "../src/playpage.ts";
 
 const OG = {
   title: "Rawr Playground",
@@ -439,4 +441,120 @@ test("a render request names its caller for the animation allowance", async () =
   assert.equal(request.headers.get(USER_HEADER), "abc123");
   assert.equal(request.headers.get("content-type"), "application/json");
   assert.equal(await request.text(), '{"code":"x"}');
+});
+
+test("the page offers Run on server, the default, and Run in browser, which loads rawr-web on demand", () => {
+  const html = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
+  assert.match(html, /<input type="radio" name="where" value="server" checked><span>Run on server<\/span>/);
+  assert.match(html, /<input type="radio" name="where" value="browser"><span>Run in browser<\/span>/);
+  // Nothing loads the module up front: the inline script imports it on first use.
+  assert.ok(!html.includes(`<script type="module"`));
+  assert.ok(!html.includes(`src="${WEB_MODULE}"`));
+  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
+  assert.ok(script.includes(`import(${JSON.stringify(WEB_MODULE)})`));
+  // The server runs what the browser cannot.
+  for (const reason of ["rawr-web did not load", "this browser has no WebGL2 or WebGPU", "an async main needs tokio's timers"]) {
+    assert.ok(script.includes(reason), reason);
+  }
+});
+
+/** The page's inline script against a stand-in DOM, with `web` as the loaded rawr-web. */
+async function browserRun(code: string, web: Record<string, unknown> | null, gpu = true) {
+  const html = render({ snippet: snippet({ code }), examples: [], sitekey: null, shared: null, og: OG });
+  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
+  const nodes: Record<string, any> = {};
+  const node = (id: string, value = "") => (nodes[id] ??= {
+    id, value, textContent: id === "msghint" ? "(sent before preview)" : "", children: [] as any[], style: {}, dataset: {},
+    classList: { toggle() {}, add() {} }, addEventListener() {}, append(...c: any[]) { this.children.push(...c); },
+    replaceChildren(...c: any[]) { this.children = c; },
+  });
+  node("code", code); node("messages"); node("size");
+  node("example-data").textContent = "[]";
+  const where = { server: { checked: false, value: "server", addEventListener() {} }, browser: { checked: true, value: "browser", addEventListener() {} } };
+  const fetched: string[] = [];
+  const document = {
+    getElementById: node,
+    createElement: (tag: string) => tag === "canvas" ? { getContext: () => (gpu ? {} : null) } : { ...node("new-" + Math.random()), tag },
+    querySelectorAll: (q: string) => q.includes("where") ? Object.values(where) : [],
+    querySelector: (q: string) => q === "input[name=where]:checked" ? (where.browser.checked ? where.browser : where.server)
+      : q === "input[name=where][value=server]" ? where.server : { value: "dark" },
+    addEventListener() {}, head: { append() {} },
+  };
+  const loads: string[] = [];
+  const load = async (url: string) => { loads.push(url); if (!web) throw new Error("404"); return { default: async () => {}, ...web }; };
+  const fetch = async (url: string) => { fetched.push(url); return { ok: true, status: 200, headers: new Map([["content-type", "application/json"]]), json: async () => ({ status: 0, output: [{ stream: "stdout", text: "from the server\n" }] }) }; };
+  const run = new Function("document", "localStorage", "fetch", "navigator", "performance", "history", "location", "loadModule",
+    script.replace(/import\(/, "loadModule("));
+  run(document, { getItem: () => null, setItem() {} }, fetch, {}, { now: () => 0 }, { replaceState() {} }, {}, load);
+  await nodes.run.onclick();
+  return { out: nodes.out, status: nodes.status.textContent, loads, fetched, where };
+}
+
+test("Run in browser runs a plain program in rawr-web and shows its output as the server's", async () => {
+  const web = { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 3, output: [{ stream: "stdout", text: "hi\n" }] }) };
+  const { out, status, loads, fetched } = await browserRun("println!(\"hi\")", web);
+  assert.deepEqual(loads, [WEB_MODULE]);
+  assert.deepEqual(fetched, [], "the server is not asked");
+  assert.equal(out.children[0].className, "term");
+  assert.match(status, /in the browser · exit 3$/);
+});
+
+test("Run in browser mounts an iced snippet on a canvas holder and runs it there", async () => {
+  const calls: unknown[][] = [];
+  const web = { kind: () => "iced", run: (...args: unknown[]) => { calls.push(args); } };
+  const { out, status, fetched } = await browserRun("text(\"hi\")", web);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "text(\"hi\")");
+  assert.equal(out.children[0].className, "live");
+  assert.ok(out.children[0].innerHTML.includes(`id="iced"`));
+  assert.match(status, /· live$/);
+  assert.deepEqual(fetched, []);
+});
+
+test("Run in browser falls back to the server when the module does not load or cannot draw", async () => {
+  const failed = await browserRun("1 + 2", null);
+  assert.deepEqual(failed.fetched, ["/play/render"]);
+  assert.match(failed.status, /on the server: rawr-web did not load$/);
+  assert.ok(failed.where.server.checked, "the choice goes back to the server");
+  const iced = await browserRun("text(\"hi\")", { kind: () => "iced", run() { throw new Error("not called"); } }, false);
+  assert.deepEqual(iced.fetched, ["/play/render"]);
+  assert.match(iced.status, /no WebGL2 or WebGPU$/);
+  const tokio = await browserRun("#[tokio::main]\nasync fn main() {}", { kind: () => "server" });
+  assert.deepEqual(tokio.fetched, ["/play/render"]);
+});
+
+test("rawr-web's files are served with types the edge compresses", () => {
+  const headers = (path: string) => webHeaders(path, new Headers({ etag: "\"x\"", "content-type": "application/octet-stream" }));
+  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("content-type"), "application/wasm");
+  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("etag"), "\"x\"");
+  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("cache-control"), null, "the module revalidates");
+  assert.equal(headers("/web/rawr_web.js")?.get("content-type"), "text/javascript; charset=utf-8");
+  assert.equal(headers("/web/fonts/NotoSansCJK-Regular.ttc")?.get("content-type"), "font/ttf");
+  assert.equal(headers("/web/fonts/FiraMono-Regular.ttf")?.get("cache-control"), "public, max-age=604800");
+  assert.equal(headers("/web/index.html"), null);
+});
+
+test("a browser that takes brotli gets rawr-web's brotli copy as is", async () => {
+  const stored: Record<string, string> = { "/web/rawr_web_bg.wasm": "wasm", "/web/rawr_web_bg.wasm.br": "packed", "/web/rawr_web.js": "js" };
+  const assets = {
+    fetch: async (request: Request) => {
+      const body = stored[new URL(request.url).pathname];
+      return body ? new Response(body, { headers: { etag: `"${body}"` } }) : new Response("no", { status: 404 });
+    },
+  };
+  const get = (path: string, encoding: string) =>
+    webAsset(new Request("https://rawr.airstrike.fyi" + path, { headers: { "accept-encoding": encoding } }), assets);
+  const packed = await get("/web/rawr_web_bg.wasm", "gzip, deflate, br, zstd");
+  assert.equal(await packed.text(), "packed");
+  assert.equal(packed.headers.get("content-encoding"), "br");
+  assert.equal(packed.headers.get("content-type"), "application/wasm");
+  const plain = await get("/web/rawr_web_bg.wasm", "gzip");
+  assert.equal(await plain.text(), "wasm");
+  assert.equal(plain.headers.get("content-encoding"), null);
+  assert.equal(plain.headers.get("content-type"), "application/wasm");
+  // No brotli copy: the stored file, which the edge compresses itself.
+  const js = await get("/web/rawr_web.js", "br");
+  assert.equal(await js.text(), "js");
+  assert.equal(js.headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.equal((await get("/web/missing.wasm", "br")).status, 404);
 });

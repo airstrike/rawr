@@ -3174,11 +3174,16 @@ dependencies = [
  "rawr",
  "rawr-cli",
  "rawr-iced",
+ "rawr-snippet",
  "reqwest",
  "serde_json",
  "serenity",
  "tokio",
 ]
+
+[[package]]
+name = "rawr-snippet"
+version = "0.1.0"
 
 [[package]]
 name = "rawr-toml"
@@ -3219,8 +3224,13 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "iced",
+ "js-sys",
+ "rawr",
+ "rawr-cli",
  "rawr-iced",
+ "rawr-snippet",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

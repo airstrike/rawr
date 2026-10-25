@@ -62,6 +62,7 @@
 <p>Ctrl+Enter or Cmd+Enter runs the code. You can pick the theme and a size. The messages box takes one <code>Message</code> expression per line.</p>
 <p>The Examples menu lists plain Rust programs in a Rust group, then iced&rsquo;s own examples in an iced group. A first visit opens the first Rust example. The editor keeps your latest snippet, so <code>/play</code> opens where you left off.</p>
 <p>The playground uses the same renderer, <a href="/docs/reference/play#limits">limits</a> and allowance as the bot.</p>
+<p><strong>Run on server</strong> is the default. <strong>Run in browser</strong> loads rawr into the page the first time you pick it. An iced snippet then runs live and updates as you type, and a plain program shows its output as the server would. A snippet the browser can&rsquo;t run goes to the server instead. That happens when rawr doesn&rsquo;t load, when the browser has no WebGL2 or WebGPU for an iced snippet, and for an <code>async fn main</code>.</p>
 
 <h3 id="share">Share links</h3>
 <p><strong>Share</strong> saves the code and options and gives a link of the form <code>/play/&lt;id&gt;</code>. A shared link shows a preview card in Discord and other apps. For an iced snippet the card is its last frame. For a plain program it shows the first line of output. A share that nobody opens for 30 days is deleted.</p>

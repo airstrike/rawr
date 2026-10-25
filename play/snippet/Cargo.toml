@@ -1,0 +1,9 @@
+[package]
+name = "rawr-snippet"
+version = "0.1.0"
+rust-version = "1.95.0"
+edition = "2024"
+publish = false
+description = "How a Rawr snippet becomes a program, shared by the ?play server and the browser"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
