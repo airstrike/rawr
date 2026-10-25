@@ -126,9 +126,18 @@ the check swaps the new code into the running app. The app keeps its state
 when the new code is compatible with it. `cargo run` compiles the same app
 natively.
 
-rawr-iced also adds `rawr preview`, `rawr snapshot`, `rawr mcp`, `rawr init`
-and `rawr cache`. The [rawr-iced docs](https://rawr.airstrike.fyi/docs/iced)
+rawr-iced also adds `rawr preview`, `rawr snapshot` and `rawr cache`, and
+window tools for `rawr mcp`. The [rawr-iced docs](https://rawr.airstrike.fyi/docs/iced)
 cover them.
+
+## Can a coding agent use it?
+
+Yes. `rawr mcp` is an MCP server for agents such as Claude Code and Codex. Run
+`rawr init` in a project to register it. The agent then makes a crate with
+`new`, checks it with `check`, and runs it with `run` or `start`. After each
+save, `wait` says whether the program reloaded or failed. Each error comes with
+its file and line. The [agents docs](https://rawr.airstrike.fyi/docs/agents)
+list the tools.
 
 ## Can my app run Rust scripts?
 

@@ -377,6 +377,100 @@ impl Plan {
     }
 }
 
+/// Why Cargo would reject a crate at `path` (relative to the current
+/// directory): the nearest enclosing manifest with a `[workspace]` that
+/// doesn't exclude it doesn't list it in `members` either. The text says
+/// how to fix it.
+#[must_use]
+pub fn outside_workspace(path: &Path) -> Option<String> {
+    let current = std::env::current_dir().ok()?;
+    let root = normalize_absolute(&current.join(path))?;
+    workspace_refusal(&root)
+}
+
+fn workspace_refusal(root: &Path) -> Option<String> {
+    for ancestor in root.ancestors().skip(1) {
+        let manifest = ancestor.join("Cargo.toml");
+        let Ok(text) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+            continue;
+        };
+        let Some(workspace) = document
+            .get("workspace")
+            .and_then(|item| item.as_table_like())
+        else {
+            continue;
+        };
+        let relative = root.strip_prefix(ancestor).ok()?;
+        let patterns = |key: &str| -> Vec<String> {
+            workspace
+                .get(key)
+                .and_then(|item| item.as_array())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let excluded = patterns("exclude")
+            .iter()
+            .any(|excluded| relative.starts_with(excluded.trim_end_matches('/')));
+        let member = patterns("members")
+            .iter()
+            .any(|member| matches_glob(member.trim_end_matches('/'), relative));
+        if member && !excluded {
+            return None;
+        }
+        // Cargo goes on looking above a workspace that excludes the crate.
+        if excluded {
+            continue;
+        }
+        return Some(format!(
+            "{} is inside the Cargo workspace of {}, which doesn't list it, so Cargo would reject the crate. \
+             Add \"{}\" to `workspace.members` there, or create the crate outside {}",
+            root.display(),
+            manifest.display(),
+            relative.display(),
+            ancestor.display()
+        ));
+    }
+    None
+}
+
+/// Whether `path` matches a workspace `members` glob: `*` and `?` within
+/// one component.
+fn matches_glob(pattern: &str, path: &Path) -> bool {
+    let pattern: Vec<&str> = pattern.split('/').filter(|part| !part.is_empty()).collect();
+    let path: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    pattern.len() == path.len()
+        && pattern
+            .iter()
+            .zip(&path)
+            .all(|(pattern, part)| matches_component(pattern.as_bytes(), part.as_bytes()))
+}
+
+fn matches_component(pattern: &[u8], text: &[u8]) -> bool {
+    match (pattern.first(), text.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            matches_component(&pattern[1..], text)
+                || (!text.is_empty() && matches_component(pattern, &text[1..]))
+        }
+        (Some(b'?'), Some(_)) => matches_component(&pattern[1..], &text[1..]),
+        (Some(expected), Some(found)) if expected == found => {
+            matches_component(&pattern[1..], &text[1..])
+        }
+        _ => false,
+    }
+}
+
 fn normalize_absolute(path: &Path) -> Option<PathBuf> {
     let mut prefix = None;
     let mut rooted = false;
@@ -625,6 +719,44 @@ impl std::error::Error for Error {
             | ErrorKind::ExistingNonEmpty(_)
             | ErrorKind::UnsafeAncestor { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_crate_inside_a_workspace_that_does_not_list_it_is_refused_with_the_fix() {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/rawr-cli-workspace")
+            .join(std::process::id().to_string());
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("crates")).unwrap();
+        fs::write(
+            base.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"scratch\"]\n",
+        )
+        .unwrap();
+        assert_eq!(super::workspace_refusal(&base.join("crates/app")), None);
+        // Excluded, so Cargo looks further up: rawr's own workspace, which
+        // doesn't list it.
+        assert!(super::workspace_refusal(&base.join("scratch/app")).is_some());
+        let refusal = super::workspace_refusal(&base.join("tools/app")).unwrap();
+        assert!(
+            refusal.contains("Add \"tools/app\" to `workspace.members` there"),
+            "{refusal}"
+        );
+        assert!(super::matches_glob(
+            "crates/a?p*",
+            std::path::Path::new("crates/app-one")
+        ));
+        assert!(!super::matches_glob(
+            "crates/*",
+            std::path::Path::new("crates/a/b")
+        ));
+        fs::remove_dir_all(&base).unwrap();
     }
 }
 

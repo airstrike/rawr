@@ -15,6 +15,13 @@ rawr-watch = { path = "../watch" }
 serde_json = "1.0.45"
 toml_edit = { package = "rawr-toml-edit", path = "../toml/edit", default-features = false, features = ["parse", "display"] }
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27.1", features = ["process", "signal"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.24"
+
 [[bin]]
 name = "rawr"
 path = "src/main.rs"

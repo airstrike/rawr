@@ -151,6 +151,45 @@ fn malformed_bytes_boot_fresh() {
     assert!(shows(&new, "new 0 start Idle None"));
 }
 
+const STOPWATCH: &str = include_str!("../../../play/tests/fixtures/stopwatch.rs");
+
+#[test]
+fn a_running_stopwatch_carries_in_process_but_not_as_bytes() {
+    let mut old = boot(STOPWATCH);
+    let mut simulator = iced_test::simulator(old.view());
+    simulator.click("Start").unwrap();
+    let message = simulator.into_messages().next().unwrap();
+    old.update(message).unwrap();
+    assert!(shows(&old, "Stop"));
+    // Its `Duration` and `Instant` are native values: no bytes carry them.
+    assert!(export(&old).is_none());
+
+    let edited = STOPWATCH.replace("\"Reset\"", "\"Clear\"");
+    let mut new = boot(&edited);
+    assert!(shows(&new, "Start"));
+    assert!(new.carry_state(&old));
+    assert!(shows(&new, "Stop") && shows(&new, "Clear"));
+
+    // A State of another shape boots fresh.
+    let reshaped = STOPWATCH.replace("duration: Duration,", "duration: Duration,\n    laps: u32,");
+    let mut fresh = boot(&reshaped);
+    assert!(!fresh.carry_state(&old));
+    assert!(shows(&fresh, "Start"));
+}
+
+#[test]
+fn plain_state_carries_in_process() {
+    let mut old = boot(&source("old", ""));
+    increment(&mut old);
+    increment(&mut old);
+    let mut new = boot(&source("new", ""));
+    assert!(new.carry_state(&old));
+    assert!(shows(&new, "new 2 n2 Busy(2) Some('x')"));
+    increment(&mut new);
+    assert!(shows(&new, "new 3 n3 Busy(3) Some('x')"));
+    assert!(shows(&old, "old 2 n2 Busy(2) Some('x')"));
+}
+
 const COLLECTIONS: &str = r#"
 use std::collections::{BTreeMap, HashSet};
 use iced::widget::{button, column, text};

@@ -189,6 +189,7 @@ pub(super) fn attempt(
             if let Err(error) = lane.commit_resident(prepared) {
                 return failed(error, adapter, watch_request, diagnostic);
             }
+            rawr_cli::events::swapped();
             for warning in adapter
                 .commit_inputs(staged)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?

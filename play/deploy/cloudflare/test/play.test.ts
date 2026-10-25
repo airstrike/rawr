@@ -32,7 +32,7 @@ import {
   type Snippet,
 } from "../src/play.ts";
 import { escape } from "../src/dashboard.ts";
-import { render, slug, WEB_MODULE, type Example } from "../src/playpage.ts";
+import { DATA, TURNSTILE_JS, inject, slug } from "../src/playpage.ts";
 
 const OG = {
   title: "Rawr Playground",
@@ -144,71 +144,72 @@ test("the pass cookie is HttpOnly, Secure and SameSite=Lax for 30 days", () => {
   assert.equal(cookie(null, PASS_COOKIE), null);
 });
 
-test("a page with a pass loads no widget until the server refuses the pass", () => {
-  const html = render({ snippet: snippet(), examples: [], sitekey: "0xKEY", pass: true, shared: null, og: OG });
-  assert.ok(!html.includes("<script src=\"https://challenges.cloudflare.com"), "no Turnstile script up front");
-  assert.ok(html.includes(`id="ts"`), "the widget can still mount as a fallback");
-  assert.ok(html.includes("let pass = true;"));
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  assert.doesNotThrow(() => new Function(scripts[0]));
-  assert.ok(scripts[0].includes('appearance: "interaction-only"'));
-  const fresh = render({ snippet: snippet(), examples: [], sitekey: "0xKEY", shared: null, og: OG });
-  assert.ok(fresh.includes("let pass = false;"));
-});
+/** The site's build, which build.mjs merges into the Worker's assets. */
+const DIST = new URL("../../../../site/dist/", import.meta.url);
+async function built(path: string): Promise<string> {
+  const { existsSync, readFileSync } = await import("node:fs");
+  assert.ok(existsSync(new URL("play.html", DIST)), "site/dist is missing: run `npm run build` in site/ (build.mjs does)");
+  return readFileSync(new URL(path, DIST), "utf8");
+}
 
-test("the page escapes the code and embeds the examples safely", () => {
-  const html = render({
-    snippet: snippet({ code: "</textarea><script>alert(1)</script>", messages: ["Message::A"] }),
-    examples: [{ name: "Counter", code: "fn main() {} // </script><script>x()</script>" }],
+/** The island's data as the Worker wrote it into the page. */
+const playData = (html: string) => JSON.parse(html.match(/<script type="application\/json" id="play-data">([\s\S]*?)<\/script>/)![1]);
+
+test("the Worker writes each request's data into the site's playground page", async () => {
+  const page = await built("play.html");
+  assert.ok(page.includes(DATA), "the static page holds the island's placeholder");
+  const html = inject(page, {
+    snippet: snippet({ code: "</script><script>alert(1)</script>", messages: ["Message::A"], theme: "light" }),
+    examples: [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust" }],
     sitekey: "0xKEY",
     shared: "abcDEF1234",
     og: OG,
   });
-  assert.ok(!html.includes("</textarea><script>alert(1)"));
-  assert.ok(html.includes("&#60;/textarea&#62;"));
-  assert.ok(!html.includes("</script><script>x()"), "example code cannot close the script");
-  assert.ok(html.includes("Message::A"));
-  assert.ok(html.includes("turnstile/v0/api.js"));
-  assert.ok(html.includes("shared · abcDEF1234"));
-  assert.ok(html.includes('href="/bot/invite"') && html.includes('href="/bot"'));
-  const bare = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
-  assert.ok(!bare.includes("challenges.cloudflare.com") && !bare.includes(`id="ts"`));
+  assert.ok(!html.includes("</script><script>alert(1)") && !html.includes("</script><script>x()"), "code cannot close the script");
+  const data = playData(html);
+  assert.equal(data.snippet.code, "</script><script>alert(1)</script>");
+  assert.deepEqual(data.snippet.messages, ["Message::A"]);
+  assert.equal(data.shared, "abcDEF1234");
+  assert.equal(data.sitekey, "0xKEY");
+  assert.equal(data.pass, false);
+  assert.deepEqual(data.examples, [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust", slug: "async-tasks" }]);
+  // A share opens in its own theme, pinned before the page's theme script reads it.
+  assert.ok(html.includes('<html lang="en" data-theme-pin="light">'));
+  assert.ok(html.indexOf("data-theme-pin") < html.indexOf("localStorage"));
+  // Turnstile's script comes up front without a pass, and not with one.
+  assert.ok(html.includes(`<script src="${TURNSTILE_JS}" async defer></script>`));
+  const passed = inject(page, { snippet: snippet(), examples: [], sitekey: "0xKEY", pass: true, shared: null, og: OG });
+  assert.ok(!passed.includes("challenges.cloudflare.com/turnstile/v0/api.js\" async"));
+  assert.equal(playData(passed).pass, true);
+  assert.ok(!passed.includes("data-theme-pin"), "only a share pins the theme");
+  assert.throws(() => inject("<html></html>", { snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG }), /no #play-data/);
 });
 
-test("the page's inline script parses", () => {
-  const html = render({
-    snippet: snippet({ messages: ["Message::Increment", "Message::Increment"] }),
-    examples: [{ name: "Counter", code: "x", messages: ["Message::Increment"] }],
-    sitekey: "0xKEY",
-    shared: null,
-    og: OG,
-  });
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  assert.equal(scripts.length, 1);
-  assert.doesNotThrow(() => new Function(scripts[0]));
-  assert.ok(scripts[0].includes("localStorage"), "the draft is kept");
-  assert.ok(html.includes('<option value="reset">Reset</option>'));
+test("the playground's link preview is the request's, once", async () => {
+  const html = inject(await built("play.html"), { snippet: snippet(), examples: [], sitekey: null, shared: "abcDEF1234", og: OG });
+  assert.equal(html.match(/property="og:title"/g)?.length, 1);
+  assert.equal(html.match(/name="description"/g)?.length, 1);
+  assert.ok(html.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/play/abcDEF1234.png">'));
+  assert.ok(html.includes('<meta property="og:image:height" content="382">'));
+  assert.ok(html.includes('<meta name="twitter:card" content="summary_large_image">'));
 });
 
-test("the examples menu groups Rust before iced, each option by its index", () => {
-  const html = render({
-    snippet: snippet(),
-    examples: [
-      { name: "Letter histogram", code: "fn main() {}", group: "Rust" },
-      { name: "Word count", code: "fn main() {}", group: "Rust" },
-      { name: "Counter", code: "x", messages: ["Message::Increment"], group: "iced" },
-    ],
-    sitekey: null,
-    shared: null,
-    og: OG,
-  });
-  assert.ok(
-    html.includes(
-      '<option value="">Examples</option><optgroup label="Rust"><option value="0">Letter histogram</option>' +
-        '<option value="1">Word count</option></optgroup><optgroup label="iced"><option value="2">Counter</option>' +
-        '</optgroup><option value="reset">Reset</option>',
-    ),
-  );
+test("the playground page is the island, with Run in browser and Run on server, and loads no rawr-web up front", async () => {
+  const html = await built("play.html");
+  assert.ok(html.includes("<astro-island"), "the island");
+  assert.ok(html.includes(">Run on server<") && html.includes(">Run in browser<"));
+  assert.ok(!/<script[^>]*src="\/web\/rawr_web\.js"/.test(html), "rawr-web loads on demand");
+  assert.ok(!html.includes('rel="modulepreload" href="/web/'));
+  for (const href of ["/docs/play", "/bot", "/bot/invite"]) assert.ok(html.includes(`href="${href}"`), href);
+});
+
+test("every page has the site's header, with Docs or Playground current", async () => {
+  const header = (page: string) => page.match(/<header class="bar">[\s\S]*?<\/header>/)![0];
+  const landing = header(await built("index.html"));
+  assert.ok(!landing.includes("aria-current"));
+  assert.equal(header(await built("play.html")), landing.replace(`<a href="/play">`, `<a href="/play" aria-current="page">`));
+  assert.equal(header(await built("docs/run.html")), landing.replace(`<a href="/docs">`, `<a href="/docs" aria-current="true">`));
+  assert.ok(landing.includes("data-theme-switch"), "the theme's switch");
 });
 
 test("link preview tags", () => {
@@ -221,8 +222,6 @@ test("link preview tags", () => {
   assert.ok(tags.includes("&#34;hi&#34; &#60;b&#62;"));
   const unsized = ogTags({ ...OG, width: undefined, height: undefined }, escape);
   assert.ok(!unsized.includes("og:image:width"), "no size until the preview is rendered");
-  const page = render({ snippet: snippet(), examples: [], sitekey: null, shared: "abcDEF1234", og: OG });
-  assert.ok(page.includes("og:image:height"));
 });
 
 test("first line, headers, PNG size", () => {
@@ -264,7 +263,7 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   const { readFileSync } = await import("node:fs");
   const { decodeHtml, runBlocks, runnable, sha256 } = await import("../src/play.ts");
   const root = new URL("../../../../", import.meta.url);
-  const html = readFileSync(new URL("site/public/index.html", root), "utf8");
+  const html = readFileSync(new URL("site/dist/index.html", root), "utf8");
   const sources = runnable(html);
   assert.equal(sources.length, 2, "cart.rs and the counter");
   assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs", "main.rs"]);
@@ -283,7 +282,7 @@ test("the landing page's runnable sources are its files, exactly", async () => {
 test("the allow-list covers every page's run blocks, the docs included", async () => {
   const { allowList, sitePages } = await import("../allowlist.mjs");
   const { sha256 } = await import("../src/play.ts");
-  const pages = sitePages(new URL("../../../../site/public", import.meta.url).pathname);
+  const pages = sitePages(new URL("../../../../site/dist", import.meta.url).pathname);
   const { hashes, blocks } = await allowList(pages);
   const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
   assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
@@ -328,7 +327,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
 test("every link between the site's pages lands on a page and an anchor", async () => {
   const { existsSync, readFileSync } = await import("node:fs");
   const { sitePages } = await import("../allowlist.mjs");
-  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const root = new URL("../../../../site/dist/", import.meta.url).pathname;
   const pages: Map<string, string> = sitePages(root);
   // The assets binding serves /a from a.html or a/index.html, and other files as they are.
   const file = (path: string) =>
@@ -358,7 +357,7 @@ test("every link between the site's pages lands on a page and an anchor", async 
 
 test("docs pages that moved redirect to their new paths", async () => {
   const { existsSync, readFileSync } = await import("node:fs");
-  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const root = new URL("../../../../site/dist/", import.meta.url).pathname;
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   const block = source.match(/export const DOCS_MOVED[^{]*\{([^}]*)\}/);
   assert.ok(block);
@@ -386,11 +385,10 @@ test("docs pages that moved redirect to their new paths", async () => {
   }
 });
 
-test("docs.js sends a moved anchor to a page and an id that exist", async () => {
+test("a moved anchor goes to a page and an id that exist", async () => {
   const { existsSync, readFileSync } = await import("node:fs");
-  const root = new URL("../../../../site/public/", import.meta.url).pathname;
-  const script = readFileSync(root + "docs/docs.js", "utf8");
-  const moved: Record<string, Record<string, string>> = JSON.parse(script.match(/const MOVED = (\{.*\});/)![1]);
+  const root = new URL("../../../../site/dist/", import.meta.url).pathname;
+  const { MOVED: moved } = await import("../../../../site/src/lib/moved.ts");
   const page = (path: string) =>
     [`${path.slice(1)}.html`, `${path.slice(1)}/index.html`].find((candidate) => existsSync(root + candidate));
   const broken: string[] = [];
@@ -454,13 +452,12 @@ test("a ?play line's options read as the bot reads them", async () => {
 });
 
 /**
- * Load the site's run.js over a stand-in DOM that holds one run block, click
+ * Run the site's run.ts over a stand-in DOM that holds one run block, click
  * its Run button, and return the request it sends. With `edit`, the code is
  * edited first, so the request goes to /play/render.
  */
 async function runJs(block: { name: string; code: string; play: string | null }, edit = ""): Promise<{ url: string; body: any }> {
-  const { readFileSync } = await import("node:fs");
-  const script = readFileSync(new URL("../../../../site/public/run.js", import.meta.url), "utf8");
+  const { setup } = await import("../../../../site/src/scripts/run.ts");
   const element = (props: Record<string, unknown> = {}): any => {
     const listeners: Record<string, ((event: unknown) => void)[]> = {};
     const attributes: Record<string, string> = {};
@@ -508,7 +505,7 @@ async function runJs(block: { name: string; code: string; play: string | null },
     sent({ url, body: JSON.parse(init?.body ?? "null") });
     return Response.json({ kind: "text", status: 0, output: [] });
   };
-  new Function("document", "window", "fetch", script)(document, {}, fetch);
+  setup({ document, window: {}, fetch } as any);
   if (edit) {
     source.innerText = block.code + edit;
     source.fire("input");
@@ -517,11 +514,11 @@ async function runJs(block: { name: string; code: string; play: string | null },
   return request;
 }
 
-test("run.js sends a block's ?play options, and /play/run allows that exact snippet", async () => {
+test("run.ts sends a block's ?play options, and /play/run allows that exact snippet", async () => {
   const { readFileSync } = await import("node:fs");
   const { allowList, sitePages } = await import("../allowlist.mjs");
   const { runBlocks, sha256 } = await import("../src/play.ts");
-  const root = new URL("../../../../site/public/", import.meta.url);
+  const root = new URL("../../../../site/dist/", import.meta.url);
   const html = readFileSync(new URL("docs/play/index.html", root), "utf8");
   const app = runBlocks(html).find((block) => block.name === "increment.rs")!;
   // The page shows the bot's ?play line, and the block sends the same options.
@@ -575,13 +572,6 @@ test("landing runs are limited lightly per IP", async () => {
   assert.equal(limiter.take("other", 2_000), 0);
 });
 
-test("the playground shows text results as a terminal", () => {
-  const page = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
-  assert.ok(page.includes('const terminal = (result)'));
-  assert.ok(page.includes('type.startsWith("application/json")'));
-  assert.ok(page.includes("ignored for programs without iced"));
-});
-
 test("a share preview asks for a still image", () => {
   const body = JSON.parse(stillBody(JSON.stringify({ code: "x", messages: ["Message::A"] })));
   assert.deepEqual(body, { code: "x", messages: ["Message::A"], still: true });
@@ -596,144 +586,6 @@ test("a render request names its caller for the animation allowance", async () =
   assert.equal(await request.text(), '{"code":"x"}');
 });
 
-test("the page offers Run in browser, the default, and Run on server; rawr-web loads once the page is up", () => {
-  const html = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
-  assert.match(html, /<input type="radio" name="where" value="server"><span>Run on server<\/span>/);
-  assert.match(html, /<input type="radio" name="where" value="browser" checked><span>Run in browser<\/span>/);
-  // Nothing loads the module in the HTML: the inline script imports it after the page loads.
-  assert.ok(!html.includes(`<script type="module"`));
-  assert.ok(!html.includes(`src="${WEB_MODULE}"`));
-  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
-  assert.ok(script.includes(`import(${JSON.stringify(WEB_MODULE)})`));
-  assert.ok(script.includes(`addEventListener("load", preload`));
-  // The server runs what the browser cannot.
-  for (const reason of ["rawr-web did not load", "this browser has no WebGL2 or WebGPU", "rawr-web cannot run this yet"]) {
-    assert.ok(script.includes(reason), reason);
-  }
-  assert.ok(!script.includes("tokio's timers"), "an async main runs in the browser");
-});
-
-test("the playground's header is the site's, with Playground current, and its own links in the footer", async () => {
-  const html = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
-  const site = (await import("node:fs")).readFileSync(new URL("../../../../site/public/index.html", import.meta.url), "utf8");
-  const header = (page: string) => page.match(/<header class="bar">[\s\S]*?<\/header>/)![0];
-  assert.equal(header(html), header(site).replace(`<a href="/play">`, `<a href="/play" aria-current="page">`));
-  const footer = html.match(/<footer>[\s\S]*?<\/footer>/)![0];
-  for (const href of ["/docs/play", "/bot", "/bot/invite"]) assert.ok(footer.includes(`href="${href}"`), href);
-});
-
-/** The page's inline script against a stand-in DOM, with `web` as the loaded rawr-web. */
-function standIn(options: { code?: string; web?: Record<string, unknown> | null; gpu?: boolean; url?: string; shared?: string | null; examples?: Example[] } = {}) {
-  const { code = "", web = null, gpu = true, url = "http://localhost/play", shared = null, examples = [] } = options;
-  const html = render({ snippet: snippet({ code }), examples, sitekey: null, shared, og: OG });
-  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0];
-  const data = html.match(/<script type="application\/json" id="example-data">([\s\S]*?)<\/script>/)![1];
-  const nodes: Record<string, any> = {};
-  const listen = () => ({ on: {} as Record<string, Function[]>, addEventListener(type: string, f: Function) { (this.on[type] ??= []).push(f); } });
-  const node = (id: string, value = "") => (nodes[id] ??= {
-    id, value, textContent: id === "msghint" ? "(sent before preview)" : "", children: [] as any[], style: {}, dataset: {},
-    classList: { toggle() {}, add() {} }, ...listen(), append(...c: any[]) { this.children.push(...c); },
-    replaceChildren(...c: any[]) { this.children = c; },
-  });
-  node("code", code); node("messages"); node("size");
-  node("example-data").textContent = data;
-  // Radios in one group: checking one unchecks the other.
-  const where: Record<"server" | "browser", any> = {} as any;
-  for (const value of ["server", "browser"] as const) {
-    let on = value === "browser";
-    where[value] = { value, ...listen(), get checked() { return on; },
-      set checked(next: boolean) { on = next; if (next) where[value === "server" ? "browser" : "server"].checked = false; } };
-  }
-  const fetched: string[] = [];
-  const document = {
-    readyState: "loading",
-    getElementById: node,
-    createElement: (tag: string) => tag === "canvas" ? { getContext: () => (gpu ? {} : null) } : { ...node("new-" + Math.random()), tag },
-    querySelectorAll: (q: string) => q.includes("where") ? Object.values(where) : [],
-    querySelector: (q: string) => q === "input[name=where]:checked" ? (where.browser.checked ? where.browser : where.server)
-      : q === "input[name=where][value=server]" ? where.server : { value: "dark" },
-    addEventListener() {}, head: { append() {} },
-  };
-  const loads: string[] = [];
-  const load = async (url: string) => { loads.push(url); if (!web) throw new Error("404"); return { default: async () => {}, ...web }; };
-  let fetch: Function = async (url: string) => { fetched.push(url); return { ok: true, status: 200, headers: new Map([["content-type", "application/json"]]), json: async () => ({ status: 0, output: [{ stream: "stdout", text: "from the server\n" }] }) }; };
-  const addresses: string[] = [];
-  const parsed = new URL(url);
-  const location = { pathname: parsed.pathname, search: parsed.search, hash: parsed.hash, origin: parsed.origin };
-  const window = listen();
-  const run = new Function("document", "localStorage", "fetch", "navigator", "performance", "history", "location", "window", "loadModule",
-    script.replace(/import\(/, "loadModule("));
-  const navigator: any = {};
-  run(document, { getItem: () => null, setItem() {} }, (...args: unknown[]) => fetch(...args), navigator, { now: () => 0 }, { replaceState: (_: unknown, __: string, to: string) => addresses.push(to) }, location, window, load);
-  const choose = (value: "server" | "browser") => {
-    where[value].checked = true;
-    for (const f of where[value].on.change ?? []) f();
-  };
-  return { nodes, where, loads, fetched, addresses, window, choose,
-    setFetch: (next: Function) => { fetch = next; },
-    clipboard: (write: (text: string) => void) => { navigator.clipboard = { writeText: async (text: string) => write(text) }; } };
-}
-
-async function browserRun(code: string, web: Record<string, unknown> | null, gpu = true) {
-  const page = standIn({ code, web, gpu });
-  await page.nodes.run.onclick();
-  return { out: page.nodes.out, status: page.nodes.status.textContent, loads: page.loads, fetched: page.fetched, where: page.where };
-}
-
-test("Run in browser runs a plain program in rawr-web and shows its output as the server's", async () => {
-  const web = { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 3, output: [{ stream: "stdout", text: "hi\n" }] }) };
-  const { out, status, loads, fetched } = await browserRun("println!(\"hi\")", web);
-  assert.deepEqual(loads, [WEB_MODULE]);
-  assert.deepEqual(fetched, [], "the server is not asked");
-  assert.equal(out.children[0].className, "term");
-  assert.match(status, /in the browser · exit 3$/);
-});
-
-test("Run in browser mounts an iced snippet on a canvas holder and runs it there", async () => {
-  const calls: unknown[][] = [];
-  const web = { kind: () => "iced", run: (...args: unknown[]) => { calls.push(args); } };
-  const { out, status, fetched } = await browserRun("text(\"hi\")", web);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], "text(\"hi\")");
-  assert.equal(out.children[0].className, "live");
-  assert.ok(out.children[0].innerHTML.includes(`id="iced"`));
-  assert.match(status, /· live$/);
-  assert.deepEqual(fetched, []);
-});
-
-test("Run in browser falls back to the server when the module does not load or cannot draw", async () => {
-  const failed = await browserRun("1 + 2", null);
-  assert.deepEqual(failed.fetched, ["/play/render"]);
-  assert.match(failed.status, /on the server: rawr-web did not load$/);
-  assert.ok(failed.where.server.checked, "the choice goes back to the server");
-  const iced = await browserRun("text(\"hi\")", { kind: () => "iced", run() { throw new Error("not called"); } }, false);
-  assert.deepEqual(iced.fetched, ["/play/render"]);
-  assert.match(iced.status, /no WebGL2 or WebGPU$/);
-  const later = await browserRun("1 + 2", { kind: () => "server" });
-  assert.deepEqual(later.fetched, ["/play/render"]);
-  assert.match(later.status, /rawr-web cannot run this yet$/);
-});
-
-test("Run in browser runs an async main in rawr-web and shows its output as it is written", async () => {
-  let seen: any[] = [];
-  const page = standIn({ code: "#[tokio::main]\nasync fn main() {}", web: {
-    kind: () => "async",
-    run_async: async (_code: string, write: (stream: string, text: string) => void) => {
-      write("stdout", "fetch at 100 ms\n");
-      // The page shows a chunk the moment it is written.
-      seen = page.nodes.out.children[0].children.map((span: any) => span.textContent);
-      write("stdout", "3 jobs in 300 ms\n");
-      return JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "fetch at 100 ms\n3 jobs in 300 ms\n" }] });
-    },
-  } });
-  await page.nodes.run.onclick();
-  assert.deepEqual(seen, ["fetch at 100 ms\n"]);
-  assert.deepEqual(page.fetched, [], "the server is not asked");
-  assert.equal(page.nodes.out.children[0].className, "term");
-  assert.equal(page.nodes.out.children[0].children[0].textContent, "fetch at 100 ms\n3 jobs in 300 ms\n");
-  assert.match(page.nodes.status.textContent, /in the browser$/);
-});
-
 test("example slugs are stable, readable and unique", async () => {
   assert.equal(slug("Async tasks"), "async-tasks");
   assert.equal(slug("Counter"), "counter");
@@ -745,77 +597,6 @@ test("example slugs are stable, readable and unique", async () => {
   assert.ok(slugs.length > 20);
   assert.ok(slugs.every((s) => /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s)));
   assert.equal(new Set(slugs).size, slugs.length);
-});
-
-const EXAMPLE_SET: Example[] = [
-  { name: "Async tasks", code: "async fn main() {}", group: "Rust" },
-  { name: "Counter", code: "counter code", messages: ["Message::Increment"], group: "iced" },
-];
-
-test("the address restores an example from its hash and the server from ?run=server", () => {
-  const page = standIn({ url: "http://localhost/play?run=server#counter", examples: EXAMPLE_SET });
-  assert.equal(page.nodes.code.value, "counter code");
-  assert.equal(page.nodes.messages.value, "Message::Increment");
-  assert.ok(page.where.server.checked && !page.where.browser.checked);
-  assert.deepEqual(page.addresses, ["/play?run=server#counter"]);
-  // The browser is the default: ?run=browser is dropped, and the hash kept.
-  const browser = standIn({ url: "http://localhost/play?run=browser#async-tasks", examples: EXAMPLE_SET });
-  assert.equal(browser.nodes.code.value, "async fn main() {}");
-  assert.ok(browser.where.browser.checked);
-  assert.deepEqual(browser.addresses, ["/play#async-tasks"]);
-  // A bare address writes nothing.
-  assert.deepEqual(standIn({ examples: EXAMPLE_SET }).addresses, []);
-});
-
-test("a share's code wins over an example's hash, which the share page drops", () => {
-  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server#counter", shared: "abcDEF1234", examples: EXAMPLE_SET });
-  assert.equal(page.nodes.code.value, "shared code");
-  assert.deepEqual(page.addresses, ["/play/abcDEF1234?run=server"]);
-});
-
-test("a share's link keeps ?run=server and drops the example's hash; opening it restores the server", async () => {
-  const copied: string[] = [];
-  const page = standIn({ code: "x", url: "http://localhost/play?run=server#counter", examples: EXAMPLE_SET });
-  page.clipboard((text: string) => copied.push(text));
-  page.setFetch(async () => ({ ok: true, json: async () => ({ id: "abcDEF1234" }) }));
-  await page.nodes.share.onclick();
-  assert.equal(page.addresses.at(-1), "/play/abcDEF1234?run=server");
-  assert.deepEqual(copied, ["http://localhost/play/abcDEF1234?run=server"]);
-  const opened = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server", shared: "abcDEF1234" });
-  assert.ok(opened.where.server.checked);
-  assert.equal(opened.nodes.code.value, "shared code");
-});
-
-test("choosing an example, the run mode and an edit keep the address with replaceState", async () => {
-  const page = standIn({ code: "x", url: "http://localhost/play/abcDEF1234", shared: "abcDEF1234", examples: EXAMPLE_SET, web: { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) } });
-  const target = { value: "1" };
-  page.nodes.examples.onchange({ target });
-  assert.equal(page.nodes.code.value, "counter code");
-  assert.equal(page.addresses.at(-1), "/play#counter");
-  page.choose("server");
-  assert.equal(page.addresses.at(-1), "/play?run=server#counter");
-  // An edit drops the hash: the code is no longer the example's.
-  for (const f of page.nodes.code.on.input) f();
-  assert.equal(page.addresses.at(-1), "/play?run=server");
-  page.choose("browser");
-  assert.equal(page.addresses.at(-1), "/play");
-  await new Promise((done) => setTimeout(done, 10));
-});
-
-test("in the browser, rawr-web loads once the page has loaded, and a restored example runs", async () => {
-  const ran: string[] = [];
-  const web = { kind: () => "text", run_text: (code: string) => { ran.push(code); return JSON.stringify({ kind: "text", status: 0, output: [] }); } };
-  const page = standIn({ url: "http://localhost/play#async-tasks", examples: EXAMPLE_SET, web });
-  assert.deepEqual(page.loads, [], "nothing loads before the page has");
-  for (const f of page.window.on.load) f();
-  await new Promise((done) => setTimeout(done, 10));
-  assert.deepEqual(page.loads, [WEB_MODULE]);
-  assert.deepEqual(ran, ["async fn main() {}"]);
-  // On the server, nothing loads.
-  const server = standIn({ url: "http://localhost/play?run=server", web });
-  for (const f of server.window.on.load) f();
-  await new Promise((done) => setTimeout(done, 10));
-  assert.deepEqual(server.loads, []);
 });
 
 test("rawr-web's files are served with types the edge compresses", () => {

@@ -62,8 +62,18 @@ pub fn run(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
-    session(target, graph, lifecycle, profile, None)
-        .map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart))
+    let ran = session(target, graph, lifecycle, profile, None);
+    events(&ran);
+    ran.map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart))
+}
+
+/// Tell a supervising `rawr mcp` how a session ended (D537.4).
+fn events(ran: &Result<Ended, diagnostic::Report>) {
+    match ran {
+        Ok(Ended::Exit(code)) => rawr_cli::events::ended(*code),
+        Ok(Ended::Restart) => {}
+        Err(report) => rawr_cli::events::failed(report),
+    }
 }
 
 /// `rawr run` of a program (D500.1): it runs with `arguments` after its
@@ -94,6 +104,7 @@ pub fn run_program(
     let mut ran = session(target, graph, lifecycle, profile, Some(&program));
     loop {
         let restart = matches!(ran, Ok(Ended::Restart));
+        events(&ran);
         if !restart {
             rawr_cli::cargo::after_run(cargo.take());
             match ran {
@@ -179,10 +190,17 @@ fn session(
     let _socket = profile
         .socket(&target_path)
         .map(rawr_import::process::remove_on_exit);
+    // A `rawr mcp` that started this run hears what happens, and its death
+    // ends the run (D537.3–4).
+    rawr_cli::events::watch_parent(|| drop(rawr_import::process::retire_owned()));
+    if rawr_cli::events::supervised() {
+        rawr_import::progress::listen(rawr_cli::events::building);
+    }
     rawr_import::progress::begin(&target_path);
     let initial = initial_watched_program(target, graph, &target_path, lifecycle, profile, program);
     rawr_import::progress::finish(initial.is_ok());
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
+    rawr_cli::events::running();
 
     let mut refresh_at = Instant::now();
     let mut refresh_required = false;
@@ -246,15 +264,19 @@ fn session(
                     });
                 match prepared {
                     Ok(prepared) => {
+                        let reason = manifests.restart_line(&prepared.manifests);
                         rawr_import::process::say(format_args!(
-                            "rawr: {}; restarting the program",
-                            manifests.restart_line(&prepared.manifests)
+                            "rawr: {reason}; restarting the program"
                         ));
+                        rawr_cli::events::restarting(&reason);
                         return Ok(Ended::Restart);
                     }
                     // Latest wins: a newer save reports for itself.
                     Err(_) if adapter.deadline().is_some() => {}
-                    Err(report) => rawr_import::process::say(diagnostic::render(&report)),
+                    Err(report) => {
+                        rawr_import::process::say(diagnostic::render(&report));
+                        rawr_cli::events::failed(&report);
+                    }
                 }
                 // A failed save is reported once.
                 started_from = changed;
@@ -364,6 +386,11 @@ fn session(
             // Capture before the full path's final current validation, never
             // after adoption where an intervening native event could disappear.
             let next_native_baseline = adapter.native_baseline();
+            // A hot commit swaps; a new runner restarts the program.
+            let swapped = matches!(
+                preparation,
+                rawr_import::process::hot::Preparation::Prepared(_)
+            );
             let admitted = match preparation {
                 rawr_import::process::hot::Preparation::Prepared(prepared) => lane
                     .revalidate_compile(prepared)
@@ -389,6 +416,7 @@ fn session(
                         rawr_import::process::say(format_args!(
                             "rawr: {reason}; restarting the program"
                         ));
+                        rawr_cli::events::restarting(&reason);
                         announced = Some(next_manifests.clone());
                     }
                     let (request, snapshot) = miss.into_parts();
@@ -419,6 +447,11 @@ fn session(
             };
             match admitted {
                 Ok(crate::native::Watched::Installed) => {
+                    if swapped {
+                        rawr_cli::events::swapped();
+                    } else {
+                        rawr_cli::events::running();
+                    }
                     manifests = next_manifests;
                     native_baseline = next_native_baseline;
                     native_inputs = None;
@@ -738,6 +771,7 @@ fn settle_failure(
 }
 
 fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diagnostic::Report> {
+    rawr_cli::events::failed(&report);
     let rendered = diagnostic::render(&report);
     rawr_import::process::say(format_args!(
         "Rawr imported owner kept the last good generation:\n{rendered}"

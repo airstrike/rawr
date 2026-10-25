@@ -1,0 +1,26 @@
+<meta name="description" content="Saving a marked file swaps its new code into the running iced app. The app keeps its state when the new code allows it.">
+<article>
+<h1>Reload</h1>
+<p class="lede">Saving a marked file swaps its new code into the running iced app. The app keeps its state when the new code allows it.</p>
+<h2 id="hot-reload">Saving a marked file</h2>
+<p>A save checks the new code and swaps it in with no native build. In a gallery app on an Apple Silicon Mac, that took about 0.2&nbsp;s.</p>
+<p><code>rawr run</code> also runs <code>cargo check</code> in the background. Its errors show in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
+
+<h2 id="state">What a reload keeps</h2>
+<p>A change to the state&rsquo;s own types can make the old state incompatible. Then the app boots again.</p>
+<p>A value of an imported type in the State survives an edit to a marked file. An edit to the dependency&rsquo;s Rust code starts a new app from its default State. The window names the imported type that did not carry over.</p>
+
+<h2 id="failed">A save that fails the check</h2>
+<p>The last good code keeps running. A bar in the window shows the error. Its buttons retry, copy the error or reset the app.</p>
+
+<h2 id="native">Native edits</h2>
+<p>Saving a native module or a dependency&rsquo;s source rebuilds it with Cargo. The app reloads when the build finishes. In the same gallery app on a busy Apple Silicon Mac, that took about 8&nbsp;s.</p>
+
+<h2 id="tasks">Tasks and async code</h2>
+<p>A reload cancels the running tasks. Their handles report <code>is_aborted()</code>, and the status line says so. A suspended async body never goes on with the new code.</p>
+<p>The State keeps what it held. A download the reload cancelled still shows as running until a message changes it.</p>
+<p>A reload drops the output of a <code>spawn_blocking</code> closure that is still running. It can&rsquo;t stop the thread, which ends when the closure returns.</p>
+
+<h2 id="main-statements">Statements before the app</h2>
+<p><code>main</code> may run statements such as <code>tracing_subscriber::fmt::init();</code> before the app starts. They run once, when <code>rawr run</code> starts. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so.</p>
+</article>

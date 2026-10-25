@@ -1,0 +1,129 @@
+<meta name="description" content="Generics in rawr: generic functions and types, bounds, trait objects, your own iterators and operator traits.">
+<article>
+<h1>Generics</h1>
+<p class="lede">Functions, structs, enums and impl blocks can be generic.</p>
+<h2 id="bounds">Bounds</h2>
+<p>Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check, as in rustc. Operator traits from <code>std::ops</code>, such as <code>Add</code>, work.</p>
+<div class="block">
+  <div class="file"><b>generics.rs</b></div>
+  <pre><code data-lang="rust" data-run="generics.rs" id="src-generics">use std::fmt;
+use std::ops::Add;
+
+struct Stack&lt;T&gt; {
+    items: Vec&lt;T&gt;,
+}
+
+impl&lt;T: Clone&gt; Stack&lt;T&gt; {
+    fn new() -&gt; Self {
+        Stack { items: Vec::new() }
+    }
+
+    fn push(&amp;mut self, item: T) {
+        self.items.push(item);
+    }
+
+    fn top(&amp;self) -&gt; Option&lt;T&gt; {
+        self.items.last().cloned()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Meters(f64);
+
+impl Add for Meters {
+    type Output = Meters;
+
+    fn add(self, other: Meters) -&gt; Meters {
+        Meters(self.0 + other.0)
+    }
+}
+
+impl fmt::Display for Meters {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter) -&gt; fmt::Result {
+        write!(f, "{} m", self.0)
+    }
+}
+
+fn largest&lt;T: PartialOrd + Copy&gt;(items: &amp;[T]) -&gt; T {
+    let mut max = items[0];
+    for &amp;item in items {
+        if item &gt; max {
+            max = item;
+        }
+    }
+    max
+}
+
+fn main() {
+    let mut stack = Stack::new();
+    stack.push(Meters(1.5) + Meters(2.0));
+    println!("{}", stack.top().unwrap());
+    println!("{}", largest(&amp;[3, 9, 2]));
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rs" hidden></button><b>rawr run generics.rs</b><span id="out-generics" aria-live="polite">3.5 m
+9</span></div>
+</div>
+<h2 id="dyn">Trait objects</h2>
+<p><code>Box&lt;dyn Trait&gt;</code> holds any type that implements the trait. <code>&amp;dyn Trait</code> arguments aren&rsquo;t supported yet.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="shapes.rs" id="src-shapes">trait Shape {
+    fn area(&amp;self) -&gt; f64;
+}
+
+struct Square(f64);
+struct Circle(f64);
+
+impl Shape for Square {
+    fn area(&amp;self) -&gt; f64 {
+        self.0 * self.0
+    }
+}
+
+impl Shape for Circle {
+    fn area(&amp;self) -&gt; f64 {
+        3.14 * self.0 * self.0
+    }
+}
+
+let shapes: Vec&lt;Box&lt;dyn Shape&gt;&gt; = vec![Box::new(Square(2.0)), Box::new(Circle(1.0))];
+let total: f64 = shapes.iter().map(|s| s.area()).sum();
+println!("{total}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-shapes" data-out="out-shapes" aria-label="Run shapes.rs" hidden></button><b>rawr run shapes.rs</b><span id="out-shapes" aria-live="polite">7.140000000000001</span></div>
+</div>
+<h2 id="iterator"><code>Iterator</code></h2>
+<p>A type that implements <code>Iterator</code> gets <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="countdown.rs" id="src-countdown">struct Countdown(u32);
+
+impl Iterator for Countdown {
+    type Item = u32;
+
+    fn next(&amp;mut self) -&gt; Option&lt;u32&gt; {
+        if self.0 == 0 {
+            return None;
+        }
+        self.0 -= 1;
+        Some(self.0)
+    }
+}
+
+let v: Vec&lt;u32&gt; = Countdown(3).collect(); // [2, 1, 0]
+println!("{v:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-countdown" data-out="out-countdown" aria-label="Run countdown.rs" hidden></button><b>rawr run countdown.rs</b><span id="out-countdown" aria-live="polite">[2, 1, 0]</span></div>
+</div>
+<h2 id="from-iterator"><code>FromIterator</code></h2>
+<p>A type that implements <code>FromIterator</code> can be built by <code>collect()</code>.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="bag.rs" id="src-bag">struct Bag(Vec&lt;i64&gt;);
+
+impl FromIterator&lt;i64&gt; for Bag {
+    fn from_iter&lt;I: IntoIterator&lt;Item = i64&gt;&gt;(iter: I) -&gt; Self {
+        Bag(iter.into_iter().collect())
+    }
+}
+
+let bag: Bag = (1..4).collect();
+println!("{:?}", bag.0);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-bag" data-out="out-bag" aria-label="Run bag.rs" hidden></button><b>rawr run bag.rs</b><span id="out-bag" aria-live="polite">[1, 2, 3]</span></div>
+</div>
+</article>

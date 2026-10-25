@@ -1,0 +1,349 @@
+<main>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1><span class="word">rawr</span><span class="sub">is rust augmented with rust</span></h1>
+      <p class="tag">A Rust interpreter for your dev builds.</p>
+      <p class="lede">Put <code>// rawr</code> on the first line of a file in your Cargo crate. <code>rawr run</code> checks the marked files and then interprets them. Cargo compiles the same crate for release.</p>
+      <p class="lede">rawr can also <a href="#embed">run Rust scripts inside your app</a>.</p>
+      <div class="actions">
+        <a class="btn go" href="/docs/start">Get started</a>
+        <a class="btn" href="/play">Try it in the browser</a>
+      </div>
+    </div>
+
+    <figure class="compare intro" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
+      <div class="tabs">
+        <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-cart">cargo run</button>
+        <span class="hint">drag the divider</span>
+        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">rawr run</button>
+      </div>
+      <div class="scroller">
+      <div class="stage" id="stage-cart">
+        <div class="pane rs" aria-hidden="true">
+          <div class="file"><b>src/main.rs</b><span>compiled by Cargo</span></div>
+          <pre><code data-lang="rust">// rawr
+enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+          <div class="run"><b>cargo run</b><span>total: 27</span></div>
+        </div>
+        <div class="pane rawr">
+          <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
+          <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
+enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+          <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run this file on rawr's server" hidden></button><b>rawr run</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+        </div>
+        <div class="divider">
+          <span class="hit" aria-hidden="true"></span>
+          <button type="button" class="grip" role="slider" aria-label="Show more of the file compiled by Cargo or of the file interpreted by rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% cargo run, 50% rawr run" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+        </div>
+      </div>
+      </div>
+      <figcaption>
+        Both sides show the same <code>src/main.rs</code>. Cargo compiles it and rawr interprets it. Both print <code>total: 27</code>.
+        <small>Edit the file and press run. It runs on rawr&rsquo;s server.</small>
+      </figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="dev">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>Interpret your crate while you develop</h2>
+      <p><code>rawr run</code> takes a Cargo crate whose root file starts with <code>// rawr</code>, or a single <code>.rs</code> file. It checks names, types and traits first. A program that fails the check doesn&rsquo;t start.</p>
+      <p><code>rawr check</code> runs the same check without running the program. Then it runs <code>cargo check</code>, so rustc has the final word on whether the code is valid Rust.</p>
+      <p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust, and so is every crate in <code>[dependencies]</code>. With <a href="/docs/imports">rawr-import</a> installed, <code>rawr run</code> compiles them with Cargo and the marked code calls them.</p>
+      <p>The marker is a comment, so <code>cargo build --release</code> compiles every file and ships no interpreter.</p>
+      <p>The crate root may stay native and call marked modules. A save reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says how.</p>
+      <p>A <a href="/docs/ratatui">ratatui</a> app works this way with no extra crate. A save repaints the terminal with the app&rsquo;s state kept, and rawr leaves the terminal as it found it.</p>
+    </div>
+    <div class="stack" id="install">
+      <div class="cmds">
+        <div class="cmd"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
+        <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
+      </div>
+      <div class="block">
+        <div class="file"><b>hello/src/main.rs</b><span>written by rawr new</span></div>
+        <div class="run"><small>on your machine</small><b>rawr run</b><span>1. Hello, rawr!
+2. Hello, rawr!
+3. Hello, rawr!</span></div>
+      </div>
+      <div class="block diag">
+        <div class="file"><b>rawr run</b><span>exit 1</span></div>
+        <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `cost` found for `Item` in the current scope</span>
+ <span class="c">--&gt;</span> /home/you/cart/src/main.rs:23:21-23:25
+ <span class="c">23 |</span>         sum += item.cost();
+    <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
+        <p class="fig-note">Change <code>item.price()</code> to <code>item.cost()</code> in the cart above. The error points to the line, and nothing runs. Then <code>cargo check</code> reports rustc&rsquo;s version of the same error.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="iced">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>iced apps that reload when you save</h2>
+      <p>With the rawr-iced extension, <code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles the rest of the app.</p>
+      <p>Saving a marked file swaps the new code into the running app. The app keeps its state when the new code is compatible with it. Otherwise it starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the app.</p>
+      <p>In RawrGallery, a gallery app built with rawr-iced, an edit to a marked file was live in about 0.2&nbsp;s on an Apple Silicon Mac. An edit to a native module or a dependency is rebuilt by Cargo first, which took about 8&nbsp;s there.</p>
+      <div class="actions"><a class="btn" href="/docs/iced">Set up rawr-iced</a></div>
+    </div>
+      <figure class="compare" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
+        <div class="tabs">
+          <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-counter">cargo run</button>
+          <span class="hint">drag the divider</span>
+          <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-counter">rawr run</button>
+        </div>
+        <div class="scroller">
+        <div class="stage" id="stage-counter">
+          <div class="pane rs" aria-hidden="true">
+            <div class="file"><b>src/main.rs</b><span>compiled by Cargo</span></div>
+            <pre><code data-lang="rust">// rawr
+use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+            <div class="run"><b>cargo run</b><span class="quiet">(opens a window)</span></div>
+          </div>
+          <div class="pane rawr">
+            <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
+            <pre><code data-lang="rust" data-run="main.rs" id="src-counter">// rawr
+use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+            <div class="run"><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-alt="Counter preview with an Increment button, the number 0 and a Decrement button" aria-label="Render the counter's first frame on rawr's server" hidden></button><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
+          </div>
+          <div class="divider">
+            <span class="hit" aria-hidden="true"></span>
+            <button type="button" class="grip" role="slider" aria-label="Show more of the file compiled by Cargo or of the file interpreted by rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% cargo run, 50% rawr run" aria-controls="stage-counter"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+          </div>
+        </div>
+        </div>
+        <figcaption>
+          The same counter runs with rawr and compiles with Cargo.
+          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line. The run button renders its first frame on rawr&rsquo;s server.</small>
+        </figcaption>
+      </figure>
+  </div>
+</section>
+
+<section id="embed">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>Let your users change your app in Rust</h2>
+      <p>Your app adds the <code>rawr</code> crate and loads rules its users write in Rust, without rebuilding it.</p>
+      <p>Put <code>#[rawr::export]</code> on your own types, and the rules can use them. <code>Engine::load</code> checks the rules against the exports. <code>script.func</code> gives a typed handle to a function the rules define, and <code>script.reload()</code> picks up an edit.</p>
+      <p>Here the interpreter ships in your release build.</p>
+      <div class="actions"><a class="btn" href="/docs/embedding">Embed rawr</a></div>
+    </div>
+    <div class="stack" id="hosts">
+      <div class="block">
+        <div class="file"><b>src/main.rs</b><span>your app</span></div>
+        <pre><code data-lang="rust">use rawr::{Engine, Exports};
+
+#[derive(Clone)]
+#[rawr::export]
+pub struct Transaction {
+    pub payee: String,
+    pub amount: f64,
+}
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let mut bank = Exports::new("bank");
+    bank.add::&lt;Transaction&gt;();
+    let mut engine = Engine::new();
+    engine.export(bank)?;
+
+    let script = engine.load("rules.rs")?;
+    let category = script.func::&lt;(Transaction,), Option&lt;String&gt;&gt;("category")?;
+    let tx = Transaction { payee: "Blue Bottle Coffee".into(), amount: -4.5 };
+    println!("{:?}", category.call(tx)?);
+    Ok(())
+}</code></pre>
+      </div>
+      <div class="block">
+        <div class="file"><b>rules.rs</b><span>your user&rsquo;s rules</span></div>
+        <pre><code data-lang="rust">use bank::Transaction;
+
+fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
+    if tx.payee.contains("Coffee") { Some("coffee".into()) } else { None }
+}</code></pre>
+        <div class="run"><small>on your machine</small><b>cargo run</b><span>Some("coffee")</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>Run Rust in your browser</h2>
+      <p>The playground runs Rust code and shows its output. It renders iced code as an image or an animation.</p>
+      <p>The <code class="nw">?play</code> bot does the same in Discord. Post <code class="nw">?play</code> above a Rust code block in a channel where the bot is turned on.</p>
+      <div class="actions">
+        <a class="btn go" href="/play">Open the playground</a>
+        <a class="btn" href="/docs/play/discord">Use rawr in Discord</a>
+      </div>
+    </div>
+    <div class="pair">
+      <figure class="shot">
+        <img src="img/counter.png" width="320" height="340" loading="lazy" alt="An iced counter showing 1 between Increment and Decrement buttons">
+      </figure>
+      <div class="block">
+        <div class="file"><b>Discord</b></div>
+        <pre><code><span class="k">?play</span> 160x170 msg=Message::Increment
+<span class="c">```rust</span>
+<span class="c">// the counter from above</span>
+<span class="c">```</span></code></pre>
+        <p class="fig-note">The counter after one <code>Increment</code> message.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>Pre-alpha</h2>
+    </div>
+    <div>
+      <p class="status">rawr supports part of Rust. The <a href="/docs/reference/overview">API Reference</a> lists what works, what is missing and where rawr still differs from Rust.</p>
+      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
+      <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, and marked ratatui code that draws on the <code>Frame</code> itself.</p>
+      <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
+    </div>
+  </div>
+</section>
+</main>

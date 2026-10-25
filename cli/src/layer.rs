@@ -44,6 +44,22 @@ pub struct Manifest {
     pub templates: Vec<String>,
     /// The commands it adds to `rawr`.
     pub commands: Vec<Provided>,
+    /// The tools it adds to `rawr mcp`, each run as
+    /// `rawr-<name> mcp call <tool>` (see [`crate::mcp`]).
+    pub tools: Vec<Tool>,
+}
+
+/// A tool an extension adds to `rawr mcp`, declared in its manifest as a
+/// `[[tool]]` table with a `name`, a `description` and an `input` JSON
+/// Schema written as a JSON string.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Tool {
+    /// The tool's name.
+    pub name: String,
+    /// When an agent uses it.
+    pub description: String,
+    /// The JSON Schema of its arguments.
+    pub input: serde_json::Value,
 }
 
 /// A command a binary adds to `rawr`: a first word, and a flag that must
@@ -124,6 +140,20 @@ impl Manifest {
                     }
                 })
                 .collect(),
+            tools: match table.get("tool") {
+                None => Vec::new(),
+                Some(item) => item
+                    .as_array_of_tables()?
+                    .iter()
+                    .map(|tool| {
+                        Some(Tool {
+                            name: tool.get("name")?.as_str()?.to_owned(),
+                            description: tool.get("description")?.as_str()?.to_owned(),
+                            input: serde_json::from_str(tool.get("input")?.as_str()?).ok()?,
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+            },
         })
     }
 
@@ -572,6 +602,24 @@ mod tests {
         std::fs::remove_dir(&directory).unwrap();
         assert_eq!(answer, Some(None));
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_manifest_declares_tools_with_json_schemas() {
+        let manifest = Manifest::parse(
+            "format = 1\nname = \"rawr-x\"\n[[tool]]\nname = \"poke\"\ndescription = \"Poke it.\"\ninput = '{\"type\": \"object\"}'\n",
+        )
+        .unwrap();
+        assert_eq!(manifest.tools.len(), 1);
+        assert_eq!(manifest.tools[0].name, "poke");
+        assert_eq!(manifest.tools[0].input["type"], "object");
+        // A schema that isn't JSON makes no manifest.
+        assert_eq!(
+            Manifest::parse(
+                "format = 1\nname = \"rawr-x\"\n[[tool]]\nname = \"poke\"\ndescription = \"\"\ninput = '{'\n"
+            ),
+            None
+        );
     }
 
     #[test]

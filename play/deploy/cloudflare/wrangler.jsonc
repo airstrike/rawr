@@ -49,7 +49,7 @@
   },
   // /play's examples (play/tests/fixtures/*.rs), as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
-  // dist/ is site/public (the landing page at /, /og/card.png) and public/
+  // dist/ is site/dist (the Astro build: the landing page, the docs, /play's page) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, which
   // rawr-play renders from og/card.rs), merged by build.mjs. It also writes
   // src/runnable.gen.ts, the hashes of the sources /play/run accepts.

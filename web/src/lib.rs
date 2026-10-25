@@ -6,8 +6,9 @@
 //! `main` is `async` on the page's event loop and real clock, and streams
 //! its output as it is written. [`run`] runs an iced snippet as one
 //! iced application on the page's `#iced` element; a later call swaps in the
-//! edited program, and its State carries over when its script types are
-//! unchanged. Both wrap a snippet with `rawr-snippet`, as the server does.
+//! edited program, and its State carries over, native values and all, when
+//! its script types are unchanged. Both wrap a snippet with `rawr-snippet`,
+//! as the server does.
 #![cfg(target_arch = "wasm32")]
 
 mod fonts;
@@ -19,8 +20,8 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use iced::futures::channel::mpsc;
-use iced::widget::{text as label, Widget as _};
-use iced::{Element, Subscription, Task};
+use iced::widget::{column, container, text as label, Widget as _};
+use iced::{Element, Fill, Subscription, Task};
 use rawr_iced::program::{Adapter, Application};
 use rawr_iced::runtime;
 use wasm_bindgen::prelude::*;
@@ -35,6 +36,8 @@ struct Generation {
     theme: Option<iced::Theme>,
     /// How many messages to send a freshly booted State.
     messages: usize,
+    /// The name of a full app's State type, as its source names it.
+    state: Option<String>,
     /// The fonts its source needs.
     fonts: Vec<usize>,
 }
@@ -128,6 +131,7 @@ pub fn run(
         adapter,
         theme,
         messages: messages.len(),
+        state: state_name(code),
         fonts: fonts::needed(code).collect(),
     };
     NEXT.with(|next| *next.borrow_mut() = Some(generation));
@@ -159,6 +163,10 @@ fn claims() -> &'static rawr::layer::Claims {
 struct Web {
     adapter: Option<Adapter>,
     theme: Option<iced::Theme>,
+    /// The running app's State type name, as its source names it.
+    state: Option<String>,
+    /// Why the last swap booted a fresh State, shown under the app.
+    note: Option<String>,
     /// Fonts fetched or on their way.
     fonts: BTreeSet<usize>,
 }
@@ -196,17 +204,23 @@ impl Web {
             mut adapter,
             theme,
             messages,
+            state,
             fonts,
         }) = NEXT.with(|next| next.borrow_mut().take())
         else {
             return Task::none();
         };
         let started = now();
+        // The State itself carries, as rawr-iced's in-process reload keeps
+        // it: an `Instant` or a `Duration` in it too, so a running stopwatch
+        // keeps running. Its subscription is the new program's, from it.
         let carried = self
             .adapter
             .as_ref()
-            .and_then(Adapter::export_state)
-            .is_some_and(|bytes| adapter.seed_state(&bytes));
+            .is_some_and(|previous| adapter.carry_state(previous));
+        // Another app's State (another example) boots without a note.
+        self.note = (!carried && self.adapter.is_some() && state.is_some() && state == self.state)
+            .then(|| "State changed shape; started fresh".to_owned());
         let mut tasks = vec![Application::start(&mut adapter).map(Message::App)];
         if !carried {
             for index in 0..messages {
@@ -226,18 +240,32 @@ impl Web {
         }
         self.adapter = Some(adapter);
         self.theme = theme;
+        self.state = state;
         log(&format!(
-            "rawr-web: swapped in {:.1} ms, state {}",
+            "rawr-web: swapped in {:.1} ms, state {}{}",
             now() - started,
             if carried { "carried" } else { "booted" },
+            self.note
+                .as_deref()
+                .map(|note| format!(" · {note}"))
+                .unwrap_or_default(),
         ));
         Task::batch(tasks)
     }
 
     fn view(&self) -> Element<'_, Message> {
-        match &self.adapter {
+        let app = match &self.adapter {
             Some(adapter) => adapter.view().map(Message::App).boxed(),
-            None => label("").boxed(),
+            None => return label("").boxed(),
+        };
+        match &self.note {
+            // One line under the app, as rawr-iced's window notes a reseed.
+            Some(note) => column![
+                container(app).height(Fill),
+                container(label(note).size(13).style(label::secondary)).padding([4, 8]),
+            ]
+            .boxed(),
+            None => app,
         }
     }
 
@@ -258,6 +286,16 @@ impl Web {
             });
         Subscription::batch([app, Subscription::run(wakes).map(|()| Message::Swap)])
     }
+}
+
+/// The State type a full app's `update` is a method of, as the source
+/// names it (`Counter` for `Counter::update`), so a swap tells an edited
+/// State from another app's.
+fn state_name(code: &str) -> Option<String> {
+    let at = code.find("::update")?;
+    let before = code[..at].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let name = &code[before.len()..at];
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// The wakes [`run`] sends, as a stream for the app's subscription.

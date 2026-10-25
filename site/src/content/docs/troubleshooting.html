@@ -1,0 +1,40 @@
+<meta name="description" content="Common rawr errors and what to do about them.">
+<article>
+<h1>Troubleshooting</h1>
+<p class="lede">Common errors and what to do about them.</p>
+<h2 id="first">First steps</h2>
+<ul>
+  <li><code>rawr doctor</code> shows where <code>rawr</code> and each extension are installed, and the program it finds.</li>
+  <li><code>RAWR_VERBOSE=1 rawr run</code> says how the program was loaded and which binary ran it.</li>
+  <li><code>rawr --help</code> lists the installed extensions and the commands each one adds.</li>
+</ul>
+
+<h2 id="not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</h2>
+<div class="block diag">
+  <pre><code><span class="e">error[RAWR-ENVIRONMENT-MISSING-SOURCE]</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.</span>
+  <span class="c">= help:</span> add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr</code></pre>
+</div>
+<p>Add the line as the help says. A single <code>.rs</code> file runs without it.</p>
+
+<h2 id="not-installed">A program needs an extension that isn&rsquo;t installed</h2>
+<p><code>rawr run</code> names the missing extension and prints the commands that install it. <a href="/docs/imports#install">Imports</a> and <a href="/docs/iced#install">iced</a> list them too.</p>
+
+<h2 id="project-build">RAWR-ENVIRONMENT-PROJECT-BUILD</h2>
+<p>A crate with dependencies or native modules needs <code>rust-toolchain.toml</code> and <code>.cargo/config.toml</code>. A member of a Cargo workspace doesn&rsquo;t. The error prints both files. <a href="/docs/imports#project">Imports</a> explains them.</p>
+
+<h2 id="which-check">rawr&rsquo;s error or rustc&rsquo;s?</h2>
+<p><code>rawr check</code> prints rawr&rsquo;s result first and rustc&rsquo;s after it.</p>
+<ul>
+  <li>An error from rawr alone often means code that rawr doesn&rsquo;t support yet. The error names the construct. The <a href="/docs/reference/overview#not-supported">Overview</a> lists the gaps.</li>
+  <li>An error from rustc alone means code that rawr accepts and rustc rejects. Fix it for rustc. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases too.</li>
+</ul>
+
+<h2 id="first-run-slow">The first run takes minutes</h2>
+<p>With dependencies or iced, the first <code>rawr run</code> compiles them and a runner. Later runs reuse that build. An edit to a marked file needs no native build.</p>
+
+<h2 id="reload">An iced app doesn&rsquo;t pick up a save</h2>
+<p>A save that fails the check leaves the last good version running. The window shows the error and buttons to retry, copy the error or reset the app. <a href="/docs/iced/reload">Reload</a> says what a reload keeps.</p>
+
+<h2 id="report">Reporting a bug</h2>
+<p>If rawr gives a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+</article>

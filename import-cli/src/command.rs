@@ -99,6 +99,6 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
 }
 
 fn failure(report: &rawr::diagnostic::Report) -> ExitCode {
-    eprint!("{}", rawr_cli::diagnostic::render(report));
+    rawr_cli::diagnostic::emit(report);
     ExitCode::FAILURE
 }

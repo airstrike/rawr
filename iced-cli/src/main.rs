@@ -48,7 +48,7 @@ fn main() -> ExitCode {
                 }
                 Ok(None) => ExitCode::SUCCESS,
                 Err(error) => {
-                    eprint!("{}", rawr_iced_cli::diagnostic::render(&error.report()));
+                    rawr_iced_cli::diagnostic::emit(&error.report());
                     ExitCode::FAILURE
                 }
             }

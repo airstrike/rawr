@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Concise CLI help text.
-pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr new <path> --template iced\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
+pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr new <path> --template iced\n  rawr doctor [path]\n  rawr cache clean [--all]\n\n`rawr mcp` runs rawr-iced's agent tools as `rawr-iced mcp call <tool>`.\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
 
 /// Deterministic snapshot operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,16 +51,11 @@ pub enum Command {
         /// Destination directory.
         path: PathBuf,
     },
-    /// Serve Rawr's agent tools over MCP on stdio (`claude mcp add rawr -- rawr mcp`).
-    Mcp,
-    /// Register `rawr mcp` in the project's agent config.
-    Init {
-        /// Write Claude Code's `.mcp.json`.
-        claude: bool,
-        /// Write Codex's `.codex/config.toml`.
-        codex: bool,
-        /// Explicit source or project path, or current-directory discovery.
-        path: Option<PathBuf>,
+    /// Run one of rawr-iced's agent tools for `rawr mcp`: the call on
+    /// stdin, the result on stdout (`rawr_cli::mcp::content`).
+    McpCall {
+        /// The tool.
+        tool: String,
     },
     /// Report environment and project health.
     Doctor {
@@ -118,18 +113,26 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Request, E
         Some("snapshot") => snapshot(&mut arguments),
         Some("check") => optional_path(&mut arguments, |path| Command::Check { path }),
         Some("doctor") => optional_path(&mut arguments, |path| Command::Doctor { path }),
-        Some("mcp") => {
-            let mut arguments = arguments.peekable();
-            if arguments
-                .next_if(|argument| argument == "-h" || argument == "--help")
-                .is_some()
-            {
+        Some("mcp") => match (arguments.next(), arguments.next()) {
+            (Some(call), Some(tool)) if call == "call" => terminal(
+                Request::Execute(Command::McpCall {
+                    tool: tool.to_string_lossy().into_owned(),
+                }),
+                &mut arguments,
+            ),
+            (Some(help), _) if help == "-h" || help == "--help" => {
                 terminal(Request::Help, &mut arguments)
-            } else {
-                terminal(Request::Execute(Command::Mcp), &mut arguments)
             }
-        }
-        Some("init") => init(&mut arguments),
+            (Some(call), None) if call == "call" => Err(Error::MissingArgument {
+                command: "mcp call",
+                argument: "a tool name",
+            }),
+            (Some(other), _) => Err(Error::UnknownArgument(other)),
+            (None, _) => Err(Error::MissingArgument {
+                command: "mcp",
+                argument: "call <tool>",
+            }),
+        },
         Some("new") => new(&mut arguments),
         Some("cache") => match (arguments.next(), arguments.next()) {
             (Some(clean), all)
@@ -178,33 +181,6 @@ fn preview(arguments: &mut impl Iterator<Item = OsString>) -> Result<Request, Er
         .next()
         .map(|name| name.to_string_lossy().into_owned());
     Ok(Request::Execute(Command::Preview { path, name }))
-}
-
-fn init(arguments: &mut impl Iterator<Item = OsString>) -> Result<Request, Error> {
-    let (mut claude, mut codex, mut path) = (false, false, None);
-    for argument in arguments.by_ref() {
-        match argument.to_str() {
-            Some("-h" | "--help") => return terminal(Request::Help, arguments),
-            Some("--claude") => claude = true,
-            Some("--codex") => codex = true,
-            _ if argument.to_string_lossy().starts_with('-') => {
-                return Err(Error::UnknownArgument(argument));
-            }
-            _ if path.is_some() => return Err(Error::ExtraArgument(argument)),
-            _ => path = Some(PathBuf::from(argument)),
-        }
-    }
-    if !claude && !codex {
-        return Err(Error::MissingArgument {
-            command: "init",
-            argument: "--claude or --codex",
-        });
-    }
-    Ok(Request::Execute(Command::Init {
-        claude,
-        codex,
-        path,
-    }))
 }
 
 fn snapshot(arguments: &mut impl Iterator<Item = OsString>) -> Result<Request, Error> {
@@ -495,46 +471,16 @@ mod tests {
     }
 
     #[test]
-    fn init_takes_either_or_both_agents_and_an_optional_path() {
+    fn mcp_runs_one_tool_call() {
         assert_eq!(
-            parse(&["init", "--claude"]).unwrap(),
-            Request::Execute(Command::Init {
-                claude: true,
-                codex: false,
-                path: None
+            parse(&["mcp", "call", "click"]).unwrap(),
+            Request::Execute(Command::McpCall {
+                tool: "click".to_owned()
             })
         );
-        assert_eq!(
-            parse(&["init", "--codex", "counter", "--claude"]).unwrap(),
-            Request::Execute(Command::Init {
-                claude: true,
-                codex: true,
-                path: Some(PathBuf::from("counter"))
-            })
-        );
-        assert_eq!(parse(&["init", "--help"]).unwrap(), Request::Help);
-        assert_eq!(
-            parse(&["init"]).unwrap_err(),
-            Error::MissingArgument {
-                command: "init",
-                argument: "--claude or --codex"
-            }
-        );
-        assert_eq!(
-            parse(&["init", "counter"]).unwrap_err(),
-            Error::MissingArgument {
-                command: "init",
-                argument: "--claude or --codex"
-            }
-        );
-        assert_eq!(
-            parse(&["init", "--cursor"]).unwrap_err(),
-            Error::UnknownArgument(OsString::from("--cursor"))
-        );
-        assert_eq!(
-            parse(&["init", "--claude", "a", "b"]).unwrap_err(),
-            Error::ExtraArgument(OsString::from("b"))
-        );
+        assert!(parse(&["mcp"]).is_err());
+        assert!(parse(&["mcp", "call"]).is_err());
+        assert!(parse(&["init", "--claude"]).is_err());
     }
 
     #[test]

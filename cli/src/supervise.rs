@@ -93,10 +93,10 @@ fn location(target: &rawr::project::Target) -> PathBuf {
 }
 
 /// Whether a program that ended runs again on a save: when someone at a
-/// terminal can give it input again.
+/// terminal can give it input again, or a `rawr mcp` supervises the run.
 #[must_use]
 pub fn interactive() -> bool {
-    std::io::stdin().is_terminal()
+    std::io::stdin().is_terminal() || crate::events::supervised()
 }
 
 /// The exit status a command gives for a program's `status`.
@@ -130,6 +130,9 @@ pub fn run(
     let mut watcher = Watcher::open(&loaded.graph);
     let mut started_from = contents(&loaded.graph);
     drop(loaded);
+    // The program shares this process's group, which a dead `rawr mcp`'s
+    // watch ends.
+    crate::events::watch_parent(|| {});
     let mut child = match start(&location, &name, arguments) {
         Ok(child) => Some(child),
         Err(error) => {
@@ -137,12 +140,14 @@ pub fn run(
             return ExitCode::FAILURE;
         }
     };
+    crate::events::running();
     let interactive = interactive();
     loop {
         if let Some(running) = child.as_mut() {
             match running.try_wait() {
                 Ok(Some(status)) => {
                     child = None;
+                    crate::events::exited(status);
                     crate::cargo::after_run(cargo.take());
                     if !interactive || watcher.is_none() {
                         return exit_code(status);
@@ -170,6 +175,7 @@ pub fn run(
             Ok(loaded) => loaded,
             Err(report) => {
                 eprint!("{}", crate::diagnostic::render(&report));
+                crate::events::failed(&report);
                 continue;
             }
         };
@@ -193,10 +199,12 @@ pub fn run(
         }
         if let Err(report) = base::check(loaded) {
             eprint!("{}", crate::diagnostic::render(&report));
+            crate::events::failed(&report);
             continue;
         }
         if let Some(mut running) = child.take() {
             eprintln!("rawr: the source changed; restarting the program");
+            crate::events::restarting("the source changed");
             let _ = running.kill();
             let _ = running.wait();
         }
@@ -207,6 +215,7 @@ pub fn run(
                 return ExitCode::FAILURE;
             }
         };
+        crate::events::running();
     }
 }
 
@@ -221,7 +230,12 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
     }
     #[cfg(not(unix))]
     let _ = name;
-    command.args(arguments).env(PROGRAM, location).spawn()
+    command
+        .args(arguments)
+        .env(PROGRAM, location)
+        .env_remove(crate::events::EVENTS)
+        .env_remove(crate::events::PARENT)
+        .spawn()
 }
 
 /// The program's files, watched for saves.

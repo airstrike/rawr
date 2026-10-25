@@ -1,0 +1,9 @@
+---
+import DocsPage from "../../components/DocsPage.astro";
+import { PAGES, isIndex } from "../../lib/docs.ts";
+
+export function getStaticPaths() {
+  return PAGES.filter((page) => !isIndex(page.path)).map((page) => ({ params: { slug: page.path.slice("/docs/".length) }, props: { page } }));
+}
+---
+<DocsPage page={Astro.props.page} />

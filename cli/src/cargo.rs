@@ -50,6 +50,8 @@ pub struct Outcome {
     /// Cargo's own failure, when it failed without a rustc error (a bad
     /// manifest or a dependency it cannot fetch).
     pub failure: Option<String>,
+    /// Each error and warning as data (see [`crate::diagnostic`]).
+    pub diagnostics: Vec<serde_json::Value>,
 }
 
 impl Outcome {
@@ -105,7 +107,11 @@ impl Outcome {
             if message["reason"] != "compiler-message" {
                 continue;
             }
+            let manifest = message["manifest_path"].as_str().map(Path::new);
             let message = &message["message"];
+            outcome
+                .diagnostics
+                .extend(crate::diagnostic::from_rustc(message, manifest));
             let text = message["message"].as_str().unwrap_or_default();
             match message["level"].as_str() {
                 Some("error" | "error: internal compiler error") => {
@@ -319,11 +325,17 @@ pub fn conclude(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option
             true
         }
         Err(report) => {
-            eprint!("{}", rawr::diagnostic::render(report));
+            crate::diagnostic::emit(report);
             false
         }
     };
-    let cargo_failed = cargo.is_some_and(|cargo| print(&cargo.finish()));
+    let cargo_failed = cargo.is_some_and(|cargo| {
+        let status = cargo.finish();
+        if let Status::Finished(outcome) = &status {
+            crate::diagnostic::record(&outcome.diagnostics);
+        }
+        print(&status)
+    });
     checked && !cargo_failed
 }
 

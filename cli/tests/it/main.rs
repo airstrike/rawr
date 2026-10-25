@@ -8,6 +8,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod marked;
+mod mcp;
 mod program;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);

@@ -304,11 +304,15 @@ servers and channels; no message content, user IDs or server names), and
 `https://rawr.airstrike.fyi/bot` shows them, with the last 50 boot events,
 as a page in RawrGallery's Ink sheet.
 
-The same Worker serves all of `rawr.airstrike.fyi`. The landing page at `/`
-comes from `site/public`. The invite redirect at `/bot/invite` and the link
-preview cards in `/og/` come from `public/`. `build.mjs` merges the two into
-`dist/`, and the build fails if a path is in both. Wrangler runs it before
-every deploy. The Worker runs before the assets so it can answer the old
+The same Worker serves all of `rawr.airstrike.fyi`. The landing page, the
+docs and the playground's page come from the site's Astro build
+(`site/dist`; `npm ci` in `site/` once). The invite redirect at
+`/bot/invite` and the link preview cards in `/og/` come from `public/`.
+`build.mjs` builds the site and merges the two into `dist/`, and the build
+fails if a path is in both. Wrangler runs it before every deploy. For
+`/play` and `/play/<id>` the Worker takes the site's static `play.html` and
+writes in the request's link preview, a share's snippet and theme, the
+examples and Turnstile's key (`src/playpage.ts`). The Worker runs before the assets so it can answer the old
 host. Every request to `rawr-bot.airstrike.fyi` gets a 301 to the same path
 on `rawr.airstrike.fyi`. `/` there goes to `/bot` and `/invite` goes to
 `/bot/invite`.
@@ -371,9 +375,9 @@ playground runs apart from Discord's.
 
 The landing page has Run buttons for its own files. They call `POST
 /play/run` with a file's exact text. That route needs no Turnstile. It
-accepts only the text of a `<code data-run>` element in
-`site/public/index.html`, checked by SHA-256. The Worker embeds that page
-when it is built, so the list is always the deployed page's. A result is
+accepts only the text of a `<code data-run>` element in the site's built
+pages, checked by SHA-256. `build.mjs` collects them when it builds, so the
+list is always the deployed pages'. A result is
 cached for each image version. Uncached runs are limited per IP (20 a
 minute, 120 an hour).
 

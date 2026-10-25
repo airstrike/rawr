@@ -1,0 +1,189 @@
+<meta name="description" content="rawr-iced runs an iced app with its marked files interpreted, and a save reloads them while the app runs. Install it, start from the iced template and learn the app shapes it runs.">
+<article>
+<h1>iced</h1>
+<p class="lede">rawr-iced runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Saving a marked file reloads that code while the app keeps running.</p>
+<h2 id="when">When rawr-iced is used</h2>
+<p>The <code>rawr</code> command hands a program to rawr-iced when it names the <code>iced</code> crate. rawr-iced imports the app&rsquo;s other crates as <a href="/docs/imports">rawr-import</a> does. Set <code>RAWR_VERBOSE=1</code> to see which runner a program went to.</p>
+<p>rawr-iced is built against iced master at revision <code>be88873d</code>, which <code>rawr doctor</code> prints. A project on another revision is refused.</p>
+
+
+<h2 id="install">Install</h2>
+<div class="note"><p>rawr-iced needs a Unix system and the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. It has been tested on Apple Silicon Macs. Install <a href="/docs/start#install">the <code>rawr</code> command</a> first.</p></div>
+<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
+<p>The last line installs <code>rawr-import-driver</code>, which reads the API of iced and your other dependencies.</p>
+
+<h2 id="new">The <code>iced</code> template</h2>
+<div class="block">
+  <pre><code>rawr new counter --template iced &amp;&amp; cd counter &amp;&amp; rawr run</code></pre>
+</div>
+<p><code>counter</code> is an ordinary Cargo crate. Its <code>Cargo.toml</code> depends on iced at the revision rawr-iced is built against. The features turn on every widget rawr-iced supports.</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[package]
+name = "counter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["advanced", "canvas", "image-without-codecs", "qr_code", "selector", "sipper", "svg"] }</code></pre>
+</div>
+<p>Two more files let <code>rawr run</code> and <code>cargo build</code> share one build of iced. <code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>.</p>
+<div class="block">
+  <div class="file"><b>rust-toolchain.toml</b></div>
+  <pre><code data-lang="toml">[toolchain]
+channel = "nightly-2026-07-11"
+components = ["rust-src", "rustfmt", "clippy"]</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>.cargo/config.toml</b></div>
+  <pre><code data-lang="toml">[build]
+target = "host-tuple"</code></pre>
+</div>
+<p>A crate of your own needs the same two files. Without them, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add.</p>
+<p><code>src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust" data-run="counter.rs" id="src-counter">// rawr
+use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-alt="Counter preview with an Increment button, the number 0 and a Decrement button" aria-label="Render the counter's first frame on rawr's server" hidden></button><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
+</div>
+
+<p><code>cargo run</code> compiles the same app natively. A release build doesn&rsquo;t need the interpreter.</p>
+<p>The first <code>rawr run</code> compiles iced and the runner in the project&rsquo;s <code>target/</code>. On an Apple Silicon Mac that took about 2 minutes. Later runs reuse the build. <a href="/docs/iced/reload">Reload</a> covers what a save does.</p>
+
+
+<h2 id="shapes">App shapes</h2>
+<h3 id="iced-run"><code>iced::run</code></h3>
+<p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>, as the counter does. The state can be any type with a <code>Default</code>.</p>
+<p><code>update</code> and <code>view</code> can be closures, as in <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code>. Each parameter needs its type. An untyped one fails the check. An update closure returns <code>()</code> unless it declares a return type such as <code>-&gt; Task&lt;Message&gt;</code>.</p>
+<h3 id="application">The application builder</h3>
+<p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders:</p>
+<ul>
+  <li><code>.title(..)</code> with a method of the state or a string literal.</li>
+  <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>, or with a theme such as <code>Theme::Dark</code>.</li>
+  <li><code>.subscription(..)</code> with a method that returns a <code>Subscription</code>.</li>
+  <li><code>.centered()</code>.</li>
+</ul>
+<p><code>.window_size(..)</code>, <code>.font(..)</code>, <code>.style(..)</code> and other window and renderer settings are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
+<p>The chain may come from a function of your own, as in iced&rsquo;s todos example. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns it, and <code>main</code> ends with <code>application().run()</code>. <code>main</code> must be that function&rsquo;s only caller.</p>
+<p>This app uses the builder and an <code>update</code> that returns a <code>Task</code>:</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use iced::widget::{Column, Widget, button, column, row, text, text_input};
+use iced::{Element, Fill, Task};
+use rawr::preview;
+
+pub fn main() -&gt; iced::Result {
+    iced::application(Todos::default, Todos::update, Todos::view)
+        .title("Todos")
+        .run()
+}
+
+#[derive(Default)]
+struct Todos {
+    draft: String,
+    items: Vec&lt;String&gt;,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Edit(String),
+    Add,
+    Remove(usize),
+}
+
+impl Todos {
+    fn sample() -&gt; Todos {
+        Todos {
+            draft: String::new(),
+            items: vec!["Write the docs".to_string(), "Ship them".to_string()],
+        }
+    }
+
+    fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+        match message {
+            Message::Edit(draft) =&gt; self.draft = draft,
+            Message::Add =&gt; {
+                if !self.draft.is_empty() {
+                    self.items.push(self.draft.clone());
+                    self.draft.clear();
+                }
+            }
+            Message::Remove(index) =&gt; {
+                self.items.remove(index);
+            }
+        }
+        Task::none()
+    }
+
+    #[preview(name = "two items", seed = Todos::sample, size = (360, 180))]
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        let items: Vec&lt;Element&lt;'_, Message&gt;&gt; = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                row![text(item).width(Fill), button("x").on_press(Message::Remove(index))]
+                    .spacing(8)
+                    .boxed()
+            })
+            .collect();
+        column![
+            text_input("What needs doing?", &amp;self.draft)
+                .on_input(Message::Edit)
+                .on_submit(Message::Add),
+            Column::with_children(items).spacing(4),
+        ]
+        .spacing(12)
+        .padding(16)
+    }
+}</code></pre>
+</div>
+<figure class="shot">
+  <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
+  <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
+</figure>
+<p><code>use rawr::preview;</code> comes from the <code>rawr-macros</code> dependency, as <a href="/docs/iced/previews#previews">Previews</a> describes.</p>
+</article>

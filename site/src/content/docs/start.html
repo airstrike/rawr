@@ -1,0 +1,116 @@
+<meta name="description" content="Install rawr and run your first Rust crate without compiling it. The same files build for release with Cargo.">
+<article>
+<h1>Start</h1>
+<p class="lede">Install rawr and run your first crate without compiling it. The same files build for release with Cargo.</p>
+<h2 id="install">Install</h2>
+<p>rawr needs Rust 1.95 or newer.</p>
+<div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
+<p>This also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too.</p>
+
+<h2 id="first-crate">A first crate</h2>
+<div class="block"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre></div>
+<p><code>rawr new hello</code> creates a Cargo crate with no dependencies.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust" data-run="hello.rs" id="src-hello">// rawr
+// `rawr run` interprets this file, and `cargo build` compiles it as
+// ordinary Rust.
+
+struct Greeting {
+    name: String,
+    times: i64,
+}
+
+impl Greeting {
+    fn line(&amp;self, count: i64) -&gt; String {
+        format!("{count}. Hello, {}!", self.name)
+    }
+}
+
+fn main() {
+    let greeting = Greeting {
+        name: String::from("rawr"),
+        times: 3,
+    };
+    for count in 1..=greeting.times {
+        println!("{}", greeting.line(count));
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-hello" data-out="out-hello" aria-label="Run this file on rawr's server" hidden></button><b>rawr run</b><span id="out-hello" aria-live="polite">1. Hello, rawr!
+2. Hello, rawr!
+3. Hello, rawr!</span></div>
+</div>
+<p>The <code>// rawr</code> line marks the file for rawr to interpret. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
+<p>A crate with no dependencies needs no build, so an edit runs at once.</p>
+<p>In a terminal, <code>rawr run</code> keeps watching after the program ends. Each save runs it again, and Ctrl-C stops it. Arguments after <code>--</code> go to the program, as <a href="/docs/run#arguments">Run</a> describes.</p>
+
+<h2 id="errors">Errors</h2>
+<p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and save:</p>
+<div class="block diag">
+  <div class="file"><b>rawr run</b><span>exit 1</span></div>
+  <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `lines` found for `Greeting` in the current scope</span>
+ <span class="c">--&gt;</span> /home/you/hello/src/main.rs:22:33-22:38
+ <span class="c">22 |</span>         println!("{}", greeting.lines(count));
+    <span class="c">|</span>                                 <span class="e">^^^^^</span></code></pre>
+</div>
+<p>Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
+<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code>. Its errors are printed after the program ends, so rustc reports this mistake a second time.</p>
+
+<h2 id="check">Check without running</h2>
+<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. rawr&rsquo;s check accepts some code that rustc rejects, so rustc has the final word. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
+
+<h2 id="first-program">A single file</h2>
+<p><code>rawr run</code> also takes one <code>.rs</code> file. A single file doesn&rsquo;t need the marker.</p>
+<div class="block">
+  <div class="file"><b>cart.rs</b></div>
+  <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
+enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run cart.rs</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+</div>
+<p>A single file may also hold top-level statements. They run first, and then <code>fn main</code> runs. Cargo won&rsquo;t build a file of top-level statements, so keep them to snippets and the playground.</p>
+
+<h2 id="native">Native modules and dependencies</h2>
+<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. rawr-import compiles native code with Cargo, and marked code calls it. <a href="/docs/imports">Imports</a> sets it up.</p>
+<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls into it. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says what crosses and when the program restarts.</p>
+
+<h2 id="release">Build for release</h2>
+<div class="block"><pre><code>cargo build --release</code></pre></div>
+<p>The marker is a comment, so the release build has no interpreter in it.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/run">Run</a> says which files rawr interprets and how they meet native code.</li>
+  <li><a href="/docs/iced">iced</a> starts an app that reloads when you save.</li>
+  <li><a href="/docs/embedding">Embedding</a> runs Rust scripts inside your own app.</li>
+  <li><a href="/play">The playground</a> runs snippets in a browser.</li>
+</ul>
+</article>

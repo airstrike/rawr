@@ -1,0 +1,60 @@
+---
+// Every page's <head>: its title, description and link preview, the fonts,
+// and the theme before the first paint. Then the site bar and the page.
+import Header from "../components/Header.astro";
+import { SITE } from "../lib/docs.ts";
+import { THEME_INIT } from "../lib/theme-init.ts";
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+  /** The page's path, for its canonical URL. */
+  path: string;
+  current?: "docs" | "play";
+  /** The link preview's title and description, when they differ from the page's. */
+  og?: { title?: string; description?: string; image?: string; alt?: string; twitter?: boolean };
+  /** A fixed colour for the browser's chrome; without it, the theme's background. */
+  chrome?: string;
+  icon?: string;
+  bodyClass?: string;
+}
+const { title, description, path, current, og = {}, chrome, icon = "/favicon.svg", bodyClass } = Astro.props;
+const url = `${SITE}${path}`;
+const image = og.image ?? `${SITE}/og/card.png`;
+const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.";
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script is:inline set:html={THEME_INIT} />
+<title>{title}</title>
+<meta name="description" content={description}>
+<meta property="og:title" content={og.title ?? title}>
+<meta property="og:description" content={og.description ?? description}>
+<meta property="og:type" content="website">
+<meta property="og:url" content={url}>
+<meta property="og:image" content={image}>
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content={alt}>
+<meta name="twitter:card" content="summary_large_image">
+{og.twitter && <meta name="twitter:title" content={og.title ?? title}>}
+{og.twitter && <meta name="twitter:description" content={og.description ?? description}>}
+{og.twitter && <meta name="twitter:image" content={image}>}
+{og.twitter && <meta name="twitter:image:alt" content={alt}>}
+{chrome ? <meta name="theme-color" content={chrome}> : <meta name="theme-color" content="#141416" data-follow>}
+<link rel="canonical" href={url}>
+<link rel="icon" href={icon} type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<slot name="head" />
+</head>
+<body class={bodyClass}>
+<Header current={current} />
+<slot />
+</body>
+</html>
