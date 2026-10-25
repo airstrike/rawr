@@ -27,7 +27,7 @@ pub(crate) struct Matched {
 }
 
 pub(crate) enum Coverage {
-    Matched(Matched),
+    Matched(Box<Matched>),
     NeedsPreparation,
 }
 
@@ -146,11 +146,11 @@ impl Output {
             };
             digest.update(matched.digest());
         }
-        Coverage::Matched(Matched {
+        Coverage::Matched(Box::new(Matched {
             output: self,
             carrier: *carrier.identity(),
             coverage: digest.finalize().into(),
-        })
+        }))
     }
 }
 

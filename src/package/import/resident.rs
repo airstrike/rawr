@@ -25,6 +25,8 @@ pub struct Compiled {
 }
 
 /// Closed result of one actual compilation against the retained native surface.
+// Boxing `Compiled` would change this public, exhaustively matched contract.
+#[allow(clippy::large_enum_variant)]
 pub enum Outcome {
     /// Every captured native requirement matched the compiler's own carrier.
     Compiled(Compiled),
@@ -92,7 +94,7 @@ impl Engine {
         };
         let covered = match output.cover(native.carrier()) {
             captured::Coverage::NeedsPreparation => return Ok(Outcome::NeedsPreparation),
-            captured::Coverage::Matched(covered) => covered,
+            captured::Coverage::Matched(covered) => *covered,
         };
         let (output, carrier, coverage) = covered.into_parts();
         // Complete the one contribution retained by this exact executable and

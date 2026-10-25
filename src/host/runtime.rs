@@ -264,7 +264,7 @@ enum Binding {
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     Structural(host::structural::Definition),
     #[cfg(feature = "rust-import")]
-    Event(event::Key),
+    Event(Box<event::Key>),
 }
 
 /// A runtime facade proof could not be built or bound to an application.
@@ -1534,7 +1534,7 @@ impl Registry {
             Binding::Item(item) => facade.bindings.get(item),
             Binding::Structural(definition) => facade.structural.get(definition),
             #[cfg(feature = "rust-import")]
-            Binding::Event(key) => facade.events.get(key),
+            Binding::Event(key) => facade.events.get(&**key),
         }
     }
 
@@ -2800,9 +2800,19 @@ mod tests {
         Enum,
     }
 
+    /// An imported type to declare: its path, identity, shape and type
+    /// parameters.
+    #[cfg(feature = "rust-import")]
+    type ImportedType<'a> = (
+        &'a str,
+        [u8; 32],
+        ImportedShape,
+        Box<[crate::ImmutableString]>,
+    );
+
     #[cfg(feature = "rust-import")]
     fn imported_attestation_facade(
-        types: &[(&str, [u8; 32], ImportedShape, Box<[crate::ImmutableString]>)],
+        types: &[ImportedType<'_>],
     ) -> Result<host::facade::Definition, host::Error> {
         let mut allocation = host::TestImportAllocation::default();
         let mut facade = host::facade::Builder::new_imported(

@@ -3,6 +3,8 @@
 use crate::application;
 
 /// The single message contract inferred for a widget protocol.
+// Boxing `Exact` would change this public, exhaustively matched contract.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Type {
     /// A purely visual protocol remains generic until fresh descriptor lowering.

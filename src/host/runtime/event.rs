@@ -95,7 +95,7 @@ impl super::Registry {
             crate::EvalAltResult::ErrorRuntime(message.into(), site.span.start()).into()
         };
         if args.len() != 1
-            || !matches!(&requirement.binding, super::Binding::Event(key) if key == &site.key)
+            || !matches!(&requirement.binding, super::Binding::Event(key) if **key == site.key)
             || requirement.operands.as_ref() != std::slice::from_ref(&site.source)
             || requirement.output != site.target
         {
@@ -153,7 +153,7 @@ impl Site {
     pub(crate) fn requirement(&self) -> Requirement {
         Requirement {
             owner: self.key.owner.clone(),
-            binding: super::Binding::Event(self.key.clone()),
+            binding: super::Binding::Event(Box::new(self.key.clone())),
             path: self.key.source.path().into(),
             operands: vec![self.source.clone()].into_boxed_slice(),
             output: self.target.clone(),

@@ -152,6 +152,9 @@ struct ProjectionDeclaration {
     arguments: Box<[host::type_def::Argument]>,
 }
 
+// Boxing `External` would add an infallible allocation to a builder that
+// reserves its storage fallibly.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ProjectionTarget {
     Local(host::path::Path),

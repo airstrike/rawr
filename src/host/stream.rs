@@ -91,14 +91,14 @@ pub struct Recipe {
 pub struct Issued {
     identity: Identity,
     stream: Native,
-    mapper: std::sync::Arc<std::sync::Mutex<Mapper>>,
+    mapper: crate::Shared<std::sync::Mutex<Mapper>>,
 }
 
 /// One native stream item awaiting validation and its script mappers.
 #[must_use = "a stream item must be finished on the script thread"]
 pub struct Arrival {
     value: Dynamic,
-    mapper: std::sync::Arc<std::sync::Mutex<Mapper>>,
+    mapper: crate::Shared<std::sync::Mutex<Mapper>>,
 }
 
 impl Arrival {
@@ -531,7 +531,7 @@ impl Issued {
         Self {
             identity,
             stream,
-            mapper: std::sync::Arc::new(std::sync::Mutex::new(mapper)),
+            mapper: crate::Shared::new(std::sync::Mutex::new(mapper)),
         }
     }
 

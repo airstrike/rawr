@@ -19,6 +19,9 @@ pub(crate) struct RuntimeGraph {
     dependencies: BTreeMap<type_def::Id, Box<[host::facade::Dependency]>>,
 }
 
+// Boxing `Script` would rewrite each of its by-field patterns; a type contract
+// is built while resolving, not per call.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Shape {
     Unit,

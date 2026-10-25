@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
 
+// Large through a path's `Target::Host`; see `Target` for why it stays unboxed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Type {
     Unit(Span),
@@ -31,6 +33,9 @@ pub(crate) struct Path {
     pub span: Span,
 }
 
+// Boxing `Host` would rewrite its ~70 construction and match sites; header
+// types are built while resolving, not per call.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Target {
     Builtin,
@@ -110,6 +115,8 @@ fn substitute(ty: &mut Type, params: &[ImmutableString], arguments: &[Type], at:
     }
 }
 
+// Large through a path's `Target::Host`; see `Target` for why it stays unboxed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Argument {
     Type(Type),
@@ -713,6 +720,9 @@ fn host_type(
     span: Span,
 ) -> Option<Type> {
     use host::type_ref::Shape;
+    // Only an imported type reads the definition it is named from.
+    #[cfg(not(feature = "rust-import"))]
+    let _ = originating;
     let convert = |types: &[host::type_ref::Type], owner: Option<&host::facade::Dependency>| {
         types
             .iter()

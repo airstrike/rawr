@@ -133,6 +133,8 @@ pub struct Observation {
     state: ObservationState,
 }
 
+// Boxing `Refused` would allocate merely to report a refusal (see below).
+#[allow(clippy::large_enum_variant)]
 enum ObservationState {
     Unreached,
     // A rejected constructor retains only by-value evidence; refused shared or

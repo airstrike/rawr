@@ -3,6 +3,8 @@
 use crate::application;
 
 /// The exact local-state contract established by the optional `state` hook.
+// Boxing `Nominal` would change this public, exhaustively matched contract.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Type {
     /// The protocol is stateless and uses iced's unit state.

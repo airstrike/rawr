@@ -3,8 +3,9 @@
 
 use super::Witness;
 use crate::Dynamic;
+use crate::Shared;
 use std::fmt;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 #[cfg(feature = "sync")]
 type Finish = Box<dyn FnOnce(Witness) -> Dynamic + Send + 'static>;
@@ -17,21 +18,21 @@ type Finish = Box<dyn FnOnce(Witness) -> Dynamic + 'static>;
 /// A projected iced `Task` is one. The importer's bridge holds the call; the
 /// host that builds the value does not.
 #[derive(Clone)]
-pub struct Unwitnessed(Arc<Mutex<Option<Finish>>>);
+pub struct Unwitnessed(Shared<Mutex<Option<Finish>>>);
 
 impl Unwitnessed {
     /// Wrap the step that builds the final value from its witness.
     #[cfg(feature = "sync")]
     #[must_use]
     pub fn new(finish: impl FnOnce(Witness) -> Dynamic + Send + 'static) -> Self {
-        Self(Arc::new(Mutex::new(Some(Box::new(finish)))))
+        Self(Shared::new(Mutex::new(Some(Box::new(finish)))))
     }
 
     /// Wrap the step that builds the final value from its witness.
     #[cfg(not(feature = "sync"))]
     #[must_use]
     pub fn new(finish: impl FnOnce(Witness) -> Dynamic + 'static) -> Self {
-        Self(Arc::new(Mutex::new(Some(Box::new(finish)))))
+        Self(Shared::new(Mutex::new(Some(Box::new(finish)))))
     }
 
     /// Build the final value. `None` when a copy was already finished.
@@ -60,21 +61,21 @@ type Resolve = Box<dyn FnOnce() -> Result<Dynamic, String> + 'static>;
 /// A Rust value a native stream yielded, which becomes a Rawr value only on
 /// the thread that owns the script runtime and its imported-value arena.
 #[derive(Clone)]
-pub struct Deferred(Arc<Mutex<Option<Resolve>>>);
+pub struct Deferred(Shared<Mutex<Option<Resolve>>>);
 
 impl Deferred {
     /// Wrap the step that builds the Rawr value.
     #[cfg(feature = "sync")]
     #[must_use]
     pub fn new(resolve: impl FnOnce() -> Result<Dynamic, String> + Send + 'static) -> Self {
-        Self(Arc::new(Mutex::new(Some(Box::new(resolve)))))
+        Self(Shared::new(Mutex::new(Some(Box::new(resolve)))))
     }
 
     /// Wrap the step that builds the Rawr value.
     #[cfg(not(feature = "sync"))]
     #[must_use]
     pub fn new(resolve: impl FnOnce() -> Result<Dynamic, String> + 'static) -> Self {
-        Self(Arc::new(Mutex::new(Some(Box::new(resolve)))))
+        Self(Shared::new(Mutex::new(Some(Box::new(resolve)))))
     }
 
     /// Build the Rawr value, once.

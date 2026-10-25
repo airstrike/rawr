@@ -34,6 +34,8 @@ pub enum Boot {
 }
 
 /// A normalized callback task output using the literal `iced::Task` facade.
+// Boxing `Facade` would change this public, exhaustively matched contract.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Task {
     /// A unit callback output normalized to no task.
