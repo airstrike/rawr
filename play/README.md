@@ -54,7 +54,11 @@ The format follows `--format png|jpg|webp`, else the output extension, else
 PNG. An animated render is always a GIF. A file named `.png`, `.jpg` or
 `.webp` is then written with a `.gif` extension instead. `--still` writes
 the last frame as a still image. A note on the image goes to stderr as a
-`note: ` line when the result goes to stdout. A plain program writes JSON where an image would go. The JSON is one
+`note: ` line when the result goes to stdout. `--step N` (repeatable) clicks
+a full app's target `N` after its messages, counting from 0 in reading
+order. A full app's image comes with an `action: <label>` line for each
+target of its last frame and a `click: <label>` line for each step, beside
+the note. A plain program writes JSON where an image would go. The JSON is one
 object that starts with `{`, and no image does:
 
 ```json
@@ -105,6 +109,13 @@ column![text("hi"), button("go")]
 
 Options: `size=WxH` (or a bare `WxH`, at most 2048 per side),
 `theme=dark|light` (or a bare `dark`/`light`), and repeated `msg=EXPR`.
+
+An app's reply has a button for each target of its last frame, up to 20
+(D516). A button's `custom_id` carries the click history (`src/click.rs`),
+so a click replays the request with its messages and those steps and edits
+the reply, with no store. Only the request's author may click. A click is a
+run under the per-user and per-channel limits, one click renders per reply
+at a time, and a history stops at 24 clicks.
 
 ### Where it answers
 

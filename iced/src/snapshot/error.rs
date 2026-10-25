@@ -78,6 +78,16 @@ pub enum Error {
         #[source]
         source: crate::widget::Error,
     },
+    /// A recording's step clicks a target its interface does not have.
+    #[error("step {step} clicks target {target}, but the app shows {count} targets")]
+    Step {
+        /// One-based step number.
+        step: usize,
+        /// Zero-based target index the step names.
+        target: usize,
+        /// Targets the interface had then.
+        count: usize,
+    },
     /// The pinned software renderer could not initialize.
     #[error("the pinned tiny-skia snapshot renderer could not initialize")]
     Renderer,

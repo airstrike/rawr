@@ -80,6 +80,11 @@ pub struct Image {
     pub picture: Picture,
     /// A note for the reader, such as why an animation was cut.
     pub note: Option<String>,
+    /// A full app's targets in its last frame, by label in reading order:
+    /// what [`crate::Options::steps`] index.
+    pub actions: Vec<String>,
+    /// The label of the target each step clicked, in order.
+    pub clicked: Vec<String>,
 }
 
 /// `time` in seconds, to a tenth, without a trailing `.0`.
@@ -177,7 +182,13 @@ pub fn picture(
     budget: Duration,
     encoder: Encoder,
 ) -> Result<Image, PlayError> {
-    let Recording { frames, ending } = recording;
+    let Recording {
+        frames,
+        ending,
+        targets,
+        clicked,
+    } = recording;
+    let actions: Vec<String> = targets.into_iter().map(|target| target.label).collect();
     let last = frames
         .last()
         .ok_or_else(|| PlayError::Limit(crate::TIME_LIMIT.into()))?;
@@ -185,6 +196,8 @@ pub fn picture(
         Ok(Image {
             picture: Picture::Still(png(last)?),
             note: note.map(str::to_owned),
+            actions: actions.clone(),
+            clicked: clicked.clone(),
         })
     };
     if ending == Ending::Messages {
@@ -248,11 +261,13 @@ pub fn picture(
     Ok(Image {
         picture: Picture::Animated(gif),
         note,
+        actions,
+        clicked,
     })
 }
 
 /// A frame as a PNG.
-fn png(frame: &Frame) -> Result<Png, PlayError> {
+pub(crate) fn png(frame: &Frame) -> Result<Png, PlayError> {
     let failed =
         |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
     let mut bytes = Vec::new();
@@ -734,6 +749,8 @@ mod tests {
         let recording = Recording {
             frames,
             ending: Ending::Settled,
+            targets: Vec::new(),
+            clicked: Vec::new(),
         };
         let image =
             super::picture(recording, &super::Loops::default(), Duration::ZERO, encoder).unwrap();
