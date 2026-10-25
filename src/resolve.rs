@@ -7,7 +7,6 @@ pub(crate) mod item;
 pub(crate) mod lower_nominal;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
-#[cfg(feature = "std")]
 pub(crate) mod package;
 pub(crate) mod type_ref;
 
@@ -46,7 +45,6 @@ impl LocatedError {
         self.error
     }
 
-    #[cfg(feature = "std")]
     fn into_parts(self) -> (program::source::Id, Option<program::source::Id>, Error) {
         (self.primary, self.secondary, self.error)
     }
@@ -1233,11 +1231,7 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
 /// `rawr::future::Future`: its facade is installed and no host's own type,
 /// such as iced's `Task`, runs futures.
 pub(crate) fn core_futures(host: &host::Registry) -> bool {
-    #[cfg(feature = "std")]
-    return host.type_(crate::future::facade::FUTURE).is_some()
-        && host.type_("iced::Task").is_none();
-    #[cfg(not(feature = "std"))]
-    return false;
+    host.type_(crate::future::facade::FUTURE).is_some() && host.type_("iced::Task").is_none()
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,

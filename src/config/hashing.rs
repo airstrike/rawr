@@ -54,11 +54,7 @@ pub use crate::api::deprecated::config::hashing::{get_ahash_seed, set_ahash_seed
 /// ```
 #[inline(always)]
 pub fn set_hashing_seed(new_seed: Option<[u64; 4]>) -> Result<(), Option<[u64; 4]>> {
-    #[cfg(feature = "std")]
-    return HASHING_SEED.set(new_seed);
-
-    #[cfg(not(feature = "std"))]
-    return HASHING_SEED.set(new_seed.into()).map_err(|err| *err);
+    HASHING_SEED.set(new_seed)
 }
 
 /// Get the current hashing Seed.

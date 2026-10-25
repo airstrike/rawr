@@ -66,7 +66,6 @@ impl Engine {
     }
 
     /// Compile one discovered static package graph into an executable bundle.
-    #[cfg(feature = "std")]
     pub fn compile_package_executable(
         &self,
         target: &crate::project::Target,
@@ -77,7 +76,6 @@ impl Engine {
     /// Compile one loaded package graph to run as a program: its [`AST`]
     /// (the top level), and the script name of the entry package's
     /// `fn main`, when it has one, to call after it.
-    #[cfg(feature = "std")]
     pub fn compile_package(
         &self,
         graph: crate::package::Graph,
@@ -103,7 +101,6 @@ impl Engine {
     /// graph, application and preview contracts, schema manifest, callback
     /// manifest, and generation identity produced by one compiler
     /// transformation.
-    #[cfg(feature = "std")]
     pub fn compile_package_generation(
         &self,
         target: &crate::project::Target,
@@ -112,7 +109,6 @@ impl Engine {
     }
 
     /// Compile one reload candidate while recording the real compiler phases.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_package_generation_observed(
         &self,
@@ -124,7 +120,6 @@ impl Engine {
 
     /// [`Engine::compile_package_generation`] of a graph already loaded:
     /// a host that judged the program from its load compiles that same parse.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_loaded_package_generation(
         &self,
@@ -136,7 +131,6 @@ impl Engine {
 
     /// [`Engine::compile_package_application_descriptor`] of a graph already
     /// loaded.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_loaded_package_application_descriptor(
         &self,
@@ -147,7 +141,6 @@ impl Engine {
     }
 
     /// Compile one loaded package graph into a preview catalog.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_loaded_package_preview_catalog(
         &self,
@@ -157,7 +150,6 @@ impl Engine {
     }
 
     /// Compile and fully validate one application from a static package graph.
-    #[cfg(feature = "std")]
     pub fn compile_package_application_descriptor(
         &self,
         target: &crate::project::Target,
@@ -166,7 +158,6 @@ impl Engine {
     }
 
     /// Compile one static source graph into a preview catalog.
-    #[cfg(feature = "std")]
     pub fn compile_package_preview_catalog(
         &self,
         target: &crate::project::Target,
@@ -175,7 +166,6 @@ impl Engine {
     }
 
     /// Compile a preview catalog while recording the real compiler phases.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_package_preview_catalog_observed(
         &self,
@@ -186,7 +176,6 @@ impl Engine {
     }
 
     /// Compile a package application while recording the real compiler phases.
-    #[cfg(feature = "std")]
     #[doc(hidden)]
     pub fn compile_package_application_descriptor_observed(
         &self,
@@ -245,7 +234,6 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<AST> {
-        #[cfg(feature = "std")]
         if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
             return compiled.map(|(ast, _)| ast);
         }
@@ -267,7 +255,6 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<(AST, program::Positions)> {
-        #[cfg(feature = "std")]
         if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
             return compiled;
         }
@@ -733,7 +720,6 @@ impl Engine {
         })
     }
 
-    #[cfg(feature = "std")]
     fn compile_package_application_descriptor_with_session(
         &self,
         target: &crate::project::Target,

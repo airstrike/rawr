@@ -198,10 +198,7 @@ pub(crate) struct Requirement {
 #[derive(Default)]
 pub(crate) struct Bound(OnceCell<(witness::Authority, Shared<dyn Callback>)>);
 
-#[cfg(feature = "std")]
 type OnceCell<T> = once_cell::sync::OnceCell<T>;
-#[cfg(not(feature = "std"))]
-type OnceCell<T> = once_cell::race::OnceBox<T>;
 
 impl Bound {
     pub(crate) const fn new() -> Self {
@@ -216,10 +213,7 @@ impl Bound {
     }
 
     fn remember(&self, authority: witness::Authority, binding: &Shared<dyn Callback>) {
-        #[cfg(feature = "std")]
         let _ = self.0.set((authority, binding.clone()));
-        #[cfg(not(feature = "std"))]
-        let _ = self.0.set(Box::new((authority, binding.clone())));
     }
 }
 

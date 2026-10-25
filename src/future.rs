@@ -18,12 +18,9 @@
 
 pub use crate::eval::machine::{Frame, Poll};
 
-#[cfg(feature = "std")]
 pub mod facade;
-#[cfg(feature = "std")]
 mod runtime;
-#[cfg(feature = "std")]
 pub use runtime::*;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod tests;

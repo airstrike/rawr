@@ -39,22 +39,22 @@ categories = ["development-tools", "parser-implementations"]
 [dependencies]
 smallvec = { version = "1.7.0", default-features = false, features = ["union", "const_new", "const_generics"] }
 thin-vec = { version = "0.2.13", default-features = false }
-ahash = { version = "0.8.4", default-features = false, features = ["compile-time-rng"] }
-num-traits = { version = "0.2.14", default-features = false }
+ahash = { version = "0.8.4", default-features = false, features = ["std", "compile-time-rng"] }
+num-traits = { version = "0.2.14", default-features = false, features = ["std"] }
 # A project's runner links this crate beside the project's own crates, and any
 # feature added here makes a second once_cell.
-once_cell = { version = "1.20.1", default-features = false, features = ["race", "alloc"] }
+once_cell = { version = "1.20.1", default-features = false, features = ["std"] }
 bitflags = { version = "2.3.3", default-features = false }
 futures-core = { version = "0.3.31", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
-smartstring = { version = "1.0.0", default-features = false }
+smartstring = { version = "1.0.0", default-features = false, features = ["std"] }
 rawr_codegen = { version = "3.2.0", path = "codegen" }
-toml_edit = { package = "rawr-toml-edit", path = "toml/edit", default-features = false, features = ["parse"], optional = true }
+toml_edit = { package = "rawr-toml-edit", path = "toml/edit", default-features = false, features = ["parse"] }
 rawr_import = { package = "rawr-import", path = "importer", optional = true }
 thiserror = { version = "2", optional = true }
 
 serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"], optional = true }
-serde_json = { version = "1.0.45", default-features = false, features = ["alloc"], optional = true }
+serde_json = { version = "1.0.45", default-features = false, features = ["alloc"] }
 unicode-xid = { version = "0.2.0", default-features = false, optional = true }
 rust_decimal = { version = "1.24.0", default-features = false, features = ["maths"], optional = true }
 getrandom = { version = "0.3.4", optional = true }
@@ -64,17 +64,17 @@ arbitrary = { version = "1.3.2", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 rmp-serde = "1.1.1"
-serde_json = { version = "1.0.45", default-features = false, features = ["alloc"] }
 rawr_import = { package = "rawr-import", path = "importer", features = ["test-fixtures"] }
 
 [features]
 
-## Default features: `std`, uses runtime random numbers for hashing.
+## Default features: uses runtime random numbers for hashing.
 default = ["std", "ahash/runtime-rng"] # ahash/runtime-rng trumps ahash/compile-time-rng
-## Standard features: uses compile-time random number for hashing.
-std = ["once_cell/std", "ahash/std", "num-traits/std", "smartstring/std", "dep:toml_edit", "serde_json"]
+## Always on. The name stays because generated runner manifests enable it.
+## Without the default features, hashing uses a compile-time random number.
+std = []
 ## Enable Rawr manifest transformation into a zero-touch Cargo importer request.
-rust-import = ["std", "dep:rawr_import", "dep:thiserror"]
+rust-import = ["dep:rawr_import", "dep:thiserror"]
 ## Build exact real-extraction integration tests with the pinned importer driver.
 rust-import-driver-tests = ["rust-import", "rawr_import/rustc-driver"]
 ## Enable the pinned compiler metadata probe used by Phase 1 extraction.
@@ -91,7 +91,7 @@ serde = ["dep:serde", "smartstring/serde", "smallvec/serde", "thin-vec/serde"]
 ## Allow [Unicode Standard Annex #31](https://unicode.org/reports/tr31/) for identifiers.
 unicode-xid-ident = ["unicode-xid"]
 ## Enable functions metadata (including doc-comments); implies [`serde`](#feature-serde).
-metadata = ["serde", "serde_json", "rawr_codegen/metadata", "smartstring/serde"]
+metadata = ["serde", "rawr_codegen/metadata", "smartstring/serde"]
 ## Expose internal data structures (e.g. `AST` nodes).
 internals = []
 ## Enable the debugging interface (implies [`internals`](#feature-internals)).

@@ -10,10 +10,7 @@
 use crate::host;
 use crate::{EvalAltResult, Position, Shared};
 
-#[cfg(feature = "std")]
 type OnceCell<T> = once_cell::sync::OnceCell<T>;
-#[cfg(not(feature = "std"))]
-type OnceCell<T> = once_cell::race::OnceBox<T>;
 
 /// A compiled program's exact host requirements and, once evaluated, its
 /// bound runtime generation.
@@ -76,10 +73,7 @@ impl Hosted {
                 })?;
             Ok(Shared::new(registry.next_generation()))
         };
-        #[cfg(feature = "std")]
         let bound = self.bound.get_or_try_init(bind)?;
-        #[cfg(not(feature = "std"))]
-        let bound = self.bound.get_or_try_init(|| bind().map(Box::new))?;
         Ok(Some(bound.clone()))
     }
 }

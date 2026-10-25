@@ -127,7 +127,6 @@ pub mod host;
 #[doc(hidden)]
 pub mod island;
 pub mod item;
-#[cfg(feature = "std")]
 pub mod layer;
 /// Resolved inherent method metadata.
 pub mod method;
@@ -136,7 +135,6 @@ mod optimizer;
 /// Rawr's `Option<T>` at runtime, and its round trip to Rust's `Option<T>`.
 pub mod option;
 /// Static Rawr source and local-package graphs.
-#[cfg(feature = "std")]
 pub mod package;
 pub mod packages;
 /// Parsed Rawr compilation units.
@@ -147,12 +145,10 @@ pub mod preview;
 /// Opaque data retained by resolved programs.
 pub mod program;
 /// Canonical Rawr source and project discovery.
-#[cfg(feature = "std")]
 pub mod project;
 /// Receiver modes proven for inherent methods.
 pub mod receiver;
 /// Immutable candidates for script-native program replacement.
-#[cfg(feature = "std")]
 pub mod reload;
 /// Rawr item-name and header-type resolution.
 pub mod resolve;
@@ -211,11 +207,7 @@ type ExclusiveRange = std::ops::Range<INT>;
 /// An inclusive integer range.
 type InclusiveRange = std::ops::RangeInclusive<INT>;
 
-#[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
-
-#[cfg(not(feature = "std"))]
-use once_cell::race::OnceBox as OnceCell;
 
 pub use api::build_type::{CustomType, TypeBuilder};
 pub use api::custom_syntax::Expression;

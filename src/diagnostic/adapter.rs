@@ -271,7 +271,6 @@ impl Report {
     }
 
     /// Transform a project/environment discovery failure.
-    #[cfg(feature = "std")]
     #[must_use]
     pub fn from_project(error: &crate::project::Error) -> Self {
         use crate::project::Error as ProjectError;
