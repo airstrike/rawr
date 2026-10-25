@@ -410,7 +410,7 @@ fn cli_runs_the_playgrounds_rust_examples() {
             // D504: a tuple struct pattern collects through its `FromIterator`.
             "histogram",
             include_str!("fixtures/rust/histogram.rs"),
-            "a ##\ne ####\nh ###\nn ###\no ####\np ##\nr ##\ns ##\nt ###\nu ##\n",
+            "a ##\nd ##\ne ####\ni ###\nk ##\nn ###\no #####\nr ###\ns ###\nu ###\nv ##\ny ##\n",
         ),
         (
             "moves",

@@ -14,7 +14,7 @@ impl FromIterator<char> for Histogram {
 }
 
 fn main() {
-    let text = "The quick brown fox jumps over the lazy dog, then naps.";
+    let text = "Dyno, the quick dinosaur, jumps over five lazy brown ox kegs.";
     let Histogram(counts) = text.chars().collect();
     for (i, &n) in counts.iter().enumerate() {
         if n > 1 {
