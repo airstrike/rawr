@@ -133,7 +133,7 @@
     reset.setAttribute("aria-label", `Restore the original ${name}`);
     reset.title = `Restore the original ${name}`;
     reset.hidden = true;
-    strip.append(reset);
+    button.after(reset);
 
     // While it runs, the icon is three dots: there is nothing to stop. After
     // it, the icon is an ×.
