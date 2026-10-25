@@ -9277,3 +9277,34 @@ println!("{:?} {} {} {} {:?}", evens, m, a, c, long);
         "[2, 4] -7 -7 2 [\"bb\"]\n"
     );
 }
+
+/// `Ord::cmp(&self, other: &Self)` on a `&str` receiver is `str`'s, so
+/// `other` is a `&str`: `a.0.cmp(b.0)`. A `&&str` receiver takes a
+/// `&&str`, and a longer reference derefs to it. rustc prints
+/// `Greater Greater Less Greater Less Greater Some(Greater) Greater
+/// [("apple", 2), ("fig", 3), ("pear", 1)]`.
+#[test]
+fn language_cmp_takes_a_reference_to_the_receivers_type() {
+    assert_eq!(
+        printed(
+            r#"
+let a = ("b", 1);
+let b = ("a", 2);
+let x: &str = "q";
+let y: &&str = &"r";
+let s = String::from("m");
+let t = String::from("n");
+let n = 5;
+let mut v = vec![("pear", 1), ("apple", 2), ("fig", 3)];
+v.sort_by(|p, q| p.0.cmp(q.0));
+println!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", a.0.cmp(b.0), a.0.cmp(&b.0),
+    x.cmp(*y), y.cmp(&&"a"), s.cmp(&t), "z".cmp("y"), a.0.partial_cmp(b.0), n.cmp(&&3), v);
+"#
+        ),
+        "Greater Greater Less Greater Less Greater Some(Greater) Greater \
+         [(\"apple\", 2), (\"fig\", 3), (\"pear\", 1)]\n"
+    );
+    // An integer is not a `&str`: rustc's E0308.
+    let error = rejected(r#"let a = "b"; a.cmp(1); 0"#);
+    assert!(error.contains("mismatch"), "{error}");
+}

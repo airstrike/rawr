@@ -26167,9 +26167,15 @@ impl<'a> Parser<'a> {
             ty => ty,
         };
         let unsigned = matches!(target, Ty::Int(Int::U64 | Int::Usize));
-        let expected = Ty::Reference {
-            mutable: false,
-            target: Box::new(target),
+        // `other: &Self`, `Self` the receiver's type before it is
+        // borrowed: a `&str` receiver is `str`'s `&self`, so `other` is a
+        // `&str` too, as `a.cmp(b)` takes two string slices.
+        let expected = match self.inference.resolve(&value.ty) {
+            receiver @ (Ty::Str | Ty::Reference { mutable: false, .. }) => receiver,
+            _ => Ty::Reference {
+                mutable: false,
+                target: Box::new(target),
+            },
         };
         self.coerce_expr(&expected, &mut other)?;
         let operands = [value.rendered_source(), other.rendered_source()];
