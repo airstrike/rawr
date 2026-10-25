@@ -37465,9 +37465,37 @@ impl<'a> Parser<'a> {
             source = unboxed;
             value.ty = source.clone();
         }
-        if target.is_text() && matches!(&source, Ty::Reference { target, .. } if target.is_text()) {
+        // `&&String` and `&&&str` deref to `&str` through every reference.
+        let mut stripped = source.clone();
+        while target.is_text()
+            && let Ty::Reference { target: from, .. } = &stripped
+            && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
+        {
+            stripped = inner;
+        }
+        if target.is_text() && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
+        {
             source = Ty::Str;
             value.ty = Ty::Str;
+        }
+        // Deref coercion: `&&T` (or `&&&T`) where `&T` is expected, as
+        // `b"aeiou".contains(b)` takes a filter's `&&u8`. A reference is
+        // its value at runtime, so only the type changes.
+        if let Ty::Reference {
+            mutable: false,
+            target: to,
+        } = &target
+            && !matches!(
+                self.inference.resolve(to),
+                Ty::Reference { .. } | Ty::Infer(_)
+            )
+        {
+            while let Ty::Reference { target: from, .. } = &source
+                && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
+            {
+                source = inner;
+                value.ty = source.clone();
+            }
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.

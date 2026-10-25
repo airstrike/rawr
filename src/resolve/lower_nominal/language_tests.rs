@@ -9230,3 +9230,22 @@ main();
         "{error}"
     );
 }
+
+/// Deref coercion at an argument: `&&u8` where `&u8` is expected, and
+/// `&String` where `&str` is. rustc prints `1 2`.
+#[test]
+fn language_arguments_deref_through_nested_references() {
+    assert_eq!(
+        printed(
+            r#"
+fn takes(x: &str) -> usize { x.len() }
+let word = b"rhythm";
+let n = word.iter().filter(|b| b"aeiouy".contains(b)).count();
+let s = String::from("hi");
+let r = &s;
+println!("{} {}", n, takes(r));
+"#
+        ),
+        "1 2\n"
+    );
+}
