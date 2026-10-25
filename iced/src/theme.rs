@@ -217,6 +217,54 @@ fn bind_palette(iced: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain every Seed constant");
     }
+    // iced's `theme::Style`, an application's base colors, which a struct
+    // literal builds from a start value through each field's builder, and
+    // `theme::default(theme)`.
+    type StyleField = (
+        &'static str,
+        fn(&iced::theme::Style) -> iced::Color,
+        fn(&mut iced::theme::Style, iced::Color),
+    );
+    let fields: [StyleField; 2] = [
+        (
+            "background_color",
+            |s| s.background_color,
+            |s, c| s.background_color = c,
+        ),
+        ("text_color", |s| s.text_color, |s, c| s.text_color = c),
+    ];
+    for (name, read, write) in fields {
+        let path = format!("iced::theme::Style::{name}");
+        let owner = path.clone();
+        iced.bind(path, move |args| {
+            if args.len() == 1 {
+                let style = args[0].read_lock::<iced::theme::Style>().ok_or_else(|| {
+                    runtime_error(format!(
+                        "native theme binding received `{}`, expected `{owner}`",
+                        args[0].type_name()
+                    ))
+                })?;
+                return Ok(Dynamic::from(read(&style)));
+            }
+            require_arity(&owner, args, 2)?;
+            let color = take::<iced::Color>(args[1], "iced::Color")?;
+            let mut style = take::<iced::theme::Style>(args[0], "iced::theme::Style")?;
+            write(&mut style, color);
+            Ok(Dynamic::from(style))
+        })
+        .expect("the iced facade must retain every theme style field");
+    }
+    iced.bind("iced::theme::Style::default", |args| {
+        require_arity("theme::Style::default", args, 0)?;
+        Ok(Dynamic::from(iced::theme::default(&iced::Theme::Light)))
+    })
+    .expect("the iced facade must retain theme::Style's start value");
+    iced.bind("iced::theme::default", |args| {
+        require_arity("theme::default", args, 1)?;
+        let theme = take::<Value>(args[0], "iced::Theme")?;
+        Ok(Dynamic::from(iced::theme::default(&theme.native)))
+    })
+    .expect("the iced facade must retain theme::default");
     iced.bind("iced::Theme::custom", |args| {
         require_arity("Theme::custom", args, 2)?;
         let name = string(args[0], "Theme::custom")?;

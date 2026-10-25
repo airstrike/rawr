@@ -169,6 +169,36 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Radians operator");
     }
+    for owner in ["Degrees", "Radians"] {
+        for name in crate::ANGLE_COMPARISONS {
+            let path = format!("iced::{owner}::{name}");
+            builder
+                .bind(path.clone(), move |args| {
+                    let [left, right] = args else {
+                        return Err(arity(&path, 2, args.len()));
+                    };
+                    let left = match owner {
+                        "Degrees" => take::<Degrees>(left, "iced::Degrees")?.0,
+                        _ => take::<Radians>(left, "iced::Radians")?.0,
+                    };
+                    let right = if right.is::<Degrees>() {
+                        take::<Degrees>(right, "iced::Degrees")?.0
+                    } else if right.is::<Radians>() {
+                        take::<Radians>(right, "iced::Radians")?.0
+                    } else {
+                        pixels(right, &path)?
+                    };
+                    Ok(Dynamic::from(match name {
+                        "lt" => left < right,
+                        "le" => left <= right,
+                        "gt" => left > right,
+                        "ge" => left >= right,
+                        _ => left == right,
+                    }))
+                })
+                .expect("the iced facade must retain every angle comparison");
+        }
+    }
     for name in ["add", "sub", "mul", "div"] {
         let path = format!("iced::Vector::{name}");
         builder

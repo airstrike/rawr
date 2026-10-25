@@ -533,6 +533,17 @@ pub(crate) struct Pin {
     pub(crate) height: iced::Length,
 }
 
+/// iced's `responsive(view)`: content its view makes from the size it gets.
+#[derive(Clone)]
+pub(crate) struct Responsive {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    /// A Rawr `Fn(Size) -> Element`.
+    pub(crate) view: rawr::item::Value,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
 /// iced's `float(content)`: content drawn scaled and moved above the rest.
 #[derive(Clone)]
 pub(crate) struct Float {

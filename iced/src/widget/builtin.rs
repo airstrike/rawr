@@ -2556,7 +2556,7 @@ fn bind_intrinsic_control_builders(builder: &mut host::runtime::Builder) {
                 return Err(arity("Slider::step", 2, args.len()));
             }
             let mut slider = take::<marker::Slider>(args[0], "iced::widget::Slider")?;
-            let step = number(args[1], "Slider::step")?;
+            let step = slider_value(args[1], "Slider::step")?;
             if step <= 0.0 {
                 return Err(runtime_error(format!(
                     "Slider::step expects a positive value, found {step}"
@@ -2581,7 +2581,7 @@ fn bind_intrinsic_control_builders(builder: &mut host::runtime::Builder) {
                     return Err(arity(path, 2, args.len()));
                 }
                 let mut slider = take::<marker::Slider>(args[0], "iced::widget::Slider")?;
-                let value = number(args[1], path)?;
+                let value = slider_value(args[1], path)?;
                 set(&mut slider, value);
                 Ok(Dynamic::from(slider))
             })
@@ -3359,6 +3359,18 @@ pub(super) fn number(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAl
             value.type_name()
         ))),
     }
+}
+
+/// A slider's step or value: a number, or an angle for a slider over
+/// `Degrees` or `Radians`, read in its own unit.
+fn slider_value(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAltResult>> {
+    if let Some(degrees) = value.read_lock::<iced::Degrees>() {
+        return Ok(f64::from(degrees.0));
+    }
+    if let Some(radians) = value.read_lock::<iced::Radians>() {
+        return Ok(f64::from(radians.0));
+    }
+    number(value, operation)
 }
 
 /// `slider(Degrees::RANGE, degrees, on_change)`, or over `Radians`: the
