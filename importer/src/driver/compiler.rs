@@ -2849,6 +2849,48 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     ) -> Result<(), String> {
         /// More implementations than this are not read.
         const RELATION_IMPLEMENTATIONS: usize = 64;
+        // `P: Into<T>`, as Freya's `WindowConfig::new(impl Into<AppComponent>)`:
+        // `T`'s implementations of `From<F>` for a parameter `F`, so the
+        // classifier can read the callable one (D551.6).
+        if obligation.polarity == ty::PredicatePolarity::Positive
+            && obligation.associated.is_none()
+            && Some(obligation.trait_id) == self.tcx.get_diagnostic_item(rustc_span::sym::Into)
+            && let Some(target) = obligation
+                .arguments
+                .get(1)
+                .and_then(|argument| argument.as_type())
+            && let ty::Adt(..) = target.kind()
+            && let Some(from) = self.tcx.get_diagnostic_item(rustc_span::sym::From)
+        {
+            let mut implementations = Vec::new();
+            self.tcx
+                .for_each_relevant_impl(from, target, |impl_id| implementations.push(impl_id));
+            implementations.sort_unstable_by_key(|impl_id| {
+                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+            });
+            for impl_id in implementations.into_iter().take(RELATION_IMPLEMENTATIONS) {
+                self.budget.edge(1)?;
+                let generic_source =
+                    self.tcx
+                        .impl_opt_trait_ref(impl_id)
+                        .is_some_and(|reference| {
+                            matches!(
+                                reference
+                                    .instantiate_identity()
+                                    .skip_norm_wip()
+                                    .args
+                                    .get(1)
+                                    .and_then(|argument| argument.as_type())
+                                    .map(|source| source.kind()),
+                                Some(ty::Param(_))
+                            )
+                        });
+                if generic_source && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
+                    self.request_implementation(impl_id, obligation.relevance, None)?;
+                }
+            }
+            return Ok(());
+        }
         if obligation.polarity != ty::PredicatePolarity::Positive
             || obligation.associated.is_some()
             || obligation.arguments.len() < 2

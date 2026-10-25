@@ -274,10 +274,7 @@ macro_rules! insert_native {
 /// text.
 impl std::fmt::Display for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = NATIVE_ARENA.with(|arena| {
-            let arena = arena.try_borrow().ok()?;
-            arena.as_ref()?.display(self.clone())
-        });
+        let text = arena_access(|arena| arena.display(self.clone())).flatten();
         match text {
             Some(text) => f.write_str(&text),
             None => f.write_str("NativeHandle"),
@@ -288,10 +285,7 @@ impl std::fmt::Display for NativeHandle {
 /// `{:?}` of an imported value prints its Rust `Debug` text.
 impl std::fmt::Debug for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = NATIVE_ARENA.with(|arena| {
-            let arena = arena.try_borrow().ok()?;
-            arena.as_ref()?.debug(self.clone())
-        });
+        let text = arena_access(|arena| arena.debug(self.clone())).flatten();
         match text {
             Some(text) => f.write_str(&text),
             None => f.write_str("NativeHandle"),
@@ -302,6 +296,23 @@ struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32> }
 
 thread_local! {
     static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
+}
+
+/// Run the native call `call` with `arena` lent to the script closures it
+/// calls back on this thread, as Freya's event loop calls an app's `fn
+/// app()` from inside `launch` (D551.6).
+#[allow(dead_code)]
+fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
+    __rawr_internal::island::lend::lend(arena, call)
+}
+
+/// `call` with this thread's arena: the one in its cell, or else the one a
+/// native call running on this thread lends. `None` when neither is free.
+fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
+    NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut arena) => Some(call(arena.as_mut()?)),
+        Err(_) => __rawr_internal::island::lend::with(call),
+    })
 }
 
 enum Error {
@@ -716,14 +727,13 @@ fn install_arena(epoch: [u8; 32]) {
 }
 
 fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
-    NATIVE_ARENA.with(|arena| {
-        let mut arena = arena.try_borrow_mut().map_err(|_| Error::Stale)?;
-        let arena = arena.as_mut().ok_or(Error::Stale)?;
+    arena_access(|arena| {
         arena.release_dropped();
         let result = call(arena);
         arena.release_dropped();
         result
     })
+    .unwrap_or(Err(Error::Stale))
 }
 
 /// A receiver an async method borrows, held by its future (D513.6): a copy
@@ -1235,15 +1245,8 @@ fn runtime_project(
         .take()
         .try_cast_result::<NativeHandle>()
         .map_err(|_| runtime_error(Error::TypeMismatch))?;
-    NATIVE_ARENA.with(|arena| {
-        let mut arena = arena
-            .try_borrow_mut()
-            .map_err(|_| runtime_error(Error::Stale))?;
-        arena
-            .as_mut()
-            .ok_or_else(|| runtime_error(Error::Stale))?
-            .project(handle, call)
-    })
+    arena_access(|arena| arena.project(handle, call))
+        .unwrap_or_else(|| Err(runtime_error(Error::Stale)))
 }
 
 fn native_attestation(
@@ -1251,24 +1254,21 @@ fn native_attestation(
     expected: &__rawr_internal::host::runtime::Instantiation<'_>,
 ) -> Option<__rawr_internal::host::runtime::Attested> {
     let handle = value.read_lock::<NativeHandle>().map(|value| value.clone())?;
-    NATIVE_ARENA.with(|arena| {
-        let arena = arena.try_borrow().ok()?;
-        expected.attest_native_witness(arena.as_ref()?.witness(handle))
-    })
+    arena_access(|arena| expected.attest_native_witness(arena.witness(handle))).flatten()
 }
 
 /// `==` of two imported values by their Rust type's `PartialEq`.
 fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
     let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
-    NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.equal(lhs, rhs))
+    arena_access(|arena| arena.equal(lhs, rhs)).flatten()
 }
 
 /// The order of two imported values that key a hashed collection.
 fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
     let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
-    NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.compare(lhs, rhs))
+    arena_access(|arena| arena.compare(lhs, rhs)).flatten()
 }
 
 fn imported_runtime(
@@ -4765,11 +4765,13 @@ fn render_adapter(
                     convert::Type::Nominal { definition, .. }
                         if *definition == crate::surface::identity::Definition::future()
                 );
+                // A native call lends the arena to the script closures it
+                // calls back, as Freya's `launch` calls `fn app()` (D551.6).
                 output
                     .write_all(if lazy {
                         b"    let output = __rawr_profile_host::task::lazy(move || ".as_slice()
                     } else {
-                        b"    let output = ".as_slice()
+                        b"    let output = lend(arguments.arena, || ".as_slice()
                     })
                     .map_err(|_| request::Error::Encoding)?;
                 render_function_path(
@@ -4793,11 +4795,7 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 function_argument_list(signature, substitutions, functions, mappers, None, output)?;
                 output
-                    .write_all(if lazy {
-                        b"));\n".as_slice()
-                    } else {
-                        b");\n".as_slice()
-                    })
+                    .write_all(b"));\n")
                     .map_err(|_| request::Error::Encoding)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
@@ -4994,8 +4992,14 @@ fn render_adapter(
                         output
                             .write_all(b" = take_native(arguments, 0)?;\n")
                             .map_err(|_| request::Error::Encoding)?;
-                        write!(output, "    let output = receiver.{}", plan.name())
-                            .map_err(|_| request::Error::Encoding)?;
+                        // The arena is lent while the method runs, as for a
+                        // function (D551.6).
+                        write!(
+                            output,
+                            "    let output = lend(arguments.arena, || receiver.{}",
+                            plan.name()
+                        )
+                        .map_err(|_| request::Error::Encoding)?;
                     }
                     Receiver::Shared | Receiver::Mutable => {
                         writeln!(
@@ -5039,7 +5043,7 @@ fn render_adapter(
                 argument_list(signature.inputs().len(), 1, output)?;
                 if matches!(receiver, Receiver::Owned) {
                     output
-                        .write_all(b");\n")
+                        .write_all(b"));\n")
                         .map_err(|_| request::Error::Encoding)?;
                 } else {
                     output
@@ -6388,10 +6392,12 @@ fn callable_parameter(
 }
 
 /// A script closure where a generic item takes `F: FnOnce(..) -> R`
-/// (D513.7 b): a Rust closure that calls it, on whichever thread calls the
-/// closure, with an evaluation of its own (D490). Its inputs and output
-/// cross by value; a native value can't, since the arena is the owner
-/// thread's.
+/// (D513.7 b), or `F: Fn(..) -> R + 'static`: a Rust closure that calls it,
+/// on whichever thread calls the closure, with an evaluation of its own
+/// (D490). Its inputs and output cross by value. A native value crosses
+/// through the arena, which is the owner thread's: there a native call lends
+/// it to the closures it calls back, as Freya's `launch` calls `fn app()`
+/// (D551.6). On another thread such a closure panics with the reason.
 fn render_take_callable(
     local: usize,
     index: usize,
@@ -6409,11 +6415,8 @@ fn render_take_callable(
         .map(|input| substituted(input, signature, substitutions))
         .collect::<Result<Vec<_>, _>>()?;
     let returned = substituted(call.output(), signature, substitutions)?;
-    if !inputs.iter().all(by_value) || !by_value(&returned) {
-        return Err(request::Error::Drift {
-            field: "a closure that takes or gives a native value",
-        });
-    }
+    let native_inputs = !inputs.iter().all(by_value);
+    let native_output = !by_value(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
@@ -6423,7 +6426,11 @@ fn render_take_callable(
         parameters.push(format!("input_{position}: {rust}"));
         let mut converted = String::new();
         render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
-        values.push(format!("({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure's input can't cross: {{error:?}}\"))"));
+        values.push(if native_inputs {
+            format!("({converted})?")
+        } else {
+            format!("({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure's input can't cross: {{error:?}}\"))")
+        });
     }
     let rust = concrete_type(&returned).ok_or(request::Error::Drift {
         field: "closure output type",
@@ -6443,11 +6450,30 @@ fn render_take_callable(
     } else {
         (String::new(), "callable.call(&mut values)")
     };
+    // Native values go in and out through the arena, with `arguments` as an
+    // adapter has it.
+    let in_arena = |body: &str| {
+        format!(
+            "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
+        )
+    };
+    let values = if native_inputs {
+        format!(
+            "{}.unwrap_or_else(|error| panic!(\"rawr: a closure's input can't cross: {{error:?}}\"))",
+            in_arena(&format!("Ok([{}])", values.join(", ")))
+        )
+    } else {
+        format!("[{}]", values.join(", "))
+    };
+    let converted = if native_output {
+        in_arena(&converted)
+    } else {
+        format!("({converted})")
+    };
     writeln!(
         output,
-        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = [{}];\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            ({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
+        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
         parameters.join(", "),
-        values.join(", "),
     )
     .map_err(|_| request::Error::Encoding)
 }
@@ -6940,8 +6966,15 @@ fn substitute<'a>(
         return Ok(ty);
     };
     // A script future's output is a `rawr::Value`, whatever type the script
-    // gives it, which comes back checked (D527).
-    if index & crate::classify::representability::signature::FUTURE_OUTPUT != 0 {
+    // gives it, which comes back checked (D527). The synthetic output of a
+    // callable `impl Into<T>` converts from is the instance's (D551.6).
+    let synthetic = crate::classify::representability::signature::FUTURE_OUTPUT;
+    if index & synthetic != 0
+        && signature.parameters().iter().any(|parameter| {
+            parameter.index() == index & !synthetic
+                && parameter.kind() == crate::classify::representability::signature::Kind::Future
+        })
+    {
         static VALUE: std::sync::OnceLock<convert::Type> = std::sync::OnceLock::new();
         return Ok(VALUE.get_or_init(|| convert::Type::Nominal {
             definition: crate::surface::identity::Definition::value(),
@@ -7241,9 +7274,6 @@ fn render_generic_arguments(
         }
         return Ok(());
     }
-    output
-        .write_all(opening)
-        .map_err(|_| request::Error::Encoding)?;
     let mut type_index = 0_usize;
     let mut constant_index = 0_usize;
     let mut written = 0_usize;
@@ -7254,11 +7284,16 @@ fn render_generic_arguments(
             type_index += 1;
             continue;
         }
-        if written != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+        // An argument's `impl Trait` takes no generic argument (E0632).
+        if parameter.name().starts_with("impl ") {
+            if parameter.kind() == crate::classify::representability::signature::Kind::Type {
+                type_index += 1;
+            }
+            continue;
         }
+        output
+            .write_all(if written == 0 { opening } else { b", " })
+            .map_err(|_| request::Error::Encoding)?;
         written += 1;
         match parameter.kind() {
             crate::classify::representability::signature::Kind::Type => {
@@ -7338,6 +7373,9 @@ fn render_generic_arguments(
         return Err(request::Error::Drift {
             field: "generated substitution cardinality",
         });
+    }
+    if written == 0 {
+        return Ok(());
     }
     output.write_all(b">").map_err(|_| request::Error::Encoding)
 }
@@ -7837,8 +7875,9 @@ mod tests {
         );
         assert!(take.contains("let mut values = [];"), "{take}");
         assert!(take.contains("callable.call(&mut values)"), "{take}");
-        // A closure that gives a native value can't: the arena is the owner
-        // thread's.
+        // A closure that gives a native value Rust can't name can't be
+        // made. One it can name goes through the arena (D551.6), as the
+        // erasure fixture's `WindowConfig::new(app)` runs end to end.
         let native = Call::new(
             0,
             Box::default(),

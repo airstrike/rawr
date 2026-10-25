@@ -29,6 +29,8 @@ use crate::program::model::island::Reader;
 use crate::reload::installation::Bootstrap;
 use crate::{item, program, type_def, Dynamic, ImmutableString};
 
+pub mod lend;
+
 /// The native `main` the program registered, until the runner starts it.
 static START: Mutex<Option<fn() -> i32>> = Mutex::new(None);
 /// Whether the native `main` runs.

@@ -509,8 +509,29 @@ impl crate::Engine {
                     .map_err(super::Error::import)?,
                 );
             }
-            // A closure argument is a one-shot callable (D513.7 b).
-            let instance = if used.callable {
+            // A closure argument is a one-shot callable (D513.7 b), or a
+            // shared `'static` one native code may call again (D551.6).
+            let shared =
+                contract
+                    .outcome(identity)
+                    .and_then(|outcome| match outcome.representability() {
+                        Representability::FunctionItem(plan) => match plan.class() {
+                            Some(rawr_import::surface::callable::Class::Shared(proof)) => {
+                                Some(proof.scope())
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+            let instance = if let (true, Some(scope)) = (used.callable, shared) {
+                rawr_import::surface::instance::Arguments::shared(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    scope,
+                    limits,
+                )
+            } else if used.callable {
                 rawr_import::surface::instance::Arguments::once(
                     used.types,
                     Box::default(),
@@ -1785,8 +1806,12 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
             )
         }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
-        // runs there (D513.7 b).
-        Some(rawr_import::surface::callable::Class::Once(_)) => plan.call().is_some(),
+        // runs there (D513.7 b). `F: Fn(..) -> R + 'static`, as Freya's
+        // `AppComponent` holds, may call it again.
+        Some(
+            rawr_import::surface::callable::Class::Once(_)
+            | rawr_import::surface::callable::Class::Shared(_),
+        ) => plan.call().is_some(),
         Some(_) => false,
     }
 }

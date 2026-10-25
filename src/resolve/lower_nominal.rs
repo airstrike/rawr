@@ -14428,7 +14428,7 @@ impl<'a> Parser<'a> {
             {
                 *argument = self.eta_expand(&name, inputs.len(), argument.span)?;
             }
-            self.host_callable(argument)?;
+            self.host_callable_of(argument, !facade)?;
             self.option_host_callable(argument)?;
             // A `T: Into<Length>` passed where the library takes a `Length`:
             // the caller converted it (`convert_into_host`), so it is one.
@@ -31152,6 +31152,13 @@ impl<'a> Parser<'a> {
     }
 
     fn host_callable(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
+        self.host_callable_of(value, false)
+    }
+
+    /// [`host_callable`](Self::host_callable), where a function of no
+    /// inputs is a callable too when `nullary`: an imported item takes
+    /// Freya's `fn app()` as the closure that calls it (D551.6).
+    fn host_callable_of(&mut self, value: &mut ParsedExpr, nullary: bool) -> Result<(), Error> {
         let Ty::FnItem {
             key,
             inputs,
@@ -31163,7 +31170,7 @@ impl<'a> Parser<'a> {
         if let Some(function) = self.models.functions_by_key.get(&*key).cloned() {
             // A function of no inputs stays itself, as `State::default`
             // passed to `iced::application`.
-            if inputs.is_empty() {
+            if inputs.is_empty() && !nullary {
                 return Ok(());
             }
             let symbolic = self.symbolic_function(&function, value.span)?;

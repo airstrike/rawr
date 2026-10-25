@@ -312,6 +312,27 @@ fn main() {
 ",
         "rect 100 true [Hello, World]\n",
     );
+    // Freya's `WindowConfig::new(impl Into<AppComponent>)`, which takes any
+    // `F: Fn() -> E + 'static` through `From<F> for AppComponent`: a named
+    // function of no inputs or a closure. Native code calls it back from
+    // inside a native call, which lends it the arena, and it gives back a
+    // native value (D551.6 c).
+    runs(
+        "
+use natives::*;
+
+fn app() -> impl IntoElement {
+    rect().expanded().center().child(\"Hello\")
+}
+
+fn main() {
+    println!(\"{}\", WindowConfig::new(app).launch(2));
+    let label = String::from(\"closure\");
+    println!(\"{}\", WindowConfig::new(move || rect().child(label.clone())).launch(1));
+}
+",
+        "rect 100 true [Hello]; rect 100 true [Hello]\nrect 0 false [closure]\n",
+    );
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native

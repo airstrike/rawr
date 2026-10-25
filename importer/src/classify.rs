@@ -716,7 +716,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             if matches!(parameter.kind(), model::ParameterKind::Lifetime { .. }) {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
-            if !facade_segment_nameable(parameter.name()) {
+            // An argument's `impl Fn(..)` takes a script closure, and no
+            // signature names it.
+            if !facade_segment_nameable(parameter.name())
+                && !(parameter.name().starts_with("impl ")
+                    && self.callable_bound(generics, parameter.index()))
+            {
                 return Err(representability::reject::Kind::UnnameableType.into());
             }
         }
@@ -763,6 +768,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             );
         }
         Ok(parameters.into_boxed_slice())
+    }
+
+    /// Whether `generics` bound the parameter at `index` by `Fn`, `FnMut`
+    /// or `FnOnce`.
+    fn callable_bound(&self, generics: &model::Generics, index: u32) -> bool {
+        generics.predicates().any(|predicate| {
+            matches!(
+                predicate,
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *bounded == index
+                    && matches!(self.definition_name(trait_id), Some("Fn" | "FnMut" | "FnOnce"))
+            )
+        })
     }
 
     /// The synthetic parameters of `impl AsRef<str>` or `impl Into<String>`
@@ -1029,6 +1049,136 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// The type parameters bounded by `core::future::Future`, marked as
     /// future parameters, each with a synthetic `F::Output` parameter
     /// appended: `(index, owner)`.
+    /// `generics` with an `impl Into<T>` parameter read as the callable that
+    /// `T`'s one callable `From` implementation converts from, as Freya's
+    /// `WindowConfig::new(impl Into<AppComponent>)` with `impl<F: Fn() -> E +
+    /// 'static, E: IntoElement> From<F> for AppComponent`. The parameter
+    /// takes that implementation's bounds, and its other parameter `E` is a
+    /// synthetic one the instance infers, as a future's `F::Output` is
+    /// (D527). `None` when nothing is read so.
+    fn callable_conversion(&self, generics: &model::Generics) -> Option<model::Generics> {
+        let callable = |predicate: &model::Predicate| {
+            matches!(
+                predicate,
+                model::Predicate::Bound {
+                    bound: model::Bound::Trait { trait_id, .. },
+                    ..
+                } if matches!(self.definition_name(trait_id), Some("Fn" | "FnMut" | "FnOnce"))
+            )
+        };
+        if generics.predicates().any(callable) {
+            return None;
+        }
+        let (into, owner, parameter, target) =
+            generics
+                .predicates()
+                .enumerate()
+                .find_map(|(position, predicate)| {
+                    let model::Predicate::Bound {
+                        ty: model::Type::Parameter { owner, index },
+                        bound:
+                            model::Bound::Trait {
+                                trait_id,
+                                arguments,
+                                polarity: model::Polarity::Positive,
+                                binders,
+                            },
+                    } = predicate
+                    else {
+                        return None;
+                    };
+                    let [model::Argument::Type(target @ model::Type::Definition { .. })] =
+                        arguments.as_ref()
+                    else {
+                        return None;
+                    };
+                    (binders.is_empty() && self.is_core_trait(trait_id, "Into"))
+                        .then_some((position, owner, *index, target))
+                })?;
+        // The implementations of `From<F>` for `T` whose `F` is a callable.
+        let mut found = self.graph.implementations().filter(|implementation| {
+            let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+                return false;
+            };
+            implementation.self_type() == target
+                && self.is_core_trait(id, "From")
+                && matches!(
+                    arguments.as_ref(),
+                    [_, model::Argument::Type(model::Type::Parameter { index, .. })]
+                        if implementation.generics().predicates().any(|predicate| matches!(
+                            predicate,
+                            model::Predicate::Bound {
+                                ty: model::Type::Parameter { index: bound, .. },
+                                ..
+                            } if bound == index
+                        ) && callable(predicate))
+                )
+        });
+        let implementation = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        let model::Trait::Trait { arguments, .. } = implementation.trait_ref() else {
+            return None;
+        };
+        let [_, model::Argument::Type(model::Type::Parameter { index: source, .. })] =
+            arguments.as_ref()
+        else {
+            return None;
+        };
+        // `F` is the parameter, and at most one other, `E`, is synthetic.
+        let mut others = implementation
+            .generics()
+            .parameters()
+            .filter(|candidate| candidate.index() != *source);
+        let other = others.next();
+        if others.next().is_some()
+            || other.is_some_and(|other| !matches!(other.kind(), model::ParameterKind::Type { .. }))
+        {
+            return None;
+        }
+        let synthetic = representability::signature::future_output(parameter);
+        let renamed = |index: u32| {
+            if index == *source {
+                Some(parameter)
+            } else if other.is_some_and(|other| other.index() == index) {
+                Some(synthetic)
+            } else {
+                None
+            }
+        };
+        let mut predicates = generics
+            .predicates()
+            .enumerate()
+            .filter(|(position, _)| *position != into)
+            .map(|(_, predicate)| predicate.clone())
+            .collect::<Vec<_>>();
+        for predicate in implementation.generics().predicates() {
+            predicates.push(relabel_predicate(
+                predicate,
+                implementation.id(),
+                owner,
+                &renamed,
+            )?);
+        }
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        if let Some(other) = other {
+            parameters.push(model::Parameter::new(
+                owner.clone(),
+                synthetic,
+                other.name().into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ));
+        }
+        Some(model::Generics::new(
+            parameters.into_boxed_slice(),
+            predicates.into_boxed_slice(),
+        ))
+    }
+
     fn future_parameters(
         &self,
         generics: &model::Generics,
@@ -3099,6 +3249,17 @@ impl<P: api::Phase> Context<'_, P> {
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
+            // An invocation's signature declares each of its parameters, and
+            // an argument's `impl Fn(..)` has no name to declare, as in
+            // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`.
+            if item
+                .signature()
+                .parameters()
+                .iter()
+                .any(|parameter| parameter.name().starts_with("impl "))
+            {
+                return Err(reject::Kind::CallableProtocol.into());
+            }
             Ok(Representability::Invocation(callable::Invocation::new(
                 item,
                 container_parameters,
@@ -3598,6 +3759,8 @@ impl<P: api::Phase> Context<'_, P> {
         if !receiver_binder_is_exact(signature) && !late_binders_lend_strings(signature) {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
         }
+        let converted = self.callable_conversion(generics);
+        let generics = converted.as_ref().unwrap_or(generics);
         let strings = self.string_parameters(generics);
         let FunctionParameters {
             mut parameters,
@@ -3724,6 +3887,16 @@ impl<P: api::Phase> Context<'_, P> {
                 let returned = self.convert_value(&returned).ok()?;
                 Some(callable::Call::new(parameter, inputs, returned))
             });
+            // An argument's `impl Fn(..)` has no name a signature can
+            // declare, so only an item whose closure Rawr can make keeps it.
+            if call.is_none()
+                && signature_plan
+                    .parameters()
+                    .iter()
+                    .any(|parameter| parameter.name().starts_with("impl "))
+            {
+                return Err(representability::reject::Kind::CallableProtocol.into());
+            }
             return Ok(Representability::FunctionItem(
                 callable::Item::new(
                     signature_plan,
@@ -4327,6 +4500,140 @@ fn future_projections(
 }
 
 /// Whether `ty` names a type parameter other than the one at `except`.
+/// `predicate` of the implementation `from` with each of its type
+/// parameters the one of `owner` that `renamed` gives. `None` when it names
+/// one `renamed` has no place for.
+fn relabel_predicate(
+    predicate: &model::Predicate,
+    from: &api::identity::Definition,
+    owner: &api::identity::Definition,
+    renamed: &impl Fn(u32) -> Option<u32>,
+) -> Option<model::Predicate> {
+    let ty = |ty: &model::Type| relabel_type(ty, from, owner, renamed);
+    Some(match predicate {
+        model::Predicate::Bound { ty: bounded, bound } => model::Predicate::Bound {
+            ty: ty(bounded)?,
+            bound: relabel_bound(bound, from, owner, renamed)?,
+        },
+        model::Predicate::ProjectionEquality {
+            projection,
+            ty: equal,
+        } => model::Predicate::ProjectionEquality {
+            projection: ty(projection)?,
+            ty: ty(equal)?,
+        },
+        model::Predicate::TypeOutlives {
+            ty: outliving,
+            lifetime,
+        } => model::Predicate::TypeOutlives {
+            ty: ty(outliving)?,
+            lifetime: lifetime.clone(),
+        },
+        model::Predicate::LifetimeOutlives { .. } | model::Predicate::ConstEvaluatable(_) => {
+            predicate.clone()
+        }
+    })
+}
+
+fn relabel_bound(
+    bound: &model::Bound,
+    from: &api::identity::Definition,
+    owner: &api::identity::Definition,
+    renamed: &impl Fn(u32) -> Option<u32>,
+) -> Option<model::Bound> {
+    Some(match bound {
+        model::Bound::Trait {
+            trait_id,
+            arguments,
+            polarity,
+            binders,
+        } => model::Bound::Trait {
+            trait_id: trait_id.clone(),
+            arguments: relabel_arguments(arguments, from, owner, renamed)?,
+            polarity: *polarity,
+            binders: binders.clone(),
+        },
+        model::Bound::MaybeSized => model::Bound::MaybeSized,
+    })
+}
+
+fn relabel_arguments(
+    arguments: &[model::Argument],
+    from: &api::identity::Definition,
+    owner: &api::identity::Definition,
+    renamed: &impl Fn(u32) -> Option<u32>,
+) -> Option<Box<[model::Argument]>> {
+    arguments
+        .iter()
+        .map(|argument| match argument {
+            model::Argument::Type(ty) => {
+                relabel_type(ty, from, owner, renamed).map(model::Argument::Type)
+            }
+            other => Some(other.clone()),
+        })
+        .collect()
+}
+
+fn relabel_type(
+    ty: &model::Type,
+    from: &api::identity::Definition,
+    owner: &api::identity::Definition,
+    renamed: &impl Fn(u32) -> Option<u32>,
+) -> Option<model::Type> {
+    let inner = |ty: &model::Type| relabel_type(ty, from, owner, renamed).map(Box::new);
+    Some(match ty {
+        model::Type::Parameter {
+            owner: parameter_owner,
+            index,
+        } if parameter_owner == from => model::Type::Parameter {
+            owner: owner.clone(),
+            index: renamed(*index)?,
+        },
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: relabel_arguments(arguments, from, owner, renamed)?,
+        },
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => model::Type::Projection {
+            trait_id: trait_id.clone(),
+            associated: associated.clone(),
+            arguments: relabel_arguments(arguments, from, owner, renamed)?,
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| relabel_type(member, from, owner, renamed))
+                .collect::<Option<_>>()?,
+        ),
+        model::Type::Slice(element) => model::Type::Slice(inner(element)?),
+        model::Type::Array { element, length } => model::Type::Array {
+            element: inner(element)?,
+            length: length.clone(),
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: inner(ty)?,
+        },
+        model::Type::RawPointer { mutability, ty } => model::Type::RawPointer {
+            mutability: *mutability,
+            ty: inner(ty)?,
+        },
+        model::Type::SelfType(id) if id == from => return None,
+        model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. } => return None,
+        other => other.clone(),
+    })
+}
+
 fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> bool {
     use representability::convert::Type;
     let other = |ty: &Type| names_other_parameter(ty, except);

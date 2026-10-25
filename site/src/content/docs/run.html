@@ -50,8 +50,8 @@
 <ul>
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
   <li>Marked code can&rsquo;t call items written in the native root itself.</li>
-  <li>A marked <code>main</code> doesn&rsquo;t run on the process&rsquo;s main thread. Keep <code>main</code> native when an event loop needs that thread.</li>
 </ul>
+<p>A marked <code>main</code> runs on the process&rsquo;s main thread too, with the interpreter. So a marked crate root can start a winit event loop itself, as Freya&rsquo;s <code>launch</code> does. A save restarts such a program.</p>
 
 <h2 id="async">An async main</h2>
 <p>A marked crate root may have an <code>async fn main</code> under its runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>. The runtime is the one in your <code>Cargo.toml</code>, built by Cargo as <code>cargo run</code> builds it. rawr adds none and favors none.</p>
