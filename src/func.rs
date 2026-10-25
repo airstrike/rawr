@@ -3,8 +3,6 @@
 pub mod builtin;
 pub mod call;
 pub mod func_args;
-#[allow(clippy::module_inception)]
-pub mod func_trait;
 pub mod function;
 pub mod hashing;
 pub mod native;
@@ -19,8 +17,6 @@ pub use call::ensure_no_data_race;
 pub use call::is_anonymous_fn;
 pub use call::FnCallArgs;
 pub use func_args::FuncArgs;
-#[cfg(not(feature = "no_function"))]
-pub use func_trait::Func;
 pub use function::RawrFunc;
 #[cfg(not(feature = "no_object"))]
 #[cfg(not(feature = "no_function"))]

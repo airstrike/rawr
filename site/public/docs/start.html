@@ -68,7 +68,7 @@
 <p><code>rawr new hello</code> creates a Cargo crate with no dependencies.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
-  <pre><code data-lang="rust">// rawr
+  <pre><code data-lang="rust" data-run="hello.rs" id="src-hello">// rawr
 // `rawr run` interprets this file, and `cargo build` compiles it as
 // ordinary Rust.
 
@@ -92,7 +92,7 @@ fn main() {
         println!("{}", greeting.line(count));
     }
 }</code></pre>
-  <div class="run"><b>rawr run</b><span>1. Hello, rawr!
+  <div class="run"><button type="button" class="runbtn" data-source="src-hello" data-out="out-hello" aria-label="Run this file on rawr's server" hidden></button><b>rawr run</b><span id="out-hello" aria-live="polite">1. Hello, rawr!
 2. Hello, rawr!
 3. Hello, rawr!</span></div>
 </div>

@@ -9180,3 +9180,241 @@ fn language_a_closure_takes_its_parameter_types_from_impl_fn() {
     "#);
     assert_eq!(value, 2);
 }
+
+/// Words the old dialect reserved that Rust doesn't are ordinary names,
+/// even when a host disables them, as `?play` disables `eval`. rustc
+/// prints `42 49` for this program.
+#[test]
+fn language_dialect_words_are_ordinary_names() {
+    let source = r#"
+fn eval(x: i64) -> i64 { x * 2 }
+fn main() {
+    let call = 3;
+    let this = 4;
+    let print = 5;
+    let debug = 6;
+    let curry = 7;
+    let type_of = 8;
+    let go = 9;
+    let is_shared = 1;
+    let is_def_var = 1;
+    let is_def_fn = 1;
+    let throw = 1;
+    let goto = 1;
+    let var = 1;
+    let null = 1;
+    let spawn = 1;
+    let thread = 1;
+    println!("{} {}", eval(21), call + this + print + debug + curry + type_of + go + is_shared
+        + is_def_var + is_def_fn + throw - goto + var + null + spawn + thread);
+}
+main();
+"#;
+    assert_eq!(printed(source), "42 49\n");
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    for symbol in ["import", "eval", "print", "debug"] {
+        engine.disable_symbol(symbol);
+    }
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(*lines.lock().unwrap(), "42 49\n");
+    // `throw` is a name, so a value after it is rustc's parse error.
+    let error =
+        rejected(r#"fn f(flag: bool) -> i64 { if flag { throw "branch" } else { 0 } } f(true)"#);
+    assert!(
+        error.contains(
+            "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `\"branch\"`"
+        ),
+        "{error}"
+    );
+}
+
+/// Deref coercion at an argument: `&&u8` where `&u8` is expected, and
+/// `&&String` or `&&&str` where `&str` is. rustc prints `1 2 3 2`.
+#[test]
+fn language_arguments_deref_through_nested_references() {
+    assert_eq!(
+        printed(
+            r#"
+fn takes(x: &str) -> usize { x.len() }
+fn byte(x: &u8) -> u8 { *x }
+let word = b"rhythm";
+let n = word.iter().filter(|b| b"aeiouy".contains(b)).count();
+let s = String::from("hi");
+let r = &s;
+let k: &&u8 = &&3u8;
+println!("{} {} {} {}", n, takes(r), byte(k), takes(&&s));
+"#
+        ),
+        "1 2 3 2\n"
+    );
+    // A `&&u8` where a `u8` is expected stays rustc's E0308.
+    let error = rejected("fn byte(x: u8) -> i64 { x as i64 } let k: &&u8 = &&3u8; byte(k)");
+    assert!(error.contains("mismatch"), "{error}");
+}
+
+/// A closure parameter annotated with a nested reference, and the `&&T`
+/// that `min_by_key` and kin pass over `v.iter()`. rustc prints
+/// `[2, 4] -7 -7 2 ["bb"]`.
+#[test]
+fn language_closure_parameters_take_nested_references() {
+    assert_eq!(
+        printed(
+            r#"
+let v: Vec<u32> = vec![1, 2, 3, 4];
+let evens: Vec<&u32> = v.iter().filter(|x: &&u32| **x % 2 == 0).collect();
+let w: Vec<i64> = vec![4, -7, 2];
+let m = w.iter().min_by_key(|x| **x).unwrap();
+let a = w.iter().max_by_key(|x: &&i64| x.abs()).unwrap();
+let c = w.iter().filter(|&&x| x > 0).count();
+let s: Vec<&str> = vec!["a", "bb"];
+let long: Vec<&&str> = s.iter().filter(|w: &&&str| w.len() > 1).collect();
+println!("{:?} {} {} {} {:?}", evens, m, a, c, long);
+"#
+        ),
+        "[2, 4] -7 -7 2 [\"bb\"]\n"
+    );
+}
+
+/// `Ord::cmp(&self, other: &Self)` on a `&str` receiver is `str`'s, so
+/// `other` is a `&str`: `a.0.cmp(b.0)`. A `&&str` receiver takes a
+/// `&&str`, and a longer reference derefs to it. rustc prints
+/// `Greater Greater Less Greater Less Greater Some(Greater) Greater
+/// [("apple", 2), ("fig", 3), ("pear", 1)]`.
+#[test]
+fn language_cmp_takes_a_reference_to_the_receivers_type() {
+    assert_eq!(
+        printed(
+            r#"
+let a = ("b", 1);
+let b = ("a", 2);
+let x: &str = "q";
+let y: &&str = &"r";
+let s = String::from("m");
+let t = String::from("n");
+let n = 5;
+let mut v = vec![("pear", 1), ("apple", 2), ("fig", 3)];
+v.sort_by(|p, q| p.0.cmp(q.0));
+println!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", a.0.cmp(b.0), a.0.cmp(&b.0),
+    x.cmp(*y), y.cmp(&&"a"), s.cmp(&t), "z".cmp("y"), a.0.partial_cmp(b.0), n.cmp(&&3), v);
+"#
+        ),
+        "Greater Greater Less Greater Less Greater Some(Greater) Greater \
+         [(\"apple\", 2), (\"fig\", 3), (\"pear\", 1)]\n"
+    );
+    // An integer is not a `&str`: rustc's E0308.
+    let error = rejected(r#"let a = "b"; a.cmp(1); 0"#);
+    assert!(error.contains("mismatch"), "{error}");
+}
+
+/// An inline `format!` argument names any value in scope, as rustc
+/// resolves it: a `const`, a `static` and an imported constant, with a
+/// width or precision of their own or from a `const`. rustc prints
+/// `hello 10`, `   hello|0010|6.3`, `3 hello`, `1 3.14 ["a", "b"] [     7]`.
+#[test]
+fn language_inline_format_arguments_name_consts_and_statics() {
+    assert_eq!(
+        printed(
+            r#"
+use std::f64::consts::PI;
+const GREETING: &str = "hello";
+static LIMIT: u32 = 10;
+const PI2: f64 = 6.28;
+const WIDTH: usize = 6;
+const NAMES: [&str; 2] = ["a", "b"];
+fn main() {
+    println!("{GREETING} {LIMIT}");
+    println!("{GREETING:>8}|{LIMIT:04}|{PI2:.1}");
+    let local = 3;
+    println!("{local} {GREETING}");
+    let n = format!("{WIDTH}").len();
+    println!("{n} {PI:.2} {NAMES:?} [{:>WIDTH$}]", 7);
+}
+main();
+"#
+        ),
+        "hello 10\n   hello|0010|6.3\n3 hello\n1 3.14 [\"a\", \"b\"] [     7]\n"
+    );
+    // A name that is no value in scope: rustc's E0425 text.
+    let error = rejected(r#"fn main() { println!("{MISSING}"); } 0"#);
+    assert!(
+        error.contains("cannot find value `MISSING` in this scope"),
+        "{error}"
+    );
+}
+
+/// `Send`, `Sync` and the other auto traits are bounds rustc reads on a
+/// generic parameter, in a `where` clause, on an `impl`, as a supertrait
+/// and in `impl Trait`, bare or by their `std::marker` path. rustc prints
+/// `5 s 2.5 7 5 5`.
+#[test]
+fn language_send_and_sync_are_bounds() {
+    assert_eq!(
+        printed(
+            r#"
+fn needs_send<T: Send>(value: T) -> T { value }
+fn needs_both<T>(value: T) -> T where T: Send + Sync { value }
+struct Wrapper<T: Send> { inner: T }
+impl<T: Send> Wrapper<T> { fn get(self) -> T { self.inner } }
+trait Job: Send + Sync { fn run(&self) -> i32; }
+struct J;
+impl Job for J { fn run(&self) -> i32 { 7 } }
+fn full<T: std::marker::Send + Clone + 'static>(value: T) -> T { value.clone() }
+fn shown(value: impl Send + std::fmt::Display) -> String { format!("{value}") }
+fn main() {
+    let job: Box<dyn Job> = Box::new(J);
+    println!("{} {} {} {} {} {}", needs_send(5), needs_both(String::from("s")),
+        Wrapper { inner: 2.5 }.get(), job.run(), full(5), shown(5));
+}
+main();
+"#
+        ),
+        "5 s 2.5 7 5 5\n"
+    );
+}
+
+/// `TryFromIntError` and `FromUtf8Error` print as rustc prints them:
+/// `{:?}` names the overflow's side or the bytes and the `Utf8Error`, and
+/// `{}` is std's message. The expected lines are rustc's.
+#[test]
+fn language_std_errors_print_as_rustc_prints_them() {
+    assert_eq!(
+        printed(
+            r#"
+use std::num::TryFromIntError;
+fn narrow(x: i64) -> Result<u8, TryFromIntError> { u8::try_from(x) }
+fn main() {
+    let r: Result<u8, _> = u8::try_from(300i32);
+    println!("{:?}", r);
+    println!("{:?}", i8::try_from(-200i64));
+    let t: Result<u16, _> = 70000i64.try_into();
+    println!("{:?} {:?}", t, u8::try_from(7i64));
+    if let Err(e) = u8::try_from(300i32) { println!("{e} | {e:?} | {}", e.to_string()); }
+    println!("{:?} {}", narrow(-1), narrow(-1) == narrow(-2));
+    println!("{}", narrow(256) == narrow(-1));
+    let e = String::from_utf8(vec![0x41, 0xff, 0x42]).unwrap_err();
+    println!("{e} | {e:?}");
+    let e = String::from_utf8(vec![0x41, 0xe2, 0x82]).unwrap_err();
+    println!("{e} | {e:?} | {}", e.to_string());
+    println!("{:?} {:?}", String::from_utf8(vec![0x68, 0x69]), "x1".parse::<i32>());
+}
+main();
+"#
+        ),
+        "Err(TryFromIntError(PosOverflow))\n\
+         Err(TryFromIntError(NegOverflow))\n\
+         Err(TryFromIntError(PosOverflow)) Ok(7)\n\
+         out of range integral type conversion attempted | TryFromIntError(PosOverflow) | \
+         out of range integral type conversion attempted\n\
+         Err(TryFromIntError(NegOverflow)) true\n\
+         false\n\
+         invalid utf-8 sequence of 1 bytes from index 1 | FromUtf8Error { bytes: [65, 255, 66], \
+         error: Utf8Error { valid_up_to: 1, error_len: Some(1) } }\n\
+         incomplete utf-8 byte sequence from index 1 | FromUtf8Error { bytes: [65, 226, 130], \
+         error: Utf8Error { valid_up_to: 1, error_len: None } } | incomplete utf-8 byte sequence \
+         from index 1\n\
+         Ok(\"hi\") Err(ParseIntError { kind: InvalidDigit })\n"
+    );
+}

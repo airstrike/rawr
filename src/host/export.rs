@@ -31,6 +31,15 @@ pub trait Value: Sized + 'static {
     ///
     /// Returns an error when the type's name is not a valid path.
     fn ty() -> Result<Type, host::Error>;
+    /// The script type with the root `registry` exported it under, such as
+    /// `bank::Transaction`, which tells two roots' types of one name apart.
+    #[doc(hidden)]
+    fn qualified(registry: &host::Registry) -> Result<Type, host::Error> {
+        match registry.exported_path(std::any::TypeId::of::<Self>()) {
+            Some(path) => Type::registered(path),
+            None => Self::ty(),
+        }
+    }
     /// The script value.
     fn into_dynamic(self) -> Dynamic;
     /// The Rust value a script passed.
@@ -116,6 +125,9 @@ impl Value for () {
 impl<T: Value> Value for Option<T> {
     fn ty() -> Result<Type, host::Error> {
         Ok(Type::option(T::ty()?))
+    }
+    fn qualified(registry: &host::Registry) -> Result<Type, host::Error> {
+        Ok(Type::option(T::qualified(registry)?))
     }
     fn into_dynamic(self) -> Dynamic {
         match self {

@@ -252,6 +252,34 @@ fn cli_stops_an_endless_plain_program_at_the_time_limit() {
 }
 
 #[test]
+fn cli_sleeps_on_the_simulated_clock_at_no_cost() {
+    // The clock moves straight to each timer's end: 10 s of sleeps, then an
+    // hour, end well within the default budget.
+    let slept = text_result(
+        "use std::time::Duration;\nuse tokio::time::{sleep, Instant};\n\n#[tokio::main]\nasync fn main() {\n    let start = Instant::now();\n    for _ in 0..10 {\n        sleep(Duration::from_secs(1)).await;\n    }\n    println!(\"{} s\", start.elapsed().as_secs());\n    sleep(Duration::from_secs(3600)).await;\n    println!(\"{} s\", start.elapsed().as_secs());\n}\n",
+        &[],
+    );
+    assert_eq!(
+        (slept.text().as_str(), slept.status, slept.limit),
+        ("10 s\n3610 s\n", 0, false)
+    );
+}
+
+#[test]
+fn cli_reports_the_time_limit_when_it_cuts_an_async_programs_boot() {
+    // A 1 ms budget ends the run as the program boots: the reply names the
+    // limit, not the engine's "Script terminated" at the closing brace.
+    let result = run_stdin(include_str!("fixtures/rust/tasks.rs"), &["--time-ms", "1"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    let cut = rawr_play::Output::from_json(&result.stdout).unwrap();
+    assert_eq!(
+        (cut.text().as_str(), cut.status, cut.limit),
+        ("time limit exceeded\n", 1, true)
+    );
+}
+
+#[test]
 fn cli_still_writes_an_image_for_a_prelude_only_snippet() {
     let result = run_stdin(
         "column![text(\"hi\"), button(\"go\")]",
@@ -398,4 +426,141 @@ fn cli_renders_the_playgrounds_iced_examples() {
         let png = render_fixture_with(name, &format!("example_{name}"), args);
         assert!(colors(&png) > 16, "{name} drew a blank frame");
     }
+}
+
+#[test]
+fn cli_runs_the_playgrounds_rust_examples() {
+    // Each is a plain program in the playground's Rust group (examples.ts),
+    // with the stdout rustc's build of it prints. The async one runs on the
+    // simulated clock; a debug build needs more than the default budget.
+    let examples: [(&str, &str, &str); 8] = [
+        (
+            // D504: a tuple struct pattern collects through its `FromIterator`.
+            "histogram",
+            include_str!("fixtures/rust/histogram.rs"),
+            "a ##\nb #\nc #\nd ##\ne ####\nf ##\ng #\nh #\ni ##\nj #\nk #\nl ##\nm #\nn ###\no ###\np #\nq #\nr #\ns #\nt ##\nu ##\nv #\nw ##\nx #\ny ###\nz #\n",
+        ),
+        (
+            "moves",
+            include_str!("fixtures/rust/moves.rs"),
+            "FERRIS\n[\"ferris\", \"ferris\"]\nferris and ferris\n",
+        ),
+        (
+            "enums",
+            include_str!("fixtures/rust/enums.rs"),
+            "2 3 + 4 * = 20\n      1 + : + needs two values\n    6 7 x : not a command: \"x\"\n          : empty program\n",
+        ),
+        (
+            "traits",
+            include_str!("fixtures/rust/traits.rs"),
+            "circle r=2.5     19.63\nrect 2x9.5       19.00\n",
+        ),
+        (
+            "iterators",
+            include_str!("fixtures/rust/iterators.rs"),
+            "squares: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]\neven sum: 220\nunder 30: 5\nlengths: 1:5 2:6 3:6\nticked to 9\n",
+        ),
+        (
+            "word_count",
+            include_str!("fixtures/rust/word_count.rs"),
+            " the 4\n  on 2\n sat 2\n8 distinct words\n",
+        ),
+        (
+            // D515: a `&str` loop pattern passed by value, then used again.
+            "strings",
+            include_str!("fixtures/rust/strings.rs"),
+            "ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n",
+        ),
+        (
+            "tasks",
+            include_str!("fixtures/rust/tasks.rs"),
+            "fetch at 100 ms\nparse at 200 ms\nrender at 300 ms\n3 jobs in 300 ms\n",
+        ),
+    ];
+    for (name, source, expected) in examples {
+        let output = text_result(source, &[]);
+        assert_eq!(
+            (output.text().as_str(), output.status),
+            (expected, 0),
+            "{name}"
+        );
+    }
+
+    // The error example fails as rustc does, with E0382 at the use.
+    let result = run_stdin(include_str!("fixtures/rust/use_after_move.rs"), &[]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("use of moved value: `words`")
+            && stderr.contains("play.rs:10:5")
+            && stderr.contains("value moved here"),
+        "{stderr}"
+    );
+
+    // Every Rust example is here, and examples.ts lists each one.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let menu = std::fs::read_to_string(root.join("deploy/cloudflare/src/examples.ts")).unwrap();
+    let mut files: Vec<String> = std::fs::read_dir(root.join("tests/fixtures/rust"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    let mut tested: Vec<String> = examples
+        .iter()
+        .map(|(name, ..)| format!("{name}.rs"))
+        .chain(["use_after_move.rs".to_owned()])
+        .collect();
+    tested.sort();
+    assert_eq!(files, tested);
+    for file in files {
+        assert!(
+            menu.contains(&format!("\"../../../tests/fixtures/rust/{file}\"")),
+            "examples.ts does not import {file}"
+        );
+    }
+}
+
+/// `rawr-play` run on `tests/fixtures/{name}.rs` with `args`, writing to
+/// stdout: the image's bytes and stderr's lines.
+fn render_to_stdout(name: &str, args: &[&str]) -> (Vec<u8>, Vec<String>) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let result = Command::new(env!("CARGO_BIN_EXE_rawr-play"))
+        .arg(root.join(format!("tests/fixtures/{name}.rs")))
+        .args(args)
+        .args(["-o", "-"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    (result.stdout, stderr.lines().map(str::to_owned).collect())
+}
+
+#[test]
+fn cli_steps_click_the_counter_as_its_messages_do() {
+    let (clicked, lines) =
+        render_to_stdout("counter", &["--step", "0", "--step", "0", "--step", "1"]);
+    assert_eq!(
+        lines,
+        [
+            "action: Increment",
+            "action: Decrement",
+            "click: Increment",
+            "click: Increment",
+            "click: Decrement",
+        ]
+    );
+    let (messaged, _) = render_to_stdout(
+        "counter",
+        &[
+            "--still",
+            "--message",
+            "Message::Increment",
+            "--message",
+            "Message::Increment",
+            "--message",
+            "Message::Decrement",
+        ],
+    );
+    assert!(clicked.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(clicked == messaged, "+ + - gives the PNG the messages give");
 }

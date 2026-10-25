@@ -4,8 +4,9 @@ use iced::advanced::renderer::{self, Headless};
 use iced::widget::Widget as _;
 use iced_runtime::core::renderer::Style;
 use iced_runtime::core::theme::Base;
+use iced_runtime::core::widget::operation::Text;
 use iced_runtime::core::widget::{Id, Operation};
-use iced_runtime::core::{mouse, shell, time, window, Event, Rectangle, Size};
+use iced_runtime::core::{mouse, shell, time, window, Event, Point, Rectangle, Size, Vector};
 use iced_runtime::user_interface::{self, UserInterface};
 
 use crate::runtime;
@@ -217,6 +218,27 @@ impl Renderer {
         theme: &iced::Theme,
         scale: &mut Option<f32>,
     ) -> Result<(image::Image, window::RedrawRequest, Size), Error> {
+        let (request, size) = self.settle_frame(view, trees, declared, now);
+        let scale = *scale.get_or_insert_with(|| self.scale(size));
+        let interface = trees.drawn.as_mut().expect("the frame settled");
+        let image = self.draw(interface, theme, size, scale)?;
+        Ok((image, request, size))
+    }
+
+    /// One frame as [`Self::frame`] runs it, settled but not drawn: the
+    /// widget trees move on as they would, and nothing is rasterized.
+    /// Gives when the drawn interface asked to be redrawn, and the logical
+    /// size.
+    pub(super) fn settle_frame(
+        &mut self,
+        view: &mut dyn FnMut(
+            Vec<runtime::Message>,
+            bool,
+        ) -> iced::Element<'static, runtime::Message>,
+        trees: &mut Trees,
+        declared: Size,
+        now: time::Instant,
+    ) -> (window::RedrawRequest, Size) {
         let size = match self.canvas.filter(|canvas| canvas.fit) {
             Some(canvas) => {
                 let mut content = |published| view(published, true);
@@ -233,11 +255,88 @@ impl Renderer {
             .drawn
             .take()
             .map_or_else(user_interface::Cache::default, UserInterface::into_cache);
-        let (mut interface, request) = self.settle_at(&mut drawn, size, cache, now);
-        let scale = *scale.get_or_insert_with(|| self.scale(size));
-        let image = self.draw(&mut interface, theme, size, scale)?;
+        let (interface, request) = self.settle_at(&mut drawn, size, cache, now);
         trees.drawn = Some(interface);
-        Ok((image, request, size))
+        trees.size = size;
+        (request, size)
+    }
+
+    /// The places a click lands in the interface the last frame settled,
+    /// in reading order (see [`arrange`]). Each text and container the
+    /// interface reports, overlays included, is a candidate; one is kept
+    /// when the interface, asked with the cursor at its centre and no
+    /// event, shows a pointer, a text cursor or a grab. Asking runs no
+    /// widget's `update`, so nothing is published and no State changes.
+    /// At most [`PROBED`] candidates are asked, and none once `stop` says so.
+    pub(super) fn targets(
+        &mut self,
+        trees: &mut Trees,
+        stop: &dyn Fn() -> bool,
+    ) -> Vec<super::Target> {
+        let Some(interface) = trees.drawn.as_mut() else {
+            return Vec::new();
+        };
+        let mut found = Candidates::default();
+        interface.operate(&self.raw, &mut found);
+        let mut candidates = found.found;
+        let window = Rectangle::with_size(trees.size);
+        for (at, candidate) in candidates.iter_mut().enumerate() {
+            if at >= PROBED || stop() {
+                break;
+            }
+            let centre = candidate.bounds.center();
+            if !window.contains(centre) {
+                continue;
+            }
+            let mut messages = shell::Bus::new();
+            let (state, _) = interface.update(
+                &window::Headless,
+                &shell::Waker::noop(),
+                &[],
+                mouse::Cursor::Available(centre),
+                &mut self.raw,
+                &mut messages,
+            );
+            if let user_interface::State::Updated {
+                mouse_interaction, ..
+            } = state
+            {
+                candidate.clickable = matches!(
+                    mouse_interaction,
+                    mouse::Interaction::Pointer
+                        | mouse::Interaction::Text
+                        | mouse::Interaction::Grab
+                );
+                candidate.pointer = mouse_interaction == mouse::Interaction::Pointer;
+            }
+        }
+        arrange(candidates)
+    }
+
+    /// Click the interface the last frame settled at `at`, as a person
+    /// would and as `iced_test`'s `Simulator::click` does: the cursor moves
+    /// there, then the left button is pressed and released. Gives the
+    /// messages its widgets published.
+    pub(super) fn click(&mut self, trees: &mut Trees, at: Point) -> Vec<runtime::Message> {
+        let interface = trees
+            .drawn
+            .as_mut()
+            .expect("a frame settled before a click");
+        let events = [
+            Event::Mouse(mouse::Event::CursorMoved { position: at }),
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ];
+        let mut messages = shell::Bus::new();
+        let _ = interface.update(
+            &window::Headless,
+            &shell::Waker::noop(),
+            &events,
+            mouse::Cursor::Available(at),
+            &mut self.raw,
+            &mut messages,
+        );
+        messages.drain().map(|(message, _)| message).collect()
     }
 
     /// The interface the last [`Self::frame`] drew, drawn again at
@@ -397,6 +496,292 @@ mod margin_tests {
 pub(super) struct Trees {
     content: user_interface::Cache,
     drawn: Option<UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>>,
+    /// The logical size `drawn` is laid out at.
+    size: Size,
+}
+
+/// The most candidates [`Renderer::targets`] asks about.
+const PROBED: usize = 512;
+
+/// Something an interface reports that a click might land on: a text or a
+/// container, at its bounds on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Candidate {
+    bounds: Rectangle,
+    /// A text's content; `None` for a container.
+    text: Option<String>,
+    /// Whether an overlay reported it, over the interface's root.
+    overlay: bool,
+    /// Whether the cursor at its centre shows that a click does something:
+    /// a pointer, a text cursor or a grab.
+    clickable: bool,
+    /// Whether that is a pointer.
+    pointer: bool,
+}
+
+/// The texts and containers an interface reports, in the order it reports
+/// them, at their place on screen: a scrollable's content moves by its
+/// offset. What is reported outside the first traversal of the root is an
+/// overlay's.
+#[derive(Default)]
+struct Candidates {
+    found: Vec<Candidate>,
+    depth: usize,
+    /// Whether the root's traversal is over, so overlays report now.
+    rooted: bool,
+    translation: Vector,
+    /// A scrollable's offset, for the content it traverses next.
+    scrolled: Vector,
+}
+
+impl Candidates {
+    fn push(&mut self, bounds: Rectangle, text: Option<String>) {
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+        let shift = self.translation + self.scrolled;
+        self.found.push(Candidate {
+            bounds: bounds - shift,
+            text,
+            overlay: self.rooted || self.depth == 0,
+            clickable: false,
+            pointer: false,
+        });
+    }
+}
+
+impl Operation for Candidates {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        let translation = self.translation;
+        self.translation += std::mem::take(&mut self.scrolled);
+        self.depth += 1;
+        operate(self);
+        self.depth -= 1;
+        self.translation = translation;
+        if self.depth == 0 {
+            self.rooted = true;
+        }
+    }
+
+    fn container(&mut self, _id: Option<&Id>, bounds: Rectangle, _viewport: &Rectangle) {
+        self.push(bounds, None);
+    }
+
+    fn scrollable(
+        &mut self,
+        _id: Option<&Id>,
+        _bounds: Rectangle,
+        _content: Size,
+        translation: Vector,
+        _state: &mut dyn iced_runtime::core::widget::operation::Scrollable,
+    ) {
+        self.scrolled = translation;
+    }
+
+    fn text(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn Text) {
+        let text = state
+            .text()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.push(bounds, Some(text));
+    }
+}
+
+/// The targets among `candidates` (as [`Candidates`] reports them, each
+/// probed), in reading order:
+///
+/// - What an overlay covers is hidden, so a candidate under one is dropped.
+/// - Of the clickable candidates, the innermost wins: one holding another
+///   in the same layer is one clickable region with it (a button and its
+///   label), and the inner one is kept. Of two with the same bounds, the
+///   later (the inner) is kept.
+/// - A container is a target only when it holds no text and shows a
+///   pointer: an icon's button. A layout holding texts whose centre lands
+///   on a slider or a text input is not one.
+/// - A text is labelled by its content, and a container by its number.
+/// - Reading order is by lines, top to bottom, each left to right. A
+///   target whose centre is above the bottom of a line's first target is
+///   on that line.
+/// - A label that repeats gets its ordinal: `+ (1)`, `+ (2)`.
+pub(super) fn arrange(candidates: Vec<Candidate>) -> Vec<super::Target> {
+    let covered = |candidate: &Candidate| {
+        !candidate.overlay
+            && candidates
+                .iter()
+                .any(|other| other.overlay && other.bounds.contains(candidate.bounds.center()))
+    };
+    let shown: Vec<&Candidate> = candidates.iter().filter(|c| !covered(c)).collect();
+    let within = |inner: &Rectangle, outer: &Rectangle| {
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && inner.x + inner.width <= outer.x + outer.width
+            && inner.y + inner.height <= outer.y + outer.height
+    };
+    // Whether a candidate other than `at`, in its layer and inside it,
+    // passes `test`.
+    let inside = |at: usize, test: fn(&Candidate) -> bool| {
+        let candidate = shown[at];
+        shown.iter().enumerate().any(|(other_at, other)| {
+            other_at != at
+                && other.overlay == candidate.overlay
+                && within(&other.bounds, &candidate.bounds)
+                && (other.bounds != candidate.bounds || other_at > at)
+                && test(other)
+        })
+    };
+    let mut kept: Vec<super::Target> = shown
+        .iter()
+        .enumerate()
+        .filter(|&(at, candidate)| {
+            candidate.clickable
+                && !inside(at, |other| other.clickable)
+                && (candidate.text.is_some()
+                    || candidate.pointer && !inside(at, |other| other.text.is_some()))
+        })
+        .map(|(_, candidate)| super::Target {
+            label: candidate.text.clone().unwrap_or_default(),
+            bounds: candidate.bounds,
+        })
+        .collect();
+    kept.sort_by(|a, b| a.bounds.y.total_cmp(&b.bounds.y));
+    let mut ordered = Vec::with_capacity(kept.len());
+    let mut rest = kept.into_iter().peekable();
+    while let Some(first) = rest.next() {
+        let bottom = first.bounds.y + first.bounds.height;
+        let mut line = vec![first];
+        while let Some(next) = rest.next_if(|next| next.bounds.center().y < bottom) {
+            line.push(next);
+        }
+        line.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x));
+        ordered.extend(line);
+    }
+    for (at, target) in ordered.iter_mut().enumerate() {
+        if target.label.is_empty() {
+            target.label = format!("#{}", at + 1);
+        }
+    }
+    let labels: Vec<String> = ordered.iter().map(|target| target.label.clone()).collect();
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (target, label) in ordered.iter_mut().zip(&labels) {
+        if labels.iter().filter(|other| *other == label).count() > 1 {
+            let ordinal = seen.entry(label).or_insert(0);
+            *ordinal += 1;
+            target.label = format!("{label} ({ordinal})");
+        }
+    }
+    ordered
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::{arrange, Candidate};
+    use iced_runtime::core::Rectangle;
+
+    fn at(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        text: Option<&str>,
+        clickable: bool,
+    ) -> Candidate {
+        Candidate {
+            bounds: Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+            text: text.map(str::to_owned),
+            overlay: false,
+            clickable,
+            pointer: clickable,
+        }
+    }
+
+    fn labels(candidates: Vec<Candidate>) -> Vec<String> {
+        arrange(candidates)
+            .into_iter()
+            .map(|target| target.label)
+            .collect()
+    }
+
+    #[test]
+    fn a_buttons_label_is_its_target_and_text_alone_is_not() {
+        // A column holding a button "Increment", a value, a button
+        // "Decrement": the column's centre lands on the value.
+        let candidates = vec![
+            at(0.0, 0.0, 100.0, 120.0, None, false),
+            at(10.0, 0.0, 80.0, 30.0, None, true),
+            at(15.0, 5.0, 70.0, 20.0, Some("Increment"), true),
+            at(40.0, 40.0, 20.0, 40.0, Some("0"), false),
+            at(10.0, 90.0, 80.0, 30.0, None, true),
+            at(15.0, 95.0, 70.0, 20.0, Some("Decrement"), true),
+        ];
+        let targets = arrange(candidates);
+        let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
+        assert_eq!(labels, ["Increment", "Decrement"]);
+        assert_eq!(targets[0].bounds.center().y, 15.0, "the label's centre");
+    }
+
+    #[test]
+    fn targets_read_in_lines_left_to_right() {
+        // Two lines of buttons of different heights, reported column by
+        // column.
+        let candidates = vec![
+            at(100.0, 2.0, 40.0, 20.0, Some("b"), true),
+            at(100.0, 40.0, 40.0, 20.0, Some("d"), true),
+            at(0.0, 0.0, 40.0, 24.0, Some("a"), true),
+            at(0.0, 42.0, 40.0, 16.0, Some("c"), true),
+        ];
+        assert_eq!(labels(candidates), ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn repeated_labels_get_ordinals_and_a_bare_target_its_number() {
+        let candidates = vec![
+            at(0.0, 0.0, 20.0, 20.0, Some("+"), true),
+            at(30.0, 0.0, 20.0, 20.0, Some("-"), true),
+            at(60.0, 0.0, 20.0, 20.0, Some("+"), true),
+            // A clickable container with no text inside: an icon button.
+            at(90.0, 0.0, 20.0, 20.0, None, true),
+        ];
+        assert_eq!(labels(candidates), ["+ (1)", "-", "+ (2)", "#4"]);
+    }
+
+    #[test]
+    fn a_layout_whose_centre_lands_on_a_slider_is_no_target() {
+        // A column of labels and sliders: its centre shows a slider's grab.
+        let mut column = at(0.0, 0.0, 100.0, 200.0, None, true);
+        column.pointer = false;
+        let candidates = vec![
+            column,
+            at(0.0, 0.0, 100.0, 20.0, Some("Width:"), false),
+            at(0.0, 100.0, 100.0, 20.0, Some("Margin:"), false),
+        ];
+        assert!(labels(candidates).is_empty());
+        // A slider alone in a container: a grab, not a pointer.
+        let mut alone = at(0.0, 0.0, 100.0, 20.0, None, true);
+        alone.pointer = false;
+        assert!(labels(vec![alone]).is_empty());
+    }
+
+    #[test]
+    fn an_overlay_hides_what_it_covers() {
+        let mut option = at(0.0, 20.0, 60.0, 20.0, Some("Apple"), true);
+        option.overlay = true;
+        let mut menu = at(0.0, 20.0, 60.0, 40.0, None, true);
+        menu.overlay = true;
+        let candidates = vec![
+            at(0.0, 0.0, 60.0, 20.0, Some("Pick"), true),
+            // Under the menu: its centre shows the menu's pointer.
+            at(0.0, 30.0, 60.0, 20.0, Some("Hidden"), true),
+            menu,
+            option,
+        ];
+        assert_eq!(labels(candidates), ["Pick", "Apple"]);
+    }
 }
 
 /// A view to render: given the messages the last frame published, the

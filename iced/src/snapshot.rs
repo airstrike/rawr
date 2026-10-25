@@ -121,23 +121,25 @@ pub fn render_application(
 
 /// Run a booted application's boot Task, and each task it starts, to the
 /// end on the simulated clock, drawing nothing: how `?play` runs a plain
-/// program's `async fn main`. While a task runs, the clock moves a
-/// millisecond at a time, so tokio's timers end when they would. Returns
-/// `false` when `deadline` passed first. Freeze the clock with
-/// [`clock::freeze`] before the application boots, so its boot reads the
-/// same clock.
+/// program's `async fn main`. Once every task waits, the clock moves
+/// straight to the next timer's end, so tokio's timers end when they would
+/// and a sleep costs no wall time however long it is. Returns `false` when
+/// `deadline` passed first. Freeze the clock with [`clock::freeze`] before
+/// the application boots, so its boot reads the same clock.
 pub fn run_tasks(adapter: &mut crate::program::Adapter, deadline: &Deadline) -> bool {
-    const STEP: std::time::Duration = std::time::Duration::from_millis(1);
+    /// The farthest the clock moves at once when no timer is set: every
+    /// task waits on something else, such as a channel nothing sends on.
+    const IDLE: std::time::Duration = std::time::Duration::from_secs(1);
     let _frozen = clock::now().is_none().then(clock::freeze);
-    let mut now = clock::now().expect("the clock is frozen");
-    adapter.deliver(Vec::new());
+    let mut waiting = adapter.settle(Vec::new());
     while adapter.is_running() {
         if deadline.past() {
             return false;
         }
-        now += STEP;
-        clock::set(now);
-        adapter.deliver(Vec::new());
+        if waiting {
+            clock::advance(IDLE);
+        }
+        waiting = adapter.settle(Vec::new());
     }
     true
 }
@@ -211,6 +213,10 @@ pub struct Motion {
     /// when lower than the canvas's: an animation's frames can be smaller
     /// than a still image.
     pub animation_scale: Option<f32>,
+    /// The recording is for a still image: its last frame is drawn again
+    /// at the first frame's scale when an animation lowered it, over the
+    /// same widget trees, so the still shows what its targets click.
+    pub still: bool,
 }
 
 /// One frame of a [`Recording`].
@@ -269,14 +275,38 @@ pub struct Recording {
     pub frames: Vec<Frame>,
     /// Why it ended.
     pub ending: Ending,
+    /// Where a click lands in the last frame, in reading order: what a
+    /// step after this recording's steps would index.
+    pub targets: Vec<Target>,
+    /// The label of the target each step clicked, in order.
+    pub clicked: Vec<String>,
+}
+
+/// A place in a drawn interface where a click does something: a widget
+/// that shows a pointer, a text cursor or a grab under the cursor, found
+/// by its text or container.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Target {
+    /// Its text, or the texts inside it; `#n` when it has none. A label
+    /// that repeats has its ordinal: `+ (2)`.
+    pub label: String,
+    /// Its logical bounds; a click lands at their centre.
+    pub bounds: iced::Rectangle,
 }
 
 /// Record a booted application on a simulated clock: a frame every
 /// [`Motion::step`], each drawn as [`render_application`] draws one.
 ///
-/// The boot's Task runs first, then each of `messages` in turn. After each
-/// of them the frames run until the view settles, so each message's
-/// transition shows. `time::every` ticks and `window::frames` fire as the
+/// The boot's Task runs first, then each of `messages` in turn, then each
+/// of `steps`. After each of them the frames run until the view settles,
+/// so each message's transition shows. A step clicks a target of the
+/// interface as it then is: `steps[i]` indexes the targets in reading
+/// order (see [`Recording::targets`]), and the cursor moves to its centre,
+/// presses and releases there, as `iced_test`'s `Simulator::click` does.
+/// What its widgets publish is applied as any frame's messages are. With
+/// steps, the boot, the messages and every step but the last run their
+/// frames without drawing them, and the frames recorded are the last
+/// step's. The targets of the last frame drawn end the recording. `time::every` ticks and `window::frames` fire as the
 /// clock moves, and `Instant::now()` reads it. Freeze the clock with
 /// [`clock::freeze`] before the application boots so its boot reads the
 /// same clock; otherwise it freezes here. After the last message, `stop`
@@ -289,6 +319,7 @@ pub struct Recording {
 pub fn record_application(
     adapter: &mut crate::program::Adapter,
     messages: Vec<crate::runtime::Message>,
+    steps: &[usize],
     canvas: Canvas,
     bound: (u32, u32),
     theme: Option<&str>,
@@ -315,17 +346,42 @@ pub fn record_application(
     let mut scale = None;
     let mut streams = Streams::default();
     let mut frames: Vec<Frame> = Vec::new();
-    let last = messages.len();
+    let mut clicked = Vec::new();
+    let mut drawn = iced::Size::ZERO;
+    let delivered = messages.len();
+    let last = delivered + steps.len();
     let mut messages = messages.into_iter();
     let mut now: Instant = start;
     let mut changed = false;
+    let stopped = || {
+        motion.deadline.past()
+            || motion
+                .cut
+                .is_some_and(|cut| cut.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let ending = 'record: {
         for phase in 0..=last {
-            if phase > 0 {
+            if (1..=delivered).contains(&phase) {
                 adapter.deliver(messages.next());
             }
+            if phase > delivered {
+                let step = phase - delivered;
+                let index = steps[step - 1];
+                let targets = renderer.targets(&mut trees, &stopped);
+                let target = targets.get(index).ok_or(Error::Step {
+                    step,
+                    target: index,
+                    count: targets.len(),
+                })?;
+                clicked.push(target.label.clone());
+                let published = renderer.click(&mut trees, target.bounds.center());
+                adapter.deliver(published);
+            }
+            // With steps, only the last one's frames are drawn.
+            let quiet = !steps.is_empty() && phase < last;
             let first = frames.len();
             let began = now;
+            let mut ran = 0;
             loop {
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
@@ -358,8 +414,25 @@ pub fn record_application(
                         adapter.view()
                     })
                 };
+                ran += 1;
+                if quiet {
+                    let (request, _) = renderer.settle_frame(&mut view, &mut trees, declared, now);
+                    let armed = clock::armed();
+                    if !armed && request == RedrawRequest::Wait || ran >= motion.phase {
+                        break;
+                    }
+                    now = match request {
+                        RedrawRequest::At(at) if !armed && at > now + motion.step => at,
+                        _ => now + motion.step,
+                    };
+                    clock::set(now);
+                    let ticks = streams.tick(now);
+                    adapter.deliver(ticks);
+                    continue;
+                }
                 let (image, request, size) =
                     renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
+                drawn = size;
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
                 }
@@ -412,7 +485,7 @@ pub fn record_application(
                 if phase == last && stop(&frames[first..]) {
                     break 'record Ending::Stopped;
                 }
-                if phase < last && frames.len() - first >= motion.phase {
+                if phase < last && ran >= motion.phase {
                     break;
                 }
                 // Wait for a redraw asked for later, unless the clock
@@ -428,7 +501,32 @@ pub fn record_application(
         }
         unreachable!("the last phase ends the recording")
     };
-    Ok(Recording { frames, ending })
+    // A still shows the last frame at the scale the first was drawn at.
+    if motion.still
+        && let Some(still) = frames.first().map(|first| first.scale)
+        && let Some(last) = frames.last_mut()
+        && last.scale != still
+    {
+        let theme = named
+            .clone()
+            .unwrap_or_else(|| adapter.theme().native().clone());
+        let image = renderer.redraw(&mut trees, drawn, &theme, still)?;
+        last.width = image.width();
+        last.height = image.height();
+        last.rgba = image.into_bytes();
+        last.scale = still;
+    }
+    let targets = if frames.is_empty() {
+        Vec::new()
+    } else {
+        renderer.targets(&mut trees, &|| false)
+    };
+    Ok(Recording {
+        frames,
+        ending,
+        targets,
+        clicked,
+    })
 }
 
 /// The streams of an application's subscription, run by hand on a
@@ -441,7 +539,7 @@ struct Streams {
 struct Running {
     id: u64,
     input: iced::futures::channel::mpsc::UnboundedSender<iced::advanced::subscription::Event>,
-    output: iced::futures::stream::BoxStream<'static, crate::runtime::Message>,
+    output: iced_runtime::futures::BoxStream<crate::runtime::Message>,
 }
 
 impl Streams {

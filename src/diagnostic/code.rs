@@ -72,6 +72,8 @@ codes!(Resolve;
     (RESOLVE_NO_FIELD, "E0609", "No field of that name, as rustc reports it."),
     (RESOLVE_METHOD_VALUE, "E0615", "A method read like a field, as rustc reports it."),
     (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
+    (SCRIPT_NO_FUNCTION, "E0425", "A typed handle names no function of the script, as rustc reports it."),
+    (SCRIPT_SIGNATURE, "E0308", "A typed handle's signature differs from the script's, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
     (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),

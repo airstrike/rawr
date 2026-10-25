@@ -21,6 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -59,23 +60,37 @@
 <p class="lede">The items a program can declare.</p>
 <h2 id="fn"><code>fn</code></h2>
 <p>A function can be declared inside another function.</p>
-<div class="block"><pre><code data-lang="rust">fn total(prices: &amp;[f64]) -&gt; f64 {
+<div class="block">
+  <pre><code data-lang="rust" data-run="nested-fn.rs" id="src-nested-fn">fn total(prices: &amp;[f64]) -&gt; f64 {
     fn cents(x: f64) -&gt; f64 {
         (x * 100.0).round() / 100.0
     }
     cents(prices.iter().sum())
-}</code></pre></div>
+}
+
+println!("{}", total(&amp;[0.1, 0.2]));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-nested-fn" data-out="out-nested-fn" aria-label="Run nested-fn.rs" hidden></button><b>rawr run nested-fn.rs</b><span id="out-nested-fn" aria-live="polite">0.3</span></div>
+</div>
 <h2 id="struct"><code>struct</code></h2>
 <p>Structs with named fields, tuple structs and unit structs.</p>
-<div class="block"><pre><code data-lang="rust">struct Point {
+<div class="block">
+  <pre><code data-lang="rust" data-run="structs.rs" id="src-structs">struct Point {
     x: f64,
     y: f64,
 }
 struct Meters(f64);
-struct Marker;</code></pre></div>
+struct Marker;
+
+let p = Point { x: 1.0, y: 2.0 };
+let m = Meters(3.5);
+let _marker = Marker;
+println!("{} {} {}", p.x, p.y, m.0);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-structs" data-out="out-structs" aria-label="Run structs.rs" hidden></button><b>rawr run structs.rs</b><span id="out-structs" aria-live="polite">1 2 3.5</span></div>
+</div>
 <h2 id="enum"><code>enum</code></h2>
 <p>Unit, tuple and struct variants. A fieldless enum casts to an integer with <code>as</code>, and explicit discriminants set its values.</p>
-<div class="block"><pre><code data-lang="rust">enum Shape {
+<div class="block">
+  <pre><code data-lang="rust" data-run="enums.rs" id="src-enums">enum Shape {
     Empty,
     Circle(f64),
     Rect { w: f64, h: f64 },
@@ -86,10 +101,17 @@ enum Level {
     High = 10,
 }
 
-let n = Level::High as i32; // 10</code></pre></div>
+let n = Level::High as i32; // 10
+let shape = Shape::Rect { w: 2.0, h: 3.0 };
+if let Shape::Rect { w, h } = shape {
+    println!("{n} {}", w * h);
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-enums" data-out="out-enums" aria-label="Run enums.rs" hidden></button><b>rawr run enums.rs</b><span id="out-enums" aria-live="polite">10 6</span></div>
+</div>
 <h2 id="impl"><code>impl</code></h2>
 <p>Methods, associated functions and associated consts. An <code>impl</code> can sit inside a function body. <code>Self</code> works in a method&rsquo;s type annotations.</p>
-<div class="block"><pre><code data-lang="rust">impl Point {
+<div class="block">
+  <pre><code data-lang="rust" data-run="impl.rs" id="src-impl">impl Point {
     const ZERO: f64 = 0.0;
 
     fn origin() -&gt; Self {
@@ -100,10 +122,21 @@ let n = Level::High as i32; // 10</code></pre></div>
         let next: Self = Point { x: self.x + dx, y: self.y };
         next
     }
-}</code></pre></div>
+}
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+let p = Point::origin().shifted(2.5);
+println!("{} {}", p.x, p.y);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-impl" data-out="out-impl" aria-label="Run impl.rs" hidden></button><b>rawr run impl.rs</b><span id="out-impl" aria-live="polite">2.5 0</span></div>
+</div>
 <h2 id="trait"><code>trait</code></h2>
 <p>Default methods, associated types and static functions. A trait can be implemented for your own types and for built-in types such as <code>i64</code>.</p>
-<div class="block"><pre><code data-lang="rust">trait Describe {
+<div class="block">
+  <pre><code data-lang="rust" data-run="traits.rs" id="src-traits">trait Describe {
     fn name(&amp;self) -&gt; String;
 
     fn describe(&amp;self) -&gt; String {
@@ -115,19 +148,42 @@ impl Describe for i64 {
     fn name(&amp;self) -&gt; String {
         format!("the number {}", self)
     }
-}</code></pre></div>
+}
+
+println!("{}", 7_i64.describe());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-traits" data-out="out-traits" aria-label="Run traits.rs" hidden></button><b>rawr run traits.rs</b><span id="out-traits" aria-live="polite">this is the number 7</span></div>
+</div>
 <h2 id="send-sync"><code>Send</code> and <code>Sync</code></h2>
 <p>Every value in interpreted code is already <code>Send</code> and <code>Sync</code>, so these impls change nothing. rawr checks them as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error, and so is an <code>unsafe impl</code> of another trait.</p>
-<div class="block"><pre><code data-lang="rust">struct Handle(u64);
+<p>A bound such as <code>T: Send</code>, <code>where T: Send + Sync</code> or <code>trait Job: Send</code> is accepted, but rawr does not check it. <code>rawr check</code> runs <code>cargo check</code>, which does.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="unsafe-impl.rs" id="src-unsafe-impl">struct Handle(u64);
 unsafe impl Send for Handle {}
-unsafe impl Sync for Handle {}</code></pre></div>
+unsafe impl Sync for Handle {}
+
+let h = Handle(7);
+println!("handle {}", h.0);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-unsafe-impl" data-out="out-unsafe-impl" aria-label="Run unsafe-impl.rs" hidden></button><b>rawr run unsafe-impl.rs</b><span id="out-unsafe-impl" aria-live="polite">handle 7</span></div>
+</div>
 <h2 id="const"><code>const</code> and <code>static</code></h2>
-<div class="block"><pre><code data-lang="rust">const LIMIT: usize = 10;
-static GREETING: &amp;str = "hello";</code></pre></div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="consts.rs" id="src-consts">const LIMIT: usize = 10;
+static GREETING: &amp;str = "hello";
+
+println!("{GREETING} {LIMIT}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-consts" data-out="out-consts" aria-label="Run consts.rs" hidden></button><b>rawr run consts.rs</b><span id="out-consts" aria-live="polite">hello 10</span></div>
+</div>
 <h2 id="type"><code>type</code></h2>
 <p>Aliases can be generic. A <code>pub type</code> can be imported from another module.</p>
-<div class="block"><pre><code data-lang="rust">type Pair&lt;T&gt; = (T, T);
-type Grid = Vec&lt;Vec&lt;u8&gt;&gt;;</code></pre></div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="aliases.rs" id="src-aliases">type Pair&lt;T&gt; = (T, T);
+type Grid = Vec&lt;Vec&lt;u8&gt;&gt;;
+
+let p: Pair&lt;i64&gt; = (1, 2);
+let g: Grid = vec![vec![0; 3]; 2];
+println!("{p:?} {}x{}", g.len(), g[0].len());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-aliases" data-out="out-aliases" aria-label="Run aliases.rs" hidden></button><b>rawr run aliases.rs</b><span id="out-aliases" aria-live="polite">(1, 2) 2x3</span></div>
+</div>
 <h2 id="mod"><code>mod</code> and visibility</h2>
 <p><code>mod util;</code> loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. Cargo builds a module without it as native Rust. Inline modules work too.</p>
 <p><code>pub</code>, <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> work. A path through <code>crate::</code> or <code>super::</code> reaches a name that a module brings in with <code>use</code>.</p>
@@ -147,11 +203,18 @@ use std::fmt::*;
 use ::image::ColorType;</code></pre></div>
 <h2 id="derive"><code>#[derive]</code></h2>
 <p><code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. rawr checks a derive as rustc does, so deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</p>
-<div class="block"><pre><code data-lang="rust">#[derive(Debug, Clone, PartialEq, Default)]
+<div class="block">
+  <pre><code data-lang="rust" data-run="derive.rs" id="src-derive">#[derive(Debug, Clone, PartialEq, Default)]
 struct Order {
     id: u32,
     note: String,
-}</code></pre></div>
+}
+
+let a = Order { id: 1, ..Default::default() };
+let b = a.clone();
+println!("{a:?} {}", a == b);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-derive" data-out="out-derive" aria-label="Run derive.rs" hidden></button><b>rawr run derive.rs</b><span id="out-derive" aria-live="polite">Order { id: 1, note: "" } true</span></div>
+</div>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/overview">Previous<b>Overview</b></a><a class="next" href="/docs/reference/types">Next<b>Types</b></a></nav>
 </article>
 </main>
@@ -165,5 +228,6 @@ struct Order {
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>

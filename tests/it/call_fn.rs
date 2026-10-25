@@ -1,5 +1,5 @@
 #![cfg(not(feature = "no_function"))]
-use rawr::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Func, FuncArgs, INT, Scope};
+use rawr::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs, INT, Scope};
 
 #[test]
 fn test_call_fn() {
@@ -146,19 +146,23 @@ fn test_call_fn_private() {
     assert_eq!(r, 42);
 }
 
+// A handle takes `i64`, which `INT` isn't under `only_i32`.
 #[test]
-fn test_anonymous_fn() {
-    let calc_func = Func::<(INT, INT, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: i64, z: i64,) -> i64 { (x + y) * z }", "calc").unwrap();
-    assert_eq!(calc_func(42, 123, 9).unwrap(), 1485);
+#[cfg(not(feature = "only_i32"))]
+#[cfg(not(feature = "no_std"))]
+fn test_typed_handle() {
+    let script = Engine::new().script("fn calc(x: i64, y: i64, z: i64,) -> i64 { (x + y) * z }").unwrap();
+    let calc = script.func::<(INT, INT, INT), INT>("calc").unwrap();
+    assert_eq!(calc.call(42, 123, 9).unwrap(), 1485);
 
-    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
-    assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
+    let script = Engine::new().script("pub fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }").unwrap();
+    let calc = script.func::<(INT, String, INT), INT>("calc").unwrap();
+    assert_eq!(calc.call(42, "hello".into(), 9).unwrap(), 423);
 
-    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "pub fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
-    assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
-
-    let calc_func = Func::<(INT, &str, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: &str, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
-    assert_eq!(calc_func(42, "hello", 9).unwrap(), 423);
+    // A `&str` parameter borrows the handle's `String`.
+    let script = Engine::new().script("fn calc(x: i64, y: &str, z: i64) -> i64 { (x + y.len() as i64) * z }").unwrap();
+    let calc = script.func::<(INT, String, INT), INT>("calc").unwrap();
+    assert_eq!(calc.call(42, "hello".into(), 9).unwrap(), 423);
 }
 
 #[test]

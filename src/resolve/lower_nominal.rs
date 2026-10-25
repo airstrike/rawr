@@ -10582,7 +10582,34 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn display_text(&self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+    /// A std error's `Display` of its runtime `value`: its message, or for
+    /// the errors whose runtime value is their `Debug`, the message their
+    /// `Debug` determines.
+    fn parse_error_display(
+        &mut self,
+        error: ParseError,
+        value: origin::Fragment,
+    ) -> origin::Fragment {
+        match error {
+            ParseError::TryFromInt => {
+                value.surrounded("{ ", &format!("; {TRY_FROM_INT_MESSAGE:?} }}"))
+            }
+            ParseError::Utf8 => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == "utf8_display")
+                    .expect("a listed piece")
+                    .to_string();
+                self.prelude_op(
+                    PreludeOp::StrPieces,
+                    [value, code.into(), "()".into(), "()".into()],
+                )
+            }
+            _ => value,
+        }
+    }
+
+    fn display_text(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
         match ty {
             Ty::Script(id, _) => self
                 .models
@@ -10592,7 +10619,7 @@ impl<'a> Parser<'a> {
                 Self::std_dispatch("Display", "fmt", value, &["\"\"".into()]),
             ),
             // A `ParseIntError` and kin is its message.
-            Ty::ParseError(_) => Some(value),
+            Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
             _ => None,
         }
     }
@@ -25408,12 +25435,31 @@ impl<'a> Parser<'a> {
                                 {
                                     return Ok(index);
                                 }
-                                // Rust 2021's inline argument: a local of
-                                // that name.
+                                // Rust 2021's inline argument: any value of
+                                // that name in scope. A local is borrowed
+                                // below; any other name (a `const`, a
+                                // `static`, an imported constant) is read
+                                // as the expression `name` reads, followed
+                                // by a `,` so nothing after the macro
+                                // continues it.
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
-                                    return Err(invalid(format!(
-                                        "cannot find value `{name}` in this scope"
-                                    )));
+                                    let at = expression.start();
+                                    this.splice_tokens(vec![
+                                        (Token::Identifier(Box::new(name.as_str().into())), at),
+                                        (Token::Comma, at),
+                                    ]);
+                                    let captured = match this.parse_expr() {
+                                        Ok(captured) => captured,
+                                        Err(Error::UnknownVariable { .. }) => {
+                                            return Err(invalid(format!(
+                                                "cannot find value `{name}` in this scope"
+                                            )));
+                                        }
+                                        Err(error) => return Err(error),
+                                    };
+                                    this.expect(Token::Comma, "an inline `format!` argument")?;
+                                    arguments.push((Some(name.as_str().into()), captured));
+                                    return Ok(arguments.len() - 1);
                                 };
                                 if !binding.available || !binding.moved_fields.is_empty() {
                                     return Err(Error::MovedValue {
@@ -26266,9 +26312,15 @@ impl<'a> Parser<'a> {
             ty => ty,
         };
         let unsigned = matches!(target, Ty::Int(Int::U64 | Int::Usize));
-        let expected = Ty::Reference {
-            mutable: false,
-            target: Box::new(target),
+        // `other: &Self`, `Self` the receiver's type before it is
+        // borrowed: a `&str` receiver is `str`'s `&self`, so `other` is a
+        // `&str` too, as `a.cmp(b)` takes two string slices.
+        let expected = match self.inference.resolve(&value.ty) {
+            receiver @ (Ty::Str | Ty::Reference { mutable: false, .. }) => receiver,
+            _ => Ty::Reference {
+                mutable: false,
+                target: Box::new(target),
+            },
         };
         self.coerce_expr(&expected, &mut other)?;
         let operands = [value.rendered_source(), other.rendered_source()];
@@ -26409,7 +26461,10 @@ impl<'a> Parser<'a> {
                 &target,
                 &number,
             );
-            let ty = Ty::Result(Box::new(target), Box::new(Ty::Unit));
+            let ty = Ty::Result(
+                Box::new(target),
+                Box::new(Ty::ParseError(ParseError::TryFromInt)),
+            );
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         if let Ty::Float(_) = number
@@ -26958,6 +27013,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_operand(&mut self) -> Result<ParsedExpr, Error> {
+        // `&&x`, which the lexer reads as one `&&`: `& &x`.
+        if matches!(self.peek(), Token::And) {
+            let at = self.next().1;
+            let mut second = at;
+            second.advance();
+            self.splice_tokens(vec![(Token::Ampersand, at), (Token::Ampersand, second)]);
+        }
         if matches!(self.peek(), Token::Ampersand) {
             let start = self.next().1;
             if matches!(self.peek(), Token::Mut) {
@@ -27061,7 +27123,14 @@ impl<'a> Parser<'a> {
             value.span = span(start, operand.span.end());
             return Ok(value);
         }
-        let ty = self.inference.resolve(&operand.ty);
+        let mut ty = self.inference.resolve(&operand.ty);
+        // `-x` and `!x` of a `&i64` or `&bool`: std's `impl Neg for &i64`
+        // and kin give the value.
+        if let Ty::Reference { target, .. } = &ty
+            && let target @ (Ty::Int(_) | Ty::Float(_) | Ty::Bool) = self.inference.resolve(target)
+        {
+            ty = target;
+        }
         // `!x` of an integer flips its bits.
         if operator == "!"
             && let Ty::Int(_) = ty
@@ -27401,7 +27470,15 @@ impl<'a> Parser<'a> {
                 );
                 continue;
             }
-            let builtin = self.inference.resolve(&value.ty);
+            // A method call auto-derefs through every reference: `x.abs()`
+            // of a `&&i64` is `i64::abs`. One reference is left, which
+            // the builtin methods below look through.
+            let mut builtin = self.inference.resolve(&value.ty);
+            while let Ty::Reference { target, .. } = &builtin
+                && let inner @ Ty::Reference { .. } = self.inference.resolve(target)
+            {
+                builtin = inner;
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
@@ -27782,17 +27859,19 @@ impl<'a> Parser<'a> {
             }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
             // its message, which is its value.
-            if let Ty::ParseError(_) = number
+            if let Ty::ParseError(error) = number
                 && matches!(member.as_str(), "to_string" | "clone")
                 && matches!(self.peek(), Token::Unit)
             {
                 let end = self.next().1;
-                let ty = if member.as_str() == "clone" {
-                    number
+                let (ty, source) = if member.as_str() == "clone" {
+                    (number, value.rendered_source())
                 } else {
-                    Ty::String
+                    (
+                        Ty::String,
+                        self.parse_error_display(error, value.rendered_source()),
+                    )
                 };
-                let source = value.rendered_source();
                 value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
@@ -32703,13 +32782,21 @@ impl<'a> Parser<'a> {
             target: Box::new(element.clone()),
         };
         let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
+        // `v.iter().min_by_key(..)` passes `&&T`: a reference to the
+        // iterator's `&T`.
+        let borrowed = Ty::Reference {
+            mutable: false,
+            target: Box::new(reference.clone()),
+        };
         self.closure_hints = match member.as_str() {
-            "sort_by" | "sort_unstable_by" | "min_by" | "max_by" => {
+            "sort_by" | "sort_unstable_by" => {
                 vec![hint(vec![reference.clone(), reference.clone()])]
             }
-            "sort_by_key" | "sort_unstable_by_key" | "min_by_key" | "max_by_key" | "retain" => {
+            "min_by" | "max_by" => vec![hint(vec![borrowed.clone(), borrowed])],
+            "sort_by_key" | "sort_unstable_by_key" | "retain" => {
                 vec![hint(vec![reference.clone()])]
             }
+            "min_by_key" | "max_by_key" => vec![hint(vec![borrowed])],
             _ => Vec::new(),
         };
         let arguments = if member.as_str() == "append" {
@@ -33047,11 +33134,15 @@ impl<'a> Parser<'a> {
             ("min" | "max", []) | ("min_by_key" | "max_by_key" | "min_by" | "max_by", [_])
                 if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) =>
             {
+                let input = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(reference.clone()),
+                };
                 let (source, item) = self.extremum(
                     receiver,
                     &element,
                     &member,
-                    arguments.first_mut(),
+                    arguments.first_mut().map(|by| (by, input)),
                     member_span,
                 )?;
                 (source, Ty::Option(Box::new(item)))
@@ -33218,7 +33309,7 @@ impl<'a> Parser<'a> {
         values: origin::Fragment,
         element: &Ty,
         member: &str,
-        by: Option<&mut ParsedExpr>,
+        by: Option<(&mut ParsedExpr, Ty)>,
         member_span: Span,
     ) -> Result<(origin::Fragment, Ty), Error> {
         let item = Ty::Reference {
@@ -33241,16 +33332,18 @@ impl<'a> Parser<'a> {
             "; let {best} = (); let {best_key} = (); let {first} = true; "
         ));
         let keyed = member.ends_with("_key");
-        let compare = if let Some(by) = by {
+        // `by`'s closure takes a reference to the iterator's item, `input`:
+        // `&&T` over `v.iter()`.
+        let compare = if let Some((by, input)) = by {
             let output = if keyed {
                 self.inference.fresh()
             } else {
                 Ty::Ordering
             };
             let inputs: Box<[Ty]> = if keyed {
-                Box::new([item.clone()])
+                Box::new([input])
             } else {
-                Box::new([item.clone(), item.clone()])
+                Box::new([input.clone(), input])
             };
             let expected = Ty::Fn {
                 inputs,
@@ -35340,7 +35433,10 @@ impl<'a> Parser<'a> {
                 &builtin,
                 &source,
             );
-            let ty = Ty::Result(Box::new(builtin), Box::new(Ty::Unit));
+            let ty = Ty::Result(
+                Box::new(builtin),
+                Box::new(Ty::ParseError(ParseError::TryFromInt)),
+            );
             return Ok(self.operator_expr(value, ty, expression));
         }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
@@ -35713,6 +35809,50 @@ impl<'a> Parser<'a> {
                 && definition.identity().imported().is_none()
             {
                 return self.parse_host_struct(definition, path_span);
+            }
+        }
+        // `iced::Degrees(90.0)`: a facade tuple struct's constructor named
+        // in full, which the facade declares as the type's `from`, as an
+        // imported `Degrees(90.0)` reads it.
+        if matches!(self.peek(), Token::LeftParen)
+            && self.models.qualified_owner(path_span).is_none()
+        {
+            let full = match self.models.import(&segments[0].0) {
+                Some(binding)
+                    if matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    ) =>
+                {
+                    format!(
+                        "{}{}::{member}",
+                        binding.qualified,
+                        &owner[segments[0].0.len()..]
+                    )
+                }
+                _ => format!("{owner}::{member}"),
+            };
+            if let Some(definition) = self.models.host.source_type(&full)
+                && definition.identity().imported().is_none()
+                && self
+                    .models
+                    .host_items(&format!("{}::from", definition.path()))
+                    .is_some()
+            {
+                let at = member_span.start();
+                let mut tokens = Vec::new();
+                for (name, name_span) in segments.iter().skip(1).chain([&(member, member_span)]) {
+                    tokens.push((Token::DoubleColon, name_span.start()));
+                    tokens.push((
+                        Token::Identifier(Box::new(name.as_str().into())),
+                        name_span.start(),
+                    ));
+                }
+                tokens.push((Token::DoubleColon, at));
+                tokens.push((Token::Identifier(Box::new("from".into())), at));
+                self.splice_tokens(tokens);
+                let (first, first_span) = segments.swap_remove(0);
+                return self.parse_qualified(first, first_span);
             }
         }
         // `module::S`, `module::W(x)`, `module::W`.
@@ -36761,6 +36901,16 @@ impl<'a> Parser<'a> {
                 let target = Box::new(self.parse_local_type()?);
                 return Ok(Ty::Reference { mutable, target });
             }
+            // `&&T`, which the lexer reads as one `&&`: `& &T`.
+            Token::And => {
+                let at = self.next().1;
+                self.splice_tokens(vec![(Token::Ampersand, at)]);
+                let target = Box::new(self.parse_local_type()?);
+                return Ok(Ty::Reference {
+                    mutable: false,
+                    target,
+                });
+            }
             _ => {}
         }
         // `<T as Trait>::Name`: the associated type `T::Name`.
@@ -37574,9 +37724,37 @@ impl<'a> Parser<'a> {
             source = unboxed;
             value.ty = source.clone();
         }
-        if target.is_text() && matches!(&source, Ty::Reference { target, .. } if target.is_text()) {
+        // `&&String` and `&&&str` deref to `&str` through every reference.
+        let mut stripped = source.clone();
+        while target.is_text()
+            && let Ty::Reference { target: from, .. } = &stripped
+            && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
+        {
+            stripped = inner;
+        }
+        if target.is_text() && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
+        {
             source = Ty::Str;
             value.ty = Ty::Str;
+        }
+        // Deref coercion: `&&T` (or `&&&T`) where `&T` is expected, as
+        // `b"aeiou".contains(b)` takes a filter's `&&u8`. A reference is
+        // its value at runtime, so only the type changes.
+        if let Ty::Reference {
+            mutable: false,
+            target: to,
+        } = &target
+            && !matches!(
+                self.inference.resolve(to),
+                Ty::Reference { .. } | Ty::Infer(_)
+            )
+        {
+            while let Ty::Reference { target: from, .. } = &source
+                && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
+            {
+                source = inner;
+                value.ty = source.clone();
+            }
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
@@ -41154,6 +41332,9 @@ enum ParseError {
     Infallible,
     /// `std::string::FromUtf8Error`, the error of `String::from_utf8`.
     Utf8,
+    /// `std::num::TryFromIntError`, the error of `u8::try_from(x)` and
+    /// `x.try_into()` among integers.
+    TryFromInt,
 }
 
 impl ParseError {
@@ -41165,6 +41346,7 @@ impl ParseError {
             "ParseCharError" => Self::Char,
             "Infallible" => Self::Infallible,
             "FromUtf8Error" => Self::Utf8,
+            "TryFromIntError" => Self::TryFromInt,
             _ => return None,
         })
     }
@@ -41177,6 +41359,7 @@ impl ParseError {
             Self::Char => "ParseCharError",
             Self::Infallible => "Infallible",
             Self::Utf8 => "FromUtf8Error",
+            Self::TryFromInt => "TryFromIntError",
         }
     }
 
@@ -41193,7 +41376,8 @@ impl ParseError {
     }
 
     /// Each message (the error's `Display`, its value at runtime) with the
-    /// error's `Debug`, as Rust's std writes them.
+    /// error's `Debug`, as Rust's std writes them. A `TryFromIntError` is
+    /// its `Debug` at runtime instead, and [`Self::display`] its message.
     const fn texts(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::Int => &[
@@ -41235,10 +41419,16 @@ impl ParseError {
                     "ParseCharError { kind: TooManyChars }",
                 ),
             ],
-            Self::Infallible | Self::Utf8 => &[],
+            // A `TryFromIntError` is its `Debug` text, which names the
+            // side it overflowed, and its message is one for both. A
+            // `FromUtf8Error` is its `Debug` text, which holds its bytes.
+            Self::Infallible | Self::Utf8 | Self::TryFromInt => &[],
         }
     }
 }
+
+/// `std::num::TryFromIntError`'s message, its `Display`.
+const TRY_FROM_INT_MESSAGE: &str = "out of range integral type conversion attempted";
 
 /// `text.parse()` into the kind `code` (`kind_code`): `Ok` of the value,
 /// or `Err` of the std error's message, by Rust's own `FromStr`.
@@ -41834,9 +42024,17 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
 }
 
 /// The string methods `StrPieces` runs, by code: each gives an array.
-/// `from_utf8` gives a `Result` of the text or its error's message, and
-/// `debug` a string's or a char's `Debug` text.
-const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8", "debug"];
+/// `from_utf8` gives a `Result` of the text or its error's `Debug` text,
+/// `utf8_display` that error's message from its `Debug` text, and `debug`
+/// a string's or a char's `Debug` text.
+const STR_PIECES: &[&str] = &[
+    "bytes",
+    "char_indices",
+    "splitn",
+    "from_utf8",
+    "debug",
+    "utf8_display",
+];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
@@ -41851,9 +42049,27 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
         return Ok(match String::from_utf8(bytes) {
             Ok(text) => crate::result::ok(Dynamic::from(ImmutableString::from(text))),
             Err(error) => {
-                crate::result::err(Dynamic::from(ImmutableString::from(error.to_string())))
+                crate::result::err(Dynamic::from(ImmutableString::from(format!("{error:?}"))))
             }
         });
+    }
+    // `FromUtf8Error { bytes: [..], error: Utf8Error { valid_up_to: 0,
+    // error_len: Some(1) } }`: std's `Display` of that `Utf8Error`.
+    if name == "utf8_display" {
+        let debug = args[0].clone_cast::<ImmutableString>();
+        let number = |key: &str| {
+            let rest = debug.rsplit_once(key)?.1;
+            let digits = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+            digits.parse::<usize>().ok()
+        };
+        let valid_up_to = number("valid_up_to: ").unwrap_or_default();
+        let text = match number("error_len: Some(") {
+            Some(length) => {
+                format!("invalid utf-8 sequence of {length} bytes from index {valid_up_to}")
+            }
+            None => format!("incomplete utf-8 byte sequence from index {valid_up_to}"),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
     }
     if name == "debug" {
         let text = match args[0].as_char() {
@@ -42180,10 +42396,13 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
     if name == "try_from" {
         let source = operand_kind.widen(value);
+        // `TryFromIntError`'s `Debug`, its runtime value.
         return Ok(if (low..=high).contains(&source) {
             crate::result::ok(kind.store(source).into())
+        } else if source > high {
+            crate::result::err(ImmutableString::from("TryFromIntError(PosOverflow)").into())
         } else {
-            crate::result::err(Dynamic::UNIT)
+            crate::result::err(ImmutableString::from("TryFromIntError(NegOverflow)").into())
         });
     }
     let a = kind.widen(value);

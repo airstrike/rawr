@@ -25,7 +25,6 @@
 //! `diagnostic\t<file>\t<line>\t<column>\t<code>\t<message>` lines.
 
 use std::cell::Cell;
-use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -260,9 +259,13 @@ fn named(name: &str) -> Result<Key, String> {
 
 /// Listen on the project's agent socket for the window's lifetime.
 pub(crate) fn subscription() -> iced::Subscription<Call> {
+    #[cfg(target_arch = "wasm32")]
+    return iced::Subscription::none();
+    #[cfg(not(target_arch = "wasm32"))]
     iced::Subscription::run(listen)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn listen() -> impl iced::futures::Stream<Item = Call> {
     iced::stream::channel(
         8,
@@ -283,10 +286,13 @@ fn listen() -> impl iced::futures::Stream<Item = Call> {
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn serve(
     stream: std::os::unix::net::UnixStream,
     mut output: iced::futures::channel::mpsc::Sender<Call>,
 ) {
+    use std::io::{BufRead, Write};
+
     let mut text = String::new();
     let mut reader = std::io::BufReader::new(&stream);
     let mut line = String::new();

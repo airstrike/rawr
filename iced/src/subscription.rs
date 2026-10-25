@@ -102,7 +102,7 @@ where
     fn stream(
         self: Box<Self>,
         input: iced::advanced::subscription::EventStream,
-    ) -> iced::futures::stream::BoxStream<'static, Self::Output> {
+    ) -> iced_runtime::futures::BoxStream<Self::Output> {
         use iced::futures::stream::StreamExt;
 
         let instance = self.instance;
@@ -162,7 +162,7 @@ where
     fn stream(
         self: Box<Self>,
         _input: iced::advanced::subscription::EventStream,
-    ) -> iced::futures::stream::BoxStream<'static, Self::Output> {
+    ) -> iced_runtime::futures::BoxStream<Self::Output> {
         let message = (self.emit)(runtime::Message::subscription_error(
             self.instance,
             self.generation,
@@ -295,7 +295,7 @@ fn bind_events(builder: &mut host::runtime::Builder) {
 
     fn input(filter: fn(Input) -> Option<Dynamic>) -> Native {
         match events() {
-            Some(events) => events
+            Some(events) => crate::local::Local(events)
                 .filter_map(move |event| async move { filter(event).map(Ok) })
                 .boxed(),
             None => stream::empty().boxed(),
@@ -447,6 +447,7 @@ fn bind_events(builder: &mut host::runtime::Builder) {
 }
 
 /// A tick every `duration`, from a timer thread that ends with the stream.
+#[cfg(not(target_arch = "wasm32"))]
 fn ticks(
     duration: std::time::Duration,
 ) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
@@ -466,6 +467,24 @@ fn ticks(
         .boxed()
 }
 
+/// A tick every `duration`, from the page's timer: a browser has no threads.
+#[cfg(target_arch = "wasm32")]
+fn ticks(
+    duration: std::time::Duration,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::futures::StreamExt;
+
+    let mut interval = wasmtimer::tokio::interval(duration);
+    interval.set_missed_tick_behavior(wasmtimer::tokio::MissedTickBehavior::Skip);
+    // An interval's first tick is now; the thread's is a `duration` away.
+    iced::futures::stream::unfold(interval, |mut interval| async move {
+        interval.tick().await;
+        Some((Ok(Dynamic::from(crate::marker::Instant::now())), interval))
+    })
+    .skip(1)
+    .boxed()
+}
+
 /// A tick every `duration` of a recording's clock, from `start`: each frame
 /// the recording draws (a `RedrawRequested` at the clock's time) gives
 /// every tick due by then, each at its own time.
@@ -483,7 +502,7 @@ fn simulated_ticks(
     };
     let mut next = start + duration;
     armed(
-        events
+        crate::local::Local(events)
             .flat_map(move |event| {
                 let mut due = Vec::new();
                 if let Input::Interaction {

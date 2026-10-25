@@ -30,6 +30,10 @@
 //!
 //! Mods choose where the bot answers with `/play-channel add|remove|list`;
 //! a server with no channels chosen gets no answers.
+//!
+//! A full app's reply has a button for each target of its last frame
+//! (D516). A click replays the request with the history its button
+//! carries ([`rawr_play::click`]) and edits the reply in place.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -40,15 +44,18 @@ use std::time::{Duration, Instant};
 
 use rawr_play::budget::{self, Budgets, Grant};
 use rawr_play::channels::{self, Channels, Parents, Store};
-use rawr_play::message::{self, Done, RateLimit, Reply};
+use rawr_play::click::{self, Decision};
+use rawr_play::message::{self, Done, RateLimit, Reply, Shot};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
-    Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType, Context,
-    CreateAttachment, CreateCommand, CreateCommandOption, CreateMessage, EditInteractionResponse,
-    EditMessage, EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId,
-    Interaction, InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions,
-    ReactionType, Ready, ResolvedValue, UnavailableGuild,
+    ButtonStyle, Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType,
+    ComponentInteraction, Context, CreateActionRow, CreateAttachment, CreateButton, CreateCommand,
+    CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseFollowup,
+    CreateInteractionResponseMessage, CreateMessage, EditInteractionResponse, EditMessage,
+    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, Interaction,
+    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
+    ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
 use tokio::io::AsyncWriteExt;
@@ -200,8 +207,9 @@ impl Renderer {
         };
         let idle = held.grant.idle.then_some(started);
         let (mut result, outcome) = self.spawn(&request, format, idle).await;
-        if let Ok(Done::Image(_, note)) = &mut result {
-            *note = budget::annotate(note.take(), &held.grant, animation, started.elapsed());
+        if let Ok(Done::Image(shot)) = &mut result {
+            shot.note =
+                budget::annotate(shot.note.take(), &held.grant, animation, started.elapsed());
         }
         drop(held);
         Some(Rendered {
@@ -441,9 +449,11 @@ impl EventHandler for Handler {
         // Serenity re-sends typing every 7 s until it is dropped; Discord
         // shows it for 10 s.
         let typing = msg.channel_id.start_typing(&context.http);
+        let hash = request.as_ref().ok().map(click::hash);
         let reply = self.reply(request, msg.guild_id, msg.author.id.get()).await;
         typing.stop();
-        self.send(&context, msg.channel_id, msg.id, reply).await;
+        self.send(&context, msg.channel_id, msg.id, reply, hash.as_deref())
+            .await;
     }
 
     /// Re-render a `?play` request when its author edits it: edit our
@@ -490,18 +500,28 @@ impl EventHandler for Handler {
             None => self.find_reply(&context, event.channel_id, event.id).await,
         };
         let typing = event.channel_id.start_typing(&context.http);
+        let hash = request.as_ref().ok().map(click::hash);
         let reply = self.reply(request, event.guild_id, user).await;
         typing.stop();
         let Some(reply_id) = reply_id else {
-            self.send(&context, event.channel_id, event.id, reply).await;
+            self.send(&context, event.channel_id, event.id, reply, hash.as_deref())
+                .await;
             return;
         };
+        // The history starts over: the buttons are the new request's.
         let builder = match reply {
-            Reply::Image(image, note) => EditMessage::new()
-                .content(note.map_or_else(String::new, |note| subtext(&note)))
+            Reply::Image(shot) => {
+                let (content, rows) = dressed(&shot, hash.as_deref(), &[]);
+                EditMessage::new()
+                    .content(content)
+                    .remove_all_attachments()
+                    .new_attachment(self.attachment(shot.bytes))
+                    .components(rows)
+            }
+            Reply::Text(text) => EditMessage::new()
+                .content(text)
                 .remove_all_attachments()
-                .new_attachment(self.attachment(image)),
-            Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
+                .components(Vec::new()),
         };
         match event
             .channel_id
@@ -592,8 +612,10 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
-        let Interaction::Command(command) = interaction else {
-            return;
+        let command = match interaction {
+            Interaction::Command(command) => command,
+            Interaction::Component(component) => return self.click(&context, &component).await,
+            _ => return,
         };
         if command.data.name != COMMAND {
             return;
@@ -659,9 +681,132 @@ impl Handler {
     }
 
     fn allow(&self, user: u64, channel: ChannelId) -> bool {
+        self.throttle(user, channel).is_none()
+    }
+
+    /// Count a request from `user` in `channel` against both limits, as
+    /// [`Self::allow`] does; over one, how long until it may try again.
+    fn throttle(&self, user: u64, channel: ChannelId) -> Option<Duration> {
         let now = Instant::now();
-        self.users.lock().unwrap().allow(user, now)
-            && self.channel_rate.lock().unwrap().allow(channel.get(), now)
+        self.users
+            .lock()
+            .unwrap()
+            .wait(user, now)
+            .or_else(|| self.channel_rate.lock().unwrap().wait(channel.get(), now))
+    }
+
+    /// A click on one of our replies' buttons: checked as
+    /// [`click::decide`] says (refused privately), then acknowledged within
+    /// Discord's 3 s, replayed with the history its button carries, and
+    /// the reply edited with the new image and buttons. A replay that
+    /// fails leaves the reply as it was and tells the clicker privately.
+    async fn click(&self, context: &Context, component: &ComponentInteraction) {
+        let reply = &component.message;
+        let channel = component.channel_id;
+        // The request this reply answers: in the payload, else fetched.
+        let referenced = match &reply.referenced_message {
+            Some(request) => Some((**request).clone()),
+            None => match reply
+                .message_reference
+                .as_ref()
+                .and_then(|to| to.message_id)
+            {
+                Some(id) => channel.message(&context.http, id).await.ok(),
+                None => None,
+            },
+        };
+        let request = referenced.as_ref().and_then(|sent| {
+            let parsed = message::parse(&sent.content, &self.defaults)?.ok()?;
+            Some((parsed, sent.author.id.get(), sent.id))
+        });
+        let hash = request.as_ref().map(|(parsed, ..)| click::hash(parsed));
+        let user = component.user.id.get();
+        let mut claimed = None;
+        let decision = click::decide(
+            &component.data.custom_id,
+            hash.as_deref().zip(
+                request
+                    .as_ref()
+                    .map(|(parsed, author, _)| parsed.mine.then_some(*author)),
+            ),
+            user,
+            || self.throttle(user, channel),
+            || {
+                claimed = request.as_ref().and_then(|(.., id)| self.answering(*id));
+                claimed.is_some()
+            },
+        );
+        let private = |text: String| {
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .content(text)
+                    .ephemeral(true),
+            )
+        };
+        let steps = match decision {
+            Decision::Render(steps) => steps,
+            Decision::Busy => {
+                let _ = component
+                    .create_response(&context.http, CreateInteractionResponse::Acknowledge)
+                    .await;
+                return;
+            }
+            refused => {
+                let text = match refused {
+                    Decision::Wait(wait) => {
+                        self.shared
+                            .stats
+                            .lock()
+                            .unwrap()
+                            .rate_limited(component.guild_id.map(GuildId::get));
+                        click::wait_text(wait)
+                    }
+                    Decision::NotYours => click::NOT_YOURS.to_owned(),
+                    _ => click::STALE.to_owned(),
+                };
+                if let Err(error) = component
+                    .create_response(&context.http, private(text))
+                    .await
+                {
+                    eprintln!("rawr-play-bot: cannot answer a click: {error}");
+                }
+                return;
+            }
+        };
+        if let Err(error) = component
+            .create_response(&context.http, CreateInteractionResponse::Acknowledge)
+            .await
+        {
+            eprintln!("rawr-play-bot: cannot acknowledge a click: {error}");
+            return;
+        }
+        let Some((mut request, ..)) = request else {
+            return;
+        };
+        request.options.steps.clone_from(&steps);
+        // The claim holds until the reply shows the new buttons.
+        let rendered = self.render(&request, component.guild_id, user).await;
+        let shot = match rendered {
+            Reply::Image(shot) => shot,
+            Reply::Text(text) => {
+                let followup = CreateInteractionResponseFollowup::new()
+                    .content(text)
+                    .ephemeral(true);
+                if let Err(error) = component.create_followup(&context.http, followup).await {
+                    eprintln!("rawr-play-bot: cannot answer a click: {error}");
+                }
+                return;
+            }
+        };
+        let (content, rows) = dressed(&shot, hash.as_deref(), &steps);
+        let edit = EditInteractionResponse::new()
+            .content(content)
+            .clear_attachments()
+            .new_attachment(self.attachment(shot.bytes))
+            .components(rows);
+        if let Err(error) = component.edit_response(&context.http, edit).await {
+            eprintln!("rawr-play-bot: cannot edit a clicked reply: {error}");
+        }
     }
 
     /// Run `/play-channel add|remove|list`; the reply text (ephemeral).
@@ -813,14 +958,27 @@ impl Handler {
     }
 
     /// Post `reply` in `channel` as a reply to `request`, and remember it.
-    async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: Reply) {
+    /// An image gets a button for each target when the request's `hash`
+    /// is known.
+    async fn send(
+        &self,
+        context: &Context,
+        channel: ChannelId,
+        request: MessageId,
+        reply: Reply,
+        hash: Option<&str>,
+    ) {
         let builder = CreateMessage::new().reference_message((channel, request));
         let builder = match reply {
-            Reply::Image(image, note) => {
-                let builder = builder.add_file(self.attachment(image));
-                match note {
-                    Some(note) => builder.content(subtext(&note)),
-                    None => builder,
+            Reply::Image(shot) => {
+                let (content, rows) = dressed(&shot, hash, &[]);
+                let builder = builder
+                    .add_file(self.attachment(shot.bytes))
+                    .components(rows);
+                if content.is_empty() {
+                    builder
+                } else {
+                    builder.content(content)
                 }
             }
             Reply::Text(text) => builder.content(text),
@@ -867,13 +1025,14 @@ impl Handler {
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
         match rendered.result {
-            Ok(Done::Image(image, note)) => {
+            Ok(Done::Image(mut shot)) => {
                 let notes: Vec<String> = message::image_note(&request.code)
                     .map(str::to_owned)
                     .into_iter()
-                    .chain(note)
+                    .chain(shot.note.take())
                     .collect();
-                Reply::Image(image, (!notes.is_empty()).then(|| notes.join("\n")))
+                shot.note = (!notes.is_empty()).then(|| notes.join("\n"));
+                Reply::Image(shot)
             }
             Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
             Err(text) => Reply::Text(message::error_text(&text)),
@@ -960,7 +1119,9 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 .unwrap()
                                 .record_web(rendered.outcome, rendered.millis);
                             match rendered.result {
-                                Ok(Done::Image(image, note)) => {
+                                Ok(Done::Image(Shot {
+                                    bytes: image, note, ..
+                                })) => {
                                     let kind = if rawr_play::message::is_gif(&image) {
                                         "image/gif"
                                     } else {
@@ -993,6 +1154,35 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                 .await;
         });
     }
+}
+
+/// The text and buttons of an image reply to the request hashed `hash`,
+/// rendered after `steps`: its note and the clicks so far as subtext, and
+/// a button for each target, five to a row. No `hash`, no buttons.
+fn dressed(shot: &Shot, hash: Option<&str>, steps: &[usize]) -> (String, Vec<CreateActionRow>) {
+    let lines: Vec<String> = shot
+        .note
+        .iter()
+        .cloned()
+        .chain(click::quiet(&shot.clicked, &shot.actions))
+        .collect();
+    let content = subtext(&lines.join("\n"));
+    let Some(hash) = hash else {
+        return (content, Vec::new());
+    };
+    let buttons: Vec<CreateButton> = click::buttons(hash, steps, &shot.actions)
+        .into_iter()
+        .map(|button| {
+            CreateButton::new(button.id)
+                .label(button.label)
+                .style(ButtonStyle::Secondary)
+        })
+        .collect();
+    let rows = buttons
+        .chunks(5)
+        .map(|row| CreateActionRow::Buttons(row.to_vec()))
+        .collect();
+    (content, rows)
 }
 
 /// `note` as Discord subtext, one `-# ` line per line.

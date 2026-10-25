@@ -7,6 +7,11 @@
 //! frozen, that is the clock's paused runtime, which the recording moves a
 //! frame at a time (`snapshot::clock::tokio`). Elsewhere it is one runtime
 //! on a thread of its own, on the real clock.
+//!
+//! In a browser (wasm32) there is no tokio runtime: tokio's timers read a
+//! clock the browser does not have. A timer there is the page's own
+//! (`wasmtimer`), and the futures run on the page's event loop, which iced
+//! or rawr-web drives. tokio's channels need no runtime and are the same.
 
 use std::fmt;
 use std::future::Future;
@@ -43,24 +48,40 @@ fn background() -> &'static tokio::runtime::Handle {
     })
 }
 
-/// A future made and polled inside `handle`'s runtime.
+/// A future made and polled inside `handle`'s runtime. On a recording's
+/// clock its wakes also tell the clock that a timer ended.
 struct Entered<F> {
     handle: tokio::runtime::Handle,
     future: Pin<Box<F>>,
+    fired: Option<clock::Fired>,
 }
 
 impl<F: Future> Future for Entered<F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<F::Output> {
-        let _entered = self.handle.enter();
-        self.future.as_mut().poll(context)
+        let this = &mut *self;
+        let _entered = this.handle.enter();
+        match &this.fired {
+            Some(fired) => {
+                let waker = fired.waker(context.waker());
+                this.future.as_mut().poll(&mut Context::from_waker(&waker))
+            }
+            None => this.future.as_mut().poll(context),
+        }
     }
 }
 
 /// tokio's `time::sleep`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sleep(duration: std::time::Duration) -> BoxFuture<'static, ()> {
     timer_in(handle(), move || tokio::time::sleep(duration))
+}
+
+/// tokio's `time::sleep`, on the page's timer.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn sleep(duration: std::time::Duration) -> BoxFuture<'static, ()> {
+    Box::pin(wasmtimer::tokio::sleep(duration))
 }
 
 /// A timer's future, made and polled inside `handle`'s runtime. On a
@@ -73,11 +94,16 @@ where
     F: Future + Send + 'static,
 {
     let armed = clock::now().is_some().then(clock::Armed::new);
+    let fired = clock::now().and_then(|_| clock::fired());
     let future = {
         let _entered = handle.enter();
         Box::pin(make())
     };
-    let future = Entered { handle, future };
+    let future = Entered {
+        handle,
+        future,
+        fired,
+    };
     Box::pin(async move {
         let output = future.await;
         drop(armed);
@@ -88,8 +114,55 @@ where
 /// tokio's `time::Interval`, in the runtime it was made in.
 #[derive(Clone)]
 pub(crate) struct Interval {
+    #[cfg(not(target_arch = "wasm32"))]
     handle: tokio::runtime::Handle,
-    interval: Arc<tokio::sync::Mutex<tokio::time::Interval>>,
+    interval: Arc<tokio::sync::Mutex<Ticks>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type Ticks = tokio::time::Interval;
+/// The page's interval, which ticks as tokio's does.
+#[cfg(target_arch = "wasm32")]
+type Ticks = wasmtimer::tokio::Interval;
+
+impl Interval {
+    /// An interval of `period` whose first tick is now.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(period: std::time::Duration) -> Self {
+        let handle = handle();
+        let interval = {
+            let _entered = handle.enter();
+            tokio::time::interval(period)
+        };
+        Self {
+            handle,
+            interval: Arc::new(tokio::sync::Mutex::new(interval)),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn new(period: std::time::Duration) -> Self {
+        Self {
+            interval: Arc::new(tokio::sync::Mutex::new(wasmtimer::tokio::interval(period))),
+        }
+    }
+
+    /// Its next tick.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn tick(&self) -> BoxFuture<'static, ()> {
+        let shared = self.interval.clone();
+        timer_in(self.handle.clone(), move || async move {
+            shared.lock().await.tick().await;
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn tick(&self) -> BoxFuture<'static, ()> {
+        let shared = self.interval.clone();
+        Box::pin(async move {
+            shared.lock().await.tick().await;
+        })
+    }
 }
 
 /// tokio's `time::error::Elapsed`.
@@ -665,23 +738,12 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         if period.is_zero() {
             return Err(error("`period` must be non-zero."));
         }
-        let handle = handle();
-        let interval = {
-            let _entered = handle.enter();
-            tokio::time::interval(period)
-        };
-        Ok(Dynamic::from(Interval {
-            handle,
-            interval: Arc::new(tokio::sync::Mutex::new(interval)),
-        }))
+        Ok(Dynamic::from(Interval::new(period)))
     });
     bind("tokio::time::Interval::tick", |_call, args| {
         let interval = read::<Interval>(args[0], "Interval")?;
         Ok(task::tokio_task(None, move || {
-            let shared = interval.interval.clone();
-            let tick = timer_in(interval.handle.clone(), move || async move {
-                shared.lock().await.tick().await;
-            });
+            let tick = interval.tick();
             Box::pin(async move {
                 tick.await;
                 Dynamic::from(crate::marker::Instant::now())

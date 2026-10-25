@@ -457,52 +457,45 @@ impl Counter {
 <section id="embed">
   <div class="wrap sec">
     <div class="side">
-      <h2>Run Rust scripts in your app</h2>
-      <p>Your app adds the <code>rawr</code> crate and runs Rust scripts.</p>
-      <p>Put <code>#[rawr::export]</code> on your own types and functions, and scripts can use them. <code>compile_file</code> checks a script against the exports. <code>call_fn</code> calls a function the script defines.</p>
+      <h2>Let your users change your app in Rust</h2>
+      <p>Your app adds the <code>rawr</code> crate and loads rules its users write in Rust, without rebuilding it.</p>
+      <p>Put <code>#[rawr::export]</code> on your own types, and the rules can use them. <code>Engine::load</code> checks the rules against the exports. <code>script.func</code> gives a typed handle to a function the rules define, and <code>script.reload()</code> picks up an edit.</p>
       <p>Here the interpreter ships in your release build.</p>
       <div class="actions"><a class="btn" href="/docs/embedding">Embed rawr</a></div>
     </div>
     <div class="stack" id="hosts">
       <div class="block">
         <div class="file"><b>src/main.rs</b><span>your app</span></div>
-        <pre><code data-lang="rust">use rawr::{Engine, Exports, Scope};
+        <pre><code data-lang="rust">use rawr::{Engine, Exports};
 
 #[derive(Clone)]
 #[rawr::export]
-pub struct Order {
-    pub customer: String,
-    pub items: i64,
-}
-
-#[rawr::export]
-impl Order {
-    pub fn total(&amp;self, price: f64) -&gt; f64 {
-        price * self.items as f64
-    }
+pub struct Transaction {
+    pub payee: String,
+    pub amount: f64,
 }
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
-    let mut shop = Exports::new("shop");
-    shop.add::&lt;Order&gt;();
+    let mut bank = Exports::new("bank");
+    bank.add::&lt;Transaction&gt;();
     let mut engine = Engine::new();
-    engine.export(shop)?;
+    engine.export(bank)?;
 
-    let ast = engine.compile_file("scripts/label.rs".into())?;
-    let order = Order { customer: "Ada".into(), items: 2 };
-    let label = engine.call_fn::&lt;String&gt;(&amp;mut Scope::new(), &amp;ast, "label", (order,))?;
-    println!("{label}");
+    let script = engine.load("rules.rs")?;
+    let category = script.func::&lt;(Transaction,), Option&lt;String&gt;&gt;("category")?;
+    let tx = Transaction { payee: "Blue Bottle Coffee".into(), amount: -4.5 };
+    println!("{:?}", category.call(tx)?);
     Ok(())
 }</code></pre>
       </div>
       <div class="block">
-        <div class="file"><b>scripts/label.rs</b><span>a script</span></div>
-        <pre><code data-lang="rust">use shop::Order;
+        <div class="file"><b>rules.rs</b><span>your user&rsquo;s rules</span></div>
+        <pre><code data-lang="rust">use bank::Transaction;
 
-fn label(order: Order) -&gt; String {
-    format!("{} x{}: {:.2}", order.customer, order.items, order.total(9.5))
+fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
+    if tx.payee.contains("Coffee") { Some("coffee".into()) } else { None }
 }</code></pre>
-        <div class="run"><b>cargo run</b><span>Ada x2: 19.00</span></div>
+        <div class="run"><b>cargo run</b><span>Some("coffee")</span></div>
       </div>
     </div>
   </div>

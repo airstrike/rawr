@@ -7,6 +7,8 @@
 // Public facade and snapshot APIs retain their structured, source-bearing error
 // enums. Boxing their `Err` values would change those proven diagnostic APIs.
 #![allow(clippy::result_large_err)]
+// A browser build has no importer, so the profile's helpers go unused there.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod application;
 pub mod control;
@@ -15,6 +17,7 @@ pub mod diagnostic;
 mod dispatch;
 mod effect;
 pub mod features;
+mod local;
 
 use features::Feature;
 mod io_facade;
@@ -22,6 +25,7 @@ mod marker;
 pub mod native;
 mod path_facade;
 pub mod preview;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod profile;
 pub mod program;
 pub mod reload;
@@ -1307,6 +1311,7 @@ pub fn extension(iced: &facade::Definition) -> Result<facade::Definition, host::
 
 /// The profile's extension carries the profile's exact seal, so application
 /// semantics finalize its own types like the profile facade's.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn extension_profile(
     iced: &facade::Definition,
     seal: [u8; 32],
@@ -1319,6 +1324,9 @@ fn extension_with_exports(
     seal: Option<[u8; 32]>,
 ) -> Result<facade::Definition, host::Error> {
     let mut builder = facade::Builder::new("rawr_iced", facade::Abi::new(4)?)?;
+    #[cfg(target_arch = "wasm32")]
+    let _ = seal;
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(seal) = seal {
         builder.compatibility_seal(seal)?;
     }

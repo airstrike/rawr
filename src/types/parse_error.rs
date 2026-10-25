@@ -70,6 +70,11 @@ impl LexError {
 pub struct Rendered(Option<crate::ImmutableString>);
 
 impl Rendered {
+    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+    pub(crate) fn new(text: impl Into<crate::ImmutableString>) -> Self {
+        Self(Some(text.into()))
+    }
+
     /// The rendered error, when there is one.
     #[must_use]
     pub fn text(&self) -> Option<&str> {

@@ -1,8 +1,19 @@
-// iced's examples from play/tests/fixtures, embedded when the Worker is
-// built (wrangler.jsonc's "rules" import *.rs files as text). Simple ones
-// come first. A size is set where the default canvas would cut the view off.
+// The playground's examples, embedded when the Worker is built
+// (wrangler.jsonc's "rules" import *.rs files as text). Plain Rust programs
+// come first, from play/tests/fixtures/rust, and the first is what a first
+// visit opens. iced's examples follow, from play/tests/fixtures, simple ones
+// first. A size is set where the default canvas would cut the view off.
 
 import type { Example } from "./playpage.ts";
+import enums from "../../../tests/fixtures/rust/enums.rs";
+import histogram from "../../../tests/fixtures/rust/histogram.rs";
+import iterators from "../../../tests/fixtures/rust/iterators.rs";
+import moves from "../../../tests/fixtures/rust/moves.rs";
+import strings from "../../../tests/fixtures/rust/strings.rs";
+import tasks from "../../../tests/fixtures/rust/tasks.rs";
+import traits from "../../../tests/fixtures/rust/traits.rs";
+import useAfterMove from "../../../tests/fixtures/rust/use_after_move.rs";
+import wordCount from "../../../tests/fixtures/rust/word_count.rs";
 import arc from "../../../tests/fixtures/arc.rs";
 import checkbox from "../../../tests/fixtures/checkbox.rs";
 import comboBox from "../../../tests/fixtures/combo_box.rs";
@@ -24,14 +35,21 @@ import text from "../../../tests/fixtures/text.rs";
 import tooltip from "../../../tests/fixtures/tooltip.rs";
 import vectorialText from "../../../tests/fixtures/vectorial_text.rs";
 
-export const COUNTER: Example = {
-  name: "Counter",
-  code: counter,
-  messages: ["Message::Increment", "Message::Increment"],
-};
+/** Plain programs: each prints its output as text. The first opens on a first visit. */
+const RUST: Example[] = [
+  { name: "Letter histogram", code: histogram },
+  { name: "Moves and borrowing", code: moves },
+  { name: "Use after move (error)", code: useAfterMove },
+  { name: "Enums, match and ?", code: enums },
+  { name: "Traits and generics", code: traits },
+  { name: "Closures and iterators", code: iterators },
+  { name: "Word count", code: wordCount },
+  { name: "Strings and let else", code: strings },
+  { name: "Async tasks", code: tasks },
+].map((example) => ({ ...example, group: "Rust" }));
 
-export const EXAMPLES: Example[] = [
-  COUNTER,
+const ICED: Example[] = [
+  { name: "Counter", code: counter, messages: ["Message::Increment", "Message::Increment"] },
   { name: "Checkbox", code: checkbox },
   { name: "Slider", code: slider },
   { name: "Progress bar", code: progressBar },
@@ -84,4 +102,9 @@ export const EXAMPLES: Example[] = [
   { name: "Custom quad", code: customQuad, size: "480x660" },
   { name: "Arc", code: arc },
   { name: "Sandpiles", code: sandpiles },
-];
+].map((example) => ({ ...example, group: "iced" }));
+
+export const EXAMPLES: Example[] = [...RUST, ...ICED];
+
+/** What a first visit opens. */
+export const FIRST: Example = EXAMPLES[0];

@@ -80,7 +80,8 @@ fn mapper_shape_errors_are_rejected_before_runtime_binding() {
 #[test]
 fn slider_static_operand_errors_and_runtime_constraints_retain_original_view_evidence() {
     for (control, expected) in [
-        ("slider(0..=\"100\", 0, Message::Changed)", "found 'String'"),
+        // rustc: "expected integer, found `&str`" (E0308).
+        ("slider(0..=\"100\", 0, Message::Changed)", "found '&str'"),
         ("slider(0..=100, false, Message::Changed)", "i64"),
     ] {
         let source = invalid_slider_source(control);

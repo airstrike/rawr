@@ -123,7 +123,6 @@ Error: "\"forty\": invalid digit found in string"
   <li>Returning <code>&amp;mut</code> from a function or method.</li>
   <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
-  <li>Dereferencing twice (<code>**x</code>) inside a closure such as the one passed to <code>min_by_key</code>.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li><code>impl Drop</code>.</li>
 </ul>
@@ -146,7 +145,6 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
-  <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
   <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
   <li><strong>A large <code>u64</code> in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
 </ul>
@@ -164,6 +162,7 @@ Error: "\"forty\": invalid digit found in string"
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
+  <li><code>Send</code> and <code>Sync</code> bounds are not checked. An <code>Rc</code> passes <code>T: Send</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>

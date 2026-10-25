@@ -87,9 +87,9 @@ fn terminal_panic_satisfies_declared_output_and_preserves_runtime_failure() {
     assert!(matches!(error, Error::Evaluation { .. }));
     assert!(error.to_string().contains("boom"));
 
-    // `throw` is not Rust.
+    // `throw` is a name in Rust, so the string after it is rustc's parse error.
     let error = engine.compile_authority(r#"pub fn impossible() -> i64 { throw "boom"; }"#).unwrap_err();
-    assert!(error.to_string().contains("expected expression, found `throw`"), "{error}");
+    assert!(error.to_string().contains("or an operator, found `\"boom\"`"), "{error}");
 }
 
 #[test]

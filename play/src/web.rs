@@ -81,6 +81,7 @@ pub fn parse_render(body: &[u8], defaults: &Options) -> Result<Request, String> 
     Ok(Request {
         code: code.to_owned(),
         options,
+        mine: false,
     })
 }
 

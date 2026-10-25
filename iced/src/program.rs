@@ -111,7 +111,7 @@ pub struct Adapter {
     pub(crate) prepared: Option<task::Prepared>,
     /// Tasks [`Adapter::deliver`] left running: a recording polls them
     /// again on each frame, as its clock moves.
-    running: Vec<iced::futures::stream::BoxStream<'static, iced_runtime::Action<runtime::Message>>>,
+    running: Vec<iced_runtime::futures::BoxStream<iced_runtime::Action<runtime::Message>>>,
 }
 
 pub(crate) struct Draft {
@@ -886,6 +886,12 @@ impl Adapter {
     /// ends as the clock passes it. A failing update stays in the
     /// diagnostics.
     pub fn deliver(&mut self, messages: impl IntoIterator<Item = runtime::Message>) {
+        self.settle(messages);
+    }
+
+    /// [`Adapter::deliver`], and whether every running task then waits:
+    /// `false` when it stopped at [`DELIVERED`] with messages still ready.
+    pub(crate) fn settle(&mut self, messages: impl IntoIterator<Item = runtime::Message>) -> bool {
         let startup = self.take_startup_plan();
         let mut queue = self.ready(startup);
         queue.extend(messages);
@@ -893,7 +899,7 @@ impl Adapter {
         loop {
             while let Some(message) = queue.pop_front() {
                 if delivered == DELIVERED {
-                    return;
+                    return false;
                 }
                 delivered += 1;
                 if let Ok(transition) = self.update(message) {
@@ -904,7 +910,7 @@ impl Adapter {
             // A script step that just ran may have let a running task go on.
             queue.extend(self.poll_running());
             if queue.is_empty() {
-                return;
+                return true;
             }
         }
     }
@@ -995,6 +1001,27 @@ impl Adapter {
             return Ok(Transition::new(Delivery::Dropped, task::Plan::none()));
         };
         self.update_authority(&authority, message)
+    }
+
+    /// The State as bytes an adapter of an edited program can continue
+    /// from, as a new runner process does: `None` for a reloadable host's
+    /// adapter, or for a State that holds more than plain script data.
+    pub fn export_state(&self) -> Option<Vec<u8>> {
+        match &self.launch {
+            Launch::Static(launch) => self.export_state_authority(launch),
+            Launch::Reload(_) => None,
+        }
+    }
+
+    /// Continue from the State another adapter exported. `false` keeps the
+    /// boot: a script type in the State changed.
+    pub fn seed_state(&mut self, bytes: &[u8]) -> bool {
+        let Launch::Static(launch) = &self.launch else {
+            return false;
+        };
+        let launch = launch.as_ref().clone();
+        let timing = self.timing.clone();
+        self.seed_state_authority(&launch, bytes, timing.as_ref())
     }
 
     /// The State as bytes a new runner process can seed from; `None`
@@ -1476,18 +1503,26 @@ impl Application {
             .expect("Rawr native application boot state lock must remain available")
             .take()
             .expect("iced must boot a Rawr native application exactly once");
+        let task = Self::start(&mut adapter);
+        (adapter, task)
+    }
+
+    /// The task that starts a booted `adapter`: its startup tasks, or none
+    /// when it continues a seeded State. A host that owns its own iced
+    /// program (a browser's) calls this and the `*_native` functions below.
+    pub fn start(adapter: &mut Adapter) -> iced::Task<runtime::Message> {
         let plan = adapter.take_startup_plan();
-        let task = match adapter.lower_task(plan) {
+        match adapter.lower_task(plan) {
             Ok(task) => task,
             Err(error) => {
                 adapter.record_task_error(Error::Task(Arc::new(error)));
                 iced::Task::none()
             }
-        };
-        (adapter, task)
+        }
     }
 
-    fn update_native(
+    /// iced's update of one adapter.
+    pub fn update_native(
         state: &mut Adapter,
         message: runtime::Message,
     ) -> iced::Task<runtime::Message> {
@@ -1511,11 +1546,13 @@ impl Application {
         state.title.clone()
     }
 
-    fn theme_native(state: &Adapter) -> iced::Theme {
+    /// iced's theme of one adapter.
+    pub fn theme_native(state: &Adapter) -> iced::Theme {
         state.theme.native().clone()
     }
 
-    fn subscription_native(state: &Adapter) -> iced::Subscription<runtime::Message> {
+    /// iced's subscription of one adapter.
+    pub fn subscription_native(state: &Adapter) -> iced::Subscription<runtime::Message> {
         state.lower_subscription(std::convert::identity)
     }
 }

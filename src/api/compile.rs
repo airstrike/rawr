@@ -662,6 +662,35 @@ impl Engine {
         })
     }
 
+    /// Compile one script into its hosted [`AST`] and the typed signatures
+    /// of its free functions, for [`Script`](crate::Script). An error prints
+    /// as rustc prints it, with `identity` naming the source.
+    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+    pub(crate) fn compile_script(
+        &self,
+        text: &str,
+        identity: &str,
+    ) -> ParseResult<(AST, program::signatures::Signatures)> {
+        self.compile_executable_scripts_with_scope_raw(
+            None,
+            [text],
+            None,
+            None,
+            #[cfg(not(feature = "no_optimize"))]
+            self.optimization_level,
+        )
+        .map(|executable| {
+            self.freeze_exports(executable.host_dependencies());
+            let positions = executable.positions();
+            let (mut ast, signatures) = executable.into_hosted_parts();
+            crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
+                positions.located(position)
+            });
+            (ast, signatures)
+        })
+        .map_err(|error| error.rendered(identity, text))
+    }
+
     fn compile_executable_scripts_with_scope_raw<S: AsRef<str>>(
         &self,
         scope: Option<&Scope>,

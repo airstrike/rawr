@@ -121,7 +121,8 @@ fn main() {
 </div>
 <h2 id="dyn">Trait objects</h2>
 <p><code>Box&lt;dyn Trait&gt;</code> holds any type that implements the trait. <code>&amp;dyn Trait</code> arguments aren&rsquo;t supported yet.</p>
-<div class="block"><pre><code data-lang="rust">trait Shape {
+<div class="block">
+  <pre><code data-lang="rust" data-run="shapes.rs" id="src-shapes">trait Shape {
     fn area(&amp;self) -&gt; f64;
 }
 
@@ -141,10 +142,14 @@ impl Shape for Circle {
 }
 
 let shapes: Vec&lt;Box&lt;dyn Shape&gt;&gt; = vec![Box::new(Square(2.0)), Box::new(Circle(1.0))];
-let total: f64 = shapes.iter().map(|s| s.area()).sum();</code></pre></div>
+let total: f64 = shapes.iter().map(|s| s.area()).sum();
+println!("{total}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-shapes" data-out="out-shapes" aria-label="Run shapes.rs" hidden></button><b>rawr run shapes.rs</b><span id="out-shapes" aria-live="polite">7.140000000000001</span></div>
+</div>
 <h2 id="iterator"><code>Iterator</code></h2>
 <p>A type that implements <code>Iterator</code> gets <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters.</p>
-<div class="block"><pre><code data-lang="rust">struct Countdown(u32);
+<div class="block">
+  <pre><code data-lang="rust" data-run="countdown.rs" id="src-countdown">struct Countdown(u32);
 
 impl Iterator for Countdown {
     type Item = u32;
@@ -158,10 +163,14 @@ impl Iterator for Countdown {
     }
 }
 
-let v: Vec&lt;u32&gt; = Countdown(3).collect(); // [2, 1, 0]</code></pre></div>
+let v: Vec&lt;u32&gt; = Countdown(3).collect(); // [2, 1, 0]
+println!("{v:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-countdown" data-out="out-countdown" aria-label="Run countdown.rs" hidden></button><b>rawr run countdown.rs</b><span id="out-countdown" aria-live="polite">[2, 1, 0]</span></div>
+</div>
 <h2 id="from-iterator"><code>FromIterator</code></h2>
 <p>A type that implements <code>FromIterator</code> can be built by <code>collect()</code>.</p>
-<div class="block"><pre><code data-lang="rust">struct Bag(Vec&lt;i64&gt;);
+<div class="block">
+  <pre><code data-lang="rust" data-run="bag.rs" id="src-bag">struct Bag(Vec&lt;i64&gt;);
 
 impl FromIterator&lt;i64&gt; for Bag {
     fn from_iter&lt;I: IntoIterator&lt;Item = i64&gt;&gt;(iter: I) -&gt; Self {
@@ -169,7 +178,10 @@ impl FromIterator&lt;i64&gt; for Bag {
     }
 }
 
-let bag: Bag = (1..4).collect();</code></pre></div>
+let bag: Bag = (1..4).collect();
+println!("{:?}", bag.0);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-bag" data-out="out-bag" aria-label="Run bag.rs" hidden></button><b>rawr run bag.rs</b><span id="out-bag" aria-live="polite">[1, 2, 3]</span></div>
+</div>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/types">Previous<b>Types</b></a><a class="next" href="/docs/reference/patterns">Next<b>Patterns</b></a></nav>
 </article>
 </main>

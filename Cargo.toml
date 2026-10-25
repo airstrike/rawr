@@ -16,6 +16,7 @@ members = [
     "toml/edit",
     "macros",
     "watch",
+    "web",
 ]
 resolver = "3"
 

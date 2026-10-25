@@ -1414,3 +1414,25 @@ fn label(value: String) -> Element<'static, Message, Theme, iced::Renderer> {
     find(&adapter, "degrees 180");
     find(&adapter, "millis 250");
 }
+
+/// `iced::Degrees(90.0)` and `iced::Radians(1.5)`: a facade tuple
+/// struct's constructor called by its full path, with no `use`, as rustc
+/// resolves it. rustc prints the same three labels.
+#[test]
+fn angle_constructors_resolve_by_their_full_path() {
+    let adapter = boot_with(
+        r#"column![
+            label(format!("radians {}", iced::Radians(1.5).0)),
+            label(format!("degrees {}", iced::Degrees(90.0).0 * 2.0)),
+            label(format!("half turn {}", iced::Radians::from(iced::Degrees(180.0)) == iced::Radians::PI)),
+        ]"#,
+        r#"
+fn label(value: String) -> Element<'static, Message> {
+    text(value).boxed()
+}
+"#,
+    );
+    find(&adapter, "radians 1.5");
+    find(&adapter, "degrees 180");
+    find(&adapter, "half turn true");
+}

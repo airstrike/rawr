@@ -66,10 +66,12 @@ fn record(source: &str) -> Vec<rawr_iced::snapshot::Frame> {
         extended: Instant::now() + Duration::from_secs(120),
         cut: None,
         animation_scale: None,
+        still: false,
     };
     let recording = rawr_iced::snapshot::record_application(
         &mut adapter,
         messages,
+        &[],
         canvas(&options),
         (MAX_SIDE, MAX_SIDE),
         Some(options.theme.variant()),

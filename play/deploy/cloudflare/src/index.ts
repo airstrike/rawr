@@ -38,7 +38,7 @@
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
-import { COUNTER, EXAMPLES } from "./examples.ts";
+import { EXAMPLES, FIRST } from "./examples.ts";
 import {
   ID_PATTERN,
   KEEP_DAYS,
@@ -70,6 +70,7 @@ import {
   parseSnippet,
   same,
   shareId,
+  webAsset,
   type Og,
   type Snippet,
 } from "./play.ts";
@@ -576,10 +577,10 @@ function validConfig(json: string): boolean {
 }
 
 const EMPTY: Snippet = {
-  code: COUNTER.code,
+  code: FIRST.code,
   theme: "dark",
   size: "",
-  messages: COUNTER.messages ?? [],
+  messages: FIRST.messages ?? [],
 };
 
 const html = (body: string, status = 200) =>
@@ -861,6 +862,9 @@ export default {
     }
     if (DOCS_MOVED[path]) {
       return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);
+    }
+    if (path.startsWith("/web/")) {
+      return webAsset(request, env.ASSETS);
     }
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);

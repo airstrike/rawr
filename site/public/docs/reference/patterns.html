@@ -21,6 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -59,17 +60,22 @@
 <p class="lede">Patterns, and the expressions that take them.</p>
 <h2 id="match"><code>match</code></h2>
 <p>Literals, ranges, alternatives with <code>|</code>, guards and <code>@</code> bindings. Every <code>match</code> must cover every case.</p>
-<div class="block"><pre><code data-lang="rust">let n = 42;
+<div class="block">
+  <pre><code data-lang="rust" data-run="match.rs" id="src-match">let n = 42;
 let size = match n {
     0 =&gt; "none",
     1 | 2 =&gt; "few",
     3..=9 =&gt; "some",
     x @ 10..=99 if x % 2 == 0 =&gt; "many, even",
     _ =&gt; "many",
-};</code></pre></div>
+};
+println!("{size}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-match" data-out="out-match" aria-label="Run match.rs" hidden></button><b>rawr run match.rs</b><span id="out-match" aria-live="polite">many, even</span></div>
+</div>
 <h2 id="destructuring">Destructuring</h2>
 <p>Struct, tuple, enum and slice patterns. <code>..</code> matches the rest.</p>
-<div class="block"><pre><code data-lang="rust">struct Point {
+<div class="block">
+  <pre><code data-lang="rust" data-run="destructure.rs" id="src-destructure">struct Point {
     x: i64,
     y: i64,
 }
@@ -79,10 +85,15 @@ let (a, b) = (3, 4);
 let v = vec![1, 2, 3];
 if let [first, .., last] = v.as_slice() {
     println!("{first} {last}");
-}</code></pre></div>
+}
+println!("{x} {a} {b}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-destructure" data-out="out-destructure" aria-label="Run destructure.rs" hidden></button><b>rawr run destructure.rs</b><span id="out-destructure" aria-live="polite">1 3
+1 3 4</span></div>
+</div>
 <h2 id="if-let"><code>if let</code>, <code>while let</code> and <code>let else</code></h2>
 <p>Let chains work as in Rust 2024, in <code>if</code> and in <code>while</code>.</p>
-<div class="block"><pre><code data-lang="rust">fn parse(s: &amp;str) -&gt; i64 {
+<div class="block">
+  <pre><code data-lang="rust" data-run="let-else.rs" id="src-let-else">fn parse(s: &amp;str) -&gt; i64 {
     let Ok(n) = s.parse::&lt;i64&gt;() else {
         return 0;
     };
@@ -97,17 +108,29 @@ if let Some(x) = a &amp;&amp; let Some(y) = b &amp;&amp; x &lt; y {
 let mut stack = vec![1, 2, 3];
 while let Some(top) = stack.pop() {
     println!("{top}");
-}</code></pre></div>
+}
+println!("{} {}", parse("7"), parse("seven"));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-let-else" data-out="out-let-else" aria-label="Run let-else.rs" hidden></button><b>rawr run let-else.rs</b><span id="out-let-else" aria-live="polite">1 &lt; 2
+3
+2
+1
+7 0</span></div>
+</div>
 <p>A <code>let</code> whose pattern is an enum with one variant can&rsquo;t fail, so it needs no <code>else</code>.</p>
-<div class="block"><pre><code data-lang="rust">enum Wrapper {
+<div class="block">
+  <pre><code data-lang="rust" data-run="irrefutable.rs" id="src-irrefutable">enum Wrapper {
     Named(String),
 }
 
 let value = Wrapper::Named(String::from("rawr"));
-let Wrapper::Named(name) = value;</code></pre></div>
+let Wrapper::Named(name) = value;
+println!("{name}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-irrefutable" data-out="out-irrefutable" aria-label="Run irrefutable.rs" hidden></button><b>rawr run irrefutable.rs</b><span id="out-irrefutable" aria-live="polite">rawr</span></div>
+</div>
 <h2 id="loops">Loops</h2>
 <p><code>loop</code>, <code>while</code> and <code>for</code>. Labels work, and <code>break</code> can carry a value.</p>
-<div class="block"><pre><code data-lang="rust">let grid = vec![vec![1, 2], vec![3, 4]];
+<div class="block">
+  <pre><code data-lang="rust" data-run="labels.rs" id="src-labels">let grid = vec![vec![1, 2], vec![3, 4]];
 let found = 'search: loop {
     for row in &amp;grid {
         for &amp;cell in row {
@@ -117,16 +140,24 @@ let found = 'search: loop {
         }
     }
     break None;
-};</code></pre></div>
+};
+println!("{found:?}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-labels" data-out="out-labels" aria-label="Run labels.rs" hidden></button><b>rawr run labels.rs</b><span id="out-labels" aria-live="polite">Some(3)</span></div>
+</div>
 <h2 id="blocks">Blocks</h2>
 <p>A block is an expression.</p>
-<div class="block"><pre><code data-lang="rust">let total = {
+<div class="block">
+  <pre><code data-lang="rust" data-run="block-value.rs" id="src-block-value">let total = {
     let base = 10;
     base * 2
-};</code></pre></div>
+};
+println!("{total}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-block-value" data-out="out-block-value" aria-label="Run block-value.rs" hidden></button><b>rawr run block-value.rs</b><span id="out-block-value" aria-live="polite">20</span></div>
+</div>
 <h2 id="mut-patterns">Patterns on <code>&amp;mut</code></h2>
 <p>A binding through <code>&amp;mut</code> writes back to the place it came from. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let else</code>, in nested patterns, and for <code>ref mut</code>.</p>
-<div class="block"><pre><code data-lang="rust">struct Point {
+<div class="block">
+  <pre><code data-lang="rust" data-run="iter-mut.rs" id="src-iter-mut">struct Point {
     x: i64,
     y: i64,
 }
@@ -137,7 +168,10 @@ for p in &amp;mut points {
 }
 if let Some(Point { y, .. }) = points.get_mut(1) {
     *y = 9;
-}</code></pre></div>
+}
+println!("{} {}", points[1].x, points[1].y);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-iter-mut" data-out="out-iter-mut" aria-label="Run iter-mut.rs" hidden></button><b>rawr run iter-mut.rs</b><span id="out-iter-mut" aria-live="polite">6 9</span></div>
+</div>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/generics">Previous<b>Generics</b></a><a class="next" href="/docs/reference/moves">Next<b>Moves</b></a></nav>
 </article>
 </main>
@@ -151,5 +185,6 @@ if let Some(Point { y, .. }) = points.get_mut(1) {
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>

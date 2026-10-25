@@ -9,6 +9,7 @@
     "release": "./release.sh",
     "release:worker": "./release.sh --worker",
     "test": "node --test test/stats.test.ts test/play.test.ts",
+    "test:browser": "node test/browser.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

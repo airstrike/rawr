@@ -54,7 +54,7 @@ pub(crate) struct RegistryParts {
 }
 
 /// A deterministic exact proof of a complete static facade contract.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct Fingerprint {
     root: ImmutableString,
     abi: Abi,
@@ -2113,6 +2113,19 @@ impl Fingerprint {
     }
 }
 
+impl PartialEq for Fingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        // The content digest seals the contract slices, as `Hash` reads it,
+        // so equal digests are equal contracts. A program's proof and the
+        // runtime registry's are separate copies, so walking the slices
+        // cost every attested call a walk of the whole facade.
+        self.content == other.content
+            && self.root == other.root
+            && self.abi == other.abi
+            && self.compatibility == other.compatibility
+    }
+}
+
 impl Ord for Fingerprint {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Equality recognizes shared nested type proofs; ordering otherwise
@@ -2528,6 +2541,16 @@ mod imported_allocation_tests {
         ));
         assert_eq!(base, shared);
         assert_eq!(base, independent);
+        // Equality reads the content digest. Copies that share no slice are
+        // equal, and one leaf deep in an item's signature, a tuple element
+        // of a callable's parameter, sets two apart.
+        let deep = fixture(host::type_def::Form::Record, host::type_ref::Builtin::Bool);
+        assert_eq!(
+            (&deep.root, deep.abi, deep.compatibility, &deep.modules),
+            (&base.root, base.abi, base.compatibility, &base.modules)
+        );
+        assert_ne!(base, deep);
+        assert_ne!(original(&base, &deep), std::cmp::Ordering::Equal);
 
         let mut variants = vec![base.clone(); 8];
         variants[0].root = "different".into();

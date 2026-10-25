@@ -342,7 +342,8 @@ pub use func::Locked;
 type SharedModule = Shared<Module>;
 
 #[cfg(not(feature = "no_function"))]
-pub use func::Func;
+#[cfg(not(feature = "no_std"))]
+pub use api::script::{Func, Parameters, Script};
 
 #[cfg(not(feature = "no_function"))]
 pub use ast::ScriptFnMetadata;

@@ -3,7 +3,8 @@
 //! A message plays when its first line starts with `?play` or a code fence's
 //! info string contains `?play`. Options are whitespace-separated tokens on
 //! that line: `size=WxH` (or a bare `WxH`), `theme=dark|light` (or a bare
-//! `dark`/`light`), and repeated `msg=Message::Increment` for a full app.
+//! `dark`/`light`), repeated `msg=Message::Increment` for a full app, and
+//! a bare `mine`, which lets only the request's author click its reply.
 //!
 //! ````text
 //! ?play 320x200 light msg=Message::Increment
@@ -33,6 +34,9 @@ pub struct Request {
     pub code: String,
     /// Options from the marker line, over `defaults`.
     pub options: Options,
+    /// Only the request's author may click its reply's buttons (`mine`).
+    /// Anyone may click otherwise.
+    pub mine: bool,
 }
 
 /// Parse a message. `None` means it is not a `?play` message at all.
@@ -52,6 +56,7 @@ pub fn parse(content: &str, defaults: &Options) -> Option<Result<Request, String
 
 fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Request, String> {
     let mut options = defaults.clone();
+    let mut mine = false;
     let options_line = options_line.split("```").next().unwrap_or_default();
     for token in options_line.split_whitespace() {
         match token.split_once('=') {
@@ -60,7 +65,7 @@ fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Requ
             Some(("msg" | "message", value)) => options.messages.push(value.to_owned()),
             Some((key, _)) => {
                 return Err(format!(
-                    "unknown option `{key}`; expected size=WxH, theme=dark|light, msg=EXPR"
+                    "unknown option `{key}`; expected size=WxH, theme=dark|light, msg=EXPR, mine"
                 ));
             }
             None if token.contains(['x', 'X'])
@@ -68,13 +73,18 @@ fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Requ
             {
                 options.size = Some(crate::parse_size(token)?);
             }
+            None if token.eq_ignore_ascii_case("mine") => mine = true,
             None => options.theme = token.parse()?,
         }
     }
     let code = code_block(content).ok_or_else(|| {
         "put the snippet in a code block:\n?play\n```rust\ncolumn![text(\"hi\")]\n```".to_owned()
     })?;
-    Ok(Request { code, options })
+    Ok(Request {
+        code,
+        options,
+        mine,
+    })
 }
 
 impl Request {
@@ -104,6 +114,9 @@ impl Request {
         for message in &options.messages {
             args.extend(["--message".to_owned(), message.clone()]);
         }
+        for step in &options.steps {
+            args.extend(["--step".to_owned(), step.to_string()]);
+        }
         if options.still {
             args.push("--still".to_owned());
         }
@@ -128,18 +141,31 @@ fn code_block(content: &str) -> Option<String> {
 /// What the bot sends back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
-    /// Attach this image, with a note to send beside it.
-    Image(Vec<u8>, Option<String>),
+    /// Attach this image, with its note and its targets' buttons.
+    Image(Shot),
     /// Send this text (already fenced and within [`MAX_REPLY`]).
     Text(String),
+}
+
+/// An encoded image `rawr-play` wrote, and what it said about it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Shot {
+    /// The PNG, JPEG, WebP or GIF.
+    pub bytes: Vec<u8>,
+    /// The note to show beside it.
+    pub note: Option<String>,
+    /// A full app's targets in its last frame, by label in reading order.
+    pub actions: Vec<String>,
+    /// The label of the target each step clicked.
+    pub clicked: Vec<String>,
 }
 
 /// What a finished `rawr-play` process gave: an iced snippet's image, or a
 /// plain program's output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Done {
-    /// The encoded image, and the note `rawr-play` gave with it.
-    Image(Vec<u8>, Option<String>),
+    /// The image, with what `rawr-play` said about it.
+    Image(Shot),
     /// The program's output.
     Text(Output),
 }
@@ -151,7 +177,7 @@ pub enum Done {
 #[must_use]
 pub fn reply(success: bool, stdout: Vec<u8>, stderr: &str) -> Reply {
     match outcome(success, stdout, stderr) {
-        Ok(Done::Image(image, note)) => Reply::Image(image, note),
+        Ok(Done::Image(shot)) => Reply::Image(shot),
         Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
         Err(text) => Reply::Text(error_text(&text)),
     }
@@ -161,6 +187,32 @@ pub fn reply(success: bool, stdout: Vec<u8>, stderr: &str) -> Reply {
 /// image it wrote.
 pub const NOTE: &str = "note: ";
 
+/// How `rawr-play` starts a line naming a target of the image's last frame.
+pub const ACTION: &str = "action: ";
+
+/// How `rawr-play` starts a line naming the target a step clicked.
+pub const CLICK: &str = "click: ";
+
+/// The lines `rawr-play` writes beside an image: its note, then an
+/// [`ACTION`] line for each target and a [`CLICK`] line for each step.
+#[must_use]
+pub fn lines(note: Option<&str>, actions: &[String], clicked: &[String]) -> Vec<String> {
+    note.map(|note| format!("{NOTE}{note}"))
+        .into_iter()
+        .chain(actions.iter().map(|action| format!("{ACTION}{action}")))
+        .chain(clicked.iter().map(|click| format!("{CLICK}{click}")))
+        .collect()
+}
+
+/// The text after `prefix` on each of `stderr`'s lines that start with it.
+fn prefixed<'a>(stderr: &'a str, prefix: &'a str) -> impl Iterator<Item = &'a str> {
+    stderr
+        .lines()
+        .filter_map(move |line| line.strip_prefix(prefix))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
 /// Whether `bytes` are a GIF.
 #[must_use]
 pub fn is_gif(bytes: &[u8]) -> bool {
@@ -169,12 +221,7 @@ pub fn is_gif(bytes: &[u8]) -> bool {
 
 /// The note lines of a successful `rawr-play`'s stderr, joined.
 fn note(stderr: &str) -> Option<String> {
-    let notes: Vec<&str> = stderr
-        .lines()
-        .filter_map(|line| line.strip_prefix(NOTE))
-        .map(str::trim)
-        .filter(|note| !note.is_empty())
-        .collect();
+    let notes: Vec<&str> = prefixed(stderr, NOTE).collect();
     (!notes.is_empty()).then(|| notes.join("\n"))
 }
 
@@ -189,7 +236,12 @@ pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Done, Str
         if stdout.len() > MAX_ATTACHMENT {
             return Err("the image is too large to upload; try a smaller size".to_owned());
         }
-        return Ok(Done::Image(stdout, note(stderr)));
+        return Ok(Done::Image(Shot {
+            bytes: stdout,
+            note: note(stderr),
+            actions: prefixed(stderr, ACTION).map(str::to_owned).collect(),
+            clicked: prefixed(stderr, CLICK).map(str::to_owned).collect(),
+        }));
     }
     let stderr = stderr.trim();
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
@@ -270,6 +322,12 @@ impl RateLimit {
 
     /// Count a request from `key` at `now`; `false` if it is over the limit.
     pub fn allow(&mut self, key: u64, now: Instant) -> bool {
+        self.wait(key, now).is_none()
+    }
+
+    /// Count a request from `key` at `now`, as [`Self::allow`] does; over
+    /// the limit, how long until its window ends instead.
+    pub fn wait(&mut self, key: u64, now: Instant) -> Option<Duration> {
         let window = self.window;
         if self.seen.len() >= 4096 {
             self.seen
@@ -280,10 +338,10 @@ impl RateLimit {
             (*start, *count) = (now, 0);
         }
         if *count >= self.max {
-            return false;
+            return Some(window.saturating_sub(now.duration_since(*start)));
         }
         *count += 1;
-        true
+        None
     }
 }
 
@@ -369,8 +427,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request, MAX_ATTACHMENT,
-        MAX_REPLY,
+        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request, Shot,
+        MAX_ATTACHMENT, MAX_REPLY,
     };
     use crate::{Format, Options, Theme};
 
@@ -394,6 +452,9 @@ mod tests {
         assert_eq!(request.options.size, Some((320, 200)));
         assert_eq!(request.options.theme, Theme::Light);
         assert_eq!(request.options.messages, ["Message::Increment"; 2]);
+        assert!(!request.mine, "anyone may click by default");
+        assert!(parsed("?play mine light\n```\nx\n```").mine);
+        assert!(parsed("```rust ?play Mine\nx\n```").mine);
     }
 
     #[test]
@@ -413,7 +474,9 @@ mod tests {
         let bad = parse("?play size=big\n```\nx\n```", &Options::default()).unwrap();
         assert!(bad.unwrap_err().contains("400x300"));
         let bad = parse("?play colour=red\n```\nx\n```", &Options::default()).unwrap();
-        assert!(bad.unwrap_err().contains("unknown option"));
+        let error = bad.unwrap_err();
+        assert!(error.contains("unknown option"), "{error}");
+        assert!(error.ends_with("msg=EXPR, mine"), "{error}");
     }
 
     #[test]
@@ -426,13 +489,14 @@ mod tests {
 
     #[test]
     fn message_request_args() {
-        let request = parsed("?play 320x200 light msg=Message::Increment\n```\nx\n```");
+        let mut request = parsed("?play 320x200 light msg=Message::Increment\n```\nx\n```");
+        request.options.steps = vec![0, 2];
         let args = request.args(Format::Webp, 512);
         assert_eq!(
             args.join(" "),
             "- --size 320x200 --theme light --format webp --time-ms 2000 --animation-ms 2000 \
              --memory-mb 512 -o - \
-             --message Message::Increment"
+             --message Message::Increment --step 0 --step 2"
         );
     }
 
@@ -440,19 +504,24 @@ mod tests {
     fn message_reply_decision() {
         assert_eq!(
             reply(true, vec![1, 2, 3], ""),
-            Reply::Image(vec![1, 2, 3], None)
+            Reply::Image(Shot {
+                bytes: vec![1, 2, 3],
+                ..Shot::default()
+            })
         );
         let noted = reply(
             true,
             b"GIF89a".to_vec(),
-            "note: Animation shown for the first 5 s.\n",
+            "note: Animation shown for the first 5 s.\naction: Increment\naction: Decrement\nclick: Increment\n",
         );
         assert_eq!(
             noted,
-            Reply::Image(
-                b"GIF89a".to_vec(),
-                Some("Animation shown for the first 5 s.".into())
-            )
+            Reply::Image(Shot {
+                bytes: b"GIF89a".to_vec(),
+                note: Some("Animation shown for the first 5 s.".into()),
+                actions: vec!["Increment".into(), "Decrement".into()],
+                clicked: vec!["Increment".into()],
+            })
         );
         assert!(super::is_gif(b"GIF89a") && !super::is_gif(b"\x89PNG"));
         let Reply::Text(text) = reply(false, Vec::new(), "error: ```oops```\n") else {
@@ -528,6 +597,11 @@ mod tests {
         assert!(limit.allow(1, start));
         assert!(limit.allow(1, start));
         assert!(!limit.allow(1, start + Duration::from_secs(9)));
+        assert_eq!(
+            limit.wait(1, start + Duration::from_secs(9)),
+            Some(Duration::from_secs(1)),
+            "over the limit until the window ends"
+        );
         assert!(limit.allow(2, start), "keys are independent");
         assert!(
             limit.allow(1, start + Duration::from_secs(10)),
