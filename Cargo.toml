@@ -170,16 +170,6 @@ required-features = ["unstable"]
 name = "primes"
 required-features = ["unstable"]
 
-[[example]]
-name = "serde"
-required-features = ["serde"]
-
-# VM-versus-walker timings. Run with `--release`; `-- --check` exits non-zero
-# on a case that has fallen below the floor recorded beside it.
-[[example]]
-name = "grain_bench"
-required-features = ["grain"]
-
 # Every other integration test, grain harnesses included, is one binary:
 # `tests/it/main.rs`. This one stays its own, and not negotiable: it installs a
 # counting global allocator and reads process-global counters as deltas around

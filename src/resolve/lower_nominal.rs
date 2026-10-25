@@ -23935,9 +23935,31 @@ impl<'a> Parser<'a> {
         }
 
         let start = self.position();
-        let value = self.parse_expr()?;
+        let pending = self.field_entries.len();
+        let mut value = self.parse_expr()?;
         if !assignment_token(&self.peek()) {
             self.consume_imported_value(&value, "branch result", value.span)?;
+            // A bare arm such as `Key::Char(c) => app.input.push(c)` reads
+            // and stores its place itself, as a block arm's statements do.
+            // Left to the whole `match`, its store would undo another
+            // arm's change to the same place.
+            if self.field_entries.len() > pending {
+                let entries = self.field_entries.split_off(pending);
+                let result = self.temporary("arm");
+                let mut block = origin::Fragment::plain("{ ");
+                for (read, _) in &entries {
+                    block.push(read.clone());
+                }
+                block.push_text(format!(" let {result} = "));
+                block.push(value.rendered_source());
+                block.push_text("; ");
+                for (_, store) in entries {
+                    block.push(store);
+                }
+                block.push_text(format!(" {result} }}"));
+                value.source = block;
+                value.prelude = origin::Fragment::default();
+            }
             return Ok(Branch {
                 syntax: value.span,
                 value,

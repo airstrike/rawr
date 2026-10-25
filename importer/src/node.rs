@@ -1576,6 +1576,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
         | Error::Corrupt { .. }
         | Error::CleanupRequired(_)
         | Error::StaleReadSet { .. }
+        | Error::SourceChanged(_)
         | Error::Transform(_) => false,
     }
 }
@@ -1645,6 +1646,10 @@ pub enum Error {
     },
     #[error("node read-set entry became stale for action {action}")]
     StaleReadSet { action: ActionKey },
+    /// A source file changed after its snapshot was read and before the
+    /// generation it prepared was admitted: a newer save supersedes it.
+    #[error("the source changed while it was prepared: {}", .0.display())]
+    SourceChanged(std::path::PathBuf),
     #[error("node evaluation state is invalid: {0}")]
     State(&'static str),
     #[error("node transform child failed: {0}")]

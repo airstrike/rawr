@@ -41,11 +41,13 @@ mod ownership;
 pub(crate) mod parallelism;
 pub mod resident;
 pub mod runner;
+pub(crate) mod terminal;
 #[cfg(test)]
 pub(crate) mod test_launch;
 pub mod value;
 
 pub use groups::{remove_on_exit, retire_owned, Left};
+pub use terminal::say;
 
 pub use runner::{Admitted, Arguments, Candidate, Error as RunnerError, Lifecycle, Owner};
 

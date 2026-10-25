@@ -40,9 +40,10 @@
     <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/ratatui">ratatui</a></li>
     <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works" aria-current="page">How it works</a><ol class="secs"><li><a href="#interpreter">What kind of interpreter is rawr?</a></li><li><a href="#evaluator">Where does the evaluator come from?</a></li><li><a href="#speed">How fast is it?</a></li><li><a href="#borrowing">How does rawr handle borrow checking?</a></li><li><a href="#generics">How are generics handled?</a></li><li><a href="#miri">Why not use Miri or interpret rustc&rsquo;s MIR?</a></li></ol></li>
+    <li><a href="/docs/how-it-works" aria-current="page">How it works</a><ol class="secs"><li><a href="#interpreter">What kind of interpreter is rawr?</a></li><li><a href="#speed">How fast is it?</a></li><li><a href="#borrowing">How does rawr handle borrow checking?</a></li><li><a href="#generics">How are generics handled?</a></li><li><a href="#miri">Why not use Miri or interpret rustc&rsquo;s MIR?</a></li></ol></li>
   </ol>
   <p class="grp">API Reference</p>
   <ol>
@@ -60,11 +61,6 @@
 <h2 id="interpreter">What kind of interpreter is rawr?</h2>
 <p>rawr is a tree-walking interpreter over a typed program. Its front end checks names, types, traits and generics before anything runs. Then an evaluator walks the checked program.</p>
 <p>Values at run time carry a tag for their type and are reference-counted. Standard library types such as <code>Vec</code> and <code>HashMap</code> are backed by native Rust code. So are the crates a program imports and iced&rsquo;s widgets.</p>
-
-<h2 id="evaluator">Where does the evaluator come from?</h2>
-<p>rawr began as a fork of <a href="https://rhai.rs">Rhai</a>. Rhai is an embedded scripting language for Rust, and its source is on <a href="https://github.com/rhaiscript/rhai">GitHub</a>. rawr keeps Rhai&rsquo;s evaluator, its dynamic values and its machinery for calling host functions. rawr adds a typed Rust front end on top of them, and every program and script is typed Rust.</p>
-<p>Thank you to the Rhai authors for the work that rawr is built on.</p>
-<p>rawr doesn&rsquo;t run Rhai scripts. Rhai is licensed under MIT or Apache-2.0, and rawr uses the same two licenses. The LICENSE files in the repository carry the attribution.</p>
 
 <h2 id="speed">How fast is it?</h2>
 <p>Calls into native code run at native speed. In an iced app most of the time goes to native iced code, such as layout and drawing.</p>

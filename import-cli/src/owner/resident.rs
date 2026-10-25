@@ -193,7 +193,9 @@ pub(super) fn attempt(
                 .commit_inputs(staged)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?
             {
-                eprintln!("Rawr imported-owner watcher warning: {warning}");
+                rawr_import::process::say(format_args!(
+                    "Rawr imported-owner watcher warning: {warning}"
+                ));
             }
             Ok(Attempt::Settled)
         }

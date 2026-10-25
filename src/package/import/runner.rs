@@ -797,7 +797,11 @@ fn structural_path<'facade>(
     facade: &'facade host::facade::Definition,
     row: &StructuralRow,
 ) -> Result<(&'facade host::path::Path, StructuralKind), Error> {
-    let mut found = None;
+    let mut found: Option<(
+        &host::path::Path,
+        StructuralKind,
+        Option<&host::type_def::import::Identity>,
+    )> = None;
     let owned = |definition: &host::type_def::Definition| {
         row.owner.is_empty() || {
             let path = definition.path();
@@ -839,13 +843,19 @@ fn structural_path<'facade>(
             host::type_def::Shape::Opaque | host::type_def::Shape::Trait(_) => None,
         };
         if let Some(kind) = candidate {
-            if found.is_some() {
-                return Err(Error::StructuralDuplicate);
+            let identity = definition.identity().imported();
+            match found {
+                // One type at two paths, as ratatui re-exports
+                // `ratatui_core::layout::Rect`: the first path stands.
+                Some((_, _, first)) if first.is_some() && first == identity => continue,
+                Some(_) => return Err(Error::StructuralDuplicate),
+                None => found = Some((definition.path_ref(), kind, identity)),
             }
-            found = Some((definition.path_ref(), kind));
         }
     }
-    found.ok_or(Error::StructuralSelector)
+    found
+        .map(|(path, kind, _)| (path, kind))
+        .ok_or(Error::StructuralSelector)
 }
 
 fn build(

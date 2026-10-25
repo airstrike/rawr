@@ -230,18 +230,28 @@ impl<B> Lane<B> {
         &mut self,
         installation: rawr_import::supervisor::slot::Installation<B>,
     ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
-        let retired = match installation {
+        let mut retired = match installation {
             rawr_import::supervisor::slot::Installation::Installed(retired) => retired,
             rawr_import::supervisor::slot::Installation::Obsolete(candidate) => {
                 candidate.shutdown()?;
                 return Err(Error::Obsolete);
             }
         };
+        // Two programs can't share a terminal: one that has it ends before
+        // the next starts, which then gets it, and a failed start has no
+        // program to go back to.
+        if let Some(previous) = retired.take_if(|previous| previous.has_terminal()) {
+            previous.retire(&mut self.refresh)?;
+        }
         if let Err(failure) = self.slot.start() {
             return self.rollback_watched(retired, Error::Process(failure));
         }
-        if let Err(failure) = self.slot.pin_current_live_last_good() {
-            return self.rollback_watched(retired, Error::Node(failure));
+        match self.slot.pin_current_live_last_good() {
+            // A save as the program started (D531.9): it keeps running,
+            // and the save swaps in or restarts it as any other does. Its
+            // generation stays pinned as prepared, not as live.
+            Ok(()) | Err(rawr_import::node::Error::SourceChanged(_)) => {}
+            Err(failure) => return self.rollback_watched(retired, Error::Node(failure)),
         }
         let key = self.slot.key().ok_or(Error::State(
             "started runner disappeared after pin promotion",
@@ -456,6 +466,24 @@ pub enum Error {
     },
     State(&'static str),
     Obsolete,
+}
+
+impl Error {
+    /// A save after the program's files were read: a newer preparation
+    /// supersedes this one, so it is no failure to report.
+    pub(crate) const fn source_changed(&self) -> bool {
+        matches!(
+            self,
+            Self::Node(rawr_import::node::Error::SourceChanged(_))
+                | Self::Process(rawr_import::process::RunnerError::Node(
+                    rawr_import::node::Error::SourceChanged(_)
+                ))
+                | Self::PinCleanup {
+                    failure: rawr_import::node::Error::SourceChanged(_),
+                    ..
+                }
+        )
+    }
 }
 
 impl From<rawr_import::Error> for Error {

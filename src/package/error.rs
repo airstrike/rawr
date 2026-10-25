@@ -184,6 +184,20 @@ impl Error {
         }
     }
 
+    /// Whether a save changed the program's files while it was compiled,
+    /// so a preparation from the saved files supersedes this one.
+    #[cfg(feature = "rust-import")]
+    #[must_use]
+    pub const fn source_changed(&self) -> bool {
+        matches!(
+            self.kind,
+            Kind::Import(
+                super::import::Error::SnapshotMismatch
+                    | super::import::Error::Snapshot(crate::reload::source::Error::Changed { .. })
+            )
+        )
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn import_diagnostic(report: diagnostic::Report) -> Self {
         Self {

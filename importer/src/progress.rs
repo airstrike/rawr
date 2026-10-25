@@ -124,7 +124,7 @@ pub fn note(key: &str, line: &str) {
     state.notes.push(key.into());
     let shown = state.drawn;
     clear(&mut state);
-    eprintln!("{line}");
+    crate::process::say(line);
     if shown {
         state.drawn = true;
         draw(&mut state);
@@ -291,6 +291,10 @@ fn draw(state: &mut State) {
     if !state.drawn && since.elapsed() < QUIET {
         return;
     }
+    // A program that has the screen draws it alone.
+    if crate::process::terminal::raw() {
+        return;
+    }
     let percent = state.percent(Instant::now());
     let mut stderr = std::io::stderr().lock();
     if stderr.is_terminal() {
@@ -324,8 +328,18 @@ fn draw(state: &mut State) {
 }
 
 fn clear(state: &mut State) {
-    if std::mem::take(&mut state.drawn) {
+    // While a program has the screen, the line stays until it is restored.
+    if state.drawn && !crate::process::terminal::raw() {
+        state.drawn = false;
         let _ = write!(std::io::stderr(), "\r\x1b[2K");
+    }
+}
+
+/// Clear a finished launch's line that a program's screen kept.
+pub(crate) fn clear_left() {
+    let mut state = lock();
+    if state.launch.is_none() {
+        clear(&mut state);
     }
 }
 

@@ -9409,6 +9409,58 @@ println!("{} {:?} {} {:?}", gone, v, first, game.shots);
     );
 }
 
+/// A bare match arm that calls a method on a field of a `&mut` parameter,
+/// such as `Key::Char(c) => app.input.push(c)`, keeps its change to itself:
+/// another arm's `clear()` of the same field stays cleared. rustc prints
+/// `[] 1 [y] [new!] 2 [xz]`.
+#[test]
+fn language_a_bare_match_arm_through_a_mut_parameter_keeps_other_arms_changes() {
+    assert_eq!(
+        printed(
+            r#"
+struct App { input: String, n: i64 }
+enum Key { Char(char), Enter }
+fn update(app: &mut App, key: Key) {
+    match key {
+        Key::Char(c) => app.input.push(c),
+        Key::Enter => {
+            app.input.clear();
+            app.n += 1;
+        }
+    }
+}
+fn assign(app: &mut App, key: Key) {
+    match key {
+        Key::Enter => app.input = String::from("new"),
+        Key::Char(c) => app.input.push(c),
+    }
+}
+fn length(app: &mut App, key: Key) -> usize {
+    match key {
+        Key::Char(c) => {
+            app.input.push(c);
+            app.input.len()
+        }
+        Key::Enter => app.input.len(),
+    }
+}
+let mut app = App { input: String::from("x"), n: 0 };
+update(&mut app, Key::Enter);
+print!("[{}] {} ", app.input, app.n);
+update(&mut app, Key::Char('y'));
+print!("[{}] ", app.input);
+assign(&mut app, Key::Enter);
+assign(&mut app, Key::Char('!'));
+print!("[{}] ", app.input);
+let mut app = App { input: String::from("x"), n: 0 };
+let n = length(&mut app, Key::Char('z'));
+println!("{} [{}]", n, app.input);
+"#
+        ),
+        "[] 1 [y] [new!] 2 [xz]\n"
+    );
+}
+
 /// A closure parameter annotated with a nested reference, and the `&&T`
 /// that `min_by_key` and kin pass over `v.iter()`. rustc prints
 /// `[2, 4] -7 -7 2 ["bb"]`.

@@ -124,11 +124,9 @@ impl Source {
     }
 }
 
+/// A save after the snapshot was read: a newer preparation follows it.
 fn drift(path: &Path) -> Error {
-    Error::Corrupt {
-        path: path.to_path_buf(),
-        reason: "bound Rawr snapshot source changed before admission",
-    }
+    Error::SourceChanged(path.to_path_buf())
 }
 
 fn same(left: &Metadata, right: &Metadata) -> bool {
@@ -192,7 +190,7 @@ mod tests {
         fs::write(root.join("main.rs"), b"after!").unwrap();
         assert!(matches!(
             freshness.revalidate(&GraphBudget::new()),
-            Err(Error::Corrupt { .. })
+            Err(Error::SourceChanged(_))
         ));
         fs::remove_file(root.join("main.rs")).unwrap();
         fs::write(root.join("other.rs"), b"before").unwrap();
