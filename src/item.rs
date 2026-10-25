@@ -196,7 +196,6 @@ impl Value {
     }
 
     /// The captured values passed before this item's own arguments.
-    #[must_use]
     pub fn captures(&self) -> &[crate::Dynamic] {
         self.bound.as_ref().map_or(&[], |bound| &bound.0)
     }

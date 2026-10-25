@@ -126,7 +126,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         }
         PreludeOp::CellGet => Ok(inner.value()),
         PreludeOp::CellSet => {
-            inner.set(args[1].take());
+            let _ = inner.set(args[1].take());
             Ok(Dynamic::UNIT)
         }
         PreludeOp::CellRelease => {

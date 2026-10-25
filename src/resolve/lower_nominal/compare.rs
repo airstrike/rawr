@@ -398,24 +398,6 @@ impl Comparison<'_, '_> {
         let equal = call(context, definition, lhs, rhs)?;
         Ok(Some(equal.as_bool().unwrap_or(false)))
     }
-
-    /// Whether a value of the crate type `identity` compares through its
-    /// own `eq`.
-    pub(super) fn has_hand_written_eq(&self, value: &Dynamic) -> bool {
-        let identity = match &value.0 {
-            Union::Struct(value, ..) => value.identity(),
-            Union::Enum(value, ..) => value.identity(),
-            _ => return false,
-        };
-        self.models
-            .by_identity
-            .get(identity)
-            .and_then(|nominal| {
-                self.models
-                    .std_impl(nominal.definition().id(), "PartialEq", "eq")
-            })
-            .is_some()
-    }
 }
 
 /// `value` with each integer its shape says is unsigned tagged as one

@@ -878,7 +878,6 @@ impl fmt::Debug for Frame {
 impl Frame {
     /// This frame with the awaited future's output, ready to pass back as
     /// the function's last argument.
-    #[must_use]
     pub fn resume(self, output: Dynamic) -> Dynamic {
         if let Some(mut saved) = crate::func::locked_write(&self.0)
             && let Some(saved) = saved.as_mut()
@@ -909,6 +908,8 @@ struct Iteration {
 // it (`next`, `Drop`); on any other thread it is leaked.
 #[cfg(feature = "sync")]
 unsafe impl Send for Iteration {}
+// SAFETY: as above: no shared access advances or drops the iterator on a
+// thread other than the one that made it.
 #[cfg(feature = "sync")]
 unsafe impl Sync for Iteration {}
 
@@ -1054,7 +1055,7 @@ impl Engine {
         for op in &block.ops {
             match op {
                 Op::Run(statement) => {
-                    self.eval_stmt(
+                    let _ = self.eval_stmt(
                         global,
                         caches,
                         scope,

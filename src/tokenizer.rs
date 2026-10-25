@@ -2761,11 +2761,6 @@ fn is_lifetime_marker(stream: &mut (impl InputStream + ?Sized)) -> bool {
     is_lifetime
 }
 
-/// The name a Rust `switch` identifier takes in checked Rawr. `switch` is still
-/// the legacy statement keyword, so checked items and bodies lex it to this
-/// legacy-valid identifier, which every lowered form then uses.
-pub(crate) const SWITCH_NAME: &str = "__rawr_switch";
-
 /// The words the legacy lexer reads as keywords or reserves that are
 /// ordinary names in Rust (`throw` stays Rawr's panic statement). Checked
 /// Rawr, its items and bodies, reads each as the identifier `__rawr_<word>`

@@ -14,19 +14,16 @@ use std::prelude::v1::*;
 pub type Value = Result<Dynamic, Dynamic>;
 
 /// `Ok(value)`.
-#[must_use]
 pub fn ok(value: Dynamic) -> Dynamic {
     Dynamic::from(Value::Ok(value))
 }
 
 /// `Err(error)`.
-#[must_use]
 pub fn err(error: Dynamic) -> Dynamic {
     Dynamic::from(Value::Err(error))
 }
 
 /// Rust's `Result<T, E>` as a Rawr result of the Rawr values of `T` and `E`.
-#[must_use]
 pub fn from<T: Variant + Clone, E: Variant + Clone>(value: Result<T, E>) -> Dynamic {
     Dynamic::from(value.map(Dynamic::from).map_err(Dynamic::from))
 }

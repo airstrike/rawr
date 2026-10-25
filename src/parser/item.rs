@@ -2610,9 +2610,6 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
     Ok(generics)
 }
 
-/// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
-/// type equalities (`Shape<Output = i64>`) go to `projections`.
-
 /// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
 /// Rawr's types need no record of. Where it ends, when it was there.
 ///
@@ -2648,6 +2645,8 @@ fn skip_precise_capture(
     }
 }
 
+/// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
+/// type equalities (`Shape<Output = i64>`) go to `projections`.
 fn parse_bounds(
     input: &mut TokenStream,
     projections: &mut Vec<(crate::item::Name, crate::item::Name, type_ref::Type)>,

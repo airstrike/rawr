@@ -428,7 +428,7 @@ impl Parser<'_> {
 
     /// `value` as Rust's `IntoIterator` turns it into an iterator, when it
     /// is iterable.
-    pub(super) fn into_iterator(&mut self, value: &ParsedExpr) -> Option<ParsedExpr> {
+    pub(super) fn iterator_of(&mut self, value: &ParsedExpr) -> Option<ParsedExpr> {
         let (pipeline, item) = self.pipeline_of(value)?;
         Some(self.iterator_expr(pipeline, item, value.span))
     }

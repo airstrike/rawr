@@ -14,19 +14,16 @@ use std::prelude::v1::*;
 pub type Value = Option<Dynamic>;
 
 /// `Some(value)`.
-#[must_use]
 pub fn some(value: Dynamic) -> Dynamic {
     Dynamic::from(Some(value))
 }
 
 /// `None`.
-#[must_use]
 pub fn none() -> Dynamic {
     Dynamic::from(Value::None)
 }
 
 /// Rust's `Option<T>` as a Rawr option of the Rawr value of `T`.
-#[must_use]
 pub fn from<T: Variant + Clone>(value: Option<T>) -> Dynamic {
     Dynamic::from(value.map(Dynamic::from))
 }

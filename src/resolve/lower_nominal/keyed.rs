@@ -389,7 +389,7 @@ impl Parser<'_> {
         } = keyed;
         let map = kind.is_map();
         if map && member.as_str() == "entry" {
-            return self.parse_keyed_entry(value, kind, types, member_span);
+            return self.parse_keyed_entry(value, kind, &types, member_span);
         }
         let owner = |this: &Self| Ty::Keyed(kind, types.clone()).name(&this.models);
         if map && matches!(member.as_str(), "get_mut" | "iter_mut" | "values_mut") {
@@ -666,7 +666,7 @@ impl Parser<'_> {
         &mut self,
         value: ParsedExpr,
         kind: Keyed,
-        types: Box<[Ty]>,
+        types: &[Ty],
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let (mut arguments, mut end) = self.parse_call_arguments("`entry` arguments")?;

@@ -134,14 +134,16 @@ fn export_free_functions_borrow_their_arguments() {
 fn export_hides_private_items() {
     let engine = engine();
     for source in ["use shop::Order; fn f(order: Order) -> i64 { order.hidden() }", "use shop::Order; fn f(order: Order) -> f64 { order.discount }"] {
-        engine.compile(source).expect_err("a private item is not exported");
+        let _ = engine.compile(source).expect_err("a private item is not exported");
     }
+    // Rust code still calls it.
+    assert_eq!(order().hidden(), 2);
 }
 
 #[test]
 fn export_rejects_the_wrong_receiver() {
     let engine = engine();
-    engine
+    let _ = engine
         .compile("use shop::Order; fn f(order: Order) { order.add(1); }")
         .expect_err("`add` takes `&mut self`, and `order` is not mutable");
 }
@@ -169,7 +171,7 @@ fn export_rejects_a_taken_root() {
     let mut engine = engine();
     let mut again = Exports::new("shop");
     again.add::<tax_rate>();
-    engine.export(again).expect_err("the root `shop` is taken");
+    let _ = engine.export(again).expect_err("the root `shop` is taken");
 }
 
 static GUARDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -224,7 +226,7 @@ fn export_binding_fails_before_a_callback_on_another_engine() {
     let ast = compiler.compile("use count::guarded; fn f() -> i64 { guarded() }").unwrap();
     let before = GUARDED.load(std::sync::atomic::Ordering::SeqCst);
     let runner = guarding();
-    runner.call_fn::<i64>(&mut Scope::new(), &ast, "f", ()).expect_err("the program was compiled by another engine");
+    let _ = runner.call_fn::<i64>(&mut Scope::new(), &ast, "f", ()).expect_err("the program was compiled by another engine");
     assert_eq!(GUARDED.load(std::sync::atomic::Ordering::SeqCst), before);
 }
 

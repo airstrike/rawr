@@ -132,6 +132,10 @@ const TREE_STATE: &str = "iced::advanced::widget::tree::Lent";
 const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
+/// Each `impl Trait<A> for Owner` of a generic trait: the impl's own
+/// parameters and the trait's arguments.
+type ImplArguments = Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>;
+
 type OperationSelector = (
     Box<[crate::host::item::Definition]>,
     Option<crate::host::facade::Dependency>,
@@ -2085,10 +2089,7 @@ struct Tables {
     impls: BTreeSet<(ImmutableString, type_def::Id)>,
     /// The trait arguments of each `impl Trait<A> for Owner` of a generic
     /// trait, with the impl's own parameters.
-    impl_arguments: BTreeMap<
-        (ImmutableString, type_def::Id),
-        Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>,
-    >,
+    impl_arguments: BTreeMap<(ImmutableString, type_def::Id), ImplArguments>,
     /// The distinct argument lists without parameters of each generic
     /// trait's impls: one dispatcher per instance.
     trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
@@ -2346,10 +2347,7 @@ impl Models {
         }
 
         let mut associated = AssociatedTypes::default();
-        let mut impl_arguments = BTreeMap::<
-            (ImmutableString, type_def::Id),
-            Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>,
-        >::new();
+        let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
         let mut trait_instances = BTreeMap::<ImmutableString, Vec<Box<[type_ref::Type]>>>::new();
         for shell in program.items.iter() {
             let item::Kind::Impl(implementation) = &shell.kind else {
@@ -4575,8 +4573,11 @@ struct WitnessedOp {
     /// since a binding and its attestations never depend on a script type.
     placeholder: ExecutableOp,
     witnesses: usize,
-    instances: Shared<crate::Locked<BTreeMap<Box<[crate::INT]>, Shared<WitnessedInstance>>>>,
+    instances: Shared<crate::Locked<WitnessedInstances>>,
 }
+
+/// A witnessed op's instances, by the witnesses its calls pass.
+type WitnessedInstances = BTreeMap<Box<[crate::INT]>, Shared<WitnessedInstance>>;
 
 struct WitnessedInstance {
     op: ExecutableOp,
@@ -6837,11 +6838,12 @@ struct AssociatedTypes {
     /// `type Name = T;` by owner, trait and name, with the impl parameter
     /// each of the owner's type arguments names (`impl<T> Shape for
     /// Wrapper<T>`).
-    impls: BTreeMap<
-        (type_def::Id, ImmutableString, ImmutableString),
-        (type_ref::Type, Box<[Option<ImmutableString>]>),
-    >,
+    impls: BTreeMap<(type_def::Id, ImmutableString, ImmutableString), AssociatedType>,
 }
+
+/// An associated type's `T`, with the impl parameter each of the owner's
+/// type arguments names.
+type AssociatedType = (type_ref::Type, Box<[Option<ImmutableString>]>);
 
 #[derive(Clone, Copy)]
 struct Checkpoint {
@@ -7527,16 +7529,19 @@ impl PatternSyntax {
     }
 }
 
+/// Names, each with the span it was written at.
+type SpannedNames = Box<[(ImmutableString, Span)]>;
+
 #[derive(Clone)]
 struct EnumPatternSyntax {
-    owner: Box<[(ImmutableString, Span)]>,
+    owner: SpannedNames,
     owner_span: Span,
     variant: ImmutableString,
     variant_span: Span,
     payload: Box<[PatternSyntax]>,
     /// `V { x, y: p, .. }`: the field each of `payload` names, in written
     /// order, and whether `..` ends it.
-    named: Option<(Box<[(ImmutableString, Span)]>, bool)>,
+    named: Option<(SpannedNames, bool)>,
     /// `Point { x, y }` on a facade struct: `owner` is the whole path and
     /// `variant` its last name.
     host_struct: bool,
@@ -8117,12 +8122,13 @@ fn mentions_parameter(ty: &type_ref::Type) -> bool {
     }
 }
 
+/// Tokens, each with its position.
+type Tokens = Vec<(Token, Position)>;
+
 /// A call's argument tokens split after the first argument: the first,
 /// and the rest after its comma. Commas inside brackets, braces,
 /// parentheses, a turbofish or a closure's parameters do not split.
-fn split_first_argument(
-    tokens: Vec<(Token, Position)>,
-) -> (Vec<(Token, Position)>, Vec<(Token, Position)>) {
+fn split_first_argument(tokens: Tokens) -> (Tokens, Tokens) {
     let mut depth = 0usize;
     let mut angle = 0usize;
     let mut closure = false;
@@ -8478,6 +8484,24 @@ impl ImportedContext<'_> {
     }
 }
 
+/// A trait call whose generic trait's dispatcher waits for inference:
+/// `(placeholder, trait, method, arguments, span, static)`.
+type PendingInstance = (
+    String,
+    ImmutableString,
+    ImmutableString,
+    Box<[Ty]>,
+    Span,
+    bool,
+);
+
+/// The host type a host callable returns, and how many type arguments it
+/// takes.
+type ClosureOutput = (Rc<HostTyProof>, usize);
+
+/// A host callable parameter's input types, when known, and its output.
+type ClosureHint = (Option<Box<[Ty]>>, Option<ClosureOutput>);
+
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
     input: Peekable<IntoIter<(Token, Position)>>,
@@ -8534,8 +8558,8 @@ struct Parser<'a> {
     closure_hint: Option<Box<[Ty]>>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
-    closure_outputs: Vec<Option<(Rc<HostTyProof>, usize)>>,
-    closure_output: Option<(Rc<HostTyProof>, usize)>,
+    closure_outputs: Vec<Option<ClosureOutput>>,
+    closure_output: Option<ClosureOutput>,
     /// The closure about to be parsed is an async body's step function
     /// (`parse_async_block`), with its output type when it is known.
     async_step: Option<Option<Ty>>,
@@ -8647,14 +8671,7 @@ struct Parser<'a> {
     /// `(placeholder, trait, method, arguments, span)`.
     /// Each also says whether its dispatcher is a static one (a function
     /// without `self`, by witness).
-    pending_instances: Vec<(
-        String,
-        ImmutableString,
-        ImmutableString,
-        Box<[Ty]>,
-        Span,
-        bool,
-    )>,
+    pending_instances: Vec<PendingInstance>,
     /// The `{integer}` (`true`) and `{float}` literal kinds of this body,
     /// which become `i64` and `f64` where nothing else binds them.
     literal_kinds: Vec<(usize, bool)>,
@@ -14697,29 +14714,23 @@ impl<'a> Parser<'a> {
         if let Some(receiver) = receiver {
             operands.push((receiver.ty.clone(), receiver.span, true));
         }
-        #[cfg(feature = "rust-import")]
-        {
-            arguments.retain_mut(|argument| {
-                if argument.ty.is_imported_static_operand() {
-                    if self.imported.is_some() {
-                        // Move the existing static proof into the pending operation. Final
-                        // inference must settle before native-use evidence is materialized.
-                        let ty = std::mem::replace(&mut argument.ty, Ty::Unknown);
-                        operands.push((ty, argument.span, false));
-                    }
-                    false
-                } else {
-                    operands.push((argument.ty.clone(), argument.span, false));
-                    true
+        // Imported static operands leave the argument list; there are none
+        // without the importer.
+        arguments.retain_mut(|argument| {
+            if argument.ty.is_imported_static_operand() {
+                #[cfg(feature = "rust-import")]
+                if self.imported.is_some() {
+                    // Move the existing static proof into the pending operation. Final
+                    // inference must settle before native-use evidence is materialized.
+                    let ty = std::mem::replace(&mut argument.ty, Ty::Unknown);
+                    operands.push((ty, argument.span, false));
                 }
-            });
-        }
-        #[cfg(not(feature = "rust-import"))]
-        operands.extend(
-            arguments
-                .iter()
-                .map(|argument| (argument.ty.clone(), argument.span, false)),
-        );
+                false
+            } else {
+                operands.push((argument.ty.clone(), argument.span, false));
+                true
+            }
+        });
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -25083,7 +25094,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Error> {
         if parameter.iterator_item().is_some_and(|(_, into)| into)
             && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(_))
-            && let Some(iterator) = self.into_iterator(argument)
+            && let Some(iterator) = self.iterator_of(argument)
         {
             *argument = iterator;
         }
@@ -26371,7 +26382,7 @@ impl<'a> Parser<'a> {
                         reference: member_span,
                     });
                 }
-                let Some(items) = self.into_iterator(&value) else {
+                let Some(items) = self.iterator_of(&value) else {
                     return Err(self.unsupported("this method of a range"));
                 };
                 return self.parse_iterator_method(items, member, member_span);
@@ -28359,7 +28370,7 @@ impl<'a> Parser<'a> {
                 let name: ImmutableString = (*name).into();
                 let name_span = point_span(position);
                 if matches!(name.as_str(), "crate" | "Self")
-                    || self.bindings.get(&name).is_some()
+                    || self.bindings.contains_key(&name)
                     || self.models.function(&name).is_some()
                     || !matches!(self.peek(), Token::DoubleColon)
                 {
@@ -30104,11 +30115,10 @@ impl<'a> Parser<'a> {
     /// takes a pinned style or `impl Fn(&Theme, Status) -> Style`.
     fn hint_closures(&mut self, items: &[crate::host::item::Definition], receiver: Option<&Ty>) {
         self.deferred_hints = (!items.is_empty()).then(|| (items.into(), receiver.cloned()));
-        let mut overloads =
-            Vec::<Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
+        let mut overloads = Vec::<Vec<Option<ClosureHint>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
-            let hints: Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>> = self
+            let hints: Vec<Option<ClosureHint>> = self
                 .instantiate_host_signature(item, receiver, None)
                 .map(|signature| {
                     signature
@@ -30137,20 +30147,18 @@ impl<'a> Parser<'a> {
             // a `Sender<P>` whose `P` the body settles.
             let hints = hints
                 .into_iter()
-                .map(
-                    |hint: Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>| {
-                        hint.and_then(|(inputs, output)| {
-                            let mut fresh = BTreeMap::new();
-                            let inputs = inputs.and_then(|inputs| {
-                                inputs
-                                    .iter()
-                                    .map(|input| self.open_host_hint(input, &mut fresh))
-                                    .collect::<Option<Box<[Ty]>>>()
-                            });
-                            (inputs.is_some() || output.is_some()).then_some((inputs, output))
-                        })
-                    },
-                )
+                .map(|hint: Option<ClosureHint>| {
+                    hint.and_then(|(inputs, output)| {
+                        let mut fresh = BTreeMap::new();
+                        let inputs = inputs.and_then(|inputs| {
+                            inputs
+                                .iter()
+                                .map(|input| self.open_host_hint(input, &mut fresh))
+                                .collect::<Option<Box<[Ty]>>>()
+                        });
+                        (inputs.is_some() || output.is_some()).then_some((inputs, output))
+                    })
+                })
                 .collect();
             overloads.push(hints);
         }
@@ -33324,7 +33332,6 @@ impl<'a> Parser<'a> {
                 .collect(),
             captures: BTreeSet::new(),
             consumed: BTreeSet::new(),
-            owns_captures: moved,
             asynchronous: async_step.is_some(),
         });
         let outer_loops = std::mem::take(&mut self.loops);
@@ -39685,8 +39692,6 @@ struct ClosureScope {
     /// The captures the body moves out, which a closure that is not
     /// `move` takes by value. A closure that has one is `FnOnce`.
     consumed: BTreeSet<ImmutableString>,
-    /// A `move` closure or async block, which owns what it captures.
-    owns_captures: bool,
     /// An async body, where `.await` may appear.
     asynchronous: bool,
 }
@@ -39988,12 +39993,6 @@ impl FormatSpec {
         };
         out
     }
-}
-
-fn unavailable_binding_item(name: &ImmutableString, ty: &Ty) -> ImmutableString {
-    ty.host()
-        .filter(|definition| definition.identity().imported().is_some())
-        .map_or_else(|| name.clone(), |definition| definition.path().into())
 }
 
 /// The local a closure reads `self` through.
@@ -42464,8 +42463,7 @@ mod tests {
     use super::{host_ty_proof_allocations, reset_host_ty_proof_allocations, HostTyProof};
     use crate::host::{facade, item, signature, type_ref};
     use crate::{
-        host, receiver, resolve, Dynamic, Engine, ImmutableString, OptimizationLevel,
-        ParseErrorType, Shared,
+        host, receiver, resolve, Dynamic, Engine, OptimizationLevel, ParseErrorType, Shared,
     };
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42493,15 +42491,6 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
         super::imported(engine, program, &engine.host_registry, &mut allocation)
             .map(|output| output.uses)
-    }
-
-    #[test]
-    fn non_imported_unavailable_binding_keeps_its_local_join_key() {
-        let name = ImmutableString::from("ordinary");
-        assert_eq!(
-            super::unavailable_binding_item(&name, &Ty::Int(super::Int::I64)),
-            name
-        );
     }
 
     #[test]

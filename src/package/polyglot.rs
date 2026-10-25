@@ -428,9 +428,7 @@ fn cfg(tokens: &[Token<'_>], cursor: &mut usize) -> Option<bool> {
     while *cursor < tokens.len() && tokens[*cursor] != Token::Punct(b')') {
         let before = *cursor;
         values.push(cfg(tokens, cursor));
-        if tokens.get(*cursor) == Some(&Token::Punct(b',')) {
-            *cursor += 1;
-        } else if *cursor == before {
+        if tokens.get(*cursor) == Some(&Token::Punct(b',')) || *cursor == before {
             *cursor += 1;
         }
     }
