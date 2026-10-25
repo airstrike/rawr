@@ -246,8 +246,12 @@ impl<B> Lane<B> {
         if let Err(failure) = self.slot.start() {
             return self.rollback_watched(retired, Error::Process(failure));
         }
-        if let Err(failure) = self.slot.pin_current_live_last_good() {
-            return self.rollback_watched(retired, Error::Node(failure));
+        match self.slot.pin_current_live_last_good() {
+            // A save as the program started (D531.9): it keeps running,
+            // and the save swaps in or restarts it as any other does. Its
+            // generation stays pinned as prepared, not as live.
+            Ok(()) | Err(rawr_import::node::Error::SourceChanged(_)) => {}
+            Err(failure) => return self.rollback_watched(retired, Error::Node(failure)),
         }
         let key = self.slot.key().ok_or(Error::State(
             "started runner disappeared after pin promotion",
