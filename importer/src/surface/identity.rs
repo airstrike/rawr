@@ -771,7 +771,9 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
         convert::Type::ProfileMessage { payload, .. } => type_bytes(payload)?
             .checked_add(std::mem::size_of::<convert::Type>())
             .and_then(|bytes| bytes.checked_add(16)),
-        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
+        convert::Type::Option(element)
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => {
             type_bytes(element)?.checked_add(std::mem::size_of::<convert::Type>())
         }
         convert::Type::Result(ok, err) => type_bytes(ok)?
@@ -1272,6 +1274,10 @@ impl Framed {
             }
             convert::Type::Option(element) => {
                 self.byte(6);
+                self.converted_type(element);
+            }
+            convert::Type::Range(element) => {
+                self.byte(10);
                 self.converted_type(element);
             }
             convert::Type::Result(ok, err) => {

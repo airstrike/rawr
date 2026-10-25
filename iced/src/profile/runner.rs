@@ -1888,6 +1888,7 @@ pub fn bind_runtime(
     crate::widget::bind_profile(iced, semantic, replacement);
     crate::subscription::bind(iced, semantic);
     crate::task::bind(iced, semantic);
+    crate::backend::bind(iced);
     crate::theme::bind(iced, semantic);
     Ok(())
 }

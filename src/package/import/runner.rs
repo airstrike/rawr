@@ -1228,7 +1228,39 @@ fn signature(
         builder.try_parameter(ty(facade, input, profile, installed)?)?;
     }
     builder.output(ty(facade, signature.output(), profile, installed)?);
+    for relation in signature.relations() {
+        if let Some(relation) = super::relation(
+            relation.parameter(),
+            relation.arguments(),
+            relation
+                .cases()
+                .iter()
+                .map(|case| (case.this(), case.arguments())),
+            pattern,
+        ) {
+            builder.relation(relation)?;
+        }
+    }
     Ok(builder.finish())
+}
+
+/// A relation's type, when it is one a relation can match.
+fn pattern(source: &facade::Type) -> Option<host::signature::Pattern> {
+    use host::signature::Pattern;
+    use host::type_ref::Builtin;
+    Some(match source {
+        facade::Type::Unit => Pattern::Unit,
+        facade::Type::Bool => Pattern::Builtin(Builtin::Bool),
+        facade::Type::Char => Pattern::Builtin(Builtin::Char),
+        facade::Type::F64 => Pattern::Builtin(Builtin::F64),
+        facade::Type::I64 => Pattern::Builtin(Builtin::I64),
+        facade::Type::Primitive(name) => Pattern::Builtin(Builtin::primitive(name)?),
+        facade::Type::Parameter(name) => Pattern::Parameter(name.as_ref().into()),
+        facade::Type::Variable(index) => Pattern::Variable(*index),
+        facade::Type::Range(element) => Pattern::Range(Box::new(pattern(element)?)),
+        facade::Type::Option(element) => Pattern::Option(Box::new(pattern(element)?)),
+        _ => return None,
+    })
 }
 
 fn ty(
@@ -1283,6 +1315,11 @@ fn ty(
         facade::Type::Option(element) => {
             host::type_ref::Type::option(ty(facade, element, profile, installed)?)
         }
+        facade::Type::Range(element) => {
+            host::type_ref::Type::range(ty(facade, element, profile, installed)?)
+        }
+        // Only a relation's case names an impl's own parameter.
+        facade::Type::Variable(_) => return Err(Error::Shape),
         facade::Type::Result(ok, err) => host::type_ref::Type::result(
             ty(facade, ok, profile, installed)?,
             ty(facade, err, profile, installed)?,

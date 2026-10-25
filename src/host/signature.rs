@@ -11,6 +11,91 @@ pub struct Definition {
     declared: Box<[u32]>,
     parameters: Box<[host::type_ref::Type]>,
     output: host::type_ref::Type,
+    /// What the item's bounds tie between its type parameters.
+    relations: Box<[Relation]>,
+}
+
+/// A bound `R: Trait<A..>` on an imported generic item's type parameter
+/// `R`, with the trait's implementations the importer could name. rand's
+/// `random_range` has `R: SampleRange<T>`, and rand implements
+/// `SampleRange<T>` for `Range<T>`. When an argument fills `R` with one
+/// case's self type, the case's trait arguments are `A..`, as rustc's
+/// trait selection infers them: `random_range(0.5..1.0)` gives the `T` of
+/// the range's floats.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Relation {
+    parameter: ImmutableString,
+    arguments: Box<[Pattern]>,
+    cases: Box<[Case]>,
+}
+
+/// One implementation of a [`Relation`]'s trait.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Case {
+    this: Pattern,
+    arguments: Box<[Pattern]>,
+}
+
+/// A type in a [`Relation`]: the item's type parameter, an
+/// implementation's own type parameter, or a type made of them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Pattern {
+    /// The item's type parameter by name.
+    Parameter(ImmutableString),
+    /// An implementation's type parameter, by its index.
+    Variable(u32),
+    /// `()`.
+    Unit,
+    /// A builtin.
+    Builtin(host::type_ref::Builtin),
+    /// `Range<T>` of a float.
+    Range(Box<Pattern>),
+    /// `Option<T>`.
+    Option(Box<Pattern>),
+}
+
+impl Relation {
+    /// A bound on `parameter` whose trait arguments are `arguments`.
+    #[must_use]
+    pub fn new(
+        parameter: impl Into<ImmutableString>,
+        arguments: Box<[Pattern]>,
+        cases: Box<[Case]>,
+    ) -> Self {
+        Self {
+            parameter: parameter.into(),
+            arguments,
+            cases,
+        }
+    }
+
+    pub(crate) fn parameter(&self) -> &str {
+        &self.parameter
+    }
+
+    pub(crate) fn arguments(&self) -> &[Pattern] {
+        &self.arguments
+    }
+
+    pub(crate) fn cases(&self) -> &[Case] {
+        &self.cases
+    }
+}
+
+impl Case {
+    /// An implementation for `this` with the trait arguments `arguments`.
+    #[must_use]
+    pub const fn new(this: Pattern, arguments: Box<[Pattern]>) -> Self {
+        Self { this, arguments }
+    }
+
+    pub(crate) const fn this(&self) -> &Pattern {
+        &self.this
+    }
+
+    pub(crate) fn arguments(&self) -> &[Pattern] {
+        &self.arguments
+    }
 }
 
 /// A deterministic exact structural signature proof.
@@ -28,6 +113,7 @@ pub struct Builder {
     declared: Vec<u32>,
     parameters: Vec<host::type_ref::Type>,
     output: Option<host::type_ref::Type>,
+    relations: Vec<Relation>,
 }
 
 impl Builder {
@@ -39,6 +125,7 @@ impl Builder {
             declared: Vec::new(),
             parameters: Vec::new(),
             output: None,
+            relations: Vec::new(),
         }
     }
 
@@ -108,6 +195,15 @@ impl Builder {
         self
     }
 
+    /// Add what a bound ties between the type parameters.
+    pub fn relation(&mut self, relation: Relation) -> Result<&mut Self, host::Error> {
+        self.relations
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.relations.push(relation);
+        Ok(self)
+    }
+
     /// Finish the local signature proof.
     #[must_use]
     pub fn finish(self) -> Definition {
@@ -116,6 +212,7 @@ impl Builder {
             declared: self.declared.into_boxed_slice(),
             parameters: self.parameters.into_boxed_slice(),
             output: self.output.unwrap_or_else(host::type_ref::Type::unit),
+            relations: self.relations.into_boxed_slice(),
         }
     }
 }
@@ -191,7 +288,13 @@ impl Definition {
             declared: declared.into_boxed_slice(),
             parameters: parameters.into_boxed_slice(),
             output: self.output.try_clone()?,
+            relations: self.relations.clone(),
         })
+    }
+
+    /// What the item's bounds tie between its type parameters.
+    pub(crate) fn relations(&self) -> &[Relation] {
+        &self.relations
     }
 
     /// Return the positional parameter types.
@@ -345,6 +448,7 @@ impl Definition {
             declared: self.declared.clone(),
             parameters: parameters.into_boxed_slice(),
             output,
+            relations: self.relations.clone(),
         })
     }
 
@@ -450,7 +554,9 @@ fn same_input_type(
         (Shape::Tuple(left), Shape::Tuple(right)) => {
             same_types(left, right, left_parameters, right_parameters, mappings)?
         }
-        (Shape::Option(left), Shape::Option(right)) | (Shape::Iter(left), Shape::Iter(right)) => {
+        (Shape::Option(left), Shape::Option(right))
+        | (Shape::Iter(left), Shape::Iter(right))
+        | (Shape::Range(left), Shape::Range(right)) => {
             same_input_type(left, right, left_parameters, right_parameters, mappings)?
         }
         (Shape::Result(left_ok, left_err), Shape::Result(right_ok, right_err)) => {
