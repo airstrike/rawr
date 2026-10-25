@@ -17,7 +17,7 @@ fn main() {
     let text = "Jumpy Dyno quickly vexes the big frozen wolf at dawn.";
     let Histogram(counts) = text.chars().collect();
     for (i, &n) in counts.iter().enumerate() {
-        if n > 1 {
+        if n > 0 {
             let letter = (b'a' + i as u8) as char;
             println!("{letter} {}", "#".repeat(n));
         }
