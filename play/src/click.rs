@@ -2,11 +2,13 @@
 //! Discord bot.
 //!
 //! A full app's reply has a button for each target of its last frame, up to
-//! [`MAX_BUTTONS`]. A button carries the whole history in its `custom_id`,
-//! so a click needs no store and survives a restart: [`PREFIX`] (the
-//! format's version), a short [`hash`] of the request, then one base-62
-//! digit per step, the button's own target last. A click replays the
-//! request with its messages and those steps.
+//! [`MAX_BUTTONS`], and a select menu ([`MORE`]) holding the next
+//! [`MAX_OPTIONS`]. A button carries the whole history in its `custom_id`,
+//! and an option in its value, so a click needs no store and survives a
+//! restart: [`PREFIX`] (the format's version), a short [`hash`] of the
+//! request, then one base-62 digit per step, the button's own target last.
+//! A click, or a pick from the menu, replays the request with its messages
+//! and those steps.
 //!
 //! ```text
 //! p1Xb3K001
@@ -23,8 +25,20 @@ use crate::message::Request;
 /// format's version.
 pub const PREFIX: &str = "p1";
 
-/// Most buttons on a reply: four rows of five.
+/// Most buttons on a reply: four rows of five. The fifth row holds the
+/// select menu.
 pub const MAX_BUTTONS: usize = 20;
+
+/// Most options in the select menu: Discord's limit for one menu.
+pub const MAX_OPTIONS: usize = 25;
+
+/// Most targets a reply offers: the buttons, then the menu's options.
+pub const MAX_TARGETS: usize = MAX_BUTTONS + MAX_OPTIONS;
+
+/// The select menu's `custom_id`. Each option's value is the `custom_id`
+/// a button for its target would have, so a pick is read as that click
+/// (see [`chosen`]).
+pub const MORE: &str = "p1more";
 
 /// Most steps a history holds. A reply at the cap offers no buttons.
 pub const MAX_STEPS: usize = 24;
@@ -87,7 +101,7 @@ pub fn hash(request: &Request) -> String {
 }
 
 /// A click's `custom_id`: [`PREFIX`], `hash`, then `steps` in base 62.
-/// Each step is below [`MAX_BUTTONS`], so one digit each.
+/// Each step is below [`MAX_TARGETS`], so one digit each.
 #[must_use]
 pub fn encode(hash: &str, steps: &[usize]) -> String {
     let steps = steps.iter().map(|&step| char::from(DIGITS[step % 62]));
@@ -121,6 +135,16 @@ pub fn decode(id: &str) -> Option<Click> {
         hash: hash.to_owned(),
         steps,
     })
+}
+
+/// The `custom_id` a component interaction stands for: a button's own,
+/// or for a pick from the [`MORE`] menu, the picked option's value.
+#[must_use]
+pub fn chosen<'a>(custom_id: &'a str, values: &'a [String]) -> &'a str {
+    match values {
+        [value, ..] if custom_id == MORE => value,
+        _ => custom_id,
+    }
 }
 
 /// What the bot does with a click.
@@ -184,7 +208,9 @@ pub struct Button {
 
 /// The buttons for a reply to the request hashed `hash`, rendered after
 /// `steps`, whose last frame has `actions`: one per action, up to
-/// [`MAX_BUTTONS`]. None once `steps` reaches [`MAX_STEPS`]; see [`quiet`].
+/// [`MAX_TARGETS`]. The first [`MAX_BUTTONS`] are shown as buttons and the
+/// rest as the [`MORE`] menu's options. None once `steps` reaches
+/// [`MAX_STEPS`]; see [`quiet`].
 #[must_use]
 pub fn buttons(hash: &str, steps: &[usize], actions: &[String]) -> Vec<Button> {
     if steps.len() >= MAX_STEPS {
@@ -192,7 +218,7 @@ pub fn buttons(hash: &str, steps: &[usize], actions: &[String]) -> Vec<Button> {
     }
     actions
         .iter()
-        .take(MAX_BUTTONS)
+        .take(MAX_TARGETS)
         .enumerate()
         .map(|(target, label)| {
             let mut history = steps.to_vec();
@@ -242,8 +268,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        buttons, decide, decode, encode, hash, quiet, wait_text, Click, Decision, FULL,
-        MAX_BUTTONS, MAX_STEPS, PREFIX,
+        buttons, chosen, decide, decode, encode, hash, quiet, wait_text, Click, Decision, FULL,
+        MAX_BUTTONS, MAX_STEPS, MAX_TARGETS, MORE, PREFIX,
     };
     use crate::message::parse;
     use crate::Options;
@@ -264,7 +290,7 @@ mod tests {
                 steps
             })
         );
-        let longest = encode("Xb3K", &[MAX_BUTTONS - 1; MAX_STEPS]);
+        let longest = encode("Xb3K", &[MAX_TARGETS - 1; MAX_STEPS]);
         assert!(longest.len() <= 100, "{}", longest.len());
         assert_eq!(decode(&longest).unwrap().steps.len(), MAX_STEPS);
     }
@@ -377,16 +403,35 @@ mod tests {
     fn buttons_carry_the_history_and_stop_at_the_cap() {
         let actions: Vec<String> = (0..25).map(|n| format!("item {n}")).collect();
         let made = buttons("Xb3K", &[3], &actions);
-        assert_eq!(made.len(), MAX_BUTTONS);
+        assert_eq!(made.len(), 25);
         assert_eq!(made[0].id, "p1Xb3K30");
         assert_eq!(made[0].label, "item 0");
         assert_eq!(decode(&made[19].id).unwrap().steps, [3, 19]);
+        assert_eq!(decode(&made[24].id).unwrap().steps, [3, 24]);
         let long = ["x".repeat(100)];
         let label = &buttons("Xb3K", &[], &long)[0].label;
         assert_eq!(label.chars().count(), 80);
         assert!(label.ends_with('…'));
         let full = vec![0; MAX_STEPS];
         assert!(buttons("Xb3K", &full, &actions).is_empty());
+    }
+
+    #[test]
+    fn past_the_buttons_a_menu_holds_the_rest() {
+        let actions: Vec<String> = (0..60).map(|n| format!("item {n}")).collect();
+        let made = buttons("Xb3K", &[], &actions);
+        assert_eq!(made.len(), MAX_TARGETS, "twenty buttons and a menu of 25");
+        let options = &made[MAX_BUTTONS..];
+        assert_eq!(options[0].label, "item 20");
+        assert_eq!(decode(&options[24].id).unwrap().steps, [44]);
+        assert!(made.iter().all(|button| button.id.len() <= 100));
+        // A pick is read as the click its option's value names.
+        let picked = vec![options[3].id.clone()];
+        assert_eq!(chosen(MORE, &picked), "p1Xb3Kn");
+        assert_eq!(decode(chosen(MORE, &picked)).unwrap().steps, [23]);
+        assert_eq!(chosen("p1Xb3K0", &[]), "p1Xb3K0", "a button");
+        assert_eq!(chosen(MORE, &[]), MORE, "a menu with nothing picked");
+        assert_eq!(decode(MORE), None, "the menu's own ID is no click");
     }
 
     #[test]

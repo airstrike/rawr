@@ -80,7 +80,7 @@ column![text("hi"), button("go")]
 </table>
 
 <h3 id="buttons">Buttons</h3>
-<p>A reply to an app has a button for each widget you can click in its image. A button&rsquo;s label is the widget&rsquo;s text. A label that appears twice gets a number, as in <code>+ (2)</code>. A reply shows at most 20 buttons.</p>
+<p>A reply to an app has a button for each widget you can click in its image. A button&rsquo;s label is the widget&rsquo;s text. A label that appears twice gets a number, as in <code>+ (2)</code>. A reply shows at most 20 buttons. When an app has more than 20 widgets to click, a menu under the buttons holds up to 25 more. Picking one from the menu clicks it, as its button would.</p>
 <p>A button clicks its widget in the app, the way a mouse would. The bot runs the app again from the start, with its messages and every click so far, and edits its reply with the new image and new buttons. A line under the image lists the clicks. If a click starts an animation, the reply shows it as a GIF.</p>
 <p>Anyone in the channel can click a reply&rsquo;s buttons. To keep the clicks to yourself, add <code>mine</code> to the <code>?play</code> line, as in <code>?play mine</code>. Then anyone else who clicks gets a note that only they can see. The bot reads <code>mine</code> from the message as it is now, so an edit that adds or removes it takes effect on the next click.</p>
 <p>Each click counts as a run against the clicker&rsquo;s rate limits, which are 4 runs a minute per user and 12 a minute per channel. A click over a limit gets a private note that says when to try again. A click while the reply is still rendering is ignored. The app and all of its clicks share the still budget of 5 seconds.</p>

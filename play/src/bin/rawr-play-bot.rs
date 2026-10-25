@@ -50,12 +50,13 @@ use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
     ButtonStyle, Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType,
-    ComponentInteraction, Context, CreateActionRow, CreateAttachment, CreateButton, CreateCommand,
-    CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateMessage, EditInteractionResponse, EditMessage,
-    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, Interaction,
-    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
-    ResolvedValue, UnavailableGuild,
+    ComponentInteraction, ComponentInteractionDataKind, Context, CreateActionRow, CreateAttachment,
+    CreateButton, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateMessage,
+    CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption, EditInteractionResponse,
+    EditMessage, EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId,
+    Interaction, InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions,
+    ReactionType, Ready, ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
 use tokio::io::AsyncWriteExt;
@@ -721,9 +722,15 @@ impl Handler {
         });
         let hash = request.as_ref().map(|(parsed, ..)| click::hash(parsed));
         let user = component.user.id.get();
+        // A pick from the menu is the click its option's value names.
+        let picked = match &component.data.kind {
+            ComponentInteractionDataKind::StringSelect { values } => values.as_slice(),
+            _ => &[],
+        };
+        let id = click::chosen(&component.data.custom_id, picked);
         let mut claimed = None;
         let decision = click::decide(
-            &component.data.custom_id,
+            id,
             hash.as_deref().zip(
                 request
                     .as_ref()
@@ -1157,8 +1164,9 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
 }
 
 /// The text and buttons of an image reply to the request hashed `hash`,
-/// rendered after `steps`: its note and the clicks so far as subtext, and
-/// a button for each target, five to a row. No `hash`, no buttons.
+/// rendered after `steps`: its note and the clicks so far as subtext, a
+/// button for each of the first [`click::MAX_BUTTONS`] targets, five to a
+/// row, and a select menu for the rest. No `hash`, no buttons.
 fn dressed(shot: &Shot, hash: Option<&str>, steps: &[usize]) -> (String, Vec<CreateActionRow>) {
     let lines: Vec<String> = shot
         .note
@@ -1170,7 +1178,9 @@ fn dressed(shot: &Shot, hash: Option<&str>, steps: &[usize]) -> (String, Vec<Cre
     let Some(hash) = hash else {
         return (content, Vec::new());
     };
-    let buttons: Vec<CreateButton> = click::buttons(hash, steps, &shot.actions)
+    let mut made = click::buttons(hash, steps, &shot.actions);
+    let more = made.split_off(made.len().min(click::MAX_BUTTONS));
+    let buttons: Vec<CreateButton> = made
         .into_iter()
         .map(|button| {
             CreateButton::new(button.id)
@@ -1178,10 +1188,20 @@ fn dressed(shot: &Shot, hash: Option<&str>, steps: &[usize]) -> (String, Vec<Cre
                 .style(ButtonStyle::Secondary)
         })
         .collect();
-    let rows = buttons
+    let mut rows: Vec<CreateActionRow> = buttons
         .chunks(5)
         .map(|row| CreateActionRow::Buttons(row.to_vec()))
         .collect();
+    if !more.is_empty() {
+        let placeholder = format!("{} more", more.len());
+        let options = more
+            .into_iter()
+            .map(|option| CreateSelectMenuOption::new(option.label, option.id))
+            .collect();
+        let menu = CreateSelectMenu::new(click::MORE, CreateSelectMenuKind::String { options })
+            .placeholder(placeholder);
+        rows.push(CreateActionRow::SelectMenu(menu));
+    }
     (content, rows)
 }
 
