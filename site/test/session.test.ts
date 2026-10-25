@@ -21,11 +21,13 @@ interface Options {
   pass?: boolean;
   draft?: string | null;
   theme?: "dark" | "light";
+  /** Whether #ts is in the page yet. */
+  container?: boolean;
 }
 
 /** A Session on stand-ins, with what it did. */
 function standIn(options: Options = {}) {
-  const { code = "", web = null, gpu = true, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark" } = options;
+  const { code = "", web = null, gpu = true, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true } = options;
   const data: PlayData = { snippet: { code, theme: "dark", size: "", messages: [] }, examples, sitekey, pass, shared };
   const parsed = new URL(url);
   const loads: string[] = [];
@@ -59,6 +61,7 @@ function standIn(options: Options = {}) {
       clipboard: async () => {},
       turnstile: () => ({ render: () => (widgets.push("render"), "w1"), reset: () => void widgets.push("reset"), remove: () => void widgets.push("remove") }),
       loadTurnstile: () => {},
+      hasContainer: () => container,
       live: { holder: () => holder, attach: (on) => void (attached = on) },
       setTimeout: (f) => (timers.push(f), timers.length),
       clearTimeout: () => {},
@@ -267,4 +270,13 @@ test("a pass skips Turnstile until the server refuses it", async () => {
   void running;
   const fresh = standIn({ code: "x", sitekey: "0xKEY" });
   assert.deepEqual(fresh.widgets, ["render"], "without a pass the widget mounts at once");
+});
+
+test("Turnstile waits for its container instead of throwing before the island renders it", () => {
+  // The session starts before React renders #ts; rendering then would throw
+  // and blank the playground, as it did live.
+  const early = standIn({ code: "x", sitekey: "0xKEY", container: false });
+  assert.deepEqual(early.widgets, [], "no render while #ts is missing");
+  early.tick();
+  assert.deepEqual(early.widgets, [], "still waiting");
 });

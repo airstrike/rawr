@@ -117,6 +117,53 @@ pub(in crate::cargo) fn relocate(
     Ok(relocated.into_boxed_slice())
 }
 
+/// Give each file in the bundle's Cargo target directory its own inode.
+/// Cargo uplifts a root unit's outputs from the shared build directory into
+/// the target directory with cargo-util's `link_or_copy`. That is a copy (a
+/// clone) on macOS but a hard link on Linux. A hard link would make the
+/// bundle's file the live shared one: the next build would change it, and
+/// freezing it would freeze the shared file too. Every bundle walk refuses a
+/// hard-linked member for that reason. Each such file is replaced here by a
+/// copy. The caller holds the shared directory's lock, so the shared file
+/// cannot change during the copy.
+pub(in crate::cargo) fn unshare(target: &Path) -> Result<()> {
+    let io = |operation: &'static str, path: &Path| {
+        let path: PathBuf = path.to_path_buf();
+        move |source| Error::Io {
+            operation,
+            path,
+            source,
+        }
+    };
+    let mut pending = vec![target.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && directory == target => {
+                return Ok(());
+            }
+            Err(error) => return Err(io("read bundle target directory", &directory)(error)),
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(io("read bundle target directory", &directory))?
+                .path();
+            let metadata =
+                fs::symlink_metadata(&path).map_err(io("inspect bundle target output", &path))?;
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() && crate::store::bundle::hard_linked(&metadata) {
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(".rawr-unshare");
+                let copy = path.with_file_name(name);
+                fs::copy(&path, &copy).map_err(io("copy hard-linked target output", &copy))?;
+                fs::rename(&copy, &path).map_err(io("replace hard-linked target output", &path))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `<target>/rawr`: the shared build directory is the project's target
 /// directory, which also holds Rawr's store and generated sources. Those are
 /// not build output and keep their paths.
@@ -309,6 +356,31 @@ mod tests {
     }
 
     use std::fs;
+
+    /// Linux Cargo uplifts with a hard link into the shared build directory;
+    /// the bundle keeps the bytes in a file of its own.
+    #[cfg(unix)]
+    #[test]
+    fn unshare_gives_each_hard_linked_target_output_its_own_inode() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = std::env::temp_dir().join(format!("rawr-unshare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (shared, target) = (root.join("shared"), root.join("target/final/t/debug"));
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(shared.join("liba-1.rlib"), b"rlib").unwrap();
+        fs::hard_link(shared.join("liba-1.rlib"), target.join("liba.rlib")).unwrap();
+        fs::write(target.join("liba.d"), b"dep-info").unwrap();
+        super::unshare(&root.join("target/final")).unwrap();
+        for path in [shared.join("liba-1.rlib"), target.join("liba.rlib")] {
+            assert_eq!(fs::metadata(&path).unwrap().nlink(), 1, "{path:?}");
+        }
+        assert_eq!(fs::read(target.join("liba.rlib")).unwrap(), b"rlib");
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 2);
+        super::unshare(&root.join("missing")).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn relocation_keeps_metadata_dep_info_and_script_runs_and_names_the_copies() {

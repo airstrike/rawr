@@ -142,11 +142,41 @@ pub fn run(
     let (sender, receiver) = mpsc::unbounded();
     WAKE.with(|wake| *wake.borrow_mut() = Some(sender));
     INBOX.with(|inbox| *inbox.borrow_mut() = Some(receiver));
+    webgl_on_webkit();
     iced::application(Web::boot, Web::update, Web::view)
         .theme(Web::theme)
         .subscription(Web::subscription)
         .run()
         .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+/// On WebKit, iced draws with WebGL2. WebKit's WebGPU is the one in Safari
+/// and in every browser on iOS. It fails a command buffer that copies twice
+/// out of one buffer while that buffer is still mapped. wgpu's
+/// `StagingBelt` uploads iced's quads and glyphs that way. So every frame
+/// fails validation at submit, and the canvas stays black. wgpu takes WebGL2
+/// when `navigator.gpu` is undefined. Every engine on iOS reports
+/// `navigator.vendor` as Apple's, and desktop Safari does too.
+fn webgl_on_webkit() {
+    let navigator = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
+        .ok()
+        .filter(JsValue::is_object);
+    let Some(navigator) = navigator else {
+        return;
+    };
+    let vendor = js_sys::Reflect::get(&navigator, &"vendor".into()).ok();
+    if vendor.and_then(|vendor| vendor.as_string()).as_deref() != Some("Apple Computer, Inc.") {
+        return;
+    }
+    let hidden = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&hidden, &"value".into(), &JsValue::UNDEFINED);
+    let _ = js_sys::Reflect::set(&hidden, &"configurable".into(), &JsValue::TRUE);
+    let _ = js_sys::Reflect::define_property(
+        navigator.unchecked_ref::<js_sys::Object>(),
+        &"gpu".into(),
+        &hidden,
+    );
+    log("rawr-web: WebKit's WebGPU fails iced's uploads, so iced draws with WebGL2");
 }
 
 /// rawr-iced's claims, read from its manifest as `?play` reads them.
