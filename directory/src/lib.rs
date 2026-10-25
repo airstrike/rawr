@@ -1,5 +1,9 @@
 //! Private directory replay foundation.
 //!
+//! It reads Darwin's `__getdirentries64` records on 64-bit macOS and the
+//! kernel's `getdents64` records on 64-bit Linux. Other targets get an
+//! explicit unsupported error.
+//!
 //! The raw reader owns an independently opened descriptor. Darwin can retarget
 //! that descriptor while traversing a union mount, so it never exports lookup
 //! authority or accepts a duplicated caller descriptor. Its transfer storage is

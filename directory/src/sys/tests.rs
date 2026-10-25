@@ -5,7 +5,9 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{getdirentries64, Directory};
+#[cfg(target_os = "macos")]
+use super::getdirentries64;
+use super::Directory;
 use crate::tests::Audit;
 use crate::{Reader, Record, Step, Work, BUFFER_BYTES};
 
@@ -35,6 +37,7 @@ impl Drop for Fixture {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn installed_abi_layout_widths_and_error_sentinel_match_declared_contract() {
     assert_eq!(std::mem::size_of::<libc::size_t>(), 8);
@@ -58,6 +61,61 @@ fn installed_abi_layout_widths_and_error_sentinel_match_declared_contract() {
     let error = std::io::Error::last_os_error();
     assert_eq!(result, libc::size_t::MAX);
     assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+}
+
+// The kernel's linux_dirent64 and libc's 64-bit dirent share this layout.
+#[cfg(target_os = "linux")]
+#[test]
+fn installed_abi_layout_widths_and_error_sentinel_match_declared_contract() {
+    assert_eq!(std::mem::size_of::<libc::c_long>(), 8);
+    assert_eq!(std::mem::size_of::<libc::ino_t>(), 8);
+    assert_eq!(std::mem::size_of::<libc::off_t>(), 8);
+    assert_eq!(std::mem::offset_of!(libc::dirent, d_ino), 0);
+    assert_eq!(std::mem::offset_of!(libc::dirent, d_off), 8);
+    assert_eq!(std::mem::offset_of!(libc::dirent, d_reclen), 16);
+    assert_eq!(std::mem::offset_of!(libc::dirent, d_type), 18);
+    assert_eq!(std::mem::offset_of!(libc::dirent, d_name), 19);
+    assert_eq!(crate::frame::NAME_OFFSET, 19);
+    let mut buffer = [0u8; BUFFER_BYTES];
+    // SAFETY: valid initialized buffer of the declared count, every argument
+    // passed as a long, deliberately invalid fd. The kernel must reject the fd
+    // without writing; this tests the -1 sentinel and errno contract.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_getdents64,
+            libc::c_long::from(-1),
+            buffer.as_mut_ptr(),
+            super::COUNT,
+        )
+    };
+    let error = std::io::Error::last_os_error();
+    assert_eq!(result, -1);
+    assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+    assert!(buffer.iter().all(|byte| *byte == 0));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_reports_no_union_mount_and_reads_exact_records() {
+    let fixture = Fixture::new();
+    fs::write(fixture.0.join("a"), []).unwrap();
+    fs::write(fixture.0.join("abcdefgh"), []).unwrap();
+    let path = fixture.c_path();
+    let mut directory = Directory::open(&path).unwrap();
+    assert!(!directory.union().unwrap());
+    let mut buffer = [0xa5; BUFFER_BYTES];
+    let length = directory.read(&mut buffer).unwrap();
+    let mut batch = crate::Batch::new(&buffer[..length]);
+    let mut names = Vec::new();
+    while let Some(record) = batch.next(&mut Audit::default()).unwrap() {
+        let Record::Entry(entry) = record else {
+            panic!("Linux has no vacant records");
+        };
+        names.push(entry.name().to_vec());
+    }
+    names.sort();
+    assert_eq!(names, [&b"."[..], b"..", b"a", b"abcdefgh"]);
+    assert_eq!(directory.read(&mut buffer).unwrap(), 0);
 }
 
 #[test]
@@ -150,11 +208,18 @@ fn real_open_failures_are_errors_and_final_symlinks_are_not_followed() {
 
 #[test]
 fn cargo_stream_stat_abi_and_following_open_match_installed_contract() {
-    assert_eq!(std::mem::size_of::<libc::stat>(), 144);
+    // (size, st_mode offset, mode width, AT_SYMLINK_NOFOLLOW) for each header.
+    #[cfg(target_os = "macos")]
+    let expected = (144, 4, 2, 0x20);
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    let expected = (128, 16, 4, 0x100);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    let expected = (144, 24, 4, 0x100);
+    assert_eq!(std::mem::size_of::<libc::stat>(), expected.0);
     assert_eq!(std::mem::align_of::<libc::stat>(), 8);
-    assert_eq!(std::mem::offset_of!(libc::stat, st_mode), 4);
-    assert_eq!(std::mem::size_of::<libc::mode_t>(), 2);
-    assert_eq!(libc::AT_SYMLINK_NOFOLLOW, 0x20);
+    assert_eq!(std::mem::offset_of!(libc::stat, st_mode), expected.1);
+    assert_eq!(std::mem::size_of::<libc::mode_t>(), expected.2);
+    assert_eq!(libc::AT_SYMLINK_NOFOLLOW, expected.3);
     let _: unsafe extern "C" fn(
         libc::c_int,
         *const libc::c_char,

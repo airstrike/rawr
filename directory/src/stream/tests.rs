@@ -312,6 +312,9 @@ fn ordinary_eof_tail_prevents_extra_read_but_union_collection_ignores_it() {
     assert!(shared.borrow().batches.is_empty());
 }
 
+// Darwin's status tail and four-byte padding. Linux has neither, and its
+// records have exact lengths.
+#[cfg(target_os = "macos")]
 #[test]
 fn ordinary_status_tail_is_cleared_and_only_interpreted_outside_returned_prefix() {
     let mut full = record(&vec![b'a'; 1023], 1, libc::DT_REG);
