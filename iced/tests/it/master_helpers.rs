@@ -2864,3 +2864,43 @@ fn master_angles_compare_with_numbers_and_each_other() {
         "angles 1 -90 90 true false true true false true false",
     );
 }
+
+/// `PickList::ellipsis` with a `text::Ellipsis` (game_of_life),
+/// `Container::new` (gradient) and `Size::ratio` (layout).
+const ELLIPSIS_CONTAINER_RATIO: &str = r#"
+use iced::widget::{column, pick_list, text};
+use iced::{Size, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Picked(u32),
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let size = Size::new(1600.0, 300.0).ratio(16.0 / 9.0);
+        column![
+            pick_list(Some(1), [1, 2, 3], u32::to_string)
+                .on_select(Message::Picked)
+                .ellipsis(text::Ellipsis::Middle),
+            iced::widget::Container::new(text(format!("{:.0}x{:.0}", size.width, size.height)))
+                .padding(8),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_pick_list_ellipsis_container_new_and_size_ratio() {
+    let adapter = boot(ELLIPSIS_CONTAINER_RATIO);
+    find(&adapter, "533x300");
+}

@@ -329,6 +329,7 @@ pub(crate) struct PickList {
     pub(crate) width: Option<iced::Length>,
     pub(crate) padding: Option<iced::Padding>,
     pub(crate) text_size: Option<f32>,
+    pub(crate) ellipsis: Option<iced::widget::text::Ellipsis>,
 }
 
 /// iced's `combo_box::State<T>`: the script's options and the `to_string`

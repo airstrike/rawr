@@ -779,6 +779,9 @@ impl widget::Descriptor for marker::PickList {
         if let Some(size) = self.text_size {
             pick_list = pick_list.text_size(size);
         }
+        if let Some(ellipsis) = self.ellipsis {
+            pick_list = pick_list.ellipsis(ellipsis);
+        }
         pick_list.boxed()
     }
 
@@ -1256,26 +1259,29 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             new_row(call, Vec::new())
         })
         .expect("the iced facade must retain the exact Row::new item");
-    builder
-        .bind_with_context("iced::widget::container", |call, args| {
-            if args.len() != 1 {
-                return Err(arity("container", 1, args.len()));
-            }
-            Ok(Dynamic::from(marker::Container {
-                witness: call.output_witness().map_err(witness_error)?,
-                identity: widget::Identity::unique(),
-                child: take::<widget::Value>(args[0], "iced::Element")?,
-                padding: iced::Padding::ZERO,
-                width: iced::Length::Fit,
-                height: iced::Length::Fit,
-                align_x: iced::Alignment::Start,
-                align_y: iced::Alignment::Start,
-                style: None,
-                id: None,
-                clip: false,
-            }))
-        })
-        .expect("the iced facade must retain the exact container item");
+    // `container(content)` and `Container::new(content)`.
+    for path in ["iced::widget::container", "iced::widget::Container::new"] {
+        builder
+            .bind_with_context(path, |call, args| {
+                if args.len() != 1 {
+                    return Err(arity("container", 1, args.len()));
+                }
+                Ok(Dynamic::from(marker::Container {
+                    witness: call.output_witness().map_err(witness_error)?,
+                    identity: widget::Identity::unique(),
+                    child: take::<widget::Value>(args[0], "iced::Element")?,
+                    padding: iced::Padding::ZERO,
+                    width: iced::Length::Fit,
+                    height: iced::Length::Fit,
+                    align_x: iced::Alignment::Start,
+                    align_y: iced::Alignment::Start,
+                    style: None,
+                    id: None,
+                    clip: false,
+                }))
+            })
+            .expect("the iced facade must retain the exact container item");
+    }
     for (name, x, y) in [
         ("iced::widget::center", true, true),
         ("iced::widget::center_x", true, false),
@@ -1505,6 +1511,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 width: None,
                 padding: None,
                 text_size: None,
+                ellipsis: None,
             }))
         })
         .expect("the iced facade must retain the exact pick_list item");
@@ -1591,6 +1598,13 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         }),
         ("iced::widget::PickList::text_size", |pick_list, value| {
             pick_list.text_size = Some(pixels(value, "PickList::text_size")?);
+            Ok(())
+        }),
+        ("iced::widget::PickList::ellipsis", |pick_list, value| {
+            pick_list.ellipsis = Some(take::<iced::widget::text::Ellipsis>(
+                value,
+                "iced::widget::text::Ellipsis",
+            )?);
             Ok(())
         }),
     ] {

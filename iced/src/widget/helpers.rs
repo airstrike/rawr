@@ -1256,6 +1256,16 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Size field");
     }
+    builder
+        .bind("iced::Size::ratio", |args| {
+            let [size, ratio] = args else {
+                return Err(arity("Size::ratio", 2, args.len()));
+            };
+            let size = super::builtin::take::<iced::Size>(size, "iced::Size")?;
+            let ratio = super::builtin::number(ratio, "Size::ratio")? as f32;
+            Ok(Dynamic::from(size.ratio(ratio)))
+        })
+        .expect("the iced facade must retain Size::ratio");
     // `point.x`, read, or set as a place (`offset.x = 2.0`).
     fn coordinate<T: Clone + Send + Sync + 'static>(
         builder: &mut host::runtime::Builder,
