@@ -227,7 +227,8 @@ pub fn run(
 #[must_use]
 pub fn tree(root: u32) -> Vec<u32> {
     let Ok(output) = Command::new("ps")
-        .args(["-axo", "pid=,ppid="])
+        // POSIX -A, which both BSD and procps ps read as every process.
+        .args(["-A", "-o", "pid=,ppid="])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

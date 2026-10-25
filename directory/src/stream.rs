@@ -240,7 +240,9 @@ impl<D: System> Core<D> {
                     return Ok(None);
                 }
                 // Pinned readdir clears the optional status tail before each
-                // read; an older kernel may leave these bytes untouched.
+                // read; an older kernel may leave these bytes untouched. Linux
+                // writes only whole records inside the returned prefix, so its
+                // cleared tail never reports EOF and only a zero return ends.
                 const TAIL: usize = crate::BUFFER_BYTES - 4;
                 admit(admission, Work::Copy { bytes: 4 })?;
                 self.buffer[TAIL..].fill(0);

@@ -13,10 +13,11 @@ protocol keep their existing unsafe-forbidden declarations.
 The exercised host is `aarch64-apple-darwin`, macOS 26.4 build 25E246. The installed
 SDK is `/Library/Developer/CommandLineTools/SDKs/MacOSX26.2.sdk`. The compiler is
 nightly-2026-07-11, rustc commit `375b1431b7d89d1c2e2bc168c011848ae12b7d14`.
-The implementation is compiled for 64-bit macOS. Other targets return an
-explicit unsupported I/O error; no opaque fallback can produce a proof. The
-importer's existing supported compiler host remains unchanged. Other macOS
-architectures have not been exercised by this slice.
+The implementation is compiled for 64-bit macOS and 64-bit Linux. Other targets
+return an explicit unsupported I/O error; no opaque fallback can produce a proof.
+Other macOS architectures have not been exercised by this slice. The Linux ABI,
+its framing and its union answer are in "Linux getdents64" below; the sections
+before it describe Darwin.
 
 The modern layout is from SDK `usr/include/sys/dirent.h:102–108`:
 
@@ -311,3 +312,104 @@ lifetime checks and the C ABI SDK syntax check. This acceptance covers only the
 foundation on the exercised macOS ABI; target inference, stored/current-source
 integration, live union qualification and release/performance evidence remain
 outside its scope.
+
+## Linux getdents64
+
+The Linux implementation covers `target_os = "linux"` with 64-bit pointers,
+under glibc and musl. Its descriptor operations are the Darwin ones above:
+`open`, `openat(fd, ".")` and `fstatat(.., AT_SYMLINK_NOFOLLOW)` with the same
+flags, ownership and SAFETY arguments. Only the batch read, its record layout
+and the union answer differ. They live in `sys.rs` and `frame.rs` behind
+`target_os` cfgs; no unsafe code was added outside `sys.rs`.
+
+### The read
+
+`Directory::read` calls `libc::syscall(SYS_getdents64, fd, buffer, COUNT)`.
+The pinned libc 0.2.189 has no `getdents64` wrapper for glibc, and glibc only
+added one in 2.30, so the raw syscall is the one spelling that works on every
+supported libc. The kernel declares `getdents64(unsigned int fd, struct
+linux_dirent64 *dirent, unsigned int count)` in `fs/readdir.c`. glibc's and
+musl's variadic `syscall()` read each argument as a `long`, so the fd and the
+count are widened to `c_long` before the call. `COUNT` is the 8192-byte
+buffer's length, checked at compile time to fit `unsigned int`. The uniquely
+borrowed initialized array is writable for exactly that extent, and the call
+retains no pointer. Both libcs turn a negative kernel result into -1 with
+errno set, so a negative return is captured immediately as the error. A
+non-negative return is the byte count of whole records, at most `COUNT`; the
+shared reader still checks it against the buffer before slicing. Linux has no
+seek-position out-parameter and no status tail. The stream's Darwin tail logic
+is harmless there: the tail is cleared before each read, the kernel writes only
+inside the returned prefix, so the tail never reports EOF, and only a
+successful zero return ends a stream, as on Darwin. A failed read, EINTR
+included, is terminal exactly as on Darwin.
+
+### Record layout
+
+`struct linux_dirent64` (kernel `include/linux/dirent.h`) is identical to the
+64-bit `struct dirent` of glibc and musl:
+
+| Field | Offset | Width |
+|---|---:|---:|
+| inode | 0 | 8 |
+| next offset | 8 | 8 |
+| record length | 16 | 2 |
+| type hint | 18 | 1 |
+| name including terminating NUL | 19 | up to 256 |
+
+There is no name-length field. `fs/readdir.c` `filldir64` is the only producer
+of these records for every filesystem, overlayfs and FUSE included, and it
+writes `reclen = ALIGN(offsetof(d_name) + namlen + 1, sizeof(u64))`, the name,
+and one NUL. The bytes between that NUL and the record end are never written,
+so they hold whatever the buffer held before. The parser therefore applies
+these rules, each a `Framing` error when broken:
+
+- The 19-byte header must be present (`Header`).
+- The record length must be at least 24, a multiple of eight, and inside the
+  returned prefix (`Length`). 24 is the shortest record, a one-byte name.
+- The whole name field (`reclen - 19` bytes) is admitted as one `Name` scan
+  before it is read. The name ends at its first NUL, and a field without one
+  is `Name`.
+- The name must be 1 to 255 bytes (`NameLength`), the kernel's `NAME_MAX`.
+- The record length must equal `filldir64`'s exact length for that name
+  (`Length`). A terminator early enough to shorten the record is misframed,
+  never padding to skip.
+- A slash in the name is `Name`, as `filldir64`'s `verify_dirent_name` rejects.
+
+Padding past the terminator is never interpreted, so stale buffer bytes cannot
+change a name. Native-endian loads come from checked byte slices, with no
+struct cast or alignment assumption, exactly as on Darwin.
+
+An inode-zero record is an entry on Linux, never vacant. The kernel returns
+it, glibc stopped skipping it in 2.33 (bug 12165), musl never skipped it, and
+the pinned std `ReadDir` does not test `d_ino`. Cargo's `read_dir` therefore
+sees it, and so does this reader. The Darwin vacant-record rule stays Darwin's.
+
+`tests/abi-linux.c` checks the header layout, the `syscall` and `fstatat`
+declarations, `AT_SYMLINK_NOFOLLOW` (0x100) and the `stat` layout for aarch64
+(size 128, `st_mode` at 16) and x86_64 (size 144, `st_mode` at 24) against the
+installed glibc headers. The Rust sys tests check the same numbers in the libc
+crate, call the real syscall with fd -1 (-1 and EBADF, buffer untouched), and
+run every live directory fixture against a real Linux filesystem.
+
+### Union mounts
+
+Linux has no `MNT_UNION` and no union mount in mainline. Overlayfs, the union
+filesystem in use, merges its layers inside the kernel: `ovl_iterate` builds
+one merged list that holds each name once and drops whiteouts before
+`getdents64` returns anything. glibc's and musl's `opendir` apply no union
+rule, and neither does std's `ReadDir`. `Directory::union` therefore returns
+`Ok(false)` without a syscall, and every Linux directory takes the ordinary
+branch. That branch keeps duplicate occurrences, which a Linux filesystem never
+returns, and skips type-14 whiteouts, which Linux never reports. The prospective
+`Mount` admission is still charged, as an upper bound for a probe that is not
+made, so admission sequences match Darwin's.
+
+### Evidence status
+
+The Linux code was type-checked and linted for `aarch64-unknown-linux-gnu`,
+`x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` with
+`cargo clippy -p rawr-directory --all-targets -- -D warnings`, tests included.
+The tests have not run on a Linux host from this checkout. The
+`.github/workflows/linux.yml` job runs them on `ubuntu-latest` (x86_64 glibc),
+with the C header check, and then runs `rawr run` on a project with a Cargo
+dependency.
