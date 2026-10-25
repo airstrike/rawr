@@ -644,6 +644,16 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         &host::runtime::Call<'_>,
         &mut [&mut Dynamic],
     ) -> Result<Dynamic, Box<EvalAltResult>>| {
+        // tokio's timers read std's clock, which a browser does not have.
+        #[cfg(target_arch = "wasm32")]
+        if path.starts_with("tokio::time::") {
+            let message = format!("`{path}` does not run in a browser yet");
+            rawr.bind_with_context(format!("rawr_iced::{path}"), move |_, _| {
+                Err(error(message.clone()))
+            })
+            .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
+            return;
+        }
         rawr.bind_with_context(format!("rawr_iced::{path}"), move |call, args| {
             f(call, args)
         })

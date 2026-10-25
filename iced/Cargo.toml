@@ -18,9 +18,7 @@ iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d3854445
 # Reads image headers for the `image` widget; its codecs are the project's.
 image = { version = "0.25", default-features = false, optional = true }
 png = "0.18.1"
-rawr = { path = "..", features = ["rust-import", "sync"] }
-rawr_import = { package = "rawr-import", path = "../importer" }
-rawr-watch = { path = "../watch" }
+rawr = { path = "..", features = ["sync"] }
 sha2 = "0.10.9"
 thiserror = "2"
 # tokio's timers and channels for Rawr code without a tokio dependency (src/tokio_facade.rs).
@@ -29,6 +27,18 @@ thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "test-util", "time"] }
 # Fallback lists for bundled fonts (src/snapshot/fonts.rs); the version cosmic-text uses.
 unicode-script = "0.5"
+
+# The importer and the watcher read files and run cargo, which a browser
+# host has neither of (D518).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rawr = { path = "..", features = ["rust-import", "sync"] }
+rawr_import = { package = "rawr-import", path = "../importer" }
+rawr-watch = { path = "../watch" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rawr = { path = "..", features = ["sync", "wasm-bindgen"] }
+# `time::every`'s ticks, on the page's timer.
+wasmtimer = "0.4.3"
 
 [dev-dependencies]
 iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }

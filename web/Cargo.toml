@@ -1,0 +1,21 @@
+[package]
+name = "rawr-web"
+version = "0.1.0"
+rust-version = "1.95.0"
+edition = "2024"
+publish = false
+description = "Rawr's iced snippets running interactively in a browser, on wasm"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Everything is wasm-only, so a native workspace build compiles an empty crate.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+# rawr-iced's renderers, and wgpu's WebGL2 backend for browsers without WebGPU.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["webgl"] }
+rawr-iced = { path = "../iced" }
+wasm-bindgen = "0.2.105"
+web-sys = { version = "0.3.105", features = ["console", "Performance", "Window"] }
