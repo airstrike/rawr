@@ -331,6 +331,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
   <li>A dashed <code>Stroke</code>, with <code>line_dash: canvas::LineDash { segments: &amp;[3.0, 6.0], offset: 0 }</code>.</li>
   <li><code>Instant::min</code> and <code>Instant::max</code>. <code>window::Settings::default().size</code> is the size a window opens at.</li>
   <li>A number or a <code>Length</code> passed to your own function that takes <code>impl Into&lt;Length&gt;</code>.</li>
+  <li><code>iced::backend</code>: <code>Backend</code>, <code>Backend::ALL</code>, <code>Backend::default()</code> and <code>backend::Settings</code>. <code>backend::configure(settings)</code> is iced&rsquo;s task that switches the renderer of a running window. A headless render and the browser have no renderer to switch, so the task ends there without a result, as it does in iced on the web.</li>
 </ul>
 <h3 id="not-available">Not available yet</h3>
 <ul>

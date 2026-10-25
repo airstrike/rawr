@@ -11,6 +11,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod application;
+mod backend;
 pub mod control;
 
 pub mod diagnostic;
@@ -104,6 +105,7 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
 fn register_debug() {
     use rawr::host::debug::register;
     tokio_facade::register_debug();
+    backend::register_debug();
     // `{}` of a facade type with `to_string` prints its Rust `Display`.
     rawr::host::display::register::<iced::ContentFit>();
     rawr::host::display::register::<iced::font::Family>();
@@ -1327,6 +1329,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             name.finish(),
         )?)?;
     }
+    // `iced::backend`: `Backend`, its settings and `configure`.
+    backend::declare(&mut builder)?;
 
     builder.finish()
 }
@@ -1549,6 +1553,7 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     subscription::bind(&mut iced_builder, &mut rawr_builder);
     task::bind(&mut iced_builder, &mut rawr_builder);
     tokio_facade::bind(&mut rawr_builder);
+    backend::bind(&mut iced_builder);
     theme::bind(&mut iced_builder, &mut rawr_builder);
     widget::bind(&mut iced_builder, &mut rawr_builder);
     Ok([iced_builder.finish(), rawr_builder.finish()])
