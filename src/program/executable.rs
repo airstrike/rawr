@@ -220,6 +220,8 @@ impl Executable {
         scope: Option<&Scope>,
         optimization_level: crate::OptimizationLevel,
     ) -> Result<(Self, resolve::lower_nominal::ImportedOutput), resolve::ImportedFailure> {
+        let mut program = program;
+        resolve::lower_nominal::reveal(engine, &mut program, &engine.host_registry, allocation)?;
         let owner = allocation.support_owner();
         let (mut executable, imported) = Self::from_lowering(engine, program, |program, model| {
             resolve::lower_nominal::with_uses(

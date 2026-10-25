@@ -261,7 +261,7 @@ impl crate::Engine {
         if !installed_profile {
             install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
         }
-        let program = match crate::resolve::package::resolve(graph, &registry) {
+        let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
             Err(failure) => {
                 if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
@@ -295,7 +295,7 @@ impl crate::Engine {
             }
         };
         let symbolic =
-            match crate::resolve::lower_imported(self, &program, &registry, &mut allocation) {
+            match crate::resolve::lower_imported(self, &mut program, &registry, &mut allocation) {
                 Ok(uses) => uses,
                 Err(crate::resolve::ImportedFailure::Surface(error)) => {
                     return Err(super::Error::import(Error::Surface(error)));

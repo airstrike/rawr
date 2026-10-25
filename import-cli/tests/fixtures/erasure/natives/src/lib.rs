@@ -46,3 +46,15 @@ impl Resource {
         self.id
     }
 }
+
+/// A trait a script's `-> impl Labelled` returns, as Freya's `fn app() ->
+/// impl IntoElement` does.
+pub trait Labelled {
+    fn label(&self) -> String;
+}
+
+impl Labelled for Resource {
+    fn label(&self) -> String {
+        format!("resource {}", self.id)
+    }
+}

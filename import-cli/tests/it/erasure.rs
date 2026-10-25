@@ -213,6 +213,48 @@ fn main() {
 ",
         "held 3\n",
     );
+    // `-> impl Labelled` of the native crate's trait is rustc's opaque type:
+    // the body's type, here `natives::Resource`, also through another such
+    // function, a path from the crate's root and an `Option`.
+    runs(
+        "
+use natives::Labelled;
+
+fn make(id: i64) -> impl Labelled {
+    natives::Resource::new(id)
+}
+
+fn wrapped() -> impl natives::Labelled {
+    make(3)
+}
+
+fn maybe(id: i64) -> Option<impl Labelled> {
+    if id > 0 { Some(make(id)) } else { None }
+}
+
+fn main() {
+    println!(\"{}\", make(7).label());
+    println!(\"{}\", wrapped().label());
+    println!(\"{}\", maybe(2).map(|made| made.label()).unwrap_or_default());
+}
+",
+        "resource 7\nresource 3\nresource 2\n",
+    );
+    // A function whose hidden type is its own has none, as rustc says.
+    refused(
+        "
+use natives::Labelled;
+
+fn endless() -> impl Labelled {
+    endless()
+}
+
+fn main() {
+    println!(\"wrong {}\", endless().label());
+}
+",
+        "impl natives::Labelled",
+    );
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native

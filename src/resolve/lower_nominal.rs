@@ -282,6 +282,345 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     })
 }
 
+/// rustc's opaque return types of imported traits (`fn app() -> impl
+/// IntoElement`): the hidden type is the body's, so each such function's
+/// body is checked once against an inference variable in the `impl
+/// Trait`'s place, and the signature names the type it binds from then on.
+/// Callers, the runner and the native side then see one concrete type, as
+/// rustc's codegen does; that callers may use more than the trait's methods
+/// is a leniency `cargo check` reports. A body that calls another such
+/// function waits for that one's reveal, round by round.
+#[cfg(feature = "rust-import")]
+pub(crate) fn reveal<A: crate::host::ImportAllocation>(
+    engine: &Engine,
+    program: &mut Program,
+    host: &crate::host::Registry,
+    allocation: &mut A,
+) -> Result<(), super::ImportedFailure> {
+    #[derive(Clone, Copy)]
+    enum Pending {
+        Function(usize),
+        Method(usize),
+    }
+    let opaque = |output: Option<&type_ref::Type>| output.is_some_and(type_ref::Type::has_opaque);
+    let mut pending = program
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, shell)| {
+            matches!(&shell.kind, item::Kind::Function(definition)
+                if opaque(definition.output.as_ref()))
+        })
+        .map(|(index, _)| Pending::Function(index))
+        .chain(
+            program
+                .methods
+                .iter()
+                .enumerate()
+                .filter(|(_, definition)| opaque(Some(definition.output())))
+                .map(|(index, _)| Pending::Method(index)),
+        )
+        .collect::<Vec<_>>();
+    while !pending.is_empty() {
+        let runtime =
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+        let compiler_host = host
+            .clone_for_import(allocation)
+            .map_err(super::ImportedFailure::Surface)?;
+        let models = Models::new(program, runtime, compiler_host);
+        let mut revealed = Vec::new();
+        let mut waiting = Vec::new();
+        let mut first_failure = None;
+        for &next in &pending {
+            let mut uses = Vec::new();
+            let mut dependencies = BTreeSet::new();
+            let mut allocation_failure = None;
+            let (source, result) = match next {
+                Pending::Function(index) => {
+                    let shell = &program.items[index];
+                    let item::Kind::Function(definition) = &shell.kind else {
+                        unreachable!("pending functions are function items");
+                    };
+                    let body_source = body_source(
+                        definition
+                            .body
+                            .text
+                            .as_deref()
+                            .unwrap_or_else(|| program.source.text_at(shell.source)),
+                        &definition.body,
+                    );
+                    let mut parser = Parser::for_function(
+                        engine,
+                        &body_source,
+                        models.for_source(shell.source),
+                        definition,
+                        shell
+                            .key
+                            .clone()
+                            .expect("resolved functions retain stable item keys"),
+                        0,
+                        0,
+                        false,
+                        Some(ImportedContext {
+                            native: None,
+                            allocation,
+                            failure: &mut allocation_failure,
+                            source: shell.source,
+                            uses: &mut uses,
+                            dependencies: &mut dependencies,
+                        }),
+                    );
+                    parser.symbolic_only = true;
+                    let output = definition
+                        .output
+                        .as_ref()
+                        .expect("an opaque function declares its output");
+                    let result = parser.opaque_expected(output).and_then(|expected| {
+                        parser.return_ty = Some(expected.clone());
+                        parser.revealing = Some(expected.clone());
+                        parser.parse_function_body(definition)?;
+                        let hidden = parser.inference.resolve(&expected);
+                        named_output(output, &hidden, &parser.models)
+                    });
+                    (shell.source, result)
+                }
+                Pending::Method(index) => {
+                    let definition = &program.methods[index];
+                    let body_source = source_span(
+                        definition
+                            .body_text()
+                            .unwrap_or_else(|| program.source.text_at(definition.source())),
+                        definition.body(),
+                    );
+                    let result = Parser::for_method(
+                        engine,
+                        &body_source,
+                        models.for_source(definition.source()),
+                        definition,
+                        0,
+                        0,
+                        false,
+                        Some(ImportedContext {
+                            native: None,
+                            allocation,
+                            failure: &mut allocation_failure,
+                            source: definition.source(),
+                            uses: &mut uses,
+                            dependencies: &mut dependencies,
+                        }),
+                    )
+                    .and_then(|mut parser| {
+                        parser.symbolic_only = true;
+                        let output = definition.output();
+                        let expected = parser.opaque_expected(output)?;
+                        parser.return_ty = Some(expected.clone());
+                        parser.revealing = Some(expected.clone());
+                        parser.parse_method_body(definition)?;
+                        let hidden = parser.inference.resolve(&expected);
+                        named_output(output, &hidden, &parser.models)
+                    });
+                    (definition.source(), result)
+                }
+            };
+            match imported_result(result, &mut allocation_failure, source) {
+                Ok(output) => revealed.push((next, output)),
+                Err(super::ImportedFailure::Surface(error)) => {
+                    return Err(super::ImportedFailure::Surface(error));
+                }
+                Err(failure) => {
+                    waiting.push(next);
+                    first_failure.get_or_insert(failure);
+                }
+            }
+        }
+        // A round that reveals nothing has no other reveal to wait for.
+        if revealed.is_empty() {
+            return Err(first_failure.expect("an unrevealed round keeps its failure"));
+        }
+        for (next, output) in revealed {
+            match next {
+                Pending::Function(index) => {
+                    if let item::Kind::Function(definition) = &mut program.items[index].kind {
+                        definition.output = Some(output);
+                    }
+                }
+                Pending::Method(index) => program.methods[index].reveal_output(output),
+            }
+        }
+        pending = waiting;
+    }
+    Ok(())
+}
+
+/// `written` with each opaque `impl Trait` replaced by the hidden type the
+/// body bound in its place (`hidden` is the whole output, resolved).
+#[cfg(feature = "rust-import")]
+fn named_output(
+    written: &type_ref::Type,
+    hidden: &Ty,
+    models: &Models,
+) -> Result<type_ref::Type, Error> {
+    let span = match written {
+        type_ref::Type::Unit(span)
+        | type_ref::Type::Tuple { span, .. }
+        | type_ref::Type::Reference { span, .. } => *span,
+        type_ref::Type::Path(path) => path.span,
+    };
+    if let Some(trait_name) = written.opaque_trait() {
+        return named_type(hidden, models, span).ok_or_else(|| Error::UnsupportedNominalSyntax {
+            construct: format!(
+                "`impl {trait_name}` whose body returns `{}`, a type Rawr cannot name in a \
+                 signature yet",
+                hidden.name(models)
+            )
+            .into(),
+            source: span,
+        });
+    }
+    if !written.has_opaque() {
+        return Ok(written.clone());
+    }
+    Ok(match (written, hidden) {
+        (type_ref::Type::Tuple { members, span }, Ty::Tuple(hidden)) => type_ref::Type::Tuple {
+            members: members
+                .iter()
+                .zip(hidden.iter())
+                .map(|(member, hidden)| named_output(member, hidden, models))
+                .collect::<Result<_, _>>()?,
+            span: *span,
+        },
+        (
+            type_ref::Type::Reference {
+                mutable,
+                lifetime,
+                target,
+                span,
+            },
+            Ty::Reference { target: hidden, .. },
+        ) => type_ref::Type::Reference {
+            mutable: *mutable,
+            lifetime: *lifetime,
+            target: Box::new(named_output(target, hidden, models)?),
+            span: *span,
+        },
+        (type_ref::Type::Path(path), _) => {
+            let mut inner = match hidden {
+                Ty::Option(element) | Ty::Array { element, .. } | Ty::Boxed(_, element) => {
+                    vec![&**element]
+                }
+                Ty::Result(ok, err) => vec![&**ok, &**err],
+                _ => Vec::new(),
+            }
+            .into_iter();
+            let mut arguments = Vec::with_capacity(path.arguments.len());
+            for argument in &path.arguments {
+                arguments.push(match argument {
+                    type_ref::Argument::Type(ty) => {
+                        let hidden = inner.next().unwrap_or(&Ty::Unknown);
+                        type_ref::Argument::Type(named_output(ty, hidden, models)?)
+                    }
+                    type_ref::Argument::Lifetime(span) => type_ref::Argument::Lifetime(*span),
+                });
+            }
+            type_ref::Type::Path(type_ref::Path {
+                arguments: arguments.into_boxed_slice(),
+                ..path.clone()
+            })
+        }
+        _ => written.clone(),
+    })
+}
+
+/// The header type naming `ty`, a body's resolved type, as a signature
+/// writes it: `None` for a type no signature names (a closure, an
+/// iterator chain) or one still unknown.
+#[cfg(feature = "rust-import")]
+fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
+    let builtin = |name: &str, arguments: Vec<type_ref::Type>| {
+        type_ref::Type::Path(type_ref::Path {
+            name: name.into(),
+            target: type_ref::Target::Builtin,
+            arguments: arguments
+                .into_iter()
+                .map(type_ref::Argument::Type)
+                .collect(),
+            span,
+        })
+    };
+    let named = |ty: &Ty| named_type(ty, models, span);
+    let all = |types: &[Ty]| types.iter().map(named).collect::<Option<Vec<_>>>();
+    Some(match ty {
+        Ty::Unit => type_ref::Type::Unit(span),
+        Ty::Bool => builtin("bool", Vec::new()),
+        Ty::Char => builtin("char", Vec::new()),
+        Ty::String => builtin("String", Vec::new()),
+        // A `&str` is the `String` path with the reference's lifetime.
+        Ty::Str => type_ref::Type::Path(type_ref::Path {
+            name: "String".into(),
+            target: type_ref::Target::Builtin,
+            arguments: Box::new([type_ref::Argument::Lifetime(span)]),
+            span,
+        }),
+        // An unsuffixed literal falls back to `i32` or `f64`, as in rustc.
+        Ty::Int(Int::Var(_)) => builtin("i32", Vec::new()),
+        Ty::Int(kind) => builtin(kind.name(), Vec::new()),
+        Ty::Float(Float::Var(_)) => builtin("f64", Vec::new()),
+        Ty::Float(kind) => builtin(kind.name(), Vec::new()),
+        Ty::Option(element) => builtin("Option", vec![named(element)?]),
+        Ty::Result(ok, err) => builtin("Result", vec![named(ok)?, named(err)?]),
+        Ty::Array {
+            element,
+            length: None,
+        } => builtin("Vec", vec![named(element)?]),
+        Ty::Array {
+            element,
+            length: Some(length),
+        } => builtin(
+            &crate::item::type_ref::array_name(*length),
+            vec![named(element)?],
+        ),
+        Ty::Boxed(pointer, target) => builtin(pointer.name(), vec![named(target)?]),
+        Ty::Tuple(members) => type_ref::Type::Tuple {
+            members: all(members)?.into_boxed_slice(),
+            span,
+        },
+        Ty::Reference { mutable, target } => type_ref::Type::Reference {
+            mutable: *mutable,
+            lifetime: None,
+            target: Box::new(named(target)?),
+            span,
+        },
+        Ty::Host { proof, arguments } => type_ref::Type::Path(type_ref::Path {
+            name: proof.definition.path().into(),
+            target: type_ref::Target::Host {
+                definition: proof.definition.clone(),
+                owner: proof.owner.clone(),
+            },
+            arguments: all(arguments)?
+                .into_iter()
+                .map(type_ref::Argument::Type)
+                .collect(),
+            span,
+        }),
+        Ty::Script(definition, arguments) => {
+            let declared = models.definition(*definition).definition();
+            type_ref::Type::Path(type_ref::Path {
+                name: declared.name().into(),
+                target: type_ref::Target::Script {
+                    definition: *definition,
+                    identity: type_def::Identity::Script(declared.key().clone()),
+                },
+                arguments: all(arguments)?
+                    .into_iter()
+                    .map(type_ref::Argument::Type)
+                    .collect(),
+                span,
+            })
+        }
+        _ => return None,
+    })
+}
+
 #[cfg(feature = "rust-import")]
 pub(crate) struct ImportedOutput {
     pub(crate) uses: Box<[ImportedUse]>,
@@ -8560,6 +8899,11 @@ struct Parser<'a> {
     expression_paths: Vec<(Span, Box<[u32]>)>,
     normalize_private_calls: bool,
     symbolic_only: bool,
+    /// While revealing an opaque return type (`reveal`): the declared
+    /// output with an inference variable for each `impl Trait`, which the
+    /// body's tail and `return`s are checked against in its place.
+    #[cfg(feature = "rust-import")]
+    revealing: Option<Ty>,
     allow_endpoint_projection: bool,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureScope>,
@@ -8849,6 +9193,8 @@ impl<'a> Parser<'a> {
             expression_paths: Vec::new(),
             normalize_private_calls: true,
             symbolic_only: false,
+            #[cfg(feature = "rust-import")]
+            revealing: None,
             allow_endpoint_projection: false,
             loops: Vec::new(),
             closures: Vec::new(),
@@ -9367,7 +9713,7 @@ impl<'a> Parser<'a> {
         }
 
         if !startup_tail {
-            let expected = Ty::from_resolved(definition.output());
+            let expected = self.tail_expected(Some(definition.output()));
             self.coerce_tail(&expected, definition.body())?;
         }
         self.wrap_widget_change(definition)?;
@@ -9388,6 +9734,84 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The type a body's tail is checked against: its declared output, or
+    /// the output being revealed.
+    fn tail_expected(&self, output: Option<&type_ref::Type>) -> Ty {
+        #[cfg(feature = "rust-import")]
+        if let Some(revealing) = &self.revealing {
+            return revealing.clone();
+        }
+        output.map_or(Ty::Unit, Ty::from_resolved)
+    }
+
+    /// `output` with a fresh inference variable for each opaque `impl
+    /// Trait` in it, which the body's tail then binds to its hidden type.
+    #[cfg(feature = "rust-import")]
+    fn opaque_expected(&mut self, output: &type_ref::Type) -> Result<Ty, Error> {
+        if output.opaque_trait().is_some() {
+            return Ok(self.inference.fresh());
+        }
+        if !output.has_opaque() {
+            return Ok(Ty::from_resolved(output));
+        }
+        let unsupported = || Error::UnsupportedNominalSyntax {
+            construct: "`impl Trait` of an imported trait inside this return type".into(),
+            source: match output {
+                type_ref::Type::Unit(span)
+                | type_ref::Type::Tuple { span, .. }
+                | type_ref::Type::Reference { span, .. } => *span,
+                type_ref::Type::Path(path) => path.span,
+            },
+        };
+        let arguments = |this: &mut Self, path: &type_ref::Path| {
+            path.arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => Some(this.opaque_expected(ty)),
+                    type_ref::Argument::Lifetime(_) => None,
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        Ok(match output {
+            type_ref::Type::Unit(_) => Ty::Unit,
+            type_ref::Type::Tuple { members, .. } => Ty::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.opaque_expected(member))
+                    .collect::<Result<_, _>>()?,
+            ),
+            type_ref::Type::Reference {
+                mutable, target, ..
+            } => Ty::Reference {
+                mutable: *mutable,
+                target: Box::new(self.opaque_expected(target)?),
+            },
+            type_ref::Type::Path(path) => {
+                let mut inner = arguments(self, path)?.into_iter();
+                let mut next = || inner.next().map(Box::new).ok_or_else(unsupported);
+                if output.option_element().is_some() {
+                    Ty::Option(next()?)
+                } else if output.vec_element().is_some() {
+                    Ty::Array {
+                        element: next()?,
+                        length: None,
+                    }
+                } else if let Some((_, length)) = output.array_element() {
+                    Ty::Array {
+                        element: next()?,
+                        length: Some(length),
+                    }
+                } else if let Some((pointer, _)) = output.pointer_element() {
+                    Ty::Boxed(Pointer::named(pointer), next()?)
+                } else if output.result_elements().is_some() {
+                    Ty::Result(next()?, next()?)
+                } else {
+                    return Err(unsupported());
+                }
+            }
+        })
+    }
+
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         let mut startup_tail = false;
         if definition.body.constant {
@@ -9401,10 +9825,7 @@ impl<'a> Parser<'a> {
         }
 
         if !startup_tail {
-            let expected = definition
-                .output
-                .as_ref()
-                .map_or(Ty::Unit, Ty::from_resolved);
+            let expected = self.tail_expected(definition.output.as_ref());
             self.coerce_tail(&expected, definition.body.span)?;
         }
 

@@ -61,7 +61,7 @@ println!("{}", other.len()); // 3</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-rc" data-out="out-rc" aria-label="Run rc.rs" hidden></button><b>rawr run rc.rs</b><span id="out-rc" aria-live="polite">3</span></div>
 </div>
 <h2 id="impl-trait"><code>impl Trait</code></h2>
-<p>In argument and return position.</p>
+<p>In argument and return position. A return type can also be <code>impl Trait</code> of a dependency&rsquo;s trait, as <a href="/docs/imports#values">Imports</a> explains.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="impl-iter.rs" id="src-impl-iter">fn evens(n: i64) -&gt; impl Iterator&lt;Item = i64&gt; {
     (0..n).filter(|x| x % 2 == 0)

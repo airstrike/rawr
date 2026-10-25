@@ -618,6 +618,16 @@ impl<'a> Resolver<'a> {
             }
 
             let (uses, types, _occupied) = self.resolve_unit_bindings(&context, &parsed_items)?;
+            // The host modules this unit's `use`s bind, by name: an imported
+            // trait is one (`use freya::prelude::IntoElement;`).
+            #[cfg(feature = "rust-import")]
+            let modules = uses
+                .iter()
+                .flatten()
+                .flat_map(|used| used.bindings.iter())
+                .filter(|binding| matches!(binding.target, item::Import::Module))
+                .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
+                .collect::<BTreeMap<_, _>>();
             aliases.extend(super::source_aliases(
                 program::source::Id::from_index(context.source.index()),
                 &types,
@@ -625,6 +635,12 @@ impl<'a> Resolver<'a> {
             for (index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
                 let Some(slot) = &slots[index] else {
                     continue;
+                };
+                #[cfg(feature = "rust-import")]
+                let parsed = {
+                    let mut parsed = parsed;
+                    qualify_opaque_bounds(&mut parsed, &modules);
+                    parsed
                 };
                 let shell = super::resolve_item(
                     slot.id,
@@ -1843,6 +1859,75 @@ fn host_target(
                 native.record(&error);
             }
             Err(error)
+        }
+    }
+}
+
+/// A return type's `impl Trait` bound that starts at a host module a `use`
+/// binds (`impl IntoElement` after `use freya::prelude::IntoElement;`) is
+/// written out from the crate's root, `impl freya::prelude::IntoElement`,
+/// so the resolver finds the imported trait by its path
+/// (`type_ref::OPAQUE_PREFIX`).
+#[cfg(feature = "rust-import")]
+fn qualify_opaque_bounds(
+    item: &mut crate::item::Parsed,
+    modules: &BTreeMap<ImmutableString, ImmutableString>,
+) {
+    use crate::item::type_ref::{Argument, Segment, Type, IMPL_TYPE};
+    fn qualify(ty: &mut Type, modules: &BTreeMap<ImmutableString, ImmutableString>) {
+        match ty {
+            Type::Path(path) => {
+                let opaque = matches!(&path.segments[..], [segment]
+                    if segment.name.text == IMPL_TYPE);
+                for segment in path.segments.iter_mut() {
+                    for argument in segment.arguments.iter_mut() {
+                        let Argument::Type(argument) = argument else {
+                            continue;
+                        };
+                        if opaque
+                            && let Type::Path(bound) = argument
+                            && !bound.global
+                            && let Some(module) = bound
+                                .segments
+                                .first()
+                                .and_then(|first| modules.get(&first.name.text))
+                        {
+                            let (at, span) = (bound.segments[0].name.span, bound.segments[0].span);
+                            bound.segments = module
+                                .split("::")
+                                .map(|text| Segment {
+                                    name: crate::item::Name {
+                                        text: text.into(),
+                                        span: at,
+                                    },
+                                    arguments: Box::default(),
+                                    span,
+                                })
+                                .chain(bound.segments.iter().skip(1).cloned())
+                                .collect();
+                        } else {
+                            qualify(argument, modules);
+                        }
+                    }
+                }
+            }
+            Type::Reference { target, .. } => qualify(target, modules),
+            Type::Tuple { members, .. } => {
+                for member in members.iter_mut() {
+                    qualify(member, modules);
+                }
+            }
+            Type::Unit(_) => {}
+        }
+    }
+    let functions: Vec<&mut crate::item::Function> = match item {
+        crate::item::Parsed::Function(function) => vec![function],
+        crate::item::Parsed::Impl(item) => item.functions.iter_mut().collect(),
+        _ => Vec::new(),
+    };
+    for function in functions {
+        if let Some(output) = &mut function.output {
+            qualify(output, modules);
         }
     }
 }
