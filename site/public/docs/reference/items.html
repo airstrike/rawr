@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Items | rawr API Reference</title>
+<meta name="description" content="The items rawr supports: fn, struct, enum, impl, trait, const, static, type, mod, use and derive.">
+<meta property="og:title" content="Items | rawr API Reference">
+<meta property="og:description" content="The items rawr supports: fn, struct, enum, impl, trait, const, static, type, mod, use and derive.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/items">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/items">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="grp">Guides</p>
+  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
+  </ol>
+  <p class="grp" data-here>API Reference</p>
+  <ol data-here>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items" aria-current="page">Items</a><ol class="secs"><li><a href="#fn"><code>fn</code></a></li><li><a href="#struct"><code>struct</code></a></li><li><a href="#enum"><code>enum</code></a></li><li><a href="#impl"><code>impl</code></a></li><li><a href="#trait"><code>trait</code></a></li><li><a href="#send-sync"><code>Send</code> and <code>Sync</code></a></li><li><a href="#const"><code>const</code> and <code>static</code></a></li><li><a href="#type"><code>type</code></a></li><li><a href="#mod"><code>mod</code> and visibility</a></li><li><a href="#use"><code>use</code></a></li><li><a href="#derive"><code>#[derive]</code></a></li></ol></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<h1>Items</h1>
+<p class="lede">The items a program can declare.</p>
+<h2 id="fn"><code>fn</code></h2>
+<p>A function can be declared inside another function.</p>
+<div class="block"><pre><code data-lang="rust">fn total(prices: &amp;[f64]) -&gt; f64 {
+    fn cents(x: f64) -&gt; f64 {
+        (x * 100.0).round() / 100.0
+    }
+    cents(prices.iter().sum())
+}</code></pre></div>
+<h2 id="struct"><code>struct</code></h2>
+<p>Structs with named fields, tuple structs and unit structs.</p>
+<div class="block"><pre><code data-lang="rust">struct Point {
+    x: f64,
+    y: f64,
+}
+struct Meters(f64);
+struct Marker;</code></pre></div>
+<h2 id="enum"><code>enum</code></h2>
+<p>Unit, tuple and struct variants. A fieldless enum casts to an integer with <code>as</code>, and explicit discriminants set its values.</p>
+<div class="block"><pre><code data-lang="rust">enum Shape {
+    Empty,
+    Circle(f64),
+    Rect { w: f64, h: f64 },
+}
+
+enum Level {
+    Low = 1,
+    High = 10,
+}
+
+let n = Level::High as i32; // 10</code></pre></div>
+<h2 id="impl"><code>impl</code></h2>
+<p>Methods, associated functions and associated consts. An <code>impl</code> can sit inside a function body. <code>Self</code> works in a method&rsquo;s type annotations.</p>
+<div class="block"><pre><code data-lang="rust">impl Point {
+    const ZERO: f64 = 0.0;
+
+    fn origin() -&gt; Self {
+        Point { x: Self::ZERO, y: Self::ZERO }
+    }
+
+    fn shifted(&amp;self, dx: f64) -&gt; Self {
+        let next: Self = Point { x: self.x + dx, y: self.y };
+        next
+    }
+}</code></pre></div>
+<h2 id="trait"><code>trait</code></h2>
+<p>Default methods, associated types and static functions. A trait can be implemented for your own types and for built-in types such as <code>i64</code>.</p>
+<div class="block"><pre><code data-lang="rust">trait Describe {
+    fn name(&amp;self) -&gt; String;
+
+    fn describe(&amp;self) -&gt; String {
+        format!("this is {}", self.name())
+    }
+}
+
+impl Describe for i64 {
+    fn name(&amp;self) -&gt; String {
+        format!("the number {}", self)
+    }
+}</code></pre></div>
+<h2 id="send-sync"><code>Send</code> and <code>Sync</code></h2>
+<p>Every value in interpreted code is already <code>Send</code> and <code>Sync</code>, so these impls change nothing. rawr checks them as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error, and so is an <code>unsafe impl</code> of another trait.</p>
+<div class="block"><pre><code data-lang="rust">struct Handle(u64);
+unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}</code></pre></div>
+<h2 id="const"><code>const</code> and <code>static</code></h2>
+<div class="block"><pre><code data-lang="rust">const LIMIT: usize = 10;
+static GREETING: &amp;str = "hello";</code></pre></div>
+<h2 id="type"><code>type</code></h2>
+<p>Aliases can be generic. A <code>pub type</code> can be imported from another module.</p>
+<div class="block"><pre><code data-lang="rust">type Pair&lt;T&gt; = (T, T);
+type Grid = Vec&lt;Vec&lt;u8&gt;&gt;;</code></pre></div>
+<h2 id="mod"><code>mod</code> and visibility</h2>
+<p><code>mod util;</code> loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. Cargo builds a module without it as native Rust. Inline modules work too.</p>
+<p><code>pub</code>, <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> work. A path through <code>crate::</code> or <code>super::</code> reaches a name that a module brings in with <code>use</code>.</p>
+<div class="block"><pre><code data-lang="rust">mod geometry {
+    pub(crate) fn area(w: f64, h: f64) -&gt; f64 {
+        w * h
+    }
+}
+
+fn main() {
+    let a = geometry::area(2.0, 3.0);
+}</code></pre></div>
+<h2 id="use"><code>use</code></h2>
+<p>Paths, groups, and globs of a standard library module. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A glob of an enum&rsquo;s variants, as in <code>use Shape::*;</code>, isn&rsquo;t supported yet.</p>
+<div class="block"><pre><code data-lang="rust">use std::collections::{HashMap, HashSet};
+use std::fmt::*;
+use ::image::ColorType;</code></pre></div>
+<h2 id="derive"><code>#[derive]</code></h2>
+<p><code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. rawr checks a derive as rustc does, so deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</p>
+<div class="block"><pre><code data-lang="rust">#[derive(Debug, Clone, PartialEq, Default)]
+struct Order {
+    id: u32,
+    note: String,
+}</code></pre></div>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/overview">Previous<b>Overview</b></a><a class="next" href="/docs/reference/types">Next<b>Types</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

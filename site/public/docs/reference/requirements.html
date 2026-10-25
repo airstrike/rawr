@@ -3,19 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Requirements and status | rawr docs</title>
+<title>Requirements | rawr API Reference</title>
 <meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and the command, a Unix system and nightly-2026-07-11 for rawr-import and rawr-iced. Where it has been tested, and what is planned.">
-<meta property="og:title" content="Requirements and status | rawr docs">
+<meta property="og:title" content="Requirements | rawr API Reference">
 <meta property="og:description" content="What each part of rawr needs: Rust 1.95 for the crate and the command, a Unix system and nightly-2026-07-11 for rawr-import and rawr-iced. Where it has been tested, and what is planned.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/requirements">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/requirements">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/requirements">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/requirements">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,48 +33,33 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
+  <p class="grp">Guides</p>
   <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp" data-here>Reference</p>
-  <ol data-here>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements" aria-current="page">Requirements and status</a><ol><li><a href="#status">Status</a></li><li><a href="#toolchains">Toolchains and platforms</a></li><li><a href="#planned">Planned</a></li></ol></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
-  <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+  <p class="grp" data-here>API Reference</p>
+  <ol data-here>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements" aria-current="page">Requirements</a><ol class="secs"><li><a href="#status">Status</a></li><li><a href="#toolchains">Toolchains and platforms</a></li><li><a href="#planned">Planned</a></li></ol></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>reference</p>
-<h1>Requirements and status</h1>
+<h1>Requirements</h1>
 <p class="lede">What each part of rawr needs, where it has been tested and what is planned.</p>
 <h2 id="status">Status</h2>
 <p>rawr is pre-alpha. Its API, commands and error codes may change.</p>
-<p>rawr supports part of Rust. <a href="/docs/language">Supported Rust</a> lists what works today. If rawr runs code with a different result than Rust, or rejects Rust it says it supports, please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+<p>rawr supports part of Rust. <a href="/docs/reference/overview">Supported Rust</a> lists what works today. If rawr runs code with a different result than Rust, or rejects Rust it says it supports, please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
 
 <h2 id="toolchains">Toolchains and platforms</h2>
 <table class="wide">
@@ -95,7 +80,7 @@
   <li>Reload on save for programs that aren&rsquo;t iced apps. Today they run once and exit.</li>
   <li>A second UI host, for ratatui, built the way rawr-iced is.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/cli">Previous<b>Commands</b></a><a class="next" href="/docs/troubleshooting">Next<b>Troubleshooting</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/commands">Previous<b>Commands</b></a></nav>
 </article>
 </main>
 </div>

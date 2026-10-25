@@ -33,43 +33,28 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp" data-here>Embed rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol><li><a href="#add">Add the crate</a></li><li><a href="#export">Export your types</a></li><li><a href="#example">A script without exports</a></li><li><a href="#statements">Statements and expressions</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#lifecycle">Loading and reloading scripts</a></li><li><a href="#release">In a release build</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol class="secs"><li><a href="#add">Add the crate</a></li><li><a href="#export">Export your types</a></li><li><a href="#example">A script without exports</a></li><li><a href="#statements">Statements and expressions</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#lifecycle">Loading and reloading scripts</a></li><li><a href="#release">In a release build</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>embed rawr</p>
 <h1>Embedding</h1>
 <p class="lede">A second use of rawr: your app runs Rust scripts while it runs. It exports its own types and functions with <code>#[rawr::export]</code>, compiles a script with an <code>Engine</code> and calls the functions the script defines.</p>
 <h2 id="add">Add the crate</h2>
@@ -315,8 +300,9 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
   <li><code>set_max_string_size</code>, <code>set_max_array_size</code> and <code>set_max_map_size</code> bound the size of values.</li>
   <li><code>on_progress</code> runs a callback as the script runs. Returning <code>Some(value)</code> from it stops the script. A host can use it for a wall-clock deadline.</li>
 </ul>
-<p>The <a href="/docs/play/reference#limits">playground and the <code class="nw">?play</code> bot</a> use these limits for untrusted snippets.</p>
+<p>The <a href="/docs/reference/play#limits">playground and the <code class="nw">?play</code> bot</a> use these limits for untrusted snippets.</p>
 
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/imports">Previous<b>Imports</b></a><a class="next" href="/docs/iced">Next<b>iced</b></a></nav>
 </article>
 </main>
 </div>

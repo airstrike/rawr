@@ -33,43 +33,28 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp" data-here>Reference</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting" aria-current="page">Troubleshooting</a><ol><li><a href="#first">First steps</a></li><li><a href="#not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</a></li><li><a href="#not-installed">A program needs an extension that isn&rsquo;t installed</a></li><li><a href="#project-build">RAWR-ENVIRONMENT-PROJECT-BUILD</a></li><li><a href="#which-check">rawr&rsquo;s error or rustc&rsquo;s?</a></li><li><a href="#first-run-slow">The first run takes minutes</a></li><li><a href="#reload">An iced app doesn&rsquo;t pick up a save</a></li><li><a href="#report">Reporting a bug</a></li></ol></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting" aria-current="page">Troubleshooting</a><ol class="secs"><li><a href="#first">First steps</a></li><li><a href="#not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</a></li><li><a href="#not-installed">A program needs an extension that isn&rsquo;t installed</a></li><li><a href="#project-build">RAWR-ENVIRONMENT-PROJECT-BUILD</a></li><li><a href="#which-check">rawr&rsquo;s error or rustc&rsquo;s?</a></li><li><a href="#first-run-slow">The first run takes minutes</a></li><li><a href="#reload">An iced app doesn&rsquo;t pick up a save</a></li><li><a href="#report">Reporting a bug</a></li></ol></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>reference</p>
 <h1>Troubleshooting</h1>
 <p class="lede">Common errors and what to do about them.</p>
 <h2 id="first">First steps</h2>
@@ -95,8 +80,8 @@
 <h2 id="which-check">rawr&rsquo;s error or rustc&rsquo;s?</h2>
 <p><code>rawr check</code> prints rawr&rsquo;s result first: <code>Checked</code> and the path, or one error. Then it prints <code>cargo check passed</code>, or <code>cargo check found</code> and rustc&rsquo;s errors.</p>
 <ul>
-  <li>An error from rawr alone often means code that rawr doesn&rsquo;t support yet. The error names the construct. <a href="/docs/language#not-supported">Supported Rust</a> lists the gaps.</li>
-  <li>An error from rustc alone means code that rawr accepts and rustc rejects. <a href="/docs/language#lenient">That list</a> is on the same page. Fix it for rustc.</li>
+  <li>An error from rawr alone often means code that rawr doesn&rsquo;t support yet. The error names the construct. <a href="/docs/reference/overview#not-supported">Supported Rust</a> lists the gaps.</li>
+  <li>An error from rustc alone means code that rawr accepts and rustc rejects. <a href="/docs/reference/overview#lenient">That list</a> is on the same page. Fix it for rustc.</li>
 </ul>
 
 <h2 id="first-run-slow">The first run takes minutes</h2>
@@ -107,7 +92,7 @@
 
 <h2 id="report">Reporting a bug</h2>
 <p>If rawr gives a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/requirements">Previous<b>Requirements and status</b></a><a class="next" href="/docs/how-it-works">Next<b>How rawr works</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play/discord">Previous<b>Discord</b></a><a class="next" href="/docs/how-it-works">Next<b>How it works</b></a></nav>
 </article>
 </main>
 </div>

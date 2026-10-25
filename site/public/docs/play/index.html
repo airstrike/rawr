@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Use the playground | rawr docs</title>
+<title>Play | rawr docs</title>
 <meta name="description" content="Run Rust in your browser with the rawr playground. Plain programs print their output, iced snippets render as a PNG or a GIF, and share links save a snippet.">
-<meta property="og:title" content="Use the playground | rawr docs">
+<meta property="og:title" content="Play | rawr docs">
 <meta property="og:description" content="Run Rust in your browser with the rawr playground. Plain programs print their output, iced snippets render as a PNG or a GIF, and share links save a snippet.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/play">
@@ -34,44 +34,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
-  </ol>
-  <p class="grp">rawr-iced</p>
-  <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp" data-here>Playground and Discord</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/play" aria-current="page">Use the playground</a><ol><li><a href="#playground">The editor</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#reach">What a snippet can reach</a></li></ol></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play" aria-current="page">Play</a><ol class="secs"><li><a href="#playground">The editor</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#reach">What a snippet can reach</a></li></ol><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
+  </ol>
+  <p class="grp">API Reference</p>
+  <ol>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>playground and Discord</p>
-<h1>Use the playground</h1>
+<h1>Play</h1>
 <p class="lede"><a href="/play">The playground</a> runs Rust code in your browser and shows its output. It renders iced code as an image or an animation. No installation is required.</p>
 <h2 id="playground">The editor</h2>
 <p><a href="/play">rawr.airstrike.fyi/play</a> has an editor and an output pane. Ctrl+Enter or Cmd+Enter runs the code. Tab indents. You can pick the theme and a size. The messages box takes one <code>Message</code> expression per line.</p>
@@ -84,7 +69,7 @@
 
 
 <h2 id="shapes">Snippet shapes</h2>
-<p>A snippet uses iced when it names the <code>iced</code> crate. It also uses iced when it uses a name from rawr-iced&rsquo;s <a href="/docs/play/reference#prelude">prelude</a> without declaring or importing it. <code>column!</code>, <code>text</code>, <code>button</code>, <code>Color</code> and <code>Fill</code> are examples. Every other snippet is a plain program.</p>
+<p>A snippet uses iced when it names the <code>iced</code> crate. It also uses iced when it uses a name from rawr-iced&rsquo;s <a href="/docs/reference/play#prelude">prelude</a> without declaring or importing it. <code>column!</code>, <code>text</code>, <code>button</code>, <code>Color</code> and <code>Fill</code> are examples. Every other snippet is a plain program.</p>
 
 <h3 id="expression">An expression</h3>
 <p>A bare iced expression renders as a view.</p>
@@ -99,7 +84,7 @@
 
 <h3 id="app">An app</h3>
 <p>A type with <code>fn view(&amp;self)</code> and <code>fn update(&amp;mut self, message)</code> is an app. The snippet can have its own <code>main</code> that calls <code>iced::run</code> or <code>iced::application</code>. Without one, the bot boots <code>State::default()</code>. A <code>main</code> whose <code>iced::run</code> takes closures is an app too. <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code> is one example. It needs no <code>fn view</code>.</p>
-<p>The bot applies each <code>msg=</code> in order. <a href="/docs/play/reference#output">Output</a> says what the reply shows. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
+<p>The bot applies each <code>msg=</code> in order. <a href="/docs/reference/play#output">Output</a> says what the reply shows. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
 <div class="block">
   <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
   <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
@@ -148,8 +133,8 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 
 
 <h2 id="reach">What a snippet can reach</h2>
-<p>A snippet runs on rawr&rsquo;s server in a sandbox. It has no files, no environment variables and no network, and it runs under time and memory limits. It can use rawr&rsquo;s <code>std</code>, iced and a stand-in for tokio, and no other crates. <a href="/docs/play/reference">The hosted execution reference</a> has the details.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/play/discord">Next<b>Use rawr in Discord</b></a></nav>
+<p>A snippet runs on rawr&rsquo;s server in a sandbox. It has no files, no environment variables and no network, and it runs under time and memory limits. It can use rawr&rsquo;s <code>std</code>, iced and a stand-in for tokio, and no other crates. <a href="/docs/reference/play">The hosted execution reference</a> has the details.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/previews">Previous<b>Previews</b></a><a class="next" href="/docs/play/discord">Next<b>Discord</b></a></nav>
 </article>
 </main>
 </div>

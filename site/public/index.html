@@ -43,10 +43,11 @@ code, pre, kbd { font-family: var(--mono); }
 p code, li code, td code, th code, figcaption code { font-size: 0.88em; color: var(--text); background: var(--raised); border: 1px solid var(--line); padding: 0 4px; }
 /* Captions keep the case they are written in, so product names stay lowercase. */
 .cap { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--dim); }
-.slash { color: var(--pink); margin-right: 8px; }
 code.nw { white-space: nowrap; }
 
-.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; border-bottom: 1px solid var(--line); }
+.bar { position: sticky; top: 0; z-index: 10; height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 32px; border-bottom: 1px solid var(--line); background: var(--bg); }
+/* The site bar stays at the top, so an anchor lands below it. */
+[id] { scroll-margin-top: 72px; }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--dim); }
 .brand:hover { text-decoration: none; }
 .mark { width: 10px; height: 10px; background: var(--pink); flex: none; }
@@ -164,7 +165,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
 }
 @media (max-width: 640px) {
   body { font-size: 16px; }
-  .bar { padding: 12px 16px; }
+  .bar { padding: 0 16px; }
   .links { gap: 14px; }
   .links .wide { display: none; }
   .wrap { padding: 0 16px; }
@@ -314,7 +315,6 @@ fn main() {
 <section id="dev">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>the dev loop</p>
       <h2>Interpret your crate while you develop</h2>
       <p><code>rawr run</code> takes a Cargo crate whose root file starts with <code>// rawr</code>, or a single <code>.rs</code> file. It checks names, types and traits first. A program that fails the check doesn&rsquo;t start.</p>
       <p><code>rawr check</code> runs the same check without running the program. Then it runs <code>cargo check</code>, so rustc has the final word on whether the code is valid Rust.</p>
@@ -350,7 +350,6 @@ fn main() {
 <section id="iced">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>rawr-iced</p>
       <h2>iced apps that reload when you save</h2>
       <p>rawr-iced is an extension for <a href="https://github.com/iced-rs/iced">iced</a> apps. With it installed, <code>rawr run</code> opens an iced app in a window. iced draws the window, and rawr interprets the marked files.</p>
       <p>Saving a marked file swaps the new code into the running app. The window stays open. The app keeps its state when the new code is compatible with it. Otherwise the app starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the window.</p>
@@ -473,7 +472,6 @@ impl Counter {
 <section id="embed">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>embedding</p>
       <h2>Run Rust scripts in your app</h2>
       <p>Embedding is a second use, separate from the dev loop. Your app adds the <code>rawr</code> crate and runs Rust scripts while it runs.</p>
       <p>Put <code>#[rawr::export]</code> on your own types and functions, and scripts can use them. <code>compile_file</code> checks a script against the exports. <code>call_fn</code> calls a function the script defines.</p>
@@ -533,7 +531,6 @@ fn label(order: Order) -&gt; String {
 <section id="try">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>try it</p>
       <h2>Run Rust in your browser</h2>
       <p>The playground runs Rust code and shows its output. It renders iced code as an image or an animation. No installation is required.</p>
       <p>The <code class="nw">?play</code> bot does the same in Discord. Post <code class="nw">?play</code> above a Rust code block in a channel where the bot is turned on.</p>
@@ -561,12 +558,11 @@ fn label(order: Order) -&gt; String {
 <section id="status">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>status</p>
       <h2>Pre-alpha</h2>
     </div>
     <div>
-      <p class="status">rawr supports part of Rust. <a href="/docs/language">Supported Rust</a> lists what works and what is missing. It also lists what rawr refuses and the few cases that still behave differently.</p>
-      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/requirements">Requirements</a> has the details.</p>
+      <p class="status">rawr supports part of Rust. <a href="/docs/reference/overview">Supported Rust</a> lists what works and what is missing. It also lists what rawr refuses and the few cases that still behave differently.</p>
+      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
       <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, reload on save for other programs that aren&rsquo;t iced apps, and a second host for ratatui.</p>
       <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
     </div>

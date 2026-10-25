@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Run Rust with rawr | rawr docs</title>
+<title>Run | rawr docs</title>
 <meta name="description" content="Which files rawr interprets, how the // rawr marker works, what rawr check does, which binary runs a program, what reloads today and what ships in a release build.">
-<meta property="og:title" content="Run Rust with rawr | rawr docs">
+<meta property="og:title" content="Run | rawr docs">
 <meta property="og:description" content="Which files rawr interprets, how the // rawr marker works, what rawr check does, which binary runs a program, what reloads today and what ships in a release build.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/run">
@@ -33,44 +33,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run" aria-current="page">Run Rust with rawr</a><ol><li><a href="#programs">What rawr runs</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run" aria-current="page">Run</a><ol class="secs"><li><a href="#programs">What rawr runs</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#native-main">A native main</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>develop with rawr</p>
-<h1>Run Rust with rawr</h1>
+<h1>Run</h1>
 <p class="lede">What <code>rawr run</code> and <code>rawr check</code> do with a crate or a file. Which files are interpreted, who runs a program and what ships in release.</p>
 <h2 id="programs">What rawr runs</h2>
 <p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate with a marked file. The crate&rsquo;s root file may start with <code>// rawr</code>, or a module it declares may. The root file is <code>src/main.rs</code> or <code>src/lib.rs</code>.</p>
@@ -109,7 +94,7 @@
 
 <h2 id="check">Checking</h2>
 <p>rawr checks a whole program before any of it runs. The check resolves names, types, traits and method calls. It also checks that every <code>match</code> covers every case.</p>
-<p><code>rawr check</code> runs that check without running the program. Then it runs <code>cargo check</code> on the crate, because rawr&rsquo;s check accepts some code that rustc rejects. <a href="/docs/language#lenient">Supported Rust</a> lists those cases.</p>
+<p><code>rawr check</code> runs that check without running the program. Then it runs <code>cargo check</code> on the crate, because rawr&rsquo;s check accepts some code that rustc rejects. <a href="/docs/reference/overview#lenient">Supported Rust</a> lists those cases.</p>
 <p><code>rawr run</code> runs <code>cargo check</code> beside the program. For a program that runs once, its errors are printed after the program ends.</p>
 
 <h2 id="who">Who runs a program</h2>
@@ -135,7 +120,7 @@
 
 <h2 id="speed">Speed</h2>
 <p>Interpreted code runs slower than the same code compiled by rustc. Calls into native code run at native speed. Keep a hot loop in a native module or a crate, and Cargo compiles it.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Get started</b></a><a class="next" href="/docs/imports">Next<b>Cargo dependencies</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Start</b></a><a class="next" href="/docs/imports">Next<b>Imports</b></a></nav>
 </article>
 </main>
 </div>

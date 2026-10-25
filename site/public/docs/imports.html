@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cargo dependencies | rawr docs</title>
+<title>Imports | rawr docs</title>
 <meta name="description" content="Use the crates in your Cargo.toml and native modules from code rawr interprets. Install rawr-import, add the two project files and use a dependency without bindings.">
-<meta property="og:title" content="Cargo dependencies | rawr docs">
+<meta property="og:title" content="Imports | rawr docs">
 <meta property="og:description" content="Use the crates in your Cargo.toml and native modules from code rawr interprets. Install rawr-import, add the two project files and use a dependency without bindings.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/imports">
@@ -33,44 +33,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports" aria-current="page">Cargo dependencies</a><ol><li><a href="#install">Install rawr-import</a></li><li><a href="#project">Project setup</a></li><li><a href="#use">Use a dependency</a></li><li><a href="#native">Native modules</a></li><li><a href="#values">Imported values</a></li><li><a href="#gaps">Known gaps</a></li></ol></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports" aria-current="page">Imports</a><ol class="secs"><li><a href="#install">Install rawr-import</a></li><li><a href="#project">Project setup</a></li><li><a href="#use">Use a dependency</a></li><li><a href="#native">Native modules</a></li><li><a href="#values">Imported values</a></li><li><a href="#gaps">Known gaps</a></li></ol></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>develop with rawr</p>
-<h1>Cargo dependencies</h1>
+<h1>Imports</h1>
 <p class="lede">Use the crates in your <code>Cargo.toml</code> and your native modules from marked code. rawr-import compiles them with Cargo.</p>
 <h2 id="install">Install rawr-import</h2>
 <p>rawr-import runs programs whose <code>Cargo.toml</code> lists dependencies, or which have native modules. Install it and <code>rawr</code> hands those programs to it.</p>
@@ -144,7 +129,7 @@ fn main() {
   <li>rawr-import runs a program once. It doesn&rsquo;t watch for saves yet.</li>
   <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/run">Previous<b>Run Rust with rawr</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/run">Previous<b>Run</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
 </article>
 </main>
 </div>

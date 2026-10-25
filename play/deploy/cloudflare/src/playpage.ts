@@ -63,7 +63,7 @@ a { color: var(--pink); text-decoration: none; }
 .cap { color: var(--dim); }
 .brand b { text-transform: none; }
 .pink { color: var(--pink); }
-.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
+.bar { position: sticky; top: 0; z-index: 10; background: var(--bg); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
 .brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
 .brand:hover b { color: var(--pink); }
 .brand:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }

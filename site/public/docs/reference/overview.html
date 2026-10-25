@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview | rawr API Reference</title>
+<meta name="description" content="The Rust that rawr runs today, its largest gaps, and the known cases where it differs from cargo run.">
+<meta property="og:title" content="Overview | rawr API Reference">
+<meta property="og:description" content="The Rust that rawr runs today, its largest gaps, and the known cases where it differs from cargo run.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/overview">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/overview">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="grp">Guides</p>
+  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
+  </ol>
+  <p class="grp" data-here>API Reference</p>
+  <ol data-here>
+    <li><a href="/docs/reference/overview" aria-current="page">Overview</a><ol class="secs"><li><a href="#glance">At a glance</a></li><li><a href="#overview">How a program runs</a></li><li><a href="#supported">Supported Rust</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from <code>cargo run</code></a></li></ol><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<h1>Overview</h1>
+<p class="lede">rawr checks a program before it runs it. This reference lists the Rust that passes that check.</p>
+<h2 id="glance">At a glance</h2>
+<p>Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
+<ul>
+  <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
+  <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
+  <li><code>async</code> code runs in iced apps and in a <code>?play</code> program whose <code>main</code> is <code>async</code>.</li>
+  <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
+  <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value. It <a href="#lenient">accepts some code rustc rejects</a>, so <code>rawr check</code> also runs <code>cargo check</code>.</li>
+</ul>
+
+<h2 id="overview">How a program runs</h2>
+<p>rawr checks a whole program before any of it runs. The check resolves names, types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
+<p>A program is a Cargo crate or a single <code>.rs</code> file. <a href="/docs/run#marker">Run</a> says which files are interpreted.</p>
+<p>A single file can hold items, top-level statements, or both. Top-level statements run first, as the body of a <code>fn main</code> would, and then rawr calls <code>fn main</code> if there is one. A function can&rsquo;t read their variables. Cargo doesn&rsquo;t build a file with top-level statements, so keep them to snippets and the playground.</p>
+<div class="block">
+  <div class="file"><b>parse.rs</b></div>
+  <pre><code data-lang="rust" data-run="parse.rs" id="src-parse">fn parse(s: &amp;str) -&gt; Result&lt;i64, String&gt; {
+    s.parse::&lt;i64&gt;().map_err(|e| format!("{s:?}: {e}"))
+}
+
+fn main() -&gt; Result&lt;(), String&gt; {
+    let n = parse("42")?;
+    println!("n = {n}");
+    let m = parse("forty")?;
+    println!("m = {m}");
+    Ok(())
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rs" hidden></button><b>rawr run parse.rs</b><span id="out-parse" aria-live="polite">n = 42
+Error: "\"forty\": invalid digit found in string"
+<span class="exit">exit status 1</span></span></div>
+</div>
+<p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101.</p>
+
+<h2 id="supported">Supported Rust</h2>
+<p>Each page lists one area of the language, with an example for each construct.</p>
+<div class="cards">
+  <a href="/docs/reference/items">Items<span>Functions, structs, enums, traits, modules and <code>use</code>.</span></a>
+  <a href="/docs/reference/types">Types<span>Numbers, strings, collections, smart pointers and casts.</span></a>
+  <a href="/docs/reference/generics">Generics<span>Bounds, trait objects and operator traits.</span></a>
+  <a href="/docs/reference/patterns">Patterns<span><code>match</code>, <code>if let</code>, <code>let else</code> and loops.</span></a>
+  <a href="/docs/reference/moves">Moves<span>Moves, partial moves and clones.</span></a>
+  <a href="/docs/reference/closures">Closures<span>Captures, <code>Fn</code> traits and async code.</span></a>
+  <a href="/docs/reference/macros">Macros<span>The built-in macros and format strings.</span></a>
+  <a href="/docs/reference/std">std<span>The parts of the standard library that work.</span></a>
+</div>
+
+<h2 id="not-supported">Not supported yet</h2>
+<p>These are valid Rust that rawr rejects today. Each one fails the check with an error that names the construct. rawr reports one error per check.</p>
+<h3 id="missing-syntax">Syntax and items</h3>
+<ul>
+  <li>A glob import of an enum&rsquo;s variants, as in <code>use Shape::*;</code>.</li>
+  <li><code>const fn</code>.</li>
+  <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
+  <li><code>macro_rules!</code>.</li>
+  <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
+  <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code>.</li>
+  <li>A <code>const</code> captured in a format string, as in <code>"{LIMIT}"</code>. Pass it as an argument instead.</li>
+</ul>
+<h3 id="missing-types">Types and borrowing</h3>
+<ul>
+  <li><code>i128</code> and <code>u128</code>.</li>
+  <li>Returning <code>&amp;mut</code> from a function or method.</li>
+  <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
+  <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
+  <li>Dereferencing twice (<code>**x</code>) inside a closure such as the one passed to <code>min_by_key</code>.</li>
+  <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
+  <li><code>impl Drop</code>.</li>
+</ul>
+<h3 id="missing-std">Standard library</h3>
+<ul>
+  <li><code>Cell</code>, <code>Weak</code> and <code>Mutex</code>.</li>
+  <li><code>std::fs</code>, and <code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>.</li>
+  <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
+  <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
+  <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
+  <li><code>Formatter::pad</code>.</li>
+  <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
+  <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
+  <li><code>Vec::binary_search</code>.</li>
+  <li><code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code>.</li>
+</ul>
+
+<h2 id="differences">Differences from <code>cargo run</code></h2>
+<p>A program that passes both <code>rawr check</code> and rustc prints the same output, except in these known cases. Each one is a defect to fix.</p>
+<ul>
+  <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
+  <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
+  <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
+  <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+  <li><strong>A large <code>u64</code> in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
+</ul>
+<h3 id="refused">Code that rawr refuses rather than run differently</h3>
+<ul>
+  <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
+</ul>
+<h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
+<p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
+<ul>
+  <li>There is no borrow checker beyond the two rules above. A shared borrow held across a mutation is accepted. So is returning a reference to a local.</li>
+  <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
+  <li>Lifetimes are not checked. <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted.</li>
+  <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
+  <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
+  <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
+  <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
+  <li>Top-level statements are accepted.</li>
+  <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
+  <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>
+  <li>Returning a field of <code>&amp;self</code> by value, as in <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/how-it-works">Previous<b>How it works</b></a><a class="next" href="/docs/reference/items">Next<b>Items</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
+</body>
+</html>

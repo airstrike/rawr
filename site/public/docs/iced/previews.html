@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Previews and tooling | rawr docs</title>
+<title>Previews | rawr docs</title>
 <meta name="description" content="Render iced views on their own with #[preview], compare them with rawr snapshot, and connect a coding agent to previews and the running app with rawr mcp.">
-<meta property="og:title" content="Previews and tooling | rawr docs">
+<meta property="og:title" content="Previews | rawr docs">
 <meta property="og:description" content="Render iced views on their own with #[preview], compare them with rawr snapshot, and connect a coding agent to previews and the running app with rawr mcp.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced/previews">
@@ -33,44 +33,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
-  </ol>
-  <p class="grp" data-here>rawr-iced</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews" aria-current="page">Previews and tooling</a><ol><li><a href="#previews">Previews and snapshots</a></li><li><a href="#commands">Commands from rawr-iced</a></li><li><a href="#files">Files</a></li></ol></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews" aria-current="page">Previews</a><ol class="secs"><li><a href="#previews">Previews and snapshots</a></li><li><a href="#commands">Commands from rawr-iced</a></li><li><a href="#files">Files</a></li></ol></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">Playground and Discord</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>rawr-iced</p>
-<h1>Previews and tooling</h1>
+<h1>Previews</h1>
 <p class="lede">Render views on their own, check them against stored images and connect a coding agent to the running app.</p>
 <h2 id="previews">Previews and snapshots</h2>
 <p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
@@ -126,7 +111,7 @@
   <li><code>target/rawr/snapshots/</code> holds the images from the last <code>rawr snapshot --check</code>.</li>
   <li><code>rawr init --claude</code> writes <code>.mcp.json</code>, and <code>rawr init --codex</code> writes <code>.codex/config.toml</code>.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/reload">Previous<b>Reload an iced app</b></a><a class="next" href="/docs/iced/reference">Next<b>Supported iced APIs</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/reload">Previous<b>Reload</b></a><a class="next" href="/docs/play">Next<b>Play</b></a></nav>
 </article>
 </main>
 </div>

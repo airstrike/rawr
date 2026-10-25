@@ -3,19 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Supported iced APIs | rawr docs</title>
+<title>iced | rawr API Reference</title>
 <meta name="description" content="The parts of iced that rawr-iced supports: views and elements, components, canvas, widgets of your own, subscriptions, Rust crates, tasks and async code, diagnostics, and what isn&#x27;t available yet.">
-<meta property="og:title" content="Supported iced APIs | rawr docs">
+<meta property="og:title" content="iced | rawr API Reference">
 <meta property="og:description" content="The parts of iced that rawr-iced supports: views and elements, components, canvas, widgets of your own, subscriptions, Rust crates, tasks and async code, diagnostics, and what isn&#x27;t available yet.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced/reference">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/iced">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/iced/reference">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/iced">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,44 +34,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
+  <p class="grp">Guides</p>
   <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp" data-here>rawr-iced</p>
+  <p class="grp" data-here>API Reference</p>
   <ol data-here>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference" aria-current="page">Supported iced APIs</a><ol><li><a href="#views">Views and elements</a></li><li><a href="#rust-crates">Rust crates in an iced app</a></li><li><a href="#async">Async code</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced" aria-current="page">iced</a><ol class="secs"><li><a href="#views">Views and elements</a></li><li><a href="#rust-crates">Rust crates in an iced app</a></li><li><a href="#async">Async code</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>rawr-iced</p>
-<h1>Supported iced APIs</h1>
+<h1>iced</h1>
 <p class="lede">The parts of iced that work in marked files today, and what isn&rsquo;t available yet.</p>
 <h2 id="views">Views and elements</h2>
 <p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
@@ -360,7 +345,7 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
 <p><code>iced::task::sipper</code> takes an async closure. The closure sends its progress with <code>progress.send(value).await</code>. <code>Task::sip</code> maps each value it sends, and then its output.</p>
 <p>An async body runs on the UI thread, one step at a time. It stops at each <code>.await</code> and goes on from there once the future ends. Its locals keep their values in between, and no work it did runs again. <code>.await</code> works in a loop, a branch, a <code>match</code> arm and a call&rsquo;s arguments. <code>?</code> returns from the async body, as in Rust.</p>
 <p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
-<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play/reference#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
+<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/reference/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
 <p>A Rust async method that borrows its receiver does not cross.</p>
 <h3 id="blocking">Blocking work</h3>
 <p><code>tokio::task::spawn_blocking</code> runs a closure from a marked file off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
@@ -428,7 +413,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
 <p>iced master has 56 examples. 34 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>ferris</code>, <code>geometry</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>sandpiles</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others use <code>async</code> code and now stop at other gaps. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/previews">Previous<b>Previews and tooling</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/std">Previous<b>std</b></a><a class="next" href="/docs/reference/play">Next<b>Play</b></a></nav>
 </article>
 </main>
 </div>

@@ -266,10 +266,12 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
   assert.deepEqual(at("docs/index.html"), []);
   assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
-  assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
-  assert.deepEqual(at("docs/iced/reference.html"), ["sun.rs", "widget.rs"]);
+  assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
+  assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs"]);
+  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs"]);
+  assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
   assert.deepEqual(at("docs/play/index.html"), [""]);
-  assert.deepEqual(at("docs/play/reference.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
+  assert.deepEqual(at("docs/reference/play.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
   // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 1);
@@ -315,9 +317,25 @@ test("docs pages that moved redirect to their new paths", async () => {
   const block = source.match(/export const DOCS_MOVED[^{]*\{([^}]*)\}/);
   assert.ok(block);
   const moved = Object.fromEntries([...block[1].matchAll(/"([^"]+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual(Object.keys(moved).sort(), ["/docs/faq", "/docs/faq.html", "/docs/iced.html", "/docs/play.html"]);
+  assert.deepEqual(Object.keys(moved).sort(), [
+    "/docs/cli",
+    "/docs/cli.html",
+    "/docs/faq",
+    "/docs/faq.html",
+    "/docs/iced.html",
+    "/docs/iced/reference",
+    "/docs/iced/reference.html",
+    "/docs/language",
+    "/docs/language.html",
+    "/docs/play.html",
+    "/docs/play/reference",
+    "/docs/play/reference.html",
+    "/docs/reference",
+    "/docs/requirements",
+    "/docs/requirements.html",
+  ]);
   for (const [from, to] of Object.entries(moved)) {
-    assert.ok(!existsSync(root + from.slice(1)) && !existsSync(root + from.slice(1) + ".html"), `${from} is still a page`);
+    assert.ok(!existsSync(root + from.slice(1) + (from.endsWith(".html") ? "" : ".html")), `${from} is still a page`);
     assert.ok(existsSync(root + to.slice(1) + ".html") || existsSync(root + to.slice(1) + "/index.html"), `${to} is not a page`);
   }
 });

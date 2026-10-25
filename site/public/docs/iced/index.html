@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rawr-iced | rawr docs</title>
+<title>iced | rawr docs</title>
 <meta name="description" content="rawr-iced is an extension for iced apps. Install it, start an app from the iced template, and learn the app shapes it runs: iced::run and the application builder.">
-<meta property="og:title" content="rawr-iced | rawr docs">
+<meta property="og:title" content="iced | rawr docs">
 <meta property="og:description" content="rawr-iced is an extension for iced apps. Install it, start an app from the iced template, and learn the app shapes it runs: iced::run and the application builder.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
@@ -33,44 +33,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
-  </ol>
-  <p class="grp" data-here>rawr-iced</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/iced" aria-current="page">Overview and setup</a><ol><li><a href="#when">When rawr-iced is used</a></li><li><a href="#install">Install</a></li><li><a href="#new">The <code>iced</code> template</a></li><li><a href="#shapes">App shapes</a></li></ol></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced" aria-current="page">iced</a><ol class="secs"><li><a href="#when">When rawr-iced is used</a></li><li><a href="#install">Install</a></li><li><a href="#new">The <code>iced</code> template</a></li><li><a href="#shapes">App shapes</a></li></ol><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">Playground and Discord</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>rawr-iced</p>
-<h1>rawr-iced</h1>
+<h1>iced</h1>
 <p class="lede">rawr-iced is an extension for <a href="https://github.com/iced-rs/iced">iced</a> apps. iced draws the window, and rawr interprets the marked files. Saving a marked file reloads the running app.</p>
 <h2 id="when">When rawr-iced is used</h2>
 <p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. A program that imports Rust crates from its <code>Cargo.toml</code> but doesn&rsquo;t use iced goes to <a href="/docs/imports">rawr-import</a>. rawr-iced imports an iced app&rsquo;s other crates the same way and adds iced to its runner. Every other program runs in <code>rawr</code> itself. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
@@ -260,7 +245,7 @@ impl Todos {
   <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
 </figure>
 <p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-macros</code> dependency provides it, as <a href="/docs/iced/previews#previews">Previews and snapshots</a> describes.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/iced/reload">Next<b>Reload an iced app</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/iced/reload">Next<b>Reload</b></a></nav>
 </article>
 </main>
 </div>

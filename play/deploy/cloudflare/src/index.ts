@@ -108,15 +108,28 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
 /**
- * Docs pages that moved when the docs were split by task. The FAQ's answers
- * went to /docs/how-it-works and elsewhere (docs.js follows a moved anchor),
- * and rawr-iced's and ?play's pages became directories.
+ * Docs pages that moved. The FAQ's answers went to /docs/how-it-works and
+ * elsewhere. rawr-iced's and ?play's pages became directories. The reference
+ * pages went under /docs/reference, and /docs/language became its overview
+ * and one page per topic. A redirect keeps the URL's #anchor, and docs.js
+ * sends an anchor that moved on to its new page.
  */
 export const DOCS_MOVED: Record<string, string> = {
   "/docs/faq": "/docs/how-it-works",
   "/docs/faq.html": "/docs/how-it-works",
   "/docs/iced.html": "/docs/iced",
   "/docs/play.html": "/docs/play",
+  "/docs/language": "/docs/reference/overview",
+  "/docs/language.html": "/docs/reference/overview",
+  "/docs/cli": "/docs/reference/commands",
+  "/docs/cli.html": "/docs/reference/commands",
+  "/docs/requirements": "/docs/reference/requirements",
+  "/docs/requirements.html": "/docs/reference/requirements",
+  "/docs/iced/reference": "/docs/reference/iced",
+  "/docs/iced/reference.html": "/docs/reference/iced",
+  "/docs/play/reference": "/docs/reference/play",
+  "/docs/play/reference.html": "/docs/reference/play",
+  "/docs/reference": "/docs/reference/overview",
 };
 
 /**

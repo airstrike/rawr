@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Get started | rawr docs</title>
+<title>Start | rawr docs</title>
 <meta name="description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
-<meta property="og:title" content="Get started | rawr docs">
+<meta property="og:title" content="Start | rawr docs">
 <meta property="og:description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
@@ -34,44 +34,29 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start" aria-current="page">Get started</a><ol><li><a href="#install">Install</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#errors">Errors</a></li><li><a href="#check">Check without running</a></li><li><a href="#first-program">A single file</a></li><li><a href="#native">Native modules and dependencies</a></li><li><a href="#release">Build for release</a></li><li><a href="#next">Next steps</a></li></ol></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start" aria-current="page">Start</a><ol class="secs"><li><a href="#install">Install</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#errors">Errors</a></li><li><a href="#check">Check without running</a></li><li><a href="#first-program">A single file</a></li><li><a href="#native">Native modules and dependencies</a></li><li><a href="#release">Build for release</a></li><li><a href="#next">Next steps</a></li></ol></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>get started</p>
-<h1>Get started</h1>
+<h1>Start</h1>
 <p class="lede">Install the <code>rawr</code> command and start a crate. Run it, make an error, then build it for release with Cargo.</p>
 <h2 id="install">Install</h2>
 <p>Install the <code>rawr</code> command. It needs Rust 1.95 or newer.</p>
@@ -128,7 +113,7 @@ fn main() {
 
 <h2 id="check">Check without running</h2>
 <p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. It prints <code>Checked</code> and the path, then <code>cargo check passed</code>. It exits with status 1 if either check fails.</p>
-<p>rawr&rsquo;s check is not rustc. It accepts some code that rustc rejects, so rustc has the final word. <a href="/docs/language#lenient">Supported Rust</a> lists those cases.</p>
+<p>rawr&rsquo;s check is not rustc. It accepts some code that rustc rejects, so rustc has the final word. <a href="/docs/reference/overview#lenient">Supported Rust</a> lists those cases.</p>
 
 <h2 id="first-program">A single file</h2>
 <p><code>rawr run</code> also takes one <code>.rs</code> file. A single file doesn&rsquo;t need the marker.</p>
@@ -186,7 +171,7 @@ fn main() {
   <li><a href="/docs/embedding">Embedding</a> runs Rust scripts inside your own app.</li>
   <li><a href="/play">The playground</a> runs snippets in a browser.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Overview</b></a><a class="next" href="/docs/run">Next<b>Run Rust with rawr</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Docs</b></a><a class="next" href="/docs/run">Next<b>Run</b></a></nav>
 </article>
 </main>
 </div>

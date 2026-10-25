@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rawr docs</title>
-<meta name="description" content="Documentation for rawr, a Rust interpreter for your dev builds. Run the files you mark // rawr while you develop, embed rawr in an app to run Rust scripts, and develop iced apps with rawr-iced.">
+<meta name="description" content="Documentation for rawr, a Rust interpreter for your dev builds: guides to running, importing, embedding and iced, and a reference for the Rust it supports.">
 <meta property="og:title" content="rawr docs">
-<meta property="og:description" content="Documentation for rawr, a Rust interpreter for your dev builds. Run the files you mark // rawr while you develop, embed rawr in an app to run Rust scripts, and develop iced apps with rawr-iced.">
+<meta property="og:description" content="Documentation for rawr, a Rust interpreter for your dev builds: guides to running, importing, embedding and iced, and a reference for the Rust it supports.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -33,91 +33,50 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
-  <ol data-here>
-    <li><a href="/docs" aria-current="page">Overview</a><ol><li><a href="#what">What rawr is</a></li><li><a href="#parts">Two ways to use rawr</a></li><li><a href="#pages">Pages</a></li></ol></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
+  <p class="grp">Guides</p>
   <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>docs</p>
-<h1>rawr documentation</h1>
-<p class="lede">rawr is a Rust interpreter for your dev builds. These pages are grouped by what you want to do.</p>
-<h2 id="what">What rawr is</h2>
-<p>rawr interprets Rust. You mark a file in your Cargo crate with <code>// rawr</code> on its first line, and <code>rawr run</code> interprets it while you develop. Cargo compiles the same crate for release.</p>
-<p>rawr checks names, types, traits and <code>match</code> arms before anything runs. Its errors use rustc&rsquo;s codes and point to your source. rawr supports part of Rust. <a href="/docs/language">Supported Rust</a> lists what works and what doesn&rsquo;t.</p>
-
-<h2 id="parts">Two ways to use rawr</h2>
-<p>The dev loop comes first. Embedding is a separate use, where your app runs Rust scripts with the <code>rawr</code> crate.</p>
-<table class="wide">
-  <tr><th>Use</th><th>What runs</th><th>What ships in release</th></tr>
-  <tr><td>The dev loop</td><td><code>rawr run</code> interprets the files whose first line is <code>// rawr</code>. Cargo compiles native modules and dependencies.</td><td>Cargo compiles every file. No interpreter ships.</td></tr>
-  <tr><td>Embedding</td><td>Cargo builds your app. Your app runs scripts through the <code>rawr</code> crate.</td><td>The <code>rawr</code> crate ships, because your app runs scripts.</td></tr>
-</table>
-<p>Extensions add more. rawr-import runs programs with Cargo dependencies. rawr-iced runs iced apps and reloads them when you save.</p>
-
-<h2 id="pages">Pages</h2>
-<h3 id="develop">Develop with rawr</h3>
+<h1>Docs</h1>
+<p class="lede">rawr is a Rust interpreter for your dev builds. <code>rawr run</code> interprets the files you mark <code>// rawr</code>, and Cargo compiles the rest. A release build compiles every file.</p>
+<h2 id="guides">Guides</h2>
 <div class="cards">
-  <a href="/docs/start">Get started<span>Install <code>rawr</code>, start a crate, run it and build it for release.</span></a>
-  <a href="/docs/run">Run Rust with rawr<span>Which files are interpreted, what <code>rawr check</code> does and what ships.</span></a>
-  <a href="/docs/imports">Cargo dependencies<span>Use crates from <code>Cargo.toml</code> and native modules with rawr-import.</span></a>
-</div>
-<h3 id="embed">Embed rawr in an app</h3>
-<div class="cards">
-  <a href="/docs/embedding">Embedding<span>Export your types with <code>#[rawr::export]</code> and call Rust scripts.</span></a>
-</div>
-<h3 id="reference">Reference</h3>
-<div class="cards">
-  <a href="/docs/language">Supported Rust<span>What works, what is missing and what rawr refuses.</span></a>
-  <a href="/docs/cli">Commands<span>Every command of <code>rawr</code>, its arguments and exit statuses.</span></a>
-  <a href="/docs/requirements">Requirements and status<span>Toolchains, tested platforms and what is planned.</span></a>
+  <a href="/docs/start">Start<span>Install rawr and run a first crate.</span></a>
+  <a href="/docs/run">Run<span>Which files rawr interprets, and what ships.</span></a>
+  <a href="/docs/imports">Imports<span>Cargo dependencies and native modules.</span></a>
+  <a href="/docs/embedding">Embedding<span>Run Rust scripts inside your app.</span></a>
+  <a href="/docs/iced">iced<span>Run an iced app with its marked files interpreted.</span></a>
+  <a href="/docs/play">Play<span>Run Rust in a browser or in Discord.</span></a>
   <a href="/docs/troubleshooting">Troubleshooting<span>Common errors and what to do about them.</span></a>
-  <a href="/docs/how-it-works">How rawr works<span>The interpreter, its speed and where it came from.</span></a>
+  <a href="/docs/how-it-works">How it works<span>The interpreter, its speed and where it came from.</span></a>
 </div>
-<h3 id="iced-pages">rawr-iced</h3>
+<h2 id="reference">API Reference</h2>
 <div class="cards">
-  <a href="/docs/iced">Overview and setup<span>Install rawr-iced and start an iced app.</span></a>
-  <a href="/docs/iced/reload">Reload an iced app<span>What a save keeps, what it resets and what rebuilds.</span></a>
-  <a href="/docs/iced/previews">Previews and tooling<span><code>#[preview]</code>, snapshots and coding agents.</span></a>
-  <a href="/docs/iced/reference">Supported iced APIs<span>Widgets, canvas, tasks and what isn&rsquo;t available yet.</span></a>
+  <a href="/docs/reference/overview">Overview<span>The Rust that rawr supports, and its gaps.</span></a>
+  <a href="/docs/reference/iced">iced<span>The iced APIs a marked file can use.</span></a>
+  <a href="/docs/reference/play">Play<span>The playground&rsquo;s sandbox, limits and replies.</span></a>
+  <a href="/docs/reference/commands">Commands<span>Every command, its arguments and exit statuses.</span></a>
+  <a href="/docs/reference/requirements">Requirements<span>Toolchains, platforms and status.</span></a>
 </div>
-<h3 id="play-pages">Playground and Discord</h3>
-<div class="cards">
-  <a href="/docs/play">Use the playground<span>Run Rust in a browser and share it.</span></a>
-  <a href="/docs/play/discord">Use rawr in Discord<span>The <code class="nw">?play</code> bot and its setup.</span></a>
-  <a href="/docs/play/reference">Hosted execution reference<span>The sandbox, the clock, limits and every reply.</span></a>
-</div>
-<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/start">Next<b>Get started</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/start">Next<b>Start</b></a></nav>
 </article>
 </main>
 </div>
