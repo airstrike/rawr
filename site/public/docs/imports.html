@@ -89,13 +89,13 @@ target = "host-tuple"</code></pre>
 mathx = { path = "mathx" }</code></pre>
 </div>
 <div class="block">
-  <div class="file"><b>mathx/src/lib.rs</b></div>
+  <div class="file"><b>mathx/src/lib.rs</b><span>a native crate</span></div>
   <pre><code data-lang="rust">pub fn double(x: i64) -&gt; i64 {
     x * 2
 }</code></pre>
 </div>
 <div class="block">
-  <div class="file"><b>src/main.rs</b></div>
+  <div class="file"><b>src/main.rs</b><span>needs the mathx crate</span></div>
   <pre><code data-lang="rust">// rawr
 use mathx::double;
 

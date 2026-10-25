@@ -66,7 +66,7 @@
 <h2 id="example">An example</h2>
 <p>This is <code>examples/rules</code> in the repository, an app with its own Cargo workspace. It totals a bank statement by category. Its users decide the categories in <code>rules.rs</code>.</p>
 <div class="block">
-  <div class="file"><b>examples/rules/src/main.rs</b></div>
+  <div class="file"><b>examples/rules/src/main.rs</b><span>your app</span></div>
   <pre><code data-lang="rust">//! A bank-statement tool whose users write their own rules in Rust. It
 //! exports `Transaction`, reads a CSV, loads the user's `rules.rs` and
 //! prints the total for each category. `scripts/embed-check.sh` runs it.
@@ -172,7 +172,7 @@ fn read(path: &amp;str) -&gt; Vec&lt;Transaction&gt; {
 </div>
 <p>The rules import <code>Transaction</code> from the root the app named, as Rust code imports from a crate. They read its fields and call its methods as Rust would.</p>
 <div class="block">
-  <div class="file"><b>examples/rules/rules.rs</b></div>
+  <div class="file"><b>examples/rules/rules.rs</b><span>your user&rsquo;s rules</span></div>
   <pre><code data-lang="rust">use bank::Transaction;
 
 fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
@@ -199,7 +199,7 @@ other        -56.49</span></div>
 </ul>
 <p>Since the handle fixes the types, literals need no suffixes. A <code>&amp;str</code> parameter takes a <code>String</code>.</p>
 <div class="block">
-  <div class="file"><b>src/main.rs</b></div>
+  <div class="file"><b>src/main.rs</b><span>your app</span></div>
   <pre><code data-lang="rust">use rawr::Engine;
 
 const SCRIPT: &amp;str = "
@@ -260,7 +260,7 @@ streaming    -15.49</span></div>
 <h2 id="statements">Statements and expressions</h2>
 <p>A script can be items, as above, or plain statements. Statements run as if they were the body of <code>fn main() { .. }</code>, the way rustdoc runs a doctest. The value of the last expression is what <code>Engine::eval</code> returns. Functions in the script can&rsquo;t read its <code>let</code> variables, as in Rust.</p>
 <div class="block">
-  <div class="file"><b>src/main.rs</b></div>
+  <div class="file"><b>src/main.rs</b><span>your app</span></div>
   <pre><code data-lang="rust">use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
@@ -283,7 +283,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 <h2 id="output">Capturing output</h2>
 <p>By default <code>println!</code> and <code>print!</code> write to the process&rsquo;s stdout. <code>eprintln!</code> and <code>eprint!</code> write to stderr. <code>Engine::on_output</code> sends that text to a callback instead. The callback gets the stream and the exact text. <code>println!</code> text includes its newline.</p>
 <div class="block">
-  <div class="file"><b>src/main.rs</b></div>
+  <div class="file"><b>src/main.rs</b><span>your app</span></div>
   <pre><code data-lang="rust">use rawr::{Engine, Output};
 use std::sync::{Arc, Mutex};
 
