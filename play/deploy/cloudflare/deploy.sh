@@ -67,7 +67,7 @@ node --input-type=module -e '
   // (index.html is its directory'"'"'s path, other pages drop .html).
   const root = process.argv[2];
   const pages = readdirSync(root, { recursive: true })
-    .filter((file) => file.endsWith(".html") && readFileSync(join(root, file), "utf8").includes("data-run"))
+    .filter((file) => file.endsWith(".html") && /<code[^>]*data-run/.test(readFileSync(join(root, file), "utf8")))
     .map((file) => "/" + relative(root, join(root, file)).replace(/index\.html$/, "").replace(/\.html$/, ""))
     .map((path) => (path.length > 1 ? path.replace(/\/$/, "") : path));
   const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");

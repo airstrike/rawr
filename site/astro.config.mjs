@@ -10,7 +10,7 @@ export default defineConfig({
   site: "https://rawr.airstrike.fyi",
   // A page is a file as the Worker's assets serve it today: docs/run.html for
   // /docs/run, and docs/iced/index.html for /docs/iced.
-  build: { format: "preserve" },
+  build: { format: "preserve", inlineStylesheets: "never" },
   trailingSlash: "never",
   compressHTML: false,
   devToolbar: { enabled: false },
