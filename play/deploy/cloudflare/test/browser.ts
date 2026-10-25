@@ -3,7 +3,8 @@
 //   web/build.sh && node test/browser.ts [WEB_DIR] [SHOTS_DIR]
 // It serves the page (playpage.ts) with rawr-web from WEB_DIR (default
 // target/wasm/site), runs the Counter in the browser (the default), clicks
-// Increment three times, makes an edit that keeps the count, runs a plain
+// Increment three times, makes an edit that keeps the count, runs the
+// Stopwatch and edits it while it runs, runs a plain
 // program, an iced app whose task sleeps, and the "Async tasks" example from
 // its #async-tasks address on the page's real clock. Then it opens the docs'
 // Play page from site/public and checks that run.js posts the app snippet
@@ -25,11 +26,12 @@ const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/M
 const counter = readFileSync(join(repo, "play/tests/fixtures/counter.rs"), "utf8");
 const tasks = readFileSync(join(repo, "play/tests/fixtures/rust/tasks.rs"), "utf8");
 const channel = readFileSync(join(repo, "play/tests/fixtures/channel.rs"), "utf8");
+const stopwatch = readFileSync(join(repo, "play/tests/fixtures/stopwatch.rs"), "utf8");
 mkdirSync(shots, { recursive: true });
 
 const og = { title: "rawr playground", description: "", url: "http://localhost/play", image: "", alt: "" };
 const brotli: string[] = [];
-const page = render({ snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples: [{ name: "Async tasks", code: tasks, group: "Rust" }], sitekey: null, shared: null, og });
+const page = render({ snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples: [{ name: "Async tasks", code: tasks, group: "Rust" }, { name: "Stopwatch", code: stopwatch, messages: ["Message::Toggle"], group: "iced" }], sitekey: null, shared: null, og });
 // The site's own pages, for run.js: what each Run button posts to /play/run.
 const site = join(repo, "site/public");
 const siteRuns: unknown[] = [];
@@ -131,6 +133,35 @@ const out = async () => {
   const { data } = await on("Page.captureScreenshot", { format: "png", clip: { ...(await evaluate(`(() => { const r = document.getElementById("out").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`)), scale: 1 } });
   return data as string;
 };
+// A clip of the page at the canvas's (x, y), w by h.
+const clip = async (x: number, y: number, width: number, height: number) => {
+  const { data } = await on("Page.captureScreenshot", { format: "png", clip: { x, y, width, height, scale: 1 } });
+  return data as string;
+};
+// The widest run of magenta in one row of #out: the Stopwatch edit's bar, 50 px a second.
+const bar = async () => evaluate(`(async () => {
+  const image = new Image(); image.src = "data:image/png;base64,${await out()}"; await image.decode();
+  const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+  const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let widest = 0;
+  for (let y = 0; y < canvas.height; y++) {
+    let run = 0;
+    for (let x = 0; x < canvas.width; x++) { const i = (y * canvas.width + x) * 4; if (data[i] > 200 && data[i + 1] < 60 && data[i + 2] > 200) run++; }
+    widest = Math.max(widest, run);
+  }
+  return widest; })()`);
+const swaps = () => logs.filter((line) => line.startsWith("rawr-web: swapped")).length;
+const swapped = async (count: number) => {
+  const start = Date.now();
+  while (swaps() <= count) {
+    if (Date.now() - start > 10000) throw new Error(`timed out waiting for a swap\n${logs.join("\n")}`);
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  return logs.filter((line) => line.startsWith("rawr-web: swapped")).at(-1)!;
+};
+const edit = (from: string, to: string) => evaluate(`(() => { const code = document.getElementById("code");
+  code.value = code.value.replace(${JSON.stringify(from)}, ${JSON.stringify(to)}); code.dispatchEvent(new Event("input")); })()`);
 const click = async (x: number, y: number) => {
   for (const type of ["mousePressed", "mouseReleased"]) {
     await on("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
@@ -163,6 +194,9 @@ try {
   const before = await out();
   await shot("counter.png");
   const box = await evaluate(`(() => { const r = document.querySelector("#out .live canvas").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`);
+  // The Counter's value, under Increment.
+  const value = () => clip(box.x + 10, box.y + 57, 120, 54);
+  const zero = await value();
   // The Counter's column: 20 px of padding, then Increment centred above the wider Decrement.
   for (let i = 0; i < 3; i++) {
     await click(box.x + 69, box.y + 36);
@@ -172,6 +206,7 @@ try {
   const clicked = await out();
   await shot("counter-clicked.png");
   check(clicked !== before, "three clicks on Increment change the canvas");
+  const three = await value();
   const clicks: number[][] = await evaluate("window.clicks");
   console.log(`click handlers: ${clicks.map(([h]) => h.toFixed(1)).join(", ")} ms; to the next frame: ${clicks.map(([, f]) => f.toFixed(1)).join(", ")} ms`);
 
@@ -182,9 +217,50 @@ try {
   await new Promise((done) => setTimeout(done, 1500));
   await shot("counter-edited.png");
   check(logs.some((line) => line.includes("state carried")), "an edit swaps in a new generation and keeps the count");
+  const edited = await value();
+  check(edited === three && three !== zero, "the edited Counter still shows 3");
   await click(box.x + 69, box.y + 36);
   await new Promise((done) => setTimeout(done, 400));
   await shot("counter-edited-clicked.png");
+
+  // The Stopwatch, started by its Toggle message. An edit while it runs keeps
+  // it running from its elapsed time: a bar 50 px a second shows the time.
+  let count = swaps();
+  await evaluate(`(() => { const examples = document.getElementById("examples"); examples.value = "1"; examples.dispatchEvent(new Event("change")); })()`);
+  check(!(await swapped(count)).includes("started fresh"), "another example boots without a note");
+  await new Promise((done) => setTimeout(done, 1500));
+  count = swaps();
+  await edit("let content = column![duration, controls]", `let bar = container(text("")).width(self.duration.as_secs_f32() * 50.0).height(12)
+            .style(|_| container::Style::default().background(Color::from_rgb(1.0, 0.0, 1.0)));
+        let content = column![duration, controls, bar]`);
+  await edit("use iced::widget::{button, center, column, row, text};", "use iced::widget::{button, center, column, container, row, text};");
+  await edit("use iced::{Center, Subscription, Widget};", "use iced::{Center, Color, Subscription, Widget};");
+  check((await swapped(count)).includes("state carried"), "an edit to the running Stopwatch carries its State");
+  await new Promise((done) => setTimeout(done, 200));
+  const first = await bar();
+  await new Promise((done) => setTimeout(done, 1000));
+  const second = await bar();
+  await shot("stopwatch-edited.png");
+  console.log(`stopwatch bar: ${first} px after the edit, ${second} px a second on`);
+  check(first >= 90, "the edited Stopwatch shows the time it had run, not 0");
+  check(second >= first + 35, "and it keeps running");
+  count = swaps();
+  await edit('button("Reset")', 'button("Clear")');
+  check((await swapped(count)).includes("state carried"), "a relabel carries it too");
+  await new Promise((done) => setTimeout(done, 200));
+  const third = await bar();
+  check(third >= second + 5, "and it runs on from where it was");
+  // A field more: the State boots fresh, with its message, and a note says why.
+  count = swaps();
+  await edit("    state: State,\n}", "    state: State,\n    laps: u32,\n}");
+  check((await swapped(count)).includes("State changed shape; started fresh"), "a reshaped State boots fresh with a note");
+  await new Promise((done) => setTimeout(done, 300));
+  await shot("stopwatch-reshaped.png");
+  const fresh = await bar();
+  console.log(`reshaped stopwatch bar: ${fresh} px`);
+  check(fresh < third && fresh > 0, "and runs again from its Toggle message");
+  // The snippets that follow are not full apps: they take no messages.
+  await evaluate(`document.getElementById("messages").value = ""`);
 
   // A broken edit keeps the app and shows the report under it.
   await evaluate(`(() => { const code = document.getElementById("code"); code.value = code.value.replace("fn update", "fn update("); code.dispatchEvent(new Event("input")); })()`);
