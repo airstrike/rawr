@@ -1,10 +1,13 @@
-//! std's `path`, `ffi` and `io` types for every program (D528.4). Every
+//! std's `path`, `ffi` and `io` types for every program (D528.4), with
+//! `env::args`, `io::stdin` and `fs::read_to_string`. Every
 //! [`Engine`](crate::Engine) made by `Engine::new` declares them, and every
 //! runtime registry binds them, so a plain program, an embedding and an
 //! iced app all name `std::path::PathBuf` (`resolve::std_reexport` sends
-//! `std::path`, `std::ffi` and `std::io` here). Nothing here reads or
-//! writes a file.
+//! `std::path`, `std::ffi`, `std::io`, `std::env` and `std::fs` here). Only
+//! `fs::read_to_string` reads a file.
 
+mod env;
+mod fs;
 pub(crate) mod io;
 mod path;
 
@@ -27,6 +30,8 @@ fn build() -> Result<facade::Definition, host::Error> {
     let mut builder = facade::Builder::new(ROOT, facade::Abi::new(1)?)?;
     path::declare(&mut builder)?;
     io::declare(&mut builder)?;
+    env::declare(&mut builder)?;
+    fs::declare(&mut builder)?;
     builder.finish()
 }
 
@@ -35,5 +40,7 @@ pub(crate) fn runtime() -> host::runtime::Facade {
     let mut builder = host::runtime::Builder::new(definition());
     path::bind(&mut builder);
     io::bind(&mut builder);
+    env::bind(&mut builder);
+    fs::bind(&mut builder);
     builder.finish()
 }

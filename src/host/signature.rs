@@ -450,7 +450,7 @@ fn same_input_type(
         (Shape::Tuple(left), Shape::Tuple(right)) => {
             same_types(left, right, left_parameters, right_parameters, mappings)?
         }
-        (Shape::Option(left), Shape::Option(right)) => {
+        (Shape::Option(left), Shape::Option(right)) | (Shape::Iter(left), Shape::Iter(right)) => {
             same_input_type(left, right, left_parameters, right_parameters, mappings)?
         }
         (Shape::Result(left_ok, left_err), Shape::Result(right_ok, right_err)) => {

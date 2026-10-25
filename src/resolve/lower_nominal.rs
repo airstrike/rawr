@@ -13539,6 +13539,10 @@ impl<'a> Parser<'a> {
             Ty::Array { element, length } => {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, length)
             }
+            // An iterator a host gives is the array of its items.
+            Ty::Iter(element) => {
+                intrinsic::Type::array(self.proven_type(&element, operation, span)?, None)
+            }
             // `None` where the host takes an `Option` of a callable: no item
             // is ever held, so no `Some` passes the proof.
             Ty::Option(element)
@@ -13731,7 +13735,6 @@ impl<'a> Parser<'a> {
             | Ty::Param(_)
             | Ty::Projection(..)
             | Ty::Boxed(..)
-            | Ty::Iter(_)
             | Ty::Dyn(..)
             | Ty::Infer(_)
             | Ty::Unknown => {
@@ -14719,6 +14722,13 @@ impl<'a> Parser<'a> {
                 }))
             }
             Shape::Option(element) => Ty::Option(Box::new(self.instantiate_host_type(
+                element,
+                parameters,
+                operation,
+                owner,
+                originating,
+            )?)),
+            Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
                 operation,
@@ -16739,7 +16749,14 @@ impl<'a> Parser<'a> {
             (Vec::new(), member_span.end())
         } else {
             self.hint_closures(&items, Some(&receiver.ty));
-            self.parse_call_arguments("host method arguments")?
+            // A std reader appends to its `&mut String` argument.
+            if items.first().is_some_and(|item| {
+                crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
+            }) {
+                self.parse_borrowing_arguments("host method arguments")?
+            } else {
+                self.parse_call_arguments("host method arguments")?
+            }
         };
         let call = span(receiver.span.start(), end);
         let choice = arguments.iter().position(|argument| {
@@ -17140,6 +17157,21 @@ impl<'a> Parser<'a> {
         call: Span,
     ) -> Result<ParsedExpr, Error> {
         if let Some(item) = items.first()
+            && arguments.len() == 1
+            && crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
+        {
+            return self.appending_host_method(
+                receiver,
+                definition,
+                items,
+                owner,
+                scoped,
+                member_span,
+                arguments,
+                call,
+            );
+        }
+        if let Some(item) = items.first()
             && let Some(value) =
                 self.immediate_callback(&item.path(), Some(&receiver), &mut arguments, call)?
         {
@@ -17251,6 +17283,69 @@ impl<'a> Parser<'a> {
             lvalue: None,
             outcome,
             evaluation,
+        }
+        .retain_origin())
+    }
+
+    /// `stdin.read_line(&mut buf)`, a std reader that appends to a
+    /// `&mut String` (`std_facade::io::APPENDING`): the facade's method
+    /// takes no argument and gives `(result, text)`, and the text is
+    /// appended to the place the argument borrows.
+    #[allow(clippy::too_many_arguments)]
+    fn appending_host_method(
+        &mut self,
+        receiver: ParsedExpr,
+        definition: &crate::host::type_def::Definition,
+        items: &[crate::host::item::Definition],
+        owner: Option<crate::host::facade::Dependency>,
+        scoped: bool,
+        member_span: Span,
+        arguments: Vec<ParsedExpr>,
+        call: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut buffer = self
+            .mutable_arguments(&arguments, [0])?
+            .pop()
+            .expect("one `&mut` argument was checked");
+        let Some(lvalue) = buffer.lvalue.clone() else {
+            unreachable!("a `&mut` place has an lvalue");
+        };
+        self.require_mutable_binding(lvalue.binding(), buffer.span)?;
+        let Ty::Reference { target, .. } = self.inference.resolve(&buffer.ty) else {
+            unreachable!("a `&mut` place is a reference");
+        };
+        buffer.ty = *target;
+        self.coerce_expr(&Ty::String, &mut buffer)?;
+        let pair = self.finish_host_method(
+            receiver,
+            definition,
+            items,
+            owner,
+            scoped,
+            member_span,
+            Vec::new(),
+            call,
+        )?;
+        let Ty::Tuple(members) = self.inference.resolve(&pair.ty) else {
+            unreachable!("an appending reader gives `(result, text)`");
+        };
+        let read = self.temporary("read");
+        let mut appended = buffer.rendered_source().surrounded("(", ")");
+        appended.push_text(format!(" + {read}[1]"));
+        let store = self.store_lvalue(&lvalue, appended)?;
+        let mut source = origin::Fragment::plain(format!("{{ let {read} = "));
+        source.push(pair.rendered_source());
+        source.push_text("; ");
+        source.push(store);
+        source.push_text(format!(" {read}[0] }}"));
+        Ok(ParsedExpr {
+            prelude: origin::Fragment::default(),
+            source,
+            ty: members[0].clone(),
+            span: call,
+            lvalue: None,
+            outcome: pair.outcome,
+            evaluation: pair.evaluation,
         }
         .retain_origin())
     }
@@ -42026,6 +42121,9 @@ const STR_METHODS: &[(&str, usize, char)] = &[
     ("rsplit_once", 1, 'p'),
     ("eq_ignore_ascii_case", 1, 'b'),
     ("is_char_boundary", 1, 'b'),
+    ("trim_matches", 1, 's'),
+    ("trim_start_matches", 1, 's'),
+    ("trim_end_matches", 1, 's'),
 ];
 
 /// `STR_METHODS`' `code` on `text`, with Rust's results; a pattern is a
@@ -42058,6 +42156,19 @@ fn str_method(
         "rfind" => option(text.rfind(&pattern(a)).map(|at| Dynamic::from(at as INT))),
         "strip_prefix" => option(text.strip_prefix(&pattern(a)).map(string)),
         "strip_suffix" => option(text.strip_suffix(&pattern(a)).map(string)),
+        // rustc takes only a `char` here; a string trims as both ends do.
+        "trim_matches" => match a.as_char() {
+            Ok(c) => string(text.trim_matches(c)),
+            Err(_) => {
+                let pattern = pattern(a);
+                string(
+                    text.trim_start_matches(pattern.as_str())
+                        .trim_end_matches(pattern.as_str()),
+                )
+            }
+        },
+        "trim_start_matches" => string(text.trim_start_matches(pattern(a).as_str())),
+        "trim_end_matches" => string(text.trim_end_matches(pattern(a).as_str())),
         "split_once" | "rsplit_once" => {
             let separator = pattern(a);
             let split = if name == "split_once" {

@@ -9452,6 +9452,40 @@ main();
     );
 }
 
+/// A CLI tool's std (D531): `env::args()` is an iterator of the process's
+/// arguments, `fs::read_to_string` gives an `io::Result`, a reader appends
+/// to the `&mut String` it borrows, and `str` trims by a pattern. rustc
+/// prints the same; stdin itself is read only under `rawr run`.
+#[test]
+fn language_std_env_fs_and_stdin_for_a_cli_tool() {
+    assert_eq!(
+        printed(
+            r#"
+use std::io::{BufRead, Read, Write};
+
+fn read(buffer: &mut String) -> usize {
+    std::io::stdin().lock().read_line(buffer).unwrap()
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    println!("{} {}", !args.is_empty(), std::env::args().skip(100_000).count());
+    let missing = std::fs::read_to_string("/no/such/file/rawr");
+    println!("{:?}", missing.map_err(|error| error.kind()));
+    println!("[{}] [{}] [{}]", "x\n\n".trim_end_matches('\n'), "--a--".trim_matches('-'), "abab c".trim_start_matches("ab"));
+    std::io::stdout().flush().unwrap();
+    if args.len() > 100_000 {
+        let mut line = String::new();
+        println!("{}", read(&mut line));
+    }
+}
+main();
+"#
+        ),
+        "true 0\nErr(NotFound)\n[x] [a] [ c]\n"
+    );
+}
+
 /// A file whose `mod` items are inline compiles as a crate root without a
 /// file or a project, as `?play` and rawr-web compile a snippet: nested
 /// modules, `super::`, `use` of a module's type, and `main` callable by
