@@ -40,6 +40,16 @@ impl Manifests {
         self.1.is_none() && self.2.is_some()
     }
 
+    /// The reason a marked `main` restarts when its next preparation is
+    /// `next`, as `rawr run` says it in one line.
+    pub fn restart_line(&self, next: &Self) -> String {
+        if self.0 == next.0 {
+            "the source changed".to_owned()
+        } else {
+            "`Cargo.toml` changed".to_owned()
+        }
+    }
+
     /// Whether the program's crate root is native and calls marked
     /// modules (D501).
     pub fn has_islands(&self) -> bool {

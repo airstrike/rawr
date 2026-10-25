@@ -1378,6 +1378,9 @@ struct Program {
     application_contract: __rawr_profile::ApplicationContract,
     _facades: Box<[__rawr_internal::host::facade::Definition]>,
     observation: __rawr_internal::package::import::runner::account::Observation,
+    /// Whether `main` is Rawr code, which runs on the thread that owns the
+    /// program while the protocol goes on beside it.
+    marked_main: bool,
 }
 
 fn program_account(program: &Option<Program>) -> Option<__rawr_internal::package::import::runner::account::Snapshot> {
@@ -1552,7 +1555,8 @@ fn compile_program(
     progress(4)?;
     progress(5)?;
     let observation = observation.take().ok_or_else(|| std::io::Error::other("native observation unavailable"))?;
-    Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract, _facades: facades, observation }))
+    let marked_main = snapshot.marked_root();
+    Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract, _facades: facades, observation, marked_main }))
 }
 
 fn compile_live(
@@ -2245,6 +2249,20 @@ fn run_protocol() -> std::io::Result<()> {
             }
             20 if admitted && payload.as_slice() == key => {
                 send_frame(&mut stream, 21, &key)?;
+                // A marked `main` runs here, on the thread that owns the
+                // program, for as long as it runs; the protocol goes on
+                // beside it, and a save restarts it (D500.1).
+                if let Some(running) = program.as_mut().filter(|program| program.marked_main) {
+                    let stream = stream.try_clone()?;
+                    std::thread::Builder::new()
+                        .name("rawr protocol".into())
+                        .spawn(move || serve_entry(stream, received, key))?;
+                    match __rawr_profile::run(running, |_| {}) {
+                        Started::Exit(status) => exit(status),
+                        Started::Entry(entry) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
+                        Started::Serving => exit(101),
+                    }
+                }
                 let calls = events.clone();
                 let forward = move |call| {
                     let _ = calls.send(Event::Call(call));

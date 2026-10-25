@@ -41,6 +41,14 @@ impl Snapshot {
         &self.entry
     }
 
+    /// Whether the crate root is marked `// rawr`, so the program's `main`
+    /// is Rawr code. A native root (D501) keeps its whole text here.
+    #[must_use]
+    pub fn marked_root(&self) -> bool {
+        self.read(&self.entry)
+            .is_some_and(crate::project::marker::is_marked)
+    }
+
     pub(crate) fn read(&self, path: &Path) -> Option<&str> {
         let path = normalize(path.to_path_buf()).ok()?;
         self.files

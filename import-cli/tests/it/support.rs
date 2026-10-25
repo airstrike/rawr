@@ -62,11 +62,25 @@ impl Drop for Run {
 
 /// `rawr-import run root`, with `variables` in its environment.
 pub fn start(root: &Path, variables: &[(&str, PathBuf)]) -> Run {
+    start_with(root, variables, &[], Stdio::null())
+}
+
+/// `rawr-import run root -- arguments`, with `variables` in its
+/// environment and `stdin` as its stdin.
+pub fn start_with(
+    root: &Path,
+    variables: &[(&str, PathBuf)],
+    arguments: &[&str],
+    stdin: Stdio,
+) -> Run {
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     child
         .arg("run")
         .arg(root)
+        .arg("--")
+        .args(arguments)
+        .stdin(stdin)
         .env("RAWR_HOME", directory.join("rawr-home"));
     for (name, value) in variables {
         child.env(name, value);

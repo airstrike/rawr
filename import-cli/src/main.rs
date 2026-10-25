@@ -22,6 +22,11 @@ fn retire_on_termination() -> std::io::Result<()> {
         signals.add(signal);
     }
     signals.thread_block().map_err(std::io::Error::from)?;
+    // A runner that read the terminal had it in the foreground; taking it
+    // back from the background would stop this process with SIGTTOU.
+    let mut background = SigSet::empty();
+    background.add(Signal::SIGTTOU);
+    background.thread_block().map_err(std::io::Error::from)?;
     std::thread::Builder::new()
         .name("rawr-termination".into())
         .spawn(move || {

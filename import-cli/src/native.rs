@@ -67,10 +67,24 @@ impl<B> Lane<B> {
         project: &Path,
         lifecycle: rawr_import::process::Lifecycle,
     ) -> Result<Self, Error> {
+        Self::for_program(project, lifecycle, None)
+    }
+
+    /// [`Self::for_lifecycle`], whose runners get `program`'s arguments and
+    /// stdin under `rawr run`.
+    pub fn for_program(
+        project: &Path,
+        lifecycle: rawr_import::process::Lifecycle,
+        program: Option<rawr_import::process::Arguments>,
+    ) -> Result<Self, Error> {
+        let mut process = rawr_import::process::Owner::for_lifecycle(project, lifecycle)?;
+        if let Some(program) = program {
+            process = process.with_program(program);
+        }
         Ok(Self {
             supervisor: rawr_import::supervisor::Owner::new(),
             cache: rawr_import::cache::Writer::new(project)?,
-            process: rawr_import::process::Owner::for_lifecycle(project, lifecycle)?,
+            process,
             slot: rawr_import::supervisor::slot::Slot::new(),
             refresh: false,
         })

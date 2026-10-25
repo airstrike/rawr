@@ -97,6 +97,17 @@ pub struct Owner {
     root: PathBuf,
     project: PathBuf,
     lifecycle: Lifecycle,
+    program: Option<Arguments>,
+}
+
+/// What a program `rawr run` runs gets as `cargo run` gives it (D500.1):
+/// its name as its first argument, the arguments after `--`, and stdin.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Arguments {
+    /// The first argument, the path of the binary `cargo run` would run.
+    pub name: std::ffi::OsString,
+    /// The arguments after `--`.
+    pub arguments: Vec<std::ffi::OsString>,
 }
 
 /// Closed generated-runner product lifecycle fixed before process admission.
@@ -221,7 +232,20 @@ impl Owner {
             root,
             project: runtime_root,
             lifecycle,
+            program: None,
         })
+    }
+
+    /// Give each runner `rawr run` starts `program`'s arguments and this
+    /// process's stdin. When stdin is the terminal this process has in the
+    /// foreground, the runner's process group gets it while it runs, so it
+    /// can read it, and this process takes it back when the runner ends.
+    /// That takes it back from the background, so the caller blocks
+    /// `SIGTTOU` on the thread that owns the runner.
+    #[must_use]
+    pub fn with_program(mut self, program: Arguments) -> Self {
+        self.program = Some(program);
+        self
     }
 
     #[cfg(not(unix))]
@@ -308,13 +332,28 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        let program = process
+            .program
+            .as_ref()
+            .filter(|_| process.lifecycle == Lifecycle::Run);
+        if let Some(program) = program {
+            command
+                .arg0(&program.name)
+                .args(&program.arguments)
+                .stdin(Stdio::inherit());
+        }
         // One preview rendered alone (`rawr mcp`'s `render_preview`).
         if let (Lifecycle::SnapshotCheck | Lifecycle::SnapshotUpdate, Some(selection)) =
             (process.lifecycle, std::env::var_os("RAWR_SNAPSHOT_ONLY"))
         {
             command.env("RAWR_SNAPSHOT_ONLY", selection);
         }
-        let mut child = super::ownership::Child::spawn(&mut command).map_err(resource_error)?;
+        let mut child = if program.is_some() {
+            super::ownership::Child::spawn_with_terminal(&mut command)
+        } else {
+            super::ownership::Child::spawn(&mut command)
+        }
+        .map_err(resource_error)?;
         let evidence_spawned_ns = crate::metrics::monotonic_ns();
         let runner_pid = child.id();
         crate::metrics::record_process(crate::metrics::ProcessKind::Runner);
@@ -653,7 +692,17 @@ impl<B> Candidate<Admitted, B> {
         if status.success() {
             Ok(true)
         } else {
-            Err(Error::Exit(status.code()))
+            // A program a signal ended gives the status a shell gives it.
+            #[cfg(unix)]
+            let code = {
+                use std::os::unix::process::ExitStatusExt as _;
+                status
+                    .code()
+                    .or_else(|| status.signal().map(|signal| 128 + signal))
+            };
+            #[cfg(not(unix))]
+            let code = status.code();
+            Err(Error::Exit(code))
         }
     }
 

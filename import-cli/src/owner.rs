@@ -62,6 +62,84 @@ pub fn run(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
+    session(target, graph, lifecycle, profile, None)
+        .map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart))
+}
+
+/// `rawr run` of a program (D500.1): it runs with `arguments` after its
+/// name, as `cargo run` gives them, and with this process's stdin. A save
+/// swaps or restarts it as [`run`] does. Once it ends, a save runs it again
+/// when stdin is a terminal; otherwise, or when Ctrl-C ended it, this
+/// returns its exit status.
+pub fn run_program(
+    target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
+    profile: &dyn crate::Profile,
+    arguments: &[std::ffi::OsString],
+) -> Result<i32, diagnostic::Report> {
+    // Ctrl-C at the terminal ends the program with SIGINT, as a shell
+    // reports it.
+    const INTERRUPTED: i32 = 128 + 2;
+    let program = rawr_import::process::Arguments {
+        name: rawr_cli::supervise::program_name(target),
+        arguments: arguments.to_vec(),
+    };
+    let lifecycle = rawr_import::process::Lifecycle::Run;
+    let interactive = rawr_cli::supervise::interactive();
+    let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
+    let mut ran = session(target, graph, lifecycle, profile, Some(&program));
+    loop {
+        let restart = matches!(ran, Ok(Ended::Restart));
+        if !restart {
+            match ran {
+                Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
+                Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
+                Err(report) if !interactive || watcher.is_none() => return Err(report),
+                Err(report) => eprint!("{}", diagnostic::render(&report)),
+            }
+            let Some(waiting) = watcher.as_ref() else {
+                return Ok(0);
+            };
+            waiting.wait();
+        }
+        let next = match rawr::project::Target::discover(location(target)) {
+            Ok(next) => next,
+            Err(error) => {
+                ran = Err(diagnostic::Report::from_project(&error));
+                continue;
+            }
+        };
+        let graph = rawr::package::Graph::load(&rawr::Engine::new(), &next).ok();
+        if let Some(next) = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open) {
+            watcher = Some(next);
+        }
+        ran = session(&next, graph, lifecycle, profile, Some(&program));
+    }
+}
+
+/// Where the program is: the crate's root, or its single file.
+fn location(target: &rawr::project::Target) -> PathBuf {
+    project(target).map_or_else(|| target.source().path().to_path_buf(), Path::to_path_buf)
+}
+
+/// How a [`session`] ended.
+enum Ended {
+    /// The program exited with this status.
+    Exit(i32),
+    /// A save changed a program that restarts on each save; its runner is
+    /// gone.
+    Restart,
+}
+
+/// One run of the program's runners, until the program ends or a save
+/// restarts it.
+fn session(
+    target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
+    lifecycle: rawr_import::process::Lifecycle,
+    profile: &dyn crate::Profile,
+    program: Option<&rawr_import::process::Arguments>,
+) -> Result<Ended, diagnostic::Report> {
     same_build(target)?;
     let source = fallback(target)?;
     let target_path = project(target)
@@ -74,7 +152,7 @@ pub fn run(
         .socket(&target_path)
         .map(rawr_import::process::remove_on_exit);
     rawr_import::progress::begin(&target_path);
-    let initial = initial_watched(target, graph, &target_path, lifecycle, profile);
+    let initial = initial_watched_program(target, graph, &target_path, lifecycle, profile, program);
     rawr_import::progress::finish(initial.is_ok());
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
 
@@ -85,11 +163,13 @@ pub fn run(
     let mut native_inputs = None;
     loop {
         match lane.reap_if_exited() {
-            Ok(true) => return Ok(true),
+            Ok(true) => return Ok(Ended::Exit(0)),
             Ok(false) => {}
             Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
-                _,
-            )))) if lifecycle == rawr_import::process::Lifecycle::Run => return Ok(false),
+                code,
+            )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
+                return Ok(Ended::Exit(code));
+            }
             Err(error) => return Err(framework(error, source.clone())),
         }
 
@@ -115,6 +195,36 @@ pub fn run(
                     continue;
                 }
             };
+            // A marked `main` runs on the runner's own thread, which a new
+            // generation can't reach: each save that prepares restarts the
+            // program (D500.1), and one that fails leaves it running.
+            if program.is_some() && !manifests.has_islands() {
+                let prepared = rawr::project::Target::discover(&target_path)
+                    .map_err(|error| rawr::diagnostic::Report::from_project(&error))
+                    .and_then(|next| {
+                        profile
+                            .prepare(
+                                &next,
+                                None,
+                                revision,
+                                &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+                            )
+                            .map_err(|error| import(error, source.clone()))
+                    });
+                match prepared {
+                    Ok(prepared) => {
+                        eprintln!(
+                            "rawr: {}; restarting the program",
+                            manifests.restart_line(&prepared.manifests)
+                        );
+                        return Ok(Ended::Restart);
+                    }
+                    // Latest wins: a newer save reports for itself.
+                    Err(_) if adapter.deadline().is_some() => {}
+                    Err(report) => eprint!("{}", diagnostic::render(&report)),
+                }
+                continue;
+            }
             let started = lane
                 .begin_compile()
                 .map_err(|error| framework(error, source.clone()))?;
@@ -299,7 +409,7 @@ pub fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source).map(|()| true);
+                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
             }
             Ok(rawr_watch::Notice::Schedule(error)) => {
                 retain_report(
@@ -309,7 +419,7 @@ pub fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source).map(|()| true);
+                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 retain_report(
@@ -319,7 +429,7 @@ pub fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source).map(|()| true);
+                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
             }
         }
     }
@@ -335,7 +445,7 @@ pub fn initial(
     profile: &dyn crate::Profile,
 ) -> Result<(Lane, rawr::reload::source::Inputs), diagnostic::Report> {
     let source = fallback(target)?;
-    let mut lane = open_lane(target, lifecycle, &source)?;
+    let mut lane = open_lane(target, lifecycle, None, &source)?;
     let Initial {
         built,
         snapshot,
@@ -371,8 +481,28 @@ pub fn initial_watched(
     ),
     diagnostic::Report,
 > {
+    initial_watched_program(target, graph, target_path, lifecycle, profile, None)
+}
+
+#[allow(clippy::type_complexity)]
+fn initial_watched_program(
+    target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
+    target_path: &Path,
+    lifecycle: rawr_import::process::Lifecycle,
+    profile: &dyn crate::Profile,
+    program: Option<&rawr_import::process::Arguments>,
+) -> Result<
+    (
+        Lane,
+        rawr_watch::Adapter,
+        resident::Manifests,
+        rawr_watch::native::Baseline,
+    ),
+    diagnostic::Report,
+> {
     let source = fallback(target)?;
-    let mut lane = open_lane(target, lifecycle, &source)?;
+    let mut lane = open_lane(target, lifecycle, program, &source)?;
     let mut initial = prepare_on_lane(&mut lane, target, graph, profile, &source)?;
     let adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
         Ok(adapter) => adapter,
@@ -447,6 +577,7 @@ pub fn initial_watched(
 fn open_lane(
     target: &rawr::project::Target,
     lifecycle: rawr_import::process::Lifecycle,
+    program: Option<&rawr_import::process::Arguments>,
     source: &diagnostic::Source,
 ) -> Result<Lane, diagnostic::Report> {
     let project = project(target).ok_or_else(|| {
@@ -455,7 +586,8 @@ fn open_lane(
             source.clone(),
         )
     })?;
-    Lane::for_lifecycle(project, lifecycle).map_err(|error| framework(error, source.clone()))
+    Lane::for_program(project, lifecycle, program.cloned())
+        .map_err(|error| framework(error, source.clone()))
 }
 
 fn prepare_on_lane(

@@ -3007,6 +3007,7 @@ dependencies = [
  "rawr",
  "rawr-location",
  "rawr-toml-edit",
+ "rawr-watch",
  "serde_json",
 ]
 

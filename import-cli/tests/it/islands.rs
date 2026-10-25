@@ -89,3 +89,56 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
+
+#[test]
+fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
+    use std::io::Write as _;
+
+    const ARGUMENTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-arguments"
+    );
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("islands-arguments");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ARGUMENTS), &root);
+    let words = root.join("src/words.rs");
+    let mut run = crate::support::start_with(
+        &root,
+        &[],
+        &["one", "two words"],
+        std::process::Stdio::piped(),
+    );
+    let mut stdin = run.child.stdin.take().unwrap();
+
+    // `cargo run` names the program by its binary.
+    let name = run.until(Duration::from_secs(900), |line| line.starts_with("name "));
+    assert!(
+        name.ends_with("/target/debug/islands-arguments"),
+        "{}",
+        run.seen.join("\n")
+    );
+    run.until(Duration::from_secs(30), |line| line == "arg ONE");
+    run.until(Duration::from_secs(30), |line| line == "arg TWO WORDS");
+    stdin.write_all(b"alpha\n").unwrap();
+    run.until(Duration::from_secs(30), |line| line == "line ALPHA");
+
+    // While the program waits on stdin, a body edit swaps in for its next
+    // call.
+    std::thread::sleep(Duration::from_secs(2));
+    edit(&words, "text.to_uppercase()", "format!(\"{text}!\")");
+    std::thread::sleep(Duration::from_secs(5));
+    if let Err(error) = stdin.write_all(b"beta\n") {
+        let _ = run.until(Duration::from_secs(2), |_| false);
+        panic!("{error}: {}", run.seen.join("\n"));
+    }
+    run.until(Duration::from_secs(60), |line| line == "line beta!");
+    drop(stdin);
+    run.until(Duration::from_secs(30), |line| line == "done");
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+}

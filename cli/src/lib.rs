@@ -16,6 +16,7 @@ pub mod cells;
 pub mod diagnostic;
 pub mod layer;
 pub mod new;
+pub mod supervise;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,10 @@ use std::process::{Command, ExitCode};
 /// Run `rawr` with `arguments`, the executable name excluded.
 #[must_use]
 pub fn main(arguments: Vec<OsString>) -> ExitCode {
+    // The process `rawr run` starts for a program on the base language.
+    if let Some(code) = supervise::child() {
+        return code;
+    }
     match parse(&arguments) {
         Ok(Request::Help) => {
             println!("{}", help(&layer::installed()));
@@ -33,7 +38,11 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             println!("rawr {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Ok(Request::Program { check, path }) => program(check, path.as_ref(), &arguments),
+        Ok(Request::Program {
+            check,
+            path,
+            program,
+        }) => self::program(check, path.as_ref(), &arguments, &program),
         Ok(Request::Doctor { path }) => doctor(path.as_ref(), &arguments),
         Ok(Request::New(New::Help)) => {
             println!("{}", new_help(&layer::installed()));
@@ -55,10 +64,12 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
 enum Request {
     Help,
     Version,
-    /// `rawr [run] [path]`, or `rawr check [path]`.
+    /// `rawr [run] [path] [-- arguments]`, or `rawr check [path]`.
     Program {
         check: bool,
         path: Option<PathBuf>,
+        /// What follows `--`, for the program.
+        program: Vec<OsString>,
     },
     Doctor {
         path: Option<PathBuf>,
@@ -102,7 +113,40 @@ fn parse_new(arguments: &[OsString]) -> Result<New, String> {
     Ok(New::Create { path, template })
 }
 
+/// The arguments before the first `--`, and those after it, which belong
+/// to the program as `cargo run` gives them.
+#[must_use]
+pub fn split_program_arguments(arguments: &[OsString]) -> (&[OsString], Vec<OsString>) {
+    match arguments.iter().position(|argument| argument == "--") {
+        Some(at) => (&arguments[..at], arguments[at + 1..].to_vec()),
+        None => (arguments, Vec::new()),
+    }
+}
+
 fn parse(arguments: &[OsString]) -> Result<Request, String> {
+    // `rawr run [path] -- ..` and `rawr [path] -- ..` give the program
+    // what follows `--`.
+    let runs = match arguments.first() {
+        Some(first) => first == "run" || first == "--" || is_path(first),
+        None => false,
+    };
+    if runs {
+        let (arguments, program) = split_program_arguments(arguments);
+        return match parse_command(arguments)? {
+            Request::Program {
+                check: false, path, ..
+            } => Ok(Request::Program {
+                check: false,
+                path,
+                program,
+            }),
+            request => Ok(request),
+        };
+    }
+    parse_command(arguments)
+}
+
+fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
     let words: Vec<_> = arguments
         .iter()
         .map(|argument| argument.to_string_lossy())
@@ -120,11 +164,16 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
         None => Ok(Request::Program {
             check: false,
             path: None,
+            program: Vec::new(),
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
         Some("run" | "check" | "doctor") if asks_help => Ok(Request::Help),
-        Some("run") => path(&arguments[1..]).map(|path| Request::Program { check: false, path }),
+        Some("run") => path(&arguments[1..]).map(|path| Request::Program {
+            check: false,
+            path,
+            program: Vec::new(),
+        }),
         // `check` with an option `rawr` does not know is another binary's.
         Some("check")
             if arguments[1..]
@@ -133,13 +182,19 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
         {
             Ok(Request::Other)
         }
-        Some("check") => path(&arguments[1..]).map(|path| Request::Program { check: true, path }),
+        Some("check") => path(&arguments[1..]).map(|path| Request::Program {
+            check: true,
+            path,
+            program: Vec::new(),
+        }),
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
-        Some(_) if is_path(&arguments[0]) => {
-            path(arguments).map(|path| Request::Program { check: false, path })
-        }
+        Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
+            check: false,
+            path,
+            program: Vec::new(),
+        }),
         Some(_) => Ok(Request::Other),
     }
 }
@@ -165,8 +220,10 @@ fn help(installed: &[layer::Installed]) -> String {
          `rawr` runs a Cargo crate whose files start with `// rawr`, or one `.rs` file. \
          Installed extensions serve more programs and add commands: `rawr` hands a \
          program to the extension that serves it.\n\n\
-         Usage:\n  rawr [run] [path]    Run a program\n  rawr check [path]    Check a program without running it\n  \
-         rawr new <path>      Create a crate with a marked `src/main.rs`\n  rawr doctor [path]   Report on the environment and the project\n",
+         Usage:\n  rawr [run] [path] [-- args]   Run a program, with its arguments after `--`\n  \
+         rawr check [path]             Check a program without running it\n  \
+         rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
+         rawr doctor [path]            Report on the environment and the project\n",
     );
     for binary in installed {
         help.push_str(&format!(
@@ -211,7 +268,12 @@ fn help(installed: &[layer::Installed]) -> String {
 
 /// Load the program once, then run it here or hand it to the binary that
 /// serves it.
-fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+fn program(
+    check: bool,
+    path: Option<&PathBuf>,
+    arguments: &[OsString],
+    program: &[OsString],
+) -> ExitCode {
     let loaded = match base::load(path) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
@@ -250,25 +312,36 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         .finish();
         return failure(&report);
     }
-    on_base(loaded, check)
+    on_base(loaded, check, program)
 }
 
 /// Run or check a loaded program on the base language: its top level,
 /// then `fn main` if it has one, as in Rust. `cargo check` runs beside it
-/// for a Cargo crate.
+/// for a Cargo crate. A run goes in a process of its own, which gets
+/// `arguments` and restarts when a save changes the program
+/// ([`supervise`]).
 #[must_use]
-pub fn on_base(loaded: base::Loaded, check: bool) -> ExitCode {
+pub fn on_base(loaded: base::Loaded, check: bool, arguments: &[OsString]) -> ExitCode {
     // rustc checks a Cargo crate of marked files while Rawr works.
     let cargo = cargo::begin(&loaded.graph);
-    if check {
-        let checked = base::check(loaded);
-        return if cargo::conclude(checked.as_deref(), cargo) {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
+    if !check {
+        let code = supervise::run(loaded, arguments);
+        cargo::after_run(cargo);
+        return code;
     }
-    let code = match base::run(loaded) {
+    let checked = base::check(loaded);
+    if cargo::conclude(checked.as_deref(), cargo) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Run a loaded program once in this process: the process
+/// [`supervise::run`] starts.
+#[must_use]
+pub fn run_once(loaded: base::Loaded) -> ExitCode {
+    match base::run(loaded) {
         Ok(None) => ExitCode::SUCCESS,
         Ok(Some(error)) => {
             eprintln!("{error}");
@@ -280,9 +353,7 @@ pub fn on_base(loaded: base::Loaded, check: bool) -> ExitCode {
             // Rust's exit status for a panic.
             ExitCode::from(101)
         }
-    };
-    cargo::after_run(cargo);
-    code
+    }
 }
 
 /// `rawr new --help`: the usage and the templates installed binaries offer.
@@ -487,9 +558,28 @@ mod tests {
             Ok(Request::Program {
                 check,
                 path: path.map(PathBuf::from),
+                program: Vec::new(),
+            })
+        };
+        let with = |path: Option<&str>, arguments: &[&str]| {
+            Ok(Request::Program {
+                check: false,
+                path: path.map(PathBuf::from),
+                program: arguments.iter().map(OsString::from).collect(),
             })
         };
         assert_eq!(request(&[]), program(false, None));
+        assert_eq!(
+            request(&["run", "app", "--", "a", "--help", "--"]),
+            with(Some("app"), &["a", "--help", "--"])
+        );
+        assert_eq!(request(&["run", "--", "a"]), with(None, &["a"]));
+        assert_eq!(request(&["--", "-n"]), with(None, &["-n"]));
+        assert_eq!(
+            request(&["tool.rs", "--", "x"]),
+            with(Some("tool.rs"), &["x"])
+        );
+        assert_eq!(request(&["check", ".", "--", "x"]), Ok(Request::Other));
         assert_eq!(request(&["run"]), program(false, None));
         assert_eq!(request(&["run", "app"]), program(false, Some("app")));
         assert_eq!(request(&["cart.rs"]), program(false, Some("cart.rs")));

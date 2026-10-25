@@ -17,7 +17,7 @@ const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
 modules. The program runs in a runner that links the rawr crate and the\n\
 program's own dependencies, built in the project's build directory beside\n\
 `cargo build`.\n\n\
-Usage:\n  rawr-import [run] [path]    Run a program\n  rawr-import check [path]    Check a program without running it\n\n\
+Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
@@ -30,6 +30,12 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         print!("{}", crate::MANIFEST);
         return ExitCode::SUCCESS;
     }
+    // The process `rawr run` starts for a program on the base language.
+    if let Some(code) = rawr_cli::supervise::child() {
+        return code;
+    }
+    // What follows `--` is the program's.
+    let (arguments, program_arguments) = rawr_cli::split_program_arguments(&arguments);
     let words: Vec<_> = arguments
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -50,11 +56,14 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Some("run") => path(&words[1..]).map(|path| (false, path)),
+        Some("check") if !program_arguments.is_empty() => {
+            Err("`check` takes no program arguments".to_owned())
+        }
         Some("check") => path(&words[1..]).map(|path| (true, path)),
         _ => path(&words).map(|path| (false, path)),
     };
     match request {
-        Ok((check, path)) => program(check, path.as_ref()),
+        Ok((check, path)) => program(check, path.as_ref(), &program_arguments),
         Err(message) => {
             eprintln!("error: {message}; run `rawr-import --help` for usage");
             ExitCode::from(2)
@@ -62,14 +71,14 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     }
 }
 
-fn program(check: bool, path: Option<&PathBuf>) -> ExitCode {
+fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
     let loaded = match rawr_cli::base::load(path) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
     };
     rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
     if !loaded.graph.declares_rust_import() {
-        return rawr_cli::on_base(loaded, check);
+        return rawr_cli::on_base(loaded, check, arguments);
     }
     let rawr_cli::base::Loaded { target, graph, .. } = loaded;
     // rustc checks the crate while Rawr works.
@@ -82,15 +91,9 @@ fn program(check: bool, path: Option<&PathBuf>) -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    let code = match owner::run(
-        &target,
-        Some(graph),
-        rawr_import::process::Lifecycle::Run,
-        &Plain,
-    ) {
-        Ok(true) => ExitCode::SUCCESS,
-        // The program printed its own error as it ran.
-        Ok(false) => ExitCode::FAILURE,
+    let code = match owner::run_program(&target, Some(graph), &Plain, arguments) {
+        // The program printed its own error as it ran; its status stands.
+        Ok(code) => ExitCode::from(u8::try_from(code & 0xff).unwrap_or(1)),
         Err(report) => failure(&report),
     };
     rawr_cli::cargo::after_run(cargo);
