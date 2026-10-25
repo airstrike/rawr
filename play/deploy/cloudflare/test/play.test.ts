@@ -305,7 +305,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
     "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
-    "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs",
+    "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs", "path.rs",
   ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
   assert.deepEqual(at("docs/iced/index.html"), ["counter.rs"]);
