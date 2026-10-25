@@ -6,8 +6,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use rawr::host::{self, facade, item, signature, type_ref};
-use rawr::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
+use crate::host::{self, facade, item, signature, type_ref};
+use crate::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
 
 const CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Default,
@@ -24,11 +24,11 @@ const OS: &str = "ffi::OsString";
 
 /// Register `Debug` for each type.
 pub(crate) fn register_debug() {
-    rawr::host::debug::register::<PathBuf>();
-    rawr::host::debug::register::<OsString>();
+    crate::host::debug::register::<PathBuf>();
+    crate::host::debug::register::<OsString>();
 }
 
-/// Declare the types and their items in rawr-iced's facade, under `path`
+/// Declare the types and their items in the std facade, under `path`
 /// and `ffi`.
 pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> {
     use type_ref::{Builtin, Type};
@@ -149,15 +149,16 @@ fn text(value: &str) -> Dynamic {
 }
 
 fn os_text(value: Option<&std::ffi::OsStr>) -> Dynamic {
-    rawr::option::from(value.map(std::ffi::OsStr::to_os_string))
+    crate::option::from(value.map(std::ffi::OsStr::to_os_string))
 }
 
-/// Bind the types' items in rawr-iced's facade.
-pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
+/// Bind the types' items in the std facade.
+pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| {
-        rawr.bind(format!("rawr_iced::{path}"), callback)
-            .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
+        runtime
+            .bind(format!("{}::{path}", super::ROOT), callback)
+            .unwrap_or_else(|_| panic!("the std facade must retain {path}"));
     };
     bind("path::PathBuf::new", |_| Ok(Dynamic::from(PathBuf::new())));
     bind("path::PathBuf::default", |_| {
@@ -190,7 +191,7 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
     });
     bind("path::PathBuf::parent", |args| {
         let path = read::<PathBuf>(args[0], "PathBuf")?;
-        Ok(rawr::option::from(
+        Ok(crate::option::from(
             path.parent().map(std::path::Path::to_path_buf),
         ))
     });
@@ -216,7 +217,9 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
     });
     bind("path::PathBuf::to_str", |args| {
         let path = read::<PathBuf>(args[0], "PathBuf")?;
-        Ok(rawr::option::from(path.to_str().map(ImmutableString::from)))
+        Ok(crate::option::from(
+            path.to_str().map(ImmutableString::from),
+        ))
     });
     bind("path::PathBuf::to_string_lossy", |args| {
         Ok(text(
@@ -236,7 +239,7 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
     });
     bind("ffi::OsString::to_str", |args| {
         let os = read::<OsString>(args[0], "OsString")?;
-        Ok(rawr::option::from(os.to_str().map(ImmutableString::from)))
+        Ok(crate::option::from(os.to_str().map(ImmutableString::from)))
     });
     bind("ffi::OsString::to_string_lossy", |args| {
         Ok(text(

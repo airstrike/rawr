@@ -20,10 +20,8 @@ pub mod features;
 mod local;
 
 use features::Feature;
-mod io_facade;
 mod marker;
 pub mod native;
-mod path_facade;
 pub mod preview;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profile;
@@ -106,8 +104,6 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
 fn register_debug() {
     use rawr::host::debug::register;
     tokio_facade::register_debug();
-    path_facade::register_debug();
-    io_facade::register_debug();
     // `{}` of a facade type with `to_string` prints its Rust `Display`.
     rawr::host::display::register::<iced::ContentFit>();
     rawr::host::display::register::<iced::font::Family>();
@@ -1385,10 +1381,6 @@ fn extension_with_exports(
         &exports.duration,
         &exports.instant,
     )?;
-    // std's `path` and `ffi` types (`resolve::std_reexport`).
-    path_facade::declare(&mut builder)?;
-    // std's `io` errors (`resolve::std_reexport`).
-    io_facade::declare(&mut builder)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1523,8 +1515,6 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     subscription::bind(&mut iced_builder, &mut rawr_builder);
     task::bind(&mut iced_builder, &mut rawr_builder);
     tokio_facade::bind(&mut rawr_builder);
-    path_facade::bind(&mut rawr_builder);
-    io_facade::bind(&mut rawr_builder);
     theme::bind(&mut iced_builder, &mut rawr_builder);
     widget::bind(&mut iced_builder, &mut rawr_builder);
     Ok([iced_builder.finish(), rawr_builder.finish()])

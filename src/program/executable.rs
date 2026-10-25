@@ -487,10 +487,6 @@ impl Executable {
         &self.ast
     }
 
-    pub(crate) fn into_ast(self) -> AST {
-        self.ast
-    }
-
     /// This program's [`AST`], which keeps the facade items it calls so
     /// its first evaluation binds them (D494 item 15).
     pub(crate) fn into_hosted_ast(self) -> AST {
@@ -526,7 +522,7 @@ impl Executable {
     /// This program's [`AST`] and the [`Positions`] of its entry source.
     pub(crate) fn into_ast_with_positions(self) -> (AST, Positions) {
         let positions = self.positions();
-        (self.ast, positions)
+        (self.into_hosted_ast(), positions)
     }
 
     /// This program's [`AST`] and the [`Positions`] of every source, for a
@@ -546,7 +542,7 @@ impl Executable {
                 .flat_map(|locations| locations.iter().copied())
                 .collect(),
         };
-        (self.ast, positions)
+        (self.into_hosted_ast(), positions)
     }
 
     /// The [`Positions`] of this program's entry source.

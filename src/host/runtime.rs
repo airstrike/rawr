@@ -1130,11 +1130,13 @@ impl Builder {
 }
 
 impl Registry {
-    /// Create an empty launch-local runtime registry.
+    /// Create a launch-local runtime registry that binds only std's `path`,
+    /// `ffi` and `io` types, which every engine declares (`std_facade`).
     #[must_use]
     pub fn new() -> Self {
+        let std = crate::std_facade::runtime();
         Self {
-            facades: Shared::new(BTreeMap::new()),
+            facades: Shared::new(BTreeMap::from([(std.dependency.root().into(), std)])),
             witness: witness::Authority::issue(),
             #[cfg(feature = "rust-import")]
             imported_receipt: None,
@@ -2164,7 +2166,15 @@ mod tests {
             empty.install(runtime()),
             Err(super::Error::MissingFacade { facade }) if facade == "alpha"
         ));
-        assert!(empty.facades.is_empty());
+        // A new registry holds only the std facade every engine declares.
+        assert_eq!(
+            empty
+                .facades
+                .keys()
+                .map(|root| root.as_str())
+                .collect::<Vec<_>>(),
+            [crate::std_facade::ROOT]
+        );
 
         let mut reverse = Registry::new();
         reverse
@@ -2180,7 +2190,7 @@ mod tests {
                 .keys()
                 .map(|root| root.as_str())
                 .collect::<Vec<_>>(),
-            ["beta"]
+            ["beta", "rawr_std"]
         );
 
         reverse
@@ -2193,14 +2203,14 @@ mod tests {
                 .keys()
                 .map(|root| root.as_str())
                 .collect::<Vec<_>>(),
-            ["alpha", "beta", "extension"]
+            ["alpha", "beta", "extension", "rawr_std"]
         );
 
         assert!(matches!(
             reverse.install(Builder::new(dependent).finish()),
             Err(super::Error::DuplicateFacade { facade }) if facade == "extension"
         ));
-        assert_eq!(reverse.facades.len(), 3);
+        assert_eq!(reverse.facades.len(), 4);
     }
 
     #[test]
@@ -2224,7 +2234,7 @@ mod tests {
                 .keys()
                 .map(|root| root.as_str())
                 .collect::<Vec<_>>(),
-            ["alpha", "beta"]
+            ["alpha", "beta", "rawr_std"]
         );
     }
 

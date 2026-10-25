@@ -6,8 +6,8 @@
 use std::io::ErrorKind;
 use std::sync::Arc;
 
-use rawr::host::{self, facade, item, signature, type_ref};
-use rawr::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
+use crate::host::{self, facade, item, signature, type_ref};
+use crate::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
 
 const ERROR: &str = "io::Error";
 const KIND: &str = "io::ErrorKind";
@@ -55,13 +55,13 @@ const KINDS: [&str; 21] = [
 
 /// Register `Debug` and `Display` for each type.
 pub(crate) fn register_debug() {
-    rawr::host::debug::register::<Error>();
-    rawr::host::debug::register::<ErrorKind>();
-    rawr::host::display::register::<Error>();
-    rawr::host::display::register::<ErrorKind>();
+    crate::host::debug::register::<Error>();
+    crate::host::debug::register::<ErrorKind>();
+    crate::host::display::register::<Error>();
+    crate::host::display::register::<ErrorKind>();
 }
 
-/// Declare the types and their items in rawr-iced's facade, under `io`.
+/// Declare the types and their items in the std facade, under `io`.
 pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> {
     use capability::Kind::{Clone, Copy, Debug, Eq, Hash, PartialEq, Send, Static};
     use type_ref::{Builtin, Type};
@@ -131,16 +131,18 @@ fn read<T: Clone + 'static>(value: &Dynamic, expected: &str) -> Result<T, Box<Ev
         })
 }
 
-fn made(error: std::io::Error) -> Dynamic {
+/// A Rawr `std::io::Error` holding `error`.
+pub(crate) fn made(error: std::io::Error) -> Dynamic {
     Dynamic::from(Error(Arc::new(error)))
 }
 
-/// Bind the types' items in rawr-iced's facade.
-pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
+/// Bind the types' items in the std facade.
+pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| {
-        rawr.bind(format!("rawr_iced::{path}"), callback)
-            .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
+        runtime
+            .bind(format!("{}::{path}", super::ROOT), callback)
+            .unwrap_or_else(|_| panic!("the std facade must retain {path}"));
     };
     macro_rules! kinds {
         ($($name:ident)*) => {

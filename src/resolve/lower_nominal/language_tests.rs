@@ -9419,6 +9419,39 @@ main();
     );
 }
 
+/// std's `path`, `ffi` and `io` types are every engine's, not only an iced
+/// app's (D528.4): a plain program prints what rustc prints.
+#[test]
+fn language_std_path_and_io_types_need_no_host() {
+    assert_eq!(
+        printed(
+            r#"
+use std::io;
+use std::path::{Path, PathBuf};
+
+fn stem(path: &Path) -> String {
+    path.file_stem().unwrap().to_string_lossy().to_string()
+}
+
+fn main() {
+    let p = PathBuf::from("a/b.txt");
+    println!("{:?} {:?}", p.extension(), p.file_name());
+    let mut q = PathBuf::new();
+    q.push("dir");
+    q.push("x.tar.gz");
+    println!("{} {} {:?}", q.display(), stem(&q), q.parent());
+    let e = io::Error::new(io::ErrorKind::NotFound, "gone");
+    println!("{e} {:?} {}", e.kind(), io::ErrorKind::TimedOut);
+}
+main();
+"#
+        ),
+        "Some(\"txt\") Some(\"b.txt\")\n\
+         dir/x.tar.gz x.tar Some(\"dir\")\n\
+         gone NotFound timed out\n"
+    );
+}
+
 /// A file whose `mod` items are inline compiles as a crate root without a
 /// file or a project, as `?play` and rawr-web compile a snippet: nested
 /// modules, `super::`, `use` of a module's type, and `main` callable by

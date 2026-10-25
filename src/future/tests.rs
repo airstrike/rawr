@@ -122,12 +122,16 @@ fn block_on_here(script: super::Script) -> crate::Value {
 }
 
 /// A value whose copies are counted while they live.
+#[cfg(feature = "sync")]
 #[derive(Debug)]
 struct Token;
 
+#[cfg(feature = "sync")]
 static LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(feature = "sync")]
 static STEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(feature = "sync")]
 impl Token {
     fn new() -> Self {
         LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -135,12 +139,14 @@ impl Token {
     }
 }
 
+#[cfg(feature = "sync")]
 impl Clone for Token {
     fn clone(&self) -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "sync")]
 impl Drop for Token {
     fn drop(&mut self) {
         LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -150,6 +156,7 @@ impl Drop for Token {
 /// A host for the owner-queue tests: `testing::step()` counts the steps that
 /// ran, `testing::boom()` panics, `testing::pending()` is a future that never
 /// ends, and `testing::token()` makes a counted value.
+#[cfg(feature = "sync")]
 fn testing() -> (host::facade::Definition, host::runtime::Facade) {
     use host::{facade, item, signature, type_ref};
     let core = super::facade::definition().unwrap();
