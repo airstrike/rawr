@@ -204,9 +204,15 @@ pub fn buttons(hash: &str, steps: &[usize], actions: &[String]) -> Vec<Button> {
 pub fn quiet(clicked: &[String], actions: &[String]) -> Vec<String> {
     /// Characters of each label in the list of clicks.
     const LABEL: usize = 24;
+    /// The most recent clicks shown; earlier ones become a leading `…`.
+    const SHOWN: usize = 5;
     let mut lines = Vec::new();
     if !clicked.is_empty() {
-        let list: Vec<String> = clicked.iter().map(|label| cut(label, LABEL)).collect();
+        let recent = &clicked[clicked.len().saturating_sub(SHOWN)..];
+        let mut list: Vec<String> = recent.iter().map(|label| cut(label, LABEL)).collect();
+        if recent.len() < clicked.len() {
+            list.insert(0, "…".to_owned());
+        }
         lines.push(format!("Clicked: {}", list.join(", ")));
     }
     if clicked.len() >= MAX_STEPS && !actions.is_empty() {
@@ -360,6 +366,13 @@ mod tests {
         assert!(quiet(&[], &actions).is_empty());
         let clicked = vec!["Increment".to_owned(), "Decrement".to_owned()];
         assert_eq!(quiet(&clicked, &actions), ["Clicked: Increment, Decrement"]);
+        let many: Vec<String> = ["Previous", "Shout", "Next", "Next", "Next", "Next"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            quiet(&many, &actions),
+            ["Clicked: …, Shout, Next, Next, Next, Next"]
+        );
         let full = vec!["Increment".to_owned(); MAX_STEPS];
         let lines = quiet(&full, &actions);
         assert_eq!(lines.len(), 2);
