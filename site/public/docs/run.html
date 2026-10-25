@@ -40,6 +40,7 @@
     <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/ratatui">ratatui</a></li>
     <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
     <li><a href="/docs/how-it-works">How it works</a></li>
@@ -67,6 +68,7 @@
 <p>The program reads the stdin of <code>rawr run</code>, a terminal or a pipe:</p>
 <div class="block"><pre><code>cat menu.txt | rawr run examples/grep -- pie</code></pre></div>
 <p>At a terminal the running program gets the keyboard, so Ctrl-C reaches it as it reaches a program <code>cargo run</code> started. Ctrl-C ends <code>rawr run</code> too.</p>
+<p>At a terminal the program also writes to the terminal itself, as under <code>cargo run</code>. rawr saves the terminal&rsquo;s settings before the program starts. After the program ends, rawr puts them back if the program changed them, even when a restart killed it. While the program holds the terminal raw, rawr&rsquo;s own lines wait until then. <a href="/docs/ratatui#terminal">ratatui</a> says more.</p>
 <p>The <code>examples/grep</code> crate in rawr&rsquo;s repository is a small grep with flags, files and stdin. <code>cargo build --release</code> builds the same crate, and its binary prints the same lines.</p>
 
 <h2 id="marker">The <code>// rawr</code> marker</h2>
@@ -94,6 +96,7 @@
 <p>The <code>examples/invaders</code> crate is a space-invaders game on winit and softbuffer. Its native <code>main.rs</code> owns the window, the keys and a pixel framebuffer. Four marked modules hold the game: its rules, the invaders&rsquo; march, the hits and what each frame draws. Each frame calls them once to move the game on and once more for the picture.</p>
 <div class="block"><pre><code>rawr run examples/invaders</code></pre></div>
 <p>A save that changes a colour, a speed or a sprite&rsquo;s shape shows at the next frame. The game keeps its score and its invaders. A new field on the game&rsquo;s state restarts the game.</p>
+<p>The <code>examples/tui</code> crate is a to-do list on ratatui. Its native <code>main.rs</code> owns the terminal, and its marked <code>app.rs</code> says what the keys do and what the screen shows. A save repaints the screen at once, with no key pressed. <a href="/docs/ratatui">ratatui</a> covers terminal apps.</p>
 <p>Limits today:</p>
 <ul>
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>

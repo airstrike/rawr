@@ -21,6 +21,7 @@ const GROUPS = [
       ["/docs/iced/reload", "Reload"],
       ["/docs/iced/previews", "Previews"],
     ]],
+    ["/docs/ratatui", "ratatui"],
     ["/docs/play", "Play", [
       ["/docs/play/discord", "Discord"],
     ]],

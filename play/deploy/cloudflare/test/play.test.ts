@@ -313,6 +313,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/reference/play.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
   assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
+  assert.deepEqual(at("docs/ratatui.html"), [], "a ratatui app needs a Cargo project and a terminal");
   // Every name is one source: the docs' cart.rs is the landing page's block.
   const names = blocks.filter((block: { name: string }) => block.name !== "").map((block: { name: string }) => block.name);
   assert.equal(new Set(names).size, names.length - 1);

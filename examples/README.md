@@ -28,6 +28,7 @@ interprets its marked files, and `cargo build --release` builds it natively.
 | [`islands`](islands)    | a native `main` that calls one marked module each tick                                                       |
 | [`grep`](grep)          | a marked command-line tool with flags, files and stdin                                                       |
 | [`invaders`](invaders)  | a space-invaders game on winit and softbuffer, whose rules and drawing are marked and reload while you play |
+| [`tui`](tui)            | a to-do list on ratatui, whose keys and view model are marked and repaint the terminal on save              |
 
 ## An App That Embeds rawr
 
