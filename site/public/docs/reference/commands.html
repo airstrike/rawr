@@ -37,6 +37,7 @@
   <ol>
     <li><a href="/docs/start">Start</a></li>
     <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/agents">Agents</a></li>
     <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
@@ -70,6 +71,8 @@
   <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path, or the first error. Then it runs <code>cargo check</code> and prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
   <tr><td><code>rawr new &lt;path&gt;</code></td><td>Creates a Cargo crate with no dependencies. Its <code>src/main.rs</code> starts with <code>// rawr</code> and prints three lines. It refuses a path that holds files.</td></tr>
   <tr><td><code>rawr new &lt;path&gt; --template &lt;name&gt;</code></td><td>Creates a crate from a template that an installed extension offers. <code>rawr new --help</code> lists the templates. rawr-iced offers <a href="/docs/iced#new"><code>iced</code></a>.</td></tr>
+  <tr><td><code>rawr mcp [path]</code></td><td>Runs an MCP server on stdio for coding agents such as Claude Code and Codex. Relative paths in its calls start at <code>path</code>, else the current directory. Installed extensions add tools to it. <a href="/docs/agents">Agents</a> describes it.</td></tr>
+  <tr><td><code>rawr init [--claude] [--codex] [path]</code></td><td>Registers <code>rawr mcp</code> in the project&rsquo;s agent config: <code>.mcp.json</code> for Claude Code and <code>.codex/config.toml</code> for Codex. Without a flag it looks for a <code>.claude</code> or <code>.codex</code> directory. It keeps the old file as <code>.bak</code>.</td></tr>
   <tr><td><code>rawr doctor [path]</code></td><td>Shows where <code>rawr</code> and each extension are and the program it finds, then each extension&rsquo;s own report. rawr-iced&rsquo;s report adds the iced revision, the renderer and the manifest.</td></tr>
   <tr><td><code>rawr -h</code>, <code>--help</code></td><td>Prints the help. For each installed extension it shows where it was found, which programs it serves and which commands it adds.</td></tr>
   <tr><td><code>rawr -V</code>, <code>--version</code></td><td>Prints the version.</td></tr>
@@ -77,10 +80,10 @@
 <p>Set <code>RAWR_VERBOSE=1</code> to see how a program was loaded and which binary ran it.</p>
 
 <h2 id="extensions">Commands from extensions</h2>
-<p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>new</code> and <code>doctor</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
+<p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>new</code>, <code>doctor</code>, <code>mcp</code> and <code>init</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
 <ul>
   <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds no commands.</li>
-  <li><a href="/docs/iced">rawr-iced</a> runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced. It adds <code>rawr preview</code>, <code>rawr snapshot</code>, <code>rawr mcp</code>, <code>rawr init</code> and <code>rawr cache</code>. <a href="/docs/iced/previews#commands">Previews</a> describes them.</li>
+  <li><a href="/docs/iced">rawr-iced</a> runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced. It adds <code>rawr preview</code>, <code>rawr snapshot</code> and <code>rawr cache</code>, and tools for <code>rawr mcp</code>. <a href="/docs/iced/previews#commands">Previews</a> describes them.</li>
 </ul>
 
 <h2 id="exit">Exit status</h2>

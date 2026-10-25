@@ -15,6 +15,7 @@ const GROUPS = [
   ["Guides", [
     ["/docs/start", "Start"],
     ["/docs/run", "Run"],
+    ["/docs/agents", "Agents"],
     ["/docs/imports", "Imports"],
     ["/docs/embedding", "Embedding"],
     ["/docs/iced", "iced", [

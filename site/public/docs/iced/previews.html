@@ -37,6 +37,7 @@
   <ol data-here>
     <li><a href="/docs/start">Start</a></li>
     <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/agents">Agents</a></li>
     <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews" aria-current="page">Previews</a><ol class="secs"><li><a href="#previews">Previews and snapshots</a></li><li><a href="#commands">Commands from rawr-iced</a></li><li><a href="#files">Files</a></li></ol></li></ol></li>
@@ -99,8 +100,8 @@
   <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
   <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs.</td></tr>
   <tr><td><code>--verbose</code></td><td>With <code>rawr snapshot</code>, prints absolute paths and storage details.</td></tr>
-  <tr><td><code>rawr mcp</code></td><td>Runs an MCP server on stdio for coding tools such as Claude Code and Codex. Its tools list and render previews, check the project and drive a running window. The window tools take screenshots, click, type, press keys, reset the app and wait for a reload.</td></tr>
-  <tr><td><code>rawr init [--claude] [--codex] [path]</code></td><td>Registers <code>rawr mcp</code> in the project. <code>--claude</code> writes <code>.mcp.json</code> for Claude Code. <code>--codex</code> writes <code>.codex/config.toml</code> for Codex.</td></tr>
+  <tr><td><code>rawr mcp</code> tools</td><td><code>rawr mcp</code> comes with rawr itself. rawr-iced adds tools to it: <code>list_previews</code>, <code>render_preview</code>, <code>click</code>, <code>type_text</code>, <code>press_key</code>, <code>do</code> and <code>reset</code>. Its window answers core&rsquo;s <code>screenshot</code> itself. <a href="/docs/agents">Agents</a> describes them.</td></tr>
+  <tr><td><code>rawr init</code></td><td>Comes with rawr itself and registers <code>rawr mcp</code> for an agent. <a href="/docs/agents#register">Agents</a> describes it.</td></tr>
   <tr><td><code>rawr cache clean</code></td><td>Removes the shared builds that no running process uses.</td></tr>
   <tr><td><code>rawr cache clean --all</code></td><td>Also removes the current project&rsquo;s <code>target/rawr</code>.</td></tr>
 </table>
