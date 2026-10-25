@@ -31,7 +31,10 @@
 // POST /play/run runs the site's own snippets without Turnstile: only
 // sources whose SHA-256 is one of the `<code data-run>` texts in the site's
 // pages. build.mjs collects those hashes into src/runnable.gen.ts, so the
-// list is the deployed pages'. Results are cached per image version.
+// list is the deployed pages'. Results are cached per image version. A
+// snippet edited on the site is the visitor's own code: run.js sends it to
+// POST /play/render with the playground's Turnstile, pass and limits, and
+// learns the site key and whether it holds a pass from GET /play/gate.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
@@ -769,6 +772,15 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   }
   if (path === "/play/run" && request.method === "POST") {
     return landingRun(request, env, ctx);
+  }
+  if (path === "/play/gate" && request.method === "GET") {
+    // What the site's run.js needs to send an edited snippet to
+    // /play/render: the Turnstile site key, and whether this browser holds a
+    // pass (the cookie is HttpOnly, so the page can't read it).
+    return Response.json(
+      { sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env) },
+      { headers: { "cache-control": "no-store" } },
+    );
   }
   if (path === "/play/share" && request.method === "POST") {
     const snippet = parseSnippet(await readJson(request, 2 * MAX_SHARE));

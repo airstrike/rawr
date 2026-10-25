@@ -22,3 +22,19 @@
 .run span.err { color: #ff8fc4; }
 .run span.exit { color: var(--dim); }
 .run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }
+
+/* The code of a runnable snippet is editable (run.js). */
+code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--pink); }
+pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px var(--dim); }
+/* After a run the play icon becomes an ×, which clears the output. */
+.runbtn .clear { display: none; }
+.runbtn[data-state="done"] .play { display: none; }
+.runbtn[data-state="done"] .clear { display: block; }
+/* Reset sits left of the run button while the code differs from the original. */
+.run.has-run { position: relative; }
+.resetbtn { position: absolute; top: 6px; right: 44px; height: 26px; padding: 0 8px; border: 1px solid var(--line); background: var(--bg); color: var(--dim); font: 12px/1 var(--mono); cursor: pointer; }
+.resetbtn[hidden] { display: none; }
+.resetbtn:hover { color: var(--text); border-color: var(--dim); }
+.resetbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* The playground's browser check, when Cloudflare asks for an interaction. */
+.runcheck:not(:empty) { margin: 8px 16px; }

@@ -133,12 +133,6 @@ section { border-top: 1px solid var(--line); padding: 64px 0; }
 .copy:hover { color: var(--text); }
 .copy.done { color: var(--pink); }
 .copy.failed { color: var(--rose); white-space: normal; max-width: 140px; padding: 6px 10px; }
-.note { margin-top: 14px; font-size: 15px; color: var(--dim); }
-
-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--raised); font-size: 15px; }
-th, td { padding: 13px 16px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; color: var(--dim); }
-th { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; font-weight: 400; border-top: 0; }
-td:first-child { color: var(--text); }
 
 .block { border: 1px solid var(--line); background: var(--inset); }
 .block .file { background: transparent; }
@@ -178,12 +172,6 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
   .block pre { font-size: 12px; padding: 12px; }
   .file, .run { padding-left: 12px; padding-right: 12px; }
   .tabs .hint { display: none; }
-  table, tbody, tr, td { display: block; }
-  tr:has(th) { display: none; }
-  td { padding: 4px 12px 10px; border-top: 0; }
-  td:first-child { padding: 10px 12px 0; }
-  tr + tr td:first-child { border-top: 1px solid var(--line); }
-  tr:has(th) + tr td:first-child { border-top: 0; }
   .pair { grid-template-columns: minmax(0, 1fr); }
   .pair .shot { justify-self: start; }
 }
@@ -213,7 +201,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
       <h1><span class="word">rawr</span><span class="sub">is rust augmented with rust</span></h1>
       <p class="tag">A Rust interpreter for your dev builds.</p>
       <p class="lede">Put <code>// rawr</code> on the first line of a file in your Cargo crate. <code>rawr run</code> checks the marked files and then interprets them. Cargo compiles the same crate for release.</p>
-      <p class="lede">An app can also run Rust scripts with rawr. That is a <a href="#embed">second, separate use</a>.</p>
+      <p class="lede">rawr can also <a href="#embed">run Rust scripts inside your app</a>.</p>
       <div class="actions">
         <a class="btn go" href="/docs/start">Get started</a>
         <a class="btn" href="/play">Try it in the browser</a>
@@ -228,7 +216,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
       </div>
       <div class="scroller">
       <div class="stage" id="stage-cart">
-        <div class="pane rs">
+        <div class="pane rs" aria-hidden="true">
           <div class="file"><b>src/main.rs</b><span>compiled by Cargo</span></div>
           <pre><code data-lang="rust">// rawr
 enum Item {
@@ -263,7 +251,7 @@ fn main() {
 }</code></pre>
           <div class="run"><b>cargo run</b><span>total: 27</span></div>
         </div>
-        <div class="pane rawr" aria-hidden="true">
+        <div class="pane rawr">
           <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
           <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
 enum Item {
@@ -306,7 +294,7 @@ fn main() {
       </div>
       <figcaption>
         Both sides show the same <code>src/main.rs</code>. Cargo compiles it and rawr interprets it. Both print <code>total: 27</code>.
-        <small>The run button sends the file to rawr&rsquo;s server and shows what it printed there.</small>
+        <small>Edit the file and press run. It runs on rawr&rsquo;s server.</small>
       </figcaption>
     </figure>
   </div>
@@ -319,9 +307,8 @@ fn main() {
       <p><code>rawr run</code> takes a Cargo crate whose root file starts with <code>// rawr</code>, or a single <code>.rs</code> file. It checks names, types and traits first. A program that fails the check doesn&rsquo;t start.</p>
       <p><code>rawr check</code> runs the same check without running the program. Then it runs <code>cargo check</code>, so rustc has the final word on whether the code is valid Rust.</p>
       <p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust, and so is every crate in <code>[dependencies]</code>. With <a href="/docs/imports">rawr-import</a> installed, <code>rawr run</code> compiles them with Cargo and the marked code calls them.</p>
-      <p>For release, <code>cargo build --release</code> compiles every file. The marker is a comment, so the release build has no interpreter in it.</p>
-      <p>The crate root may stay native and call marked modules. A save reaches the running program at its next call. <a href="/docs/run#native-main">A native main</a> says how.</p>
-      <p><strong>Planned:</strong> reload on save for other programs that aren&rsquo;t iced apps. Today such a program runs once and exits.</p>
+      <p>The marker is a comment, so <code>cargo build --release</code> compiles every file and ships no interpreter.</p>
+      <p>The crate root may stay native and call marked modules. A save reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says how.</p>
     </div>
     <div class="stack" id="install">
       <div class="cmds">
@@ -342,7 +329,6 @@ fn main() {
     <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
         <p class="fig-note">Change <code>item.price()</code> to <code>item.cost()</code> in the cart above. The error points to the line, and nothing runs. Then <code>cargo check</code> reports rustc&rsquo;s version of the same error.</p>
       </div>
-      <p class="note">The <code>rawr</code> command needs Rust 1.95 or newer. <a href="/docs/start">Get started</a> walks through a first crate.</p>
     </div>
   </div>
 </section>
@@ -351,10 +337,9 @@ fn main() {
   <div class="wrap sec">
     <div class="side">
       <h2>iced apps that reload when you save</h2>
-      <p>rawr-iced is an extension for <a href="https://github.com/iced-rs/iced">iced</a> apps. With it installed, <code>rawr run</code> opens an iced app in a window. iced draws the window, and rawr interprets the marked files.</p>
-      <p>Saving a marked file swaps the new code into the running app. The window stays open. The app keeps its state when the new code is compatible with it. Otherwise the app starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the window.</p>
+      <p>With the rawr-iced extension, <code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles the rest of the app.</p>
+      <p>Saving a marked file swaps the new code into the running app. The app keeps its state when the new code is compatible with it. Otherwise it starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the app.</p>
       <p>In RawrGallery, a gallery app built with rawr-iced, an edit to a marked file was live in about 0.2&nbsp;s on an Apple Silicon Mac. An edit to a native module or a dependency is rebuilt by Cargo first, which took about 8&nbsp;s there.</p>
-      <p>Cargo compiles the app for release. The release build doesn&rsquo;t need the interpreter.</p>
       <div class="actions"><a class="btn" href="/docs/iced">Set up rawr-iced</a></div>
     </div>
       <figure class="compare" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
@@ -365,7 +350,7 @@ fn main() {
         </div>
         <div class="scroller">
         <div class="stage" id="stage-counter">
-          <div class="pane rs">
+          <div class="pane rs" aria-hidden="true">
             <div class="file"><b>src/main.rs</b><span>compiled by Cargo</span></div>
             <pre><code data-lang="rust">// rawr
 use iced::Center;
@@ -410,7 +395,7 @@ impl Counter {
 }</code></pre>
             <div class="run"><b>cargo run</b><span class="quiet">(opens a window)</span></div>
           </div>
-          <div class="pane rawr" aria-hidden="true">
+          <div class="pane rawr">
             <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
             <pre><code data-lang="rust" data-run="main.rs" id="src-counter">// rawr
 use iced::Center;
@@ -463,7 +448,7 @@ impl Counter {
         </div>
         <figcaption>
           The same counter runs with rawr and compiles with Cargo.
-          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line. The run button renders its first frame on rawr&rsquo;s server. It doesn&rsquo;t open a window.</small>
+          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line. The run button renders its first frame on rawr&rsquo;s server.</small>
         </figcaption>
       </figure>
   </div>
@@ -473,9 +458,9 @@ impl Counter {
   <div class="wrap sec">
     <div class="side">
       <h2>Run Rust scripts in your app</h2>
-      <p>Embedding is a second use, separate from the dev loop. Your app adds the <code>rawr</code> crate and runs Rust scripts while it runs.</p>
+      <p>Your app adds the <code>rawr</code> crate and runs Rust scripts.</p>
       <p>Put <code>#[rawr::export]</code> on your own types and functions, and scripts can use them. <code>compile_file</code> checks a script against the exports. <code>call_fn</code> calls a function the script defines.</p>
-      <p>Here the interpreter is part of your app. It ships in your release build for as long as the app runs scripts.</p>
+      <p>Here the interpreter ships in your release build.</p>
       <div class="actions"><a class="btn" href="/docs/embedding">Embed rawr</a></div>
     </div>
     <div class="stack" id="hosts">
@@ -519,11 +504,6 @@ fn label(order: Order) -&gt; String {
 }</code></pre>
         <div class="run"><b>cargo run</b><span>Ada x2: 19.00</span></div>
       </div>
-      <table>
-        <tr><th>Use</th><th>What runs</th><th>What ships in release</th></tr>
-        <tr><td>The dev loop</td><td><code>rawr run</code> interprets the marked files. Cargo compiles native modules and dependencies.</td><td>Cargo compiles every file. No interpreter ships.</td></tr>
-        <tr><td>Embedding</td><td>Cargo builds your app. Your app runs scripts through the <code>rawr</code> crate.</td><td>The <code>rawr</code> crate ships, because your app runs scripts.</td></tr>
-      </table>
     </div>
   </div>
 </section>
@@ -532,7 +512,7 @@ fn label(order: Order) -&gt; String {
   <div class="wrap sec">
     <div class="side">
       <h2>Run Rust in your browser</h2>
-      <p>The playground runs Rust code and shows its output. It renders iced code as an image or an animation. No installation is required.</p>
+      <p>The playground runs Rust code and shows its output. It renders iced code as an image or an animation.</p>
       <p>The <code class="nw">?play</code> bot does the same in Discord. Post <code class="nw">?play</code> above a Rust code block in a channel where the bot is turned on.</p>
       <div class="actions">
         <a class="btn go" href="/play">Open the playground</a>
@@ -561,7 +541,7 @@ fn label(order: Order) -&gt; String {
       <h2>Pre-alpha</h2>
     </div>
     <div>
-      <p class="status">rawr supports part of Rust. <a href="/docs/reference/overview">Supported Rust</a> lists what works and what is missing. It also lists what rawr refuses and the few cases that still behave differently.</p>
+      <p class="status">rawr supports part of Rust. The <a href="/docs/reference/overview">API Reference</a> lists what works, what is missing and where rawr still differs from Rust.</p>
       <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
       <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, reload on save for other programs that aren&rsquo;t iced apps, and a second host for ratatui.</p>
       <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
@@ -586,7 +566,8 @@ fn label(order: Order) -&gt; String {
   const TOKEN = /(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|(#\[[^\]\n]*\])|(\b\d[\d_]*(?:\.\d+)?\b)|(\b[A-Za-z_][A-Za-z0-9_]*!)|(\b[A-Za-z_][A-Za-z0-9_]*\b)|(\[[^\]\n]*\](?=\n|$))/g;
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const span = (c, s) => `<span class="${c}">${esc(s)}</span>`;
-  for (const el of document.querySelectorAll("code[data-lang]")) {
+  // run.js calls it again on code that was edited.
+  const highlight = (el) => {
     const src = el.textContent, toml = el.dataset.lang === "toml";
     let out = "", last = 0;
     src.replace(TOKEN, (m, com, str, attr, num, mac, word, table, at) => {
@@ -604,7 +585,9 @@ fn label(order: Order) -&gt; String {
       return m;
     });
     el.innerHTML = out + esc(src.slice(last));
-  }
+  };
+  for (const el of document.querySelectorAll("code[data-lang]")) highlight(el);
+  window.rawrHighlight = highlight;
 
   // The subtitle under "rawr" is as wide as the word.
   const brand = document.querySelector(".hero h1");

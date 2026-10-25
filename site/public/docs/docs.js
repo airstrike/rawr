@@ -15,7 +15,8 @@
   const TOKEN = /(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|(#\[[^\]\n]*\])|(\b\d[\d_]*(?:\.\d+)?\b)|(\b[A-Za-z_][A-Za-z0-9_]*!)|(\b[A-Za-z_][A-Za-z0-9_]*\b)|(\[[^\]\n]*\](?=\n|$))/g;
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const span = (c, s) => `<span class="${c}">${esc(s)}</span>`;
-  for (const el of document.querySelectorAll("code[data-lang]")) {
+  // run.js calls it again on code that was edited.
+  const highlight = (el) => {
     const src = el.textContent, toml = el.dataset.lang === "toml";
     let out = "", last = 0;
     src.replace(TOKEN, (m, com, str, attr, num, mac, word, table, at) => {
@@ -33,7 +34,9 @@
       return m;
     });
     el.innerHTML = out + esc(src.slice(last));
-  }
+  };
+  for (const el of document.querySelectorAll("code[data-lang]")) highlight(el);
+  window.rawrHighlight = highlight;
 
   // A "#" link before each section heading that has an id.
   for (const h of document.querySelectorAll("article h2[id], article h3[id]")) {
