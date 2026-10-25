@@ -94,7 +94,7 @@ pub(crate) fn source(label: &str) -> String {
 #[derive(Clone)] enum Message {{ Tick }}
 impl State {{
     fn update(&mut self, message: Message) {{ self.value = native::echo(7); }}
-    fn view(&self) -> iced::Element<Message> {{ throw "{label}" }}
+    fn view(&self) -> iced::Element<Message> {{ panic!("{label}") }}
 }}
 pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 "#

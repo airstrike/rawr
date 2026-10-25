@@ -71,7 +71,7 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
     let (engine, cycle) = retained();
     let before = usage(&engine);
     let pure =
-        snapshot("#[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }");
+        snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let Outcome::Compiled(compiled) = engine
         .compile_package_snapshot_resident(&pure, &cycle)
         .unwrap()
@@ -109,7 +109,7 @@ fn initial_and_ordinary_generations_share_the_resident_account() {
     let (engine, cycle) = retained();
     let baseline = usage(&engine);
     let pure =
-        snapshot("#[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }");
+        snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let (initial, ast) = engine
         .compile_package_snapshot_generation_with_top_level_checked(&pure, &cycle, &[0; 32])
         .unwrap();
@@ -150,7 +150,7 @@ mod top_level {
                 "struct State { value: i64 }\n\
              #[preview] pub fn sample() -> iced::Element<()> {\n\
                  let state = State { value: 7 };\n\
-                 throw \"not invoked\";\n\
+                 panic!(\"not invoked\");\n\
              }",
             ))
             .unwrap();
@@ -172,23 +172,23 @@ mod top_level {
     }
 
     #[test]
-    fn neutral_reconstruction_keeps_prior_constant_cycles_in_the_original_account() {
+    fn neutral_reconstruction_keeps_prior_support_in_the_original_account() {
         let (engine, _) = retained();
         let original = engine.imported_native_snapshot().unwrap();
         let source = snapshot(
             "struct State { value: i64 }\n\
              #[preview] pub fn sample() -> iced::Element<()> {\n\
                  let state = State { value: 7 };\n\
-                 throw \"not invoked\";\n\
+                 panic!(\"not invoked\");\n\
              }\n\
-             const first = 42;\n\
-             fn answer() { 42 }\n\
-             const callback = answer;\n\
-             callback",
+             fn answer() -> i64 { 42 }",
         );
         let ast = engine.compile_package_snapshot(&source).unwrap();
         let first_support = Shared::downgrade(ast.shared_support());
         assert!(!ast.shared_support().is_empty());
+        // A live AST copy keeps the first generation's support charged across
+        // the reconstruction and the retirement of its engine.
+        let first_copy = ast.clone_functions_only();
         let mut program = Program {
             engine: engine.clone(),
             ast: Some(ast),
@@ -211,6 +211,7 @@ mod top_level {
 
         let ast = replacement.compile_package_snapshot(&source).unwrap();
         let second_support = Shared::downgrade(ast.shared_support());
+        let second_copy = ast.clone_functions_only();
         let mut program = Program {
             engine: replacement.clone(),
             ast: Some(ast),
@@ -250,6 +251,10 @@ mod top_level {
         assert_eq!(native.snapshot().exceeded, exceeded.exceeded);
         assert!(first_support.upgrade().is_some());
         assert!(second_support.upgrade().is_some());
+        drop(first_copy);
+        drop(second_copy);
+        assert!(first_support.upgrade().is_none());
+        assert!(second_support.upgrade().is_none());
     }
 
     #[test]
@@ -259,7 +264,7 @@ mod top_level {
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
-                throw \"not invoked\";\n\
+                panic!(\"not invoked\");\n\
             }";
         let (initial, ast) = engine
             .compile_package_snapshot_generation_with_top_level_checked(
@@ -320,9 +325,12 @@ mod top_level {
     #[test]
     fn generated_top_level_discards_acyclic_function_environments_on_success_and_error() {
         for (source, succeeds) in [
-            ("fn answer() { 42 } let callback = answer; callback", true),
             (
-                "fn answer() { 42 } let callback = answer; throw callback;",
+                "fn answer() -> i64 { 42 } let callback = answer; callback",
+                true,
+            ),
+            (
+                "fn answer() -> i64 { 42 } let callback = answer; panic!(\"{}\", callback());",
                 false,
             ),
         ] {
@@ -349,80 +357,18 @@ mod top_level {
     }
 
     #[test]
-    fn generated_top_level_const_cycle_keeps_candidate_support_charged() {
-        let (engine, cycle) = retained();
-        let baseline = usage(&engine);
-        let source = "struct State { value: i64 }\n\
-            #[preview] pub fn sample() -> iced::Element<()> {\n\
-                let state = State { value: 7 };\n\
-                throw \"not invoked\";\n\
-            }\n\
-            const first = 42;\n\
-            fn answer() { 42 }\n\
-            const callback = answer;\n\
-            callback";
-        let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(source),
-                &cycle,
-                &[0; 32],
-            )
-            .unwrap();
-        assert!(!ast.shared_support().is_empty());
-        let support = Shared::downgrade(ast.shared_support());
-        let live = usage(&engine);
-        assert!(live.0 > baseline.0 && live.1 > baseline.1);
-        let candidate = candidate
-            .bind(&engine, preview_runtime())
-            .unwrap()
-            .into_snapshot_catalog();
-        let mut program = Program {
-            engine: engine.clone(),
-            ast: Some(ast),
-        };
-        evaluate_program(&mut program).unwrap();
-        assert!(program.ast.is_none());
-        assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
-        drop(candidate);
-        // This preserves the existing constants/environment cycle. It is not
-        // collected by dropping the AST or executable, and must remain charged.
-        assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
-
-        let native = engine.imported_native.as_ref().unwrap();
-        let identity = native.snapshot().account;
-        let mut pressure = native.attempt().unwrap();
-        let remaining = rawr_import::cargo::Limits::standard().byte_limit() - native.usage().1;
-        crate::host::ImportAllocation::retain_checked(&mut pressure, Some(0), Some(remaining))
-            .unwrap();
-        // Compiling past the byte target is accepted and recorded on
-        // the same runner account; nothing is refused or latched.
-        let outcome = engine
-            .compile_package_snapshot_resident(&snapshot(source), &cycle)
-            .unwrap();
-        assert_eq!(native.snapshot().account, identity);
-        assert!(native.snapshot().first_refusal.is_none());
-        assert!(native.snapshot().exceeded.is_exceeded());
-        drop(outcome);
-        drop(pressure);
-        assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
-    }
-
-    #[test]
     fn escaped_callback_keeps_support_charged_and_observes_later_constants() {
         let (engine, cycle) = retained();
         let baseline = usage(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
-                throw \"not invoked\";\n\
+                panic!(\"not invoked\");\n\
             }\n\
-            const first = 1;\n\
-            fn answer() { global::later }\n\
+            const FIRST: i64 = 1;\n\
+            fn answer() -> i64 { LATER }\n\
             let callback = answer;\n\
-            const later = 42;\n\
+            const LATER: i64 = 42;\n\
             callback";
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level_checked(
@@ -455,7 +401,7 @@ mod top_level {
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
-                throw \"not invoked\";\n\
+                panic!(\"not invoked\");\n\
             }";
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level_checked(
@@ -506,9 +452,9 @@ mod top_level {
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
-                throw \"not invoked\";\n\
+                panic!(\"not invoked\");\n\
             }\n\
-            fn answer() { 42 }";
+            fn answer() -> i64 { 42 }";
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level_checked(
                 &snapshot(source),
@@ -544,7 +490,7 @@ mod top_level {
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level_checked(
                 &snapshot(
-                    "#[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }",
+                    "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
                 ),
                 &cycle,
                 &[0; 32],
@@ -574,7 +520,9 @@ fn resident_target_exceedance_keeps_existing_owners_and_their_account() {
     let full = native.usage();
     let outcome = engine
         .compile_package_snapshot_resident(
-            &snapshot("#[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }"),
+            &snapshot(
+                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
+            ),
             &cycle,
         )
         .unwrap();
@@ -638,7 +586,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         .find(|outcome| outcome.export().path().eq(["family_2"]))
         .unwrap();
     let original = "pub fn main() -> bool { fixture::family_2(7) }\n\
-        #[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }";
+        #[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }";
     let path = "/resident-fixture/main.rs";
     let mut inputs = rawr_import::surface::Snapshot::builder(&limits);
     inputs.entry(path).unwrap();
