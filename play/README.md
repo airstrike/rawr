@@ -261,7 +261,7 @@ The notes on an animated reply:
 The landing page's Run results are not cached when the clock cut them.
 
 Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
-of at most 32, 64 KiB strings, 131,072-element arrays and maps, and a
+of at most 32, 64 KiB strings, 65,536-element arrays and maps, and a
 wall-clock deadline checked from the progress callback. Canvas sides are at
 most 2048. Each limit gets a plain reply such as `operation limit exceeded:
 more than 1000000 operations (an endless loop?)`.
@@ -277,7 +277,8 @@ own files, which `play/sandbox` (`rawr-play-sandbox`) ships inside the
 renderer and inside rawr-web, each pinned by its SHA-256. `include_bytes!`
 of exactly one of their paths (`../assets/sun.png` and the others of iced's
 `solar_system`) reads the shipped copy from a module the Engine holds, and
-any other path still fails. The same crate gives a snippet the parts of
+any other path still fails. A shipped file's own bytes are left out of the
+array limit, so the 113 KB sun loads, and anything added to them counts. The same crate gives a snippet the parts of
 rand and tracing-subscriber that iced's examples use: `rand::rng()` is
 rand's own `StdRng`, seeded the same for every render as the clock is
 frozen the same, so a snippet's frames repeat. `tracing_subscriber::fmt::init()`

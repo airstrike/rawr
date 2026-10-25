@@ -112,6 +112,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(len as usize, FILES[2].bytes.len());
+        // Only the shipped bytes are left out of the limit: what a program
+        // adds to them counts.
+        let grown = engine
+            .eval::<rawr::INT>(
+                r#"
+                let mut bytes = include_bytes!("../assets/moon.png").to_vec();
+                for _ in 0..70000 { bytes.push(0); }
+                bytes.len() as i64
+                "#,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(grown.contains("Size of array"), "{grown}");
+        let added = engine
+            .eval::<rawr::INT>(
+                r#"
+                let mut bytes = include_bytes!("../assets/moon.png").to_vec();
+                for _ in 0..100 { bytes.push(0); }
+                bytes.len() as i64
+                "#,
+            )
+            .unwrap();
+        assert_eq!(added as usize, FILES[2].bytes.len() + 100);
         for denied in [
             r#"include_bytes!("../assets/moon.png ").len() as i64"#,
             r#"include_bytes!("/etc/passwd").len() as i64"#,

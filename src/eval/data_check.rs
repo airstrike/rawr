@@ -20,8 +20,8 @@ pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
         ax += 1;
 
         match value.0 {
-            Union::Array(ref a, ..) => {
-                let (a, m, s) = calc_array_sizes(a);
+            Union::Array(ref a, tag, ..) => {
+                let (a, m, s) = tagged_array_sizes(a, tag);
                 ax += a;
                 mx += m;
                 sx += s;
@@ -55,6 +55,17 @@ pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
 
     (ax, mx, sx)
 }
+/// [`calc_array_sizes`], less the bytes of a file the host shipped
+/// (`resolve::bundle_files`): a shipped file is the program's, as its text
+/// is, so only what is added to it counts against the limits.
+fn tagged_array_sizes(
+    array: &crate::Array,
+    tag: crate::types::dynamic::Tag,
+) -> (usize, usize, usize) {
+    let (a, m, s) = calc_array_sizes(array);
+    (a.saturating_sub(crate::resolve::bundled_len(tag)), m, s)
+}
+
 /// Recursively calculate the sizes of a map.
 ///
 /// Sizes returned are `(` [`Array`][crate::Array], [`Map`][crate::Map] and [`String`] `)`.
@@ -70,8 +81,8 @@ pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
         mx += 1;
 
         match value.0 {
-            Union::Array(ref a, ..) => {
-                let (a, m, s) = calc_array_sizes(a);
+            Union::Array(ref a, tag, ..) => {
+                let (a, m, s) = tagged_array_sizes(a, tag);
                 ax += a;
                 mx += m;
                 sx += s;
@@ -116,7 +127,7 @@ pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
 #[inline]
 pub fn calc_data_sizes(value: &Dynamic, _top: bool) -> (usize, usize, usize) {
     match value.0 {
-        Union::Array(ref arr, ..) => calc_array_sizes(arr),
+        Union::Array(ref arr, tag, ..) => tagged_array_sizes(arr, tag),
         Union::Blob(ref blob, ..) => (blob.len(), 0, 0),
         Union::Map(ref map, ..) => calc_map_sizes(map),
         Union::Str(ref s, ..) => (0, 0, s.len()),

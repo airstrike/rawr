@@ -198,12 +198,13 @@ impl Default for Limits {
             operations: 1_000_000,
             call_depth: 32,
             string_size: 64 * 1024,
-            // A 256 by 128 RGBA pixel buffer, and the bytes of each file
-            // the playground's examples include (`rawr_play_sandbox::bundle`).
-            array_size: 128 * 1024,
+            // A 128 by 128 RGBA pixel buffer. The files the playground's
+            // examples include (`rawr_play_sandbox::bundle`) are left out of
+            // it, as the program's text is.
+            array_size: 64 * 1024,
             // One rule for every collection: a `HashMap` already counts
-            // against the array limit, so maps get the same 131,072 items.
-            map_size: 128 * 1024,
+            // against the array limit, so maps get the same 65,536 items.
+            map_size: 64 * 1024,
             time: Duration::from_secs(2),
             animation: Duration::from_secs(2),
         }
@@ -935,17 +936,13 @@ fn view() -> impl Widget<()> {
     #[test]
     fn maps_and_arrays_share_one_size_limit() {
         let limits = super::Limits::default();
-        assert_eq!((limits.array_size, limits.map_size), (131_072, 131_072));
-        // Each file a playground example includes fits in an array.
-        assert!(rawr_play_sandbox::bundle::FILES
-            .iter()
-            .all(|file| file.bytes.len() <= limits.array_size));
+        assert_eq!((limits.array_size, limits.map_size), (65_536, 65_536));
         let PlayError::Limit(reason) = super::classify("Size of object map too large", &limits)
         else {
             panic!("not a limit");
         };
         assert!(
-            reason.contains("arrays and maps up to 131072 items"),
+            reason.contains("arrays and maps up to 65536 items"),
             "{reason}"
         );
     }
