@@ -441,7 +441,7 @@ struct Streams {
 struct Running {
     id: u64,
     input: iced::futures::channel::mpsc::UnboundedSender<iced::advanced::subscription::Event>,
-    output: iced::futures::stream::BoxStream<'static, crate::runtime::Message>,
+    output: iced_runtime::futures::BoxStream<crate::runtime::Message>,
 }
 
 impl Streams {

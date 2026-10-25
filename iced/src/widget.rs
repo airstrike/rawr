@@ -58,6 +58,7 @@ pub(crate) fn bind(
     script::bind(iced);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn bind_profile(
     iced: &mut rawr::host::runtime::Builder,
     rawr: &mut rawr::host::runtime::Builder,

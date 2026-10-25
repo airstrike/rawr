@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use iced::futures::channel::{mpsc, oneshot};
 
+use crate::local::Local;
 use crate::{effect, runtime};
 
 type Job = Box<dyn FnOnce() -> Option<runtime::Message> + Send + 'static>;
@@ -50,13 +51,14 @@ pub(crate) fn on_ui(
     let request = runtime::Message::resume(
         owner,
         Resume::new(move || {
-            let _ = sender.send(job());
+            let _ = sender.send(Local(job()));
             None
         }),
         false,
     );
     iced::Task::done(request).chain(
-        iced::Task::future(receiver).then(|reply| reply.unwrap_or_else(|_| iced::Task::none())),
+        iced::Task::future(receiver)
+            .then(|reply| reply.map_or_else(|_| iced::Task::none(), |task| task.0)),
     )
 }
 
@@ -71,7 +73,7 @@ pub(crate) fn each_on_ui<T: Send + 'static>(
     task: iced::Task<T>,
     step: impl Fn(T) -> iced::Task<runtime::Message> + Send + Sync + 'static,
 ) -> iced::Task<runtime::Message> {
-    let (sender, receiver) = mpsc::unbounded::<iced::Task<runtime::Message>>();
+    let (sender, receiver) = mpsc::unbounded::<Local<iced::Task<runtime::Message>>>();
     let step = Arc::new(step);
     let requests = task.map(move |output| {
         let sender = sender.clone();
@@ -79,13 +81,13 @@ pub(crate) fn each_on_ui<T: Send + 'static>(
         runtime::Message::resume(
             owner,
             Resume::new(move || {
-                let _ = sender.unbounded_send(step(output));
+                let _ = sender.unbounded_send(Local(step(output)));
                 None
             }),
             false,
         )
     });
-    iced::Task::batch([requests, iced::Task::stream(receiver).then(|task| task)])
+    iced::Task::batch([requests, iced::Task::stream(receiver).then(|task| task.0)])
 }
 
 /// A message that asks the UI thread to run `job` and deliver the message it

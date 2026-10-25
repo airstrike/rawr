@@ -4,6 +4,7 @@ use rawr::{application, host, item, preview, program, Dynamic, EvalAltResult, Po
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::local::Local;
 use crate::{dispatch, effect, runtime};
 
 /// What happens to one output once it reaches the UI thread: the rest of
@@ -85,15 +86,19 @@ pub type Materialize =
 /// An iced `Task` a Rust function returned. It runs once: Rust's `Task` is
 /// not `Clone`, and a copy of the plan shares the one native task.
 #[derive(Clone)]
-pub(crate) struct Imported(Arc<Mutex<Option<iced::Task<Materialize>>>>);
+pub(crate) struct Imported(Arc<Mutex<Option<Local<iced::Task<Materialize>>>>>);
 
 impl Imported {
     fn new(task: iced::Task<Materialize>) -> Self {
-        Self(Arc::new(Mutex::new(Some(task))))
+        Self(Arc::new(Mutex::new(Some(Local(task)))))
     }
 
     fn take(&self) -> Option<iced::Task<Materialize>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .map(|task| task.0)
     }
 }
 
@@ -167,7 +172,7 @@ pub enum Step {
 /// `task::Sipper<Output, Progress>`. It runs once, as Rust's does.
 #[derive(Clone)]
 pub struct Sip {
-    task: Arc<Mutex<Option<iced::Task<Step>>>>,
+    task: Arc<Mutex<Option<Local<iced::Task<Step>>>>>,
     /// A script sipper's builder, `async |progress| ..`, in place of a
     /// Rust task.
     script: Option<item::Value>,
@@ -180,6 +185,7 @@ impl Sip {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
+            .map(|task| task.0)
     }
 
     /// The witness of the sipper's `Output` (0) or `Progress` (1).
@@ -193,7 +199,7 @@ impl Sip {
     /// value becomes a Rawr value on the UI thread. Its output ends it.
     pub(crate) fn progress(&self) -> Option<iced::futures::stream::BoxStream<'static, Dynamic>> {
         use iced::futures::StreamExt as _;
-        let stream = iced_runtime::task::into_stream(self.take()?)?;
+        let stream = Local(iced_runtime::task::into_stream(self.take()?)?);
         let witness = self.witness(1);
         Some(
             stream
@@ -250,7 +256,7 @@ where
         move |progress| Step::Progress(on_progress(progress)),
         move |output| Step::Output(on_output(output)),
     );
-    let task = Arc::new(Mutex::new(Some(task)));
+    let task = Arc::new(Mutex::new(Some(Local(task))));
     Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
         Dynamic::from(Sip {
             task,
