@@ -55,8 +55,9 @@
 </nav>
 <main>
 <article>
+<!-- TODO: a later batch replaces the call API shown on this page (engine.call_fn::<T>(&mut scope, &ast, "name", (args,))). Leave the API text as it is until then. -->
 <h1>Embedding</h1>
-<p class="lede">A second use of rawr: your app runs Rust scripts while it runs. It exports its own types and functions with <code>#[rawr::export]</code>, compiles a script with an <code>Engine</code> and calls the functions the script defines.</p>
+<p class="lede">Your app can run Rust scripts with rawr. It exports its own types and functions with <code>#[rawr::export]</code>, compiles a script with an <code>Engine</code> and calls the functions the script defines.</p>
 <h2 id="add">Add the crate</h2>
 <p>The crate needs Rust 1.95 or newer.</p>
 <div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>

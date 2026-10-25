@@ -340,6 +340,26 @@ test("docs pages that moved redirect to their new paths", async () => {
   }
 });
 
+test("docs.js sends a moved anchor to a page and an id that exist", async () => {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const script = readFileSync(root + "docs/docs.js", "utf8");
+  const moved: Record<string, Record<string, string>> = JSON.parse(script.match(/const MOVED = (\{.*\});/)![1]);
+  const page = (path: string) =>
+    [`${path.slice(1)}.html`, `${path.slice(1)}/index.html`].find((candidate) => existsSync(root + candidate));
+  const broken: string[] = [];
+  for (const [from, anchors] of Object.entries(moved)) {
+    if (!page(from)) broken.push(`${from} is not a page`);
+    for (const [id, to] of Object.entries(anchors)) {
+      const [path, anchor] = to.split("#");
+      const file = page(path);
+      if (!file) broken.push(`${from}#${id}: ${path} is not a page`);
+      else if (anchor && !readFileSync(root + file, "utf8").includes(` id="${anchor}"`)) broken.push(`${from}#${id}: ${to} has no such id`);
+    }
+  }
+  assert.deepEqual(broken, []);
+});
+
 test("the allow-list build fails on empty, marked-up or disagreeing blocks", async () => {
   const { allowList } = await import("../allowlist.mjs");
   const fails = (pages: Record<string, string>, message: RegExp) =>

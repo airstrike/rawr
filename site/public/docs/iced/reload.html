@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reload | rawr docs</title>
-<meta name="description" content="What happens when you save a file in an iced app under rawr run: what state carries over, what boots again, what a failed check does, how native edits rebuild and what happens to running tasks.">
+<meta name="description" content="Saving a marked file swaps its new code into the running iced app. The app keeps its state when the new code allows it.">
 <meta property="og:title" content="Reload | rawr docs">
-<meta property="og:description" content="What happens when you save a file in an iced app under rawr run: what state carries over, what boots again, what a failed check does, how native edits rebuild and what happens to running tasks.">
+<meta property="og:description" content="Saving a marked file swaps its new code into the running iced app. The app keeps its state when the new code allows it.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced/reload">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -56,29 +56,28 @@
 <main>
 <article>
 <h1>Reload</h1>
-<p class="lede">What happens when you save while an iced app runs under <code>rawr run</code>. What it keeps, what starts again and what rebuilds.</p>
+<p class="lede">Saving a marked file swaps its new code into the running iced app. The app keeps its state when the new code allows it.</p>
 <h2 id="hot-reload">Saving a marked file</h2>
-<p><code>rawr run</code> opens the app and watches the crate. Saving a file marked <code>// rawr</code> checks the new code and swaps it into the running app. The window stays open.</p>
-<p>An edit to a marked file needs no native build. In RawrGallery, a gallery app built with rawr-iced, such an edit was live in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
-<p><code>rawr run</code> also runs <code>cargo check</code> in the background when the app opens and after each save. Its errors appear in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
+<p>A save checks the new code and swaps it in with no native build. In a gallery app on an Apple Silicon Mac, that took about 0.2&nbsp;s.</p>
+<p><code>rawr run</code> also runs <code>cargo check</code> in the background. Its errors show in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
 
 <h2 id="state">What a reload keeps</h2>
-<p>The app keeps its state when the new code is compatible with it. A change to the state&rsquo;s own types can make it incompatible. Then the app boots again: <code>iced::run</code> starts from <code>Default</code>, and <code>iced::application</code> runs its boot function.</p>
-<p>An edit to a marked file applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
+<p>A change to the state&rsquo;s own types can make the old state incompatible. Then the app boots again.</p>
+<p>A value of an imported type in the State survives an edit to a marked file. An edit to the dependency&rsquo;s Rust code starts a new app from its default State. The window names the imported type that did not carry over.</p>
 
 <h2 id="failed">A save that fails the check</h2>
-<p>A save that doesn&rsquo;t pass the check doesn&rsquo;t replace the running app. A bar in the window says <code>Last good still running</code> and shows the error. Its buttons retry, copy the error or reset the app.</p>
+<p>The last good code keeps running. A bar in the window shows the error. Its buttons retry, copy the error or reset the app.</p>
 
 <h2 id="native">Native edits</h2>
-<p>Saving a native module or the source of a dependency rebuilds it with Cargo. The app reloads when the build finishes. In RawrGallery on a busy Apple Silicon Mac, the new window was up about 8&nbsp;s after such a save.</p>
+<p>Saving a native module or a dependency&rsquo;s source rebuilds it with Cargo. The app reloads when the build finishes. In the same gallery app on a busy Apple Silicon Mac, that took about 8&nbsp;s.</p>
 
 <h2 id="tasks">Tasks and async code</h2>
-<p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
-<p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
+<p>A reload cancels the running tasks. Their handles report <code>is_aborted()</code>, and the status line says so. A suspended async body never goes on with the new code.</p>
+<p>The State keeps what it held. A download the reload cancelled still shows as running until a message changes it.</p>
 <p>A reload drops the output of a <code>spawn_blocking</code> closure that is still running. It can&rsquo;t stop the thread, which ends when the closure returns.</p>
 
 <h2 id="main-statements">Statements before the app</h2>
-<p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine rawr runs on.</p>
+<p><code>main</code> may run statements such as <code>tracing_subscriber::fmt::init();</code> before the app starts. They run once, when <code>rawr run</code> starts. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced">Previous<b>iced</b></a><a class="next" href="/docs/iced/previews">Next<b>Previews</b></a></nav>
 </article>
 </main>

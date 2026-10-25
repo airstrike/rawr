@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Start | rawr docs</title>
-<meta name="description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
+<meta name="description" content="Install rawr and run your first Rust crate without compiling it. The same files build for release with Cargo.">
 <meta property="og:title" content="Start | rawr docs">
-<meta property="og:description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
+<meta property="og:description" content="Install rawr and run your first Rust crate without compiling it. The same files build for release with Cargo.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -57,15 +57,15 @@
 <main>
 <article>
 <h1>Start</h1>
-<p class="lede">Install the <code>rawr</code> command and start a crate. Run it, make an error, then build it for release with Cargo.</p>
+<p class="lede">Install rawr and run your first crate without compiling it. The same files build for release with Cargo.</p>
 <h2 id="install">Install</h2>
-<p>Install the <code>rawr</code> command. It needs Rust 1.95 or newer.</p>
+<p>rawr needs Rust 1.95 or newer.</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>The <code>rawr-cli</code> package installs <code>rawr</code>. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. Run <code>rawr doctor</code> to see what is installed.</p>
+<p>This also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too.</p>
 
 <h2 id="first-crate">A first crate</h2>
 <div class="block"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre></div>
-<p><code>rawr new hello</code> creates the <code>hello</code> directory. It holds a Cargo crate with <code>Cargo.toml</code> and <code>src/main.rs</code>. The crate has no dependencies.</p>
+<p><code>rawr new hello</code> creates a Cargo crate with no dependencies.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">// rawr
@@ -96,8 +96,8 @@ fn main() {
 2. Hello, rawr!
 3. Hello, rawr!</span></div>
 </div>
-<p>The first line, <code>// rawr</code>, marks the file. <code>rawr run</code> checks it and then interprets it. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
-<p><code>rawr run</code> runs the program once and exits. Edit <code>src/main.rs</code> and run it again. A crate with no dependencies needs no build, so the edit runs at once. Reload on save for a program like this one is planned. iced apps reload today, with <a href="/docs/iced">rawr-iced</a>.</p>
+<p>The <code>// rawr</code> line marks the file for rawr to interpret. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
+<p>A crate with no dependencies needs no build, so an edit runs at once.</p>
 
 <h2 id="errors">Errors</h2>
 <p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and run it again:</p>
@@ -108,12 +108,11 @@ fn main() {
  <span class="c">22 |</span>         println!("{}", greeting.lines(count));
     <span class="c">|</span>                                 <span class="e">^^^^^</span></code></pre>
 </div>
-<p>The program doesn&rsquo;t start, so nothing is printed before the error. Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
-<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code> beside the program. Its errors are printed after the program ends, so here rustc reports the same mistake a second time.</p>
+<p>Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
+<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code>. Its errors are printed after the program ends, so rustc reports this mistake a second time.</p>
 
 <h2 id="check">Check without running</h2>
-<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. It prints <code>Checked</code> and the path, then <code>cargo check passed</code>. It exits with status 1 if either check fails.</p>
-<p>rawr&rsquo;s check is not rustc. It accepts some code that rustc rejects, so rustc has the final word. <a href="/docs/reference/overview#lenient">Supported Rust</a> lists those cases.</p>
+<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. rawr&rsquo;s check accepts some code that rustc rejects, so rustc has the final word. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
 
 <h2 id="first-program">A single file</h2>
 <p><code>rawr run</code> also takes one <code>.rs</code> file. A single file doesn&rsquo;t need the marker.</p>
@@ -152,22 +151,20 @@ fn main() {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run cart.rs</b><span id="out-cart" aria-live="polite">total: 27</span></div>
 </div>
-<p>A single file can hold items, top-level statements, or both. Top-level statements run first, as the body of <code>fn main</code> would, and then <code>fn main</code> runs. Cargo would not build a file of top-level statements, so keep those to snippets and the playground.</p>
-<p>The run button sends the file to rawr&rsquo;s server and shows what it printed there.</p>
+<p>A single file may also hold top-level statements. They run first, and then <code>fn main</code> runs. Cargo won&rsquo;t build a file of top-level statements, so keep them to snippets and the playground.</p>
 
 <h2 id="native">Native modules and dependencies</h2>
-<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. A crate with either one goes to <a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo. The marked code calls it.</p>
-<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls it through rawr. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">A native main</a> says what crosses and when the program restarts.</p>
+<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. rawr-import compiles native code with Cargo, and marked code calls it. <a href="/docs/imports">Imports</a> sets it up.</p>
+<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls into it. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says what crosses and when the program restarts.</p>
 
 <h2 id="release">Build for release</h2>
 <div class="block"><pre><code>cargo build --release</code></pre></div>
-<p>Cargo compiles every file natively. The marker is a comment, so the release build has no interpreter in it.</p>
+<p>The marker is a comment, so the release build has no interpreter in it.</p>
 
 <h2 id="next">Next steps</h2>
 <ul>
-  <li><a href="/docs/run">Run Rust with rawr</a> says which files are interpreted and who runs a program.</li>
-  <li><a href="/docs/imports">Cargo dependencies</a> sets up rawr-import.</li>
-  <li><a href="/docs/iced">rawr-iced</a> starts an iced app that reloads when you save.</li>
+  <li><a href="/docs/run">Run</a> says which files rawr interprets and how they meet native code.</li>
+  <li><a href="/docs/iced">iced</a> starts an app that reloads when you save.</li>
   <li><a href="/docs/embedding">Embedding</a> runs Rust scripts inside your own app.</li>
   <li><a href="/play">The playground</a> runs snippets in a browser.</li>
 </ul>

@@ -88,7 +88,6 @@ function sidebar(page, html) {
       let inner = "";
       if (kids.length > 0) {
         inner = `<ol class="kids">${kids.map(([kid, kidTitle]) => `<li>${link(kid, kidTitle)}${kid === page.path ? secs() : ""}</li>`).join("")}</ol>`;
-        if (path === page.path) inner = secs() + inner;
       } else if (path === page.path) {
         inner = secs();
       }

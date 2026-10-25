@@ -56,31 +56,30 @@
 <main>
 <article>
 <h1>Commands</h1>
-<p class="lede">You type every command as <code>rawr ..</code>. The <code>rawr</code> binary runs <code>run</code>, <code>check</code>, <code>new</code> and <code>doctor</code> itself. It hands other commands to the installed extension that adds them.</p>
+<p class="lede">Every command you type as <code>rawr ..</code>, including the ones that extensions add.</p>
 <h2 id="paths">Paths</h2>
-<p>Most commands take an optional path. The path can be a crate directory, its <code>Cargo.toml</code> or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate whose root file starts with <code>// rawr</code>. The root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. If the root file of the crate doesn&rsquo;t start with the marker, rawr reports that its first line is not <code>// rawr</code>.</p>
-<p>A single file runs with or without the marker. It may hold top-level statements. rawr runs them and then calls <code>fn main</code>.</p>
-<p><code>rawr --help</code> lists the commands. For each installed extension, the help also shows where it was found, which programs it serves and which commands it adds. <code>rawr</code> looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
+<p>Most commands take an optional path. The path can be a crate directory, its <code>Cargo.toml</code> or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate with a marked file. The crate root is <code>src/main.rs</code> or <code>src/lib.rs</code>. The root or a module it declares must start with <code>// rawr</code>.</p>
+<p>A single file runs with or without the marker. rawr runs its top-level statements and then calls <code>fn main</code>.</p>
 
 <h2 id="rawr">Commands of <code>rawr</code></h2>
-<p>These come with <code>rawr-cli</code>, which needs Rust 1.95 or newer. rawr-cli also installs <code>cargo-rawr</code>, which forwards to <code>rawr</code>. So <code>cargo rawr run</code> works the same as <code>rawr run</code>.</p>
+<p>These come with <code>rawr-cli</code>, which needs Rust 1.95 or newer. rawr-cli also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works the same as <code>rawr run</code>.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. A program with no dependencies runs once and exits. Then cargo&rsquo;s errors from <code>cargo check</code> are printed, if there are any. A program with Rust dependencies goes to <a href="/docs/imports">rawr-import</a>. A program that uses a framework goes to the extension that serves it. rawr-iced serves iced: it opens the app, reloads it on save and runs <code>cargo check</code> in the background.</td></tr>
-  <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path when the program is valid. It prints the first error when it isn&rsquo;t. Then it runs <code>cargo check</code> on the crate. It prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
-  <tr><td><code>rawr new &lt;path&gt;</code></td><td>Creates a Cargo crate. It writes <code>Cargo.toml</code> with no dependencies and <code>src/main.rs</code>, which starts with <code>// rawr</code> and holds a small program that prints three lines. <code>rawr run</code> runs it and <code>cargo run</code> builds it natively. It refuses a path that holds files.</td></tr>
-  <tr><td><code>rawr new &lt;path&gt; --template &lt;name&gt;</code></td><td>Creates a crate from a template that an installed extension offers, and hands the request to that extension. <code>rawr new --help</code> lists the templates. rawr-iced offers <a href="/docs/iced#new"><code>iced</code></a>.</td></tr>
-  <tr><td><code>rawr doctor [path]</code></td><td>Reports on the environment and the project. It shows where <code>rawr</code> and each extension are and the program it finds, then each extension&rsquo;s own report. rawr-iced&rsquo;s report adds the iced revision, the renderer and the manifest.</td></tr>
-  <tr><td><code>rawr -h</code>, <code>--help</code></td><td>Prints the help.</td></tr>
+  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. Errors from <code>cargo check</code> are printed after a program that runs once. A program with Rust dependencies or native modules goes to <a href="/docs/imports">rawr-import</a>. A program that uses iced goes to rawr-iced, which reloads it on save and runs <code>cargo check</code> in the background.</td></tr>
+  <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path, or the first error. Then it runs <code>cargo check</code> and prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
+  <tr><td><code>rawr new &lt;path&gt;</code></td><td>Creates a Cargo crate with no dependencies. Its <code>src/main.rs</code> starts with <code>// rawr</code> and prints three lines. It refuses a path that holds files.</td></tr>
+  <tr><td><code>rawr new &lt;path&gt; --template &lt;name&gt;</code></td><td>Creates a crate from a template that an installed extension offers. <code>rawr new --help</code> lists the templates. rawr-iced offers <a href="/docs/iced#new"><code>iced</code></a>.</td></tr>
+  <tr><td><code>rawr doctor [path]</code></td><td>Shows where <code>rawr</code> and each extension are and the program it finds, then each extension&rsquo;s own report. rawr-iced&rsquo;s report adds the iced revision, the renderer and the manifest.</td></tr>
+  <tr><td><code>rawr -h</code>, <code>--help</code></td><td>Prints the help. For each installed extension it shows where it was found, which programs it serves and which commands it adds.</td></tr>
   <tr><td><code>rawr -V</code>, <code>--version</code></td><td>Prints the version.</td></tr>
 </table>
 <p>Set <code>RAWR_VERBOSE=1</code> to see how a program was loaded and which binary ran it.</p>
 
 <h2 id="extensions">Commands from extensions</h2>
-<p>An extension adds programs it serves and commands of its own. You still type them as <code>rawr ..</code>.</p>
+<p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>new</code> and <code>doctor</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
 <ul>
   <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds no commands.</li>
-  <li><a href="/docs/iced">rawr-iced</a> runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced. It adds <code>rawr preview</code>, <code>rawr snapshot</code>, <code>rawr mcp</code>, <code>rawr init</code> and <code>rawr cache</code>. <a href="/docs/iced/previews#commands">Previews and tooling</a> describes them.</li>
+  <li><a href="/docs/iced">rawr-iced</a> runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced. It adds <code>rawr preview</code>, <code>rawr snapshot</code>, <code>rawr mcp</code>, <code>rawr init</code> and <code>rawr cache</code>. <a href="/docs/iced/previews#commands">Previews</a> describes them.</li>
 </ul>
 
 <h2 id="exit">Exit status</h2>

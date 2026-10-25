@@ -56,18 +56,18 @@
 <main>
 <article>
 <h1>Previews</h1>
-<p class="lede">Render views on their own, check them against stored images and connect a coding agent to the running app.</p>
+<p class="lede">A preview renders one view with the state you give it, without running the whole app. Snapshots of previews catch visual changes.</p>
 <h2 id="previews">Previews and snapshots</h2>
-<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
+<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>:</p>
 <div class="block">
   <div class="file"><b>Cargo.toml</b></div>
   <pre><code data-lang="toml">rawr-macros = { git = "https://github.com/airstrike/rawr" }</code></pre>
 </div>
-<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
+<p>Write <code>#[rawr::preview(..)]</code>, or <code>use rawr::preview;</code> and <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. Cargo doesn&rsquo;t warn about a function that only previews use.</p>
 <table>
   <tr><th>Option</th><th>Meaning</th></tr>
   <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
-  <tr><td><code>group = ".."</code></td><td>Groups previews. <code>rawr preview</code> steps through a group with the arrow keys.</td></tr>
+  <tr><td><code>group = ".."</code></td><td>Groups previews.</td></tr>
   <tr><td><code>seed = path</code></td><td>A function that builds the state to render, such as <code>Todos::sample</code>. Without it the state is <code>Default</code>.</td></tr>
   <tr><td><code>update = path</code></td><td>The update function to use in the preview window.</td></tr>
   <tr><td><code>theme = path</code></td><td>A function that returns the <code>Theme</code> to render with.</td></tr>
@@ -76,8 +76,8 @@
   <tr><td><code>snapshot = false</code></td><td>Leaves the preview out of <code>rawr snapshot</code>.</td></tr>
   <tr><td><code>bind = (..)</code></td><td>Arguments for a free view function that takes parameters.</td></tr>
 </table>
-<p><code>rawr preview</code> opens one preview in a window. It takes the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last one you picked. The preview window reloads on save as <code>rawr run</code> does.</p>
-<p><code>rawr snapshot --update</code> renders every preview to a PNG under <code>snapshots/</code>. Commit those files. <code>rawr snapshot --check</code> renders them again and compares pixels. It exits with status 1 and names the first changed pixel when an image differs. The new images go under <code>target/rawr/snapshots/</code> so you can compare them.</p>
+<p><code>rawr preview</code> opens one preview in a window, which reloads on save as <code>rawr run</code> does.</p>
+<p>Commit the images <code>rawr snapshot --update</code> writes. <code>rawr snapshot --check</code> then names the first changed pixel:</p>
 <div class="block diag">
   <div class="file"><b>rawr snapshot --check</b><span>exit 1</span></div>
   <pre><code><span class="h">Snapshot check found 1 mismatch(es) across 1 artifact(s):</span>
@@ -91,12 +91,12 @@
 
 <p>Press Cmd+Shift+S in the window of a running app or preview to save a PNG of it.</p>
 <h2 id="commands">Commands from rawr-iced</h2>
-<p>These need <a href="/docs/iced#install">rawr-iced</a>. With rawr-iced installed, it also runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced.</p>
+<p>These need <a href="/docs/iced#install">rawr-iced</a>.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
   <tr><td><code>rawr preview [path] [name]</code></td><td>Opens one <code>#[preview]</code> view in a window. <code>name</code> is the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last preview you picked. The arrow keys step through a group.</td></tr>
   <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
-  <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs. The new images go under <code>target/rawr/snapshots/</code>.</td></tr>
+  <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs.</td></tr>
   <tr><td><code>--verbose</code></td><td>With <code>rawr snapshot</code>, prints absolute paths and storage details.</td></tr>
   <tr><td><code>rawr mcp</code></td><td>Runs an MCP server on stdio for coding tools such as Claude Code and Codex. Its tools list and render previews, check the project and drive a running window. The window tools take screenshots, click, type, press keys, reset the app and wait for a reload.</td></tr>
   <tr><td><code>rawr init [--claude] [--codex] [path]</code></td><td>Registers <code>rawr mcp</code> in the project. <code>--claude</code> writes <code>.mcp.json</code> for Claude Code. <code>--codex</code> writes <code>.codex/config.toml</code> for Codex.</td></tr>
@@ -107,9 +107,8 @@
 
 <h2 id="files">Files</h2>
 <ul>
-  <li><code>snapshots/</code> holds the stored preview images. Commit it.</li>
+  <li><code>snapshots/</code> holds the stored preview images.</li>
   <li><code>target/rawr/snapshots/</code> holds the images from the last <code>rawr snapshot --check</code>.</li>
-  <li><code>rawr init --claude</code> writes <code>.mcp.json</code>, and <code>rawr init --codex</code> writes <code>.codex/config.toml</code>.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/reload">Previous<b>Reload</b></a><a class="next" href="/docs/play">Next<b>Play</b></a></nav>
 </article>

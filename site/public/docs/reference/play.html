@@ -57,14 +57,14 @@
 <main>
 <article>
 <h1>Play</h1>
-<p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet: what it may touch, the clock an app runs on, when the reply is a PNG or a GIF, the limits, and every note and error reply.</p>
+<p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. Both use the same renderer and the same limits.</p>
 <h2 id="sandbox">The sandbox</h2>
-<p>A snippet runs on a server whose files and settings belong to someone else. So <code>?play</code> gives it no files, no environment variables and no network. Each run is its own process, and that process starts with an empty environment. The table shows what each attempt gets.</p>
+<p>A snippet has no files, no environment variables and no network. Each run is its own process, and that process starts with an empty environment.</p>
 <table>
   <tr><th>The snippet uses</th><th>What happens</th></tr>
   <tr><td><code>include_str!("notes.txt")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_str!` here: ?play has no files</code>.</td></tr>
   <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>. Inside an app&rsquo;s <code>.fonts(..)</code> setting it is skipped instead, as <a href="#images">Images in memory</a> explains.</td></tr>
-  <tr><td><code>image("cat.png")</code> or <code>svg("logo.svg")</code></td><td>The image draws as a missing file. <code>Handle::from_path</code> does the same. The Discord reply adds the note <code>?play has no files. Paths given to image and svg do not exist here.</code></td></tr>
+  <tr><td><code>image("cat.png")</code> or <code>svg("logo.svg")</code></td><td>The image draws as a missing file. <code>Handle::from_path</code> does the same. The Discord reply adds a <a href="#image-notes">note</a>.</td></tr>
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
   <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
   <tr><td><code>tokio::fs</code>, <code>tokio::net</code>, <code>tokio::process</code>, <code>tokio::signal</code> or <code>tokio::io</code></td><td>The snippet doesn&rsquo;t compile. <a href="#tokio">?play&rsquo;s tokio</a> has none of these modules. The error for <code>tokio::fs</code> is <code>unknown type `tokio::fs`</code>.</td></tr>
@@ -83,22 +83,22 @@
   <li>A view can ask to be redrawn at a later time. When no timer is running, the clock jumps straight to that time.</li>
 </ul>
 <p>So the same snippet gives the same frames on every run. A 400&nbsp;ms sleep shows as 400&nbsp;ms in the GIF, and it takes no real time to render.</p>
-<p>An app runs on this clock, and so does a plain program whose <code>main</code> is <code>async</code>. There the clock moves only while the program waits on a timer, one millisecond at a time, and nothing is drawn. Any other plain program reads the real clock. Real time still limits every run. The scripts and the drawing count against the <a href="#limits">time budgets</a>.</p>
+<p>A plain program whose <code>main</code> is <code>async</code> runs on this clock too. Its clock moves only while it waits on a timer. Any other plain program reads the real clock. Real time still counts against the <a href="#limits">time budgets</a>.</p>
 
 
 <h2 id="output">Output</h2>
-<p>A bare expression and a view each get a PNG. An app is recorded frame by frame on the simulated clock. Its reply is a PNG or a GIF, depending on how its frames change.</p>
+<p>A bare expression and a view each get a PNG. An app is recorded frame by frame. Its reply is a PNG or a GIF, depending on how its frames change.</p>
 
 <h3 id="size">Size and scale</h3>
-<p>Without a size option the canvas fits the content and adds a 12&nbsp;px margin. A widget that fills its width gets 480 logical pixels. One that fills its height gets 360.</p>
-<p>A PNG is drawn at twice the logical size, so it stays sharp on high-density screens. A large image is drawn at a lower scale, so no side passes 2048 pixels. The scale never goes below 1. A GIF is drawn at the logical size. That is half the scale of a PNG.</p>
+<p>Without a size option the canvas fits the content and adds a 12&nbsp;px margin. A widget that fills its width gets 480 logical pixels. One that fills its height gets 360. A wrapping layout such as <code>Row::wrap()</code> wraps only with a size, as in <code>?play size=480x200</code>.</p>
+<p>A PNG is drawn at twice the logical size. A large image is drawn at a lower scale, so no side passes 2048 pixels. The scale never goes below 1. A GIF is drawn at the logical size.</p>
 
 <h3 id="frames">How an app is recorded</h3>
 <p>The bot boots the app and runs its boot task. Then it draws a frame every 50&nbsp;ms of simulated time.</p>
 <ul>
-  <li>A frame where a widget publishes a message applies that message and draws again at the same time. A frame that changes the interface also draws again. A component handling its own event is one example. A sensor firing is another. One frame draws at most 8 times.</li>
+  <li>A frame where a widget publishes a message applies that message and draws again at the same time. A frame that changes the interface also draws again. One frame draws at most 8 times.</li>
   <li>A frame settles when no timer or subscription is running and nothing asked to be redrawn.</li>
-  <li>Each <code>msg=</code> is applied after the frames before it settle. So each message&rsquo;s change shows.</li>
+  <li>Each <code>msg=</code> is applied after the frames before it settle.</li>
   <li>If the frames after the boot or a message never settle, the next message is applied after 20 frames.</li>
 </ul>
 <p>After the last message, the recording goes on until one of these happens.</p>
@@ -112,7 +112,7 @@
   <tr><td>The GIF is over 8&nbsp;MB</td><td>A PNG of the last frame with a note.</td></tr>
   <tr><td>The time budget runs out</td><td>A GIF of the frames so far that plays once. The reply notes when rendering stopped.</td></tr>
 </table>
-<p>Frames that show the same picture are merged into one longer frame. Each GIF frame shows for at least 20&nbsp;ms. Each frame stores only the rectangle that changed.</p>
+<p>Frames that show the same picture are merged into one longer frame. Each GIF frame shows for at least 20&nbsp;ms.</p>
 <p>This bar eases from empty to full in one second. It listens to <code>window::frames</code> only while it moves. Its GIF plays once and stops on the full bar.</p>
 <div class="block">
   <div class="file"><b>fill.rs</b></div>
@@ -176,7 +176,7 @@ impl Fill {
 <h3 id="loops">How loops are found</h3>
 <p>An app that never settles is checked for a cycle after its last message. The bot hashes each frame. Frame <i>k</i> repeats when it shows the same picture as an earlier frame <i>j</i>. The frames from <i>j</i> to <i>k</i> must not all show one picture. The two frames after <i>k</i> must also match the two after <i>j</i>. So must the time between them. A cycle shorter than two frames needs only as many.</p>
 <p>The GIF is then frames <i>j</i> to <i>k</i>. It loops with no hold, so the seam doesn&rsquo;t show. Frames before <i>j</i> are left out. The GIF starts the cycle at a frame where the picture changes. A 40-frame cycle is found after 43 frames.</p>
-<p>These dots light up one at a time. The next one lights up every 250&nbsp;ms. Their cycle is four pictures long, so the reply is a looping GIF of four frames.</p>
+<p>These dots light up one at a time every 250&nbsp;ms. The reply is a looping GIF of four frames.</p>
 <div class="block">
   <div class="file"><b>dots.rs</b></div>
   <pre><code data-lang="rust" data-run="dots.rs" id="src-dots">use iced::time::{self, milliseconds};
@@ -217,11 +217,9 @@ impl Dots {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-dots" data-out="out-dots" data-alt="Four dots that light up one after another in a loop, drawn by rawr-iced on the server" aria-label="Run dots.rs" hidden></button><span class="quiet" id="out-dots" aria-live="polite">(loops four dots)</span></div>
 </div>
-<p>The playground shows the same GIF. A share link&rsquo;s preview image is the last frame as a PNG.</p>
 
 
 <h2 id="limits">Limits</h2>
-<p>Snippets are untrusted. Each one runs in its own process. The hosted bot and playground use these limits.</p>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
   <tr><td>Still budget</td><td>5 seconds of real time for every run. A plain program has this budget only.</td></tr>
@@ -241,16 +239,19 @@ impl Dots {
   <tr><td>Image upload</td><td>10 MB.</td></tr>
   <tr><td>Discord reply</td><td>2000 characters.</td></tr>
   <tr><td>Runs in Discord</td><td>4 a minute per user. 12 a minute per channel.</td></tr>
+  <tr><td>Runs in the playground</td><td>6 a minute and 60 an hour per visitor.</td></tr>
+  <tr><td>Playground code</td><td>16 KiB. A share can be up to 64 KiB.</td></tr>
+  <tr><td>Playground messages</td><td>32 per run. Each can be up to 256 bytes.</td></tr>
 </table>
 <p>A run over the Discord rate limit gets an hourglass reaction instead of a reply. An edit over the limit is ignored.</p>
 
 <h3 id="animation-time">The animation budget</h3>
-<p>Every render starts on the still budget. An app moves to the animation budget at the frame where its view first changes. From then on its scripts and its recording share that deadline. Each frame is encoded into the GIF as it is recorded, so the encoding counts too.</p>
+<p>Every render starts on the still budget. An app moves to the animation budget at the frame where its view first changes. From then on its scripts, its recording and the GIF encoding share that deadline.</p>
 <p>Only one render at a time holds the longer budget. Discord and the playground share it. A render that starts while another one holds it keeps the still budget.</p>
-<p>A render that starts with no other render queued or running gets the idle budget instead. Someone who sends a snippet during an idle render doesn&rsquo;t wait for all of it. The bot asks the idle render to stop. It stops at once if it has run past 15 seconds. Otherwise it stops when it reaches 15 seconds. It stops before its next frame and keeps the frames it has.</p>
+<p>A render that starts with no other render queued or running gets the idle budget instead. When someone else sends a snippet, the idle render stops at its first frame past 15 seconds. It keeps the frames it has.</p>
 
 <h3 id="allowance">The allowance</h3>
-<p>Each user has 90 seconds of animation time in any 10 minutes. A Discord user is counted by user ID. A playground visitor is counted by a hash of their IP address. The allowance fits one idle render and two at the animation budget.</p>
+<p>A Discord user is counted by user ID. A playground visitor is counted by a hash of their IP address. The allowance fits one idle render and two at the animation budget.</p>
 <ul>
   <li>A render that ends within the still budget costs nothing.</li>
   <li>A render that runs past the still budget counts its whole time.</li>
@@ -262,11 +263,10 @@ impl Dots {
 
 
 <h2 id="differences">Where ?play differs from rawr run</h2>
-<p>A snippet has no project around it. It has no <code>Cargo.toml</code>, no files and no window. So <code>?play</code> fills some gaps with stand-ins and shortcuts. Each one is listed here with its reason and what to write instead.</p>
+<p>A snippet has no <code>Cargo.toml</code>, no files and no window. <code>?play</code> fills those gaps with stand-ins and shortcuts.</p>
 
 <h3 id="images">Images in memory</h3>
-<p>?play has no files, so an image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with <code>?play has no files</code>. <code>rawr run</code> reads all three from disk.</p>
-<p>An app&rsquo;s window settings in <code>main</code> are the exception. ?play skips <code>.fonts(..)</code>, <code>.font(..)</code>, <code>.window_size(..)</code> and iced&rsquo;s other window settings. Their arguments are never compiled. So <code>.fonts([include_bytes!("icons.ttf").as_slice()])</code> gives no error. The font isn&rsquo;t loaded, so text set in it falls back to another font.</p>
+<p>An image or svg path draws as a missing file. <code>include_bytes!</code> fails. An app&rsquo;s window settings in <code>main</code> are the exception. ?play skips <code>.fonts(..)</code>, <code>.font(..)</code>, <code>.window_size(..)</code> and iced&rsquo;s other window settings. Their arguments are never compiled. So <code>.fonts([include_bytes!("icons.ttf").as_slice()])</code> gives no error. The font isn&rsquo;t loaded, so text set in it falls back to another font.</p>
 <p>Write the image&rsquo;s bytes into the snippet instead. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel. Bytes are an array at runtime, so they can be at most 65,536 bytes long. An RGBA image of that size is 128 by 128 pixels.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>
@@ -279,21 +279,21 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
 </div>
 
 <h3 id="crates">No crates</h3>
-<p><code>rawr run</code> imports the crates a project&rsquo;s <code>Cargo.toml</code> names. A snippet has no <code>Cargo.toml</code>, so it can use only rawr&rsquo;s std, iced and <a href="#tokio">?play&rsquo;s tokio</a>. Keep a snippet to those. Use <code>rawr run</code> for a program that needs another crate.</p>
+<p>A snippet can use only rawr&rsquo;s std, iced and <a href="#tokio">?play&rsquo;s tokio</a>. Use <code>rawr run</code> for a program that needs another crate.</p>
 
 <h3 id="prelude">The prelude</h3>
-<p>A short snippet shouldn&rsquo;t need <code>use</code> lines. So a bare expression or a view with no top-level <code>use</code> gets rawr-iced&rsquo;s prelude imported for it. The prelude has iced&rsquo;s widget functions and macros. <code>text</code>, <code>button</code>, <code>column!</code> and <code>svg</code> are some of them. It also has iced&rsquo;s common types. <code>Color</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code>, <code>Theme</code>, <code>Shadow</code>, <code>Rectangle</code>, <code>Radians</code> and <code>Widget</code> are some of those. It has the modules iced&rsquo;s examples use most in a view: <code>border</code>, <code>padding</code>, <code>alignment</code>, <code>font</code>, <code>gradient</code>, <code>mouse</code> and <code>theme</code>. It has the <code>color!</code> macro and the <code>rule</code> widgets too. So <code>border::rounded(8)</code> works with no <code>use</code> line.</p>
-<p>One top-level <code>use</code> turns the prelude off for the whole snippet. Then write every <code>use</code> line the snippet needs. A <code>use</code> inside a function body leaves the prelude on. An app never gets the prelude. <code>rawr run</code> never imports names for you either.</p>
+<p>A bare expression or a view with no top-level <code>use</code> gets rawr-iced&rsquo;s prelude imported for it. The prelude has iced&rsquo;s widget functions and macros. <code>text</code>, <code>button</code>, <code>column!</code> and <code>svg</code> are some of them. It also has iced&rsquo;s common types. <code>Color</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code>, <code>Theme</code>, <code>Shadow</code>, <code>Rectangle</code>, <code>Radians</code> and <code>Widget</code> are some of those. It has the modules iced&rsquo;s examples use most in a view: <code>border</code>, <code>padding</code>, <code>alignment</code>, <code>font</code>, <code>gradient</code>, <code>mouse</code> and <code>theme</code>. It has the <code>color!</code> macro and the <code>rule</code> widgets too.</p>
+<p>One top-level <code>use</code> turns the prelude off for the whole snippet. A <code>use</code> inside a function body leaves the prelude on. An app never gets the prelude. <code>rawr run</code> never imports names for you either.</p>
 
 <h3 id="wrapping">Expressions, views and apps without main</h3>
-<p>?play wraps a snippet so it can run on its own. An expression becomes the body of <code>fn view() -&gt; impl Widget&lt;()&gt;</code>. A view gets a <code>#[preview]</code> with the canvas size. That is why a snippet can&rsquo;t have its own <code>#[preview]</code>. An app without <code>main</code> gets one that calls <code>iced::run(State::update, State::view)</code>, so it boots from <code>State::default()</code>. A <code>main</code> that passes closures to <code>iced::run</code> runs as written.</p>
-<p><code>rawr run</code> needs a <code>main</code>. To run a snippet there, put the expression in an app&rsquo;s <code>view</code> and write a <code>main</code> that calls <code>iced::run</code>.</p>
+<p>An expression becomes the body of <code>fn view() -&gt; impl Widget&lt;()&gt;</code>. A view gets a <code>#[preview]</code> with the canvas size. That is why a snippet can&rsquo;t have its own <code>#[preview]</code>. An app without <code>main</code> gets one that calls <code>iced::run(State::update, State::view)</code>, so it boots from <code>State::default()</code>. A <code>main</code> that passes closures to <code>iced::run</code> runs as written.</p>
+<p>To run a snippet with <code>rawr run</code>, put the expression in an app&rsquo;s <code>view</code> and write a <code>main</code> that calls <code>iced::run</code>.</p>
 
 <h3 id="messages">Messages instead of clicks</h3>
-<p>A render has no window, so nobody can click it. Use <code>msg=</code> to apply the message a click would send. In the playground, write one message per line in the messages box.</p>
+<p>Use <code>msg=</code> to apply the message a click would send. In the playground, write one message per line in the messages box.</p>
 
 <h3 id="tokio">tokio</h3>
-<p>A snippet has no <code>Cargo.toml</code>, so it can&rsquo;t depend on tokio. rawr-iced declares its own tokio for it instead. Each item is backed by the real tokio type holding interpreted values. Its timers run on the <a href="#clock">simulated clock</a>, so a GIF shows each wait.</p>
+<p>A snippet can&rsquo;t depend on tokio, so rawr-iced declares its own. Each item is backed by the real tokio type holding interpreted values. Its timers run on the <a href="#clock">simulated clock</a>.</p>
 <ul>
   <li><code>tokio::time</code> has <code>sleep</code>, <code>interval</code> with <code>tick().await</code>, <code>timeout</code>, <code>Instant</code> and <code>Duration</code>.</li>
   <li><code>tokio::sync::mpsc</code> has <code>channel</code> and <code>unbounded_channel</code>. Their senders have <code>send</code> and <code>clone</code>, and their receivers have <code>recv</code>.</li>
@@ -303,9 +303,9 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <li><code>tokio::task</code> has <code>yield_now</code> and <code>spawn_blocking</code>.</li>
   <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures. <code>select!</code> accepts <code>biased;</code>. A <code>select!</code> branch whose pattern doesn&rsquo;t match its value is disabled, and the others keep running, as in tokio. Once every branch is disabled, the <code>else</code> branch runs, or the program panics when there is none. A branch can&rsquo;t have an <code>if</code> condition. <code>use tokio::join;</code> makes <code>join!</code> tokio&rsquo;s.</li>
 </ul>
-<p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program can use it too when its <code>main</code> is <code>async</code>, as <code>#[tokio::main] async fn main()</code> is. Its output comes back as text, and its sleeps take no real time. A plain program with a <code>main</code> that isn&rsquo;t <code>async</code> has no async code.</p>
+<p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program can use it too when its <code>main</code> is <code>async</code>, as <code>#[tokio::main] async fn main()</code> is.</p>
 <p><code>rawr run</code> uses the same stand-in for a program that doesn&rsquo;t depend on tokio. There its timers run on the real clock. A project whose <code>Cargo.toml</code> depends on tokio gets the real crate.</p>
-<p>This app adds up what a producer sends over a channel. Its GIF shows &ldquo;adding up&rdquo; and then the sum at 400&nbsp;ms of simulated time. The sender moves into the producer, as in Rust. The channel closes when the producer ends, so the consumer&rsquo;s loop stops.</p>
+<p>This app adds up what a producer sends over a channel. Its GIF shows &ldquo;adding up&rdquo; and then the sum at 400&nbsp;ms of simulated time. The channel closes when the producer ends, so the consumer&rsquo;s loop stops.</p>
 <div class="block">
   <div class="file"><b>channel.rs</b></div>
   <pre><code data-lang="rust" data-run="channel.rs" id="src-channel">use iced::widget::text;
@@ -368,25 +368,24 @@ impl Sum {
 </div>
 
 <h3 id="spawn">No tokio::spawn</h3>
-<p>Async code runs on iced&rsquo;s UI thread, one step at a time. A spawned future would need to start a task outside the one it belongs to, and that model has no way to do it. So <code>tokio::spawn</code> doesn&rsquo;t compile. <code>task::spawn</code> and <code>spawn_local</code> don&rsquo;t either. The error says what to use instead.</p>
+<p>Async code runs on iced&rsquo;s UI thread, one step at a time. So <code>tokio::spawn</code> doesn&rsquo;t compile. <code>task::spawn</code> and <code>spawn_local</code> don&rsquo;t either.</p>
 <div class="block"><pre><code>unsupported syntax: `tokio::spawn` in a program without a tokio dependency, whose async code runs on iced's UI thread; run futures at once with `tokio::join!`, run blocking work with `tokio::task::spawn_blocking`, or return a `Task` from `update`</code></pre></div>
-<p>Use <code>tokio::join!</code> to run futures at once. Return a <code>Task</code> from <code>update</code> to start work that outlives the current message.</p>
+<p>Return a <code>Task</code> from <code>update</code> to start work that outlives the current message.</p>
 
 <h3 id="spawn-blocking">spawn_blocking</h3>
-<p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/reference/iced#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started, and a GIF is the same on every run. A closure that takes long uses up the snippet&rsquo;s time limit, as the same work in <code>update</code> would. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
+<p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/reference/iced#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
 
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
-<p>One thing works differently from the real tokio.</p>
 <ul>
   <li><strong>A read through a lock doesn&rsquo;t wait.</strong> <code>let mut held = mutex.lock().await;</code> waits until no other task holds the lock. A read inside a larger expression reads without waiting. <code>*mutex.lock().await + 1</code> is one such read. This keeps <code>+=</code> from locking twice. When a task must hold the lock across an <code>.await</code>, bind the guard with <code>let</code> first.</li>
 </ul>
 
 <h3 id="sippers">Script sippers</h3>
-<p>A sipper written in a snippet with <code>task::sipper(async |sender| ..)</code> is rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. Each <code>sender.send(value).await</code> hands the value to the progress mapper, and the body goes on after that. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. rawr&rsquo;s sipper has no such channel, so it has none of that backpressure. <code>rawr run</code> uses the same sipper for code in marked files. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
+<p>A sipper written in a snippet with <code>task::sipper(async |sender| ..)</code> is rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. It has no backpressure. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. <code>rawr run</code> uses the same sipper for code in marked files. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
 
 
 <h2 id="notes">Notes and replies</h2>
-<p>A note is a short line that comes with the reply. In Discord it shows as small text with the image or below the output. The playground shows an image&rsquo;s note after the run time. It shows a program&rsquo;s note at the end of the output.</p>
+<p>A note is a short line that comes with the reply.</p>
 
 <h3 id="image-notes">Notes on an image</h3>
 <table>
@@ -394,12 +393,12 @@ impl Sum {
   <tr><td><code>Animation shown for the first 5 s.</code></td><td>The app never settled and its frames never repeated. The GIF stops after 100 frames or 5&nbsp;s of simulated time after the last message. The number is how much simulated time it shows.</td></tr>
   <tr><td><code>Rendering stopped after 15 s, so the animation shows its first 2.3 s.</code></td><td>The time budget ran out. The first number is the budget. The second is how much simulated time the GIF shows.</td></tr>
   <tr><td><code>Rendering stopped after 21.4 s, so the animation shows its first 2.3 s. It was cut short because someone else was waiting.</code></td><td>An idle render was stopped because someone else sent a snippet. The first number is how long it ran.</td></tr>
-  <tr><td><code>Your animation time is used up for now. It frees up in 4 minutes.</code></td><td>The bot adds this line when the clock stopped a render that had only the still budget. The render had only that budget because its user&rsquo;s allowance was used up. The time is when more than 5&nbsp;s of the allowance comes back.</td></tr>
-  <tr><td><code>Another animation was rendering at the same time. Run it again shortly for up to 15 s.</code></td><td>The bot adds this line when the clock stopped a render that had only the still budget. The render had only that budget because another render held the longer one.</td></tr>
+  <tr><td><code>Your animation time is used up for now. It frees up in 4 minutes.</code></td><td>A render on the still budget ran out of time because its user&rsquo;s allowance was used up. The time is when more than 5&nbsp;s of the allowance comes back.</td></tr>
+  <tr><td><code>Another animation was rendering at the same time. Run it again shortly for up to 15 s.</code></td><td>A render on the still budget ran out of time because another render held the longer one.</td></tr>
   <tr><td><code>The bot was otherwise idle, so this animation could render for up to 60 s.</code></td><td>The render ran past 15 seconds on the idle budget. The number is the budget it had, which can be less than 60 when the allowance was low.</td></tr>
   <tr><td><code>The animation is over 8 MB. This is its last frame.</code></td><td>The GIF was too large for Discord, so the reply is a PNG of the last frame.</td></tr>
   <tr><td><code>The animation is over 100 frames. This is its last frame.</code></td><td>The messages needed more than 100 frames, so the reply is a PNG of the last frame.</td></tr>
-  <tr><td><code>?play has no files. Paths given to image and svg do not exist here.</code></td><td>The snippet passes a path to <code>image</code>, <code>svg</code> or <code>from_path</code>. It drew as a missing file. Only Discord replies add this note.</td></tr>
+  <tr><td><code>?play has no files. Paths given to image and svg do not exist here.</code></td><td>The snippet passes a path to <code>image</code>, <code>svg</code> or <code>from_path</code>. Only Discord replies add this note.</td></tr>
 </table>
 
 <h3 id="output-notes">Notes on program output</h3>
@@ -425,6 +424,7 @@ impl Sum {
   <tr><td><code>render stopped: out of memory or crashed</code></td><td>The process ran out of its 256 MB, or it crashed without a message.</td></tr>
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The renderer panicked. The line after it is the panic&rsquo;s message.</td></tr>
   <tr><td><code>the image is too large to upload; try a smaller size</code></td><td>The image was over 10 MB.</td></tr>
+  <tr><td><code>the playground is busy; try again in a moment</code></td><td>The renderer stayed busy for too long. Discord runs go first.</td></tr>
   <tr><td><code>put the snippet in a code block: ..</code></td><td>The message has <code>?play</code> but no code block.</td></tr>
   <tr><td><code>unknown option `colour`; expected size=WxH, theme=dark|light, msg=EXPR</code></td><td>An option on the <code>?play</code> line isn&rsquo;t one of the three.</td></tr>
   <tr><td><code>size `big` must look like 400x300</code></td><td>The size isn&rsquo;t two numbers joined by <code>x</code>.</td></tr>
