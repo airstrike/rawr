@@ -22,6 +22,8 @@ pub(super) struct Owned {
 // Retain the pinned Config's complete field-shaped fixed storage. Only the
 // globset constructors below set fields; this is not a new configurable engine.
 #[derive(Default)]
+// The pinned meta Config keeps every field; the shared Info is admitted at its full size.
+#[allow(dead_code)]
 struct Config {
     match_kind: Option<Kind>,
     utf8_empty: Option<bool>,
@@ -40,6 +42,8 @@ struct Config {
     byte_classes: Option<bool>,
     line_terminator: Option<u8>,
 }
+// The pinned WhichCaptures; only its Option is stored, never constructed.
+#[allow(dead_code)]
 enum Captures {
     All,
     Implicit,

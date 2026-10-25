@@ -62,14 +62,16 @@ impl Identity {
 
     /// The identity of a regular file from a raw `fstat`.
     #[cfg(unix)]
+    // The stat field types differ by platform (u64 nanoseconds on Linux).
+    #[allow(clippy::unnecessary_cast)]
     pub(crate) fn of_stat(stat: &rustix::fs::Stat) -> Option<Self> {
         let kind = u32::from(stat.st_mode) & u32::from(libc::S_IFMT);
         (kind == u32::from(libc::S_IFREG)).then_some(Self {
             device: stat.st_dev as u64,
             inode: stat.st_ino,
             length: stat.st_size as u64,
-            modified: (stat.st_mtime, stat.st_mtime_nsec),
-            changed: (stat.st_ctime, stat.st_ctime_nsec),
+            modified: (stat.st_mtime as i64, stat.st_mtime_nsec as i64),
+            changed: (stat.st_ctime as i64, stat.st_ctime_nsec as i64),
         })
     }
 }

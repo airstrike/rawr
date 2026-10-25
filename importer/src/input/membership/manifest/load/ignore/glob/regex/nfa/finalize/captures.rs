@@ -20,6 +20,8 @@ pub(in super::super) struct Groups {
     pub(super) ranges: Vec<(u32, u32)>,
     _name_maps: Vec<EmptyMap>,
     _names: Vec<Vec<Option<Arc<str>>>>,
+    // GroupInfo's memory_extra; the shared Groups is admitted at its full size.
+    #[allow(dead_code)]
     pub(super) memory_extra: usize,
 }
 struct EmptyMap {

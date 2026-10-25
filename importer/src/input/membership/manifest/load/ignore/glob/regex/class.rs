@@ -29,9 +29,14 @@ impl Item {
     }
 }
 pub(super) enum Set {
+    // regex-syntax's empty-class span; the arena admits Node at its full size.
+    #[allow(dead_code)]
     Empty(Span),
     Single(Item),
-    Union { span: Span, items: Buffer<Item> },
+    Union {
+        span: Span,
+        items: Buffer<Item>,
+    },
 }
 pub(super) struct Class {
     pub(super) span: Span,

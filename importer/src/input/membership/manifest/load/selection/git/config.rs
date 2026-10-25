@@ -22,6 +22,8 @@ pub(super) enum Source {
 }
 
 #[derive(Debug)]
+// gix-config's file metadata; read only through Debug.
+#[allow(dead_code)]
 struct Metadata {
     path: Option<PathBuf>,
     source: Source,
@@ -74,6 +76,8 @@ type Front = smallvec::SmallVec<[Event<'static>; 8]>;
 struct Section {
     header: Header<'static>,
     body: storage::Vector<Event<'static>>,
+    // gix-config's section metadata; read only through Debug.
+    #[allow(dead_code)]
     meta: Arc<Metadata>,
     id: Id,
 }
@@ -92,6 +96,8 @@ pub(super) struct File {
     sections: table::Map<Id, Section>,
     next: usize,
     order: storage::Order,
+    // gix-config's file metadata; read only through Debug.
+    #[allow(dead_code)]
     meta: Arc<Metadata>,
 }
 

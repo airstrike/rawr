@@ -1,6 +1,6 @@
 //! Consecutive real-manifest conversion from a completed normalization tail.
 //! Dependency/native pending state remains explicit; this is not Loaded authority.
-use super::{dependencies::all, package, preamble, replace, source, target, Header, Targets};
+use super::{dependencies::all, package, replace, source, Header, Targets};
 use crate::{
     cargo,
     input::membership::{
@@ -20,8 +20,8 @@ use crate::{
 };
 
 pub(in super::super) enum Failure {
-    Header(preamble::Failure),
-    Target(target::Failure),
+    Header,
+    Target,
     Validation(String),
     Dependency(replace::list::Failure),
 }
@@ -47,11 +47,11 @@ impl<'a, 'd> Owner<'a, 'd> {
     ) -> Step<Result<Conversion<'b, 'd, 's>, Failure>> {
         let header = match self.conversion_header(warnings, session)? {
             Ok(value) => value,
-            Err(error) => return Ok(Err(Failure::Header(error))),
+            Err(_) => return Ok(Err(Failure::Header)),
         };
         let targets = match self.convert_targets(&header, tail, warnings, session)? {
             Ok(value) => value,
-            Err(error) => return Ok(Err(Failure::Target(error))),
+            Err(_) => return Ok(Err(Failure::Target)),
         };
         if let Err(error) = self.validate_targets(&targets, warnings, session)? {
             return Ok(Err(Failure::Validation(error)));

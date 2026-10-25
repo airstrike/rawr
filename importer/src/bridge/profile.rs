@@ -2,7 +2,8 @@
 
 pub(crate) enum Profile {
     Current(crate::profile::Proof),
-    Historical(crate::composition::profile::Pair),
+    /// Boxed: a cached replay is the cold path, and the pair is large.
+    Historical(Box<crate::composition::profile::Pair>),
 }
 
 impl From<crate::profile::Proof> for Profile {

@@ -88,7 +88,7 @@ impl<B: crate::surface::Runner> Demand<Sealed, B> {
                     .1,
             )
         } else {
-            profile::Profile::Historical(pair)
+            profile::Profile::Historical(Box::new(pair))
         };
         Ok(GenerationRequestKey {
             request,

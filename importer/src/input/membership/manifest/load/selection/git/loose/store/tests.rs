@@ -52,7 +52,7 @@ fn default_store_admits_path_then_actual_empty_arc_and_refuses_before_publicatio
         } else {
             let store = session.finish(result).unwrap();
             assert_eq!(store.directory, std::path::Path::new("/fixture"));
-            assert_eq!(std::sync::Arc::strong_count(&store._packed), 1);
+            assert_eq!(std::rc::Rc::strong_count(&store._packed), 1);
             assert_eq!(
                 store
                     ._packed

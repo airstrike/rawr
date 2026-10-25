@@ -909,7 +909,8 @@ enum Type {
         owner: Id,
         index: u32,
     },
-    SelfType {
+    #[serde(rename = "self_type")]
+    SelfTy {
         owner: Id,
     },
     Tuple {
@@ -4334,7 +4335,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 let resolved =
                     self.parameter_owner(owner, parameter.index, ParameterClass::Type)?;
                 if resolved.self_type {
-                    Type::SelfType {
+                    Type::SelfTy {
                         owner: resolved.owner,
                     }
                 } else {
@@ -4563,7 +4564,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 },
                 ty::GenericArgKind::Type(ty) => Argument::Type {
                     ty: match opaque_argument_action(opaque, opaque_identity(ty)) {
-                        OpaqueArgumentAction::SelfReference(opaque) => Type::SelfType {
+                        OpaqueArgumentAction::SelfReference(opaque) => Type::SelfTy {
                             owner: self.id(opaque, Namespace::Type)?,
                         },
                         OpaqueArgumentAction::ConvertNormally => self.type_of(ty, owner, depth)?,
@@ -4905,7 +4906,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     false
                 };
                 let self_ty = if opaque_self {
-                    Type::SelfType {
+                    Type::SelfTy {
                         owner: self.id(
                             opaque.ok_or_else(|| "opaque self identity is absent".to_owned())?,
                             Namespace::Type,
@@ -4937,7 +4938,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             },
             ty::ClauseKind::TypeOutlives(predicate) => Predicate::TypeOutlives {
                 ty: match opaque_argument_action(opaque, opaque_identity(predicate.0)) {
-                    OpaqueArgumentAction::SelfReference(opaque) => Type::SelfType {
+                    OpaqueArgumentAction::SelfReference(opaque) => Type::SelfTy {
                         owner: self.id(opaque, Namespace::Type)?,
                     },
                     OpaqueArgumentAction::ConvertNormally => self.type_of(predicate.0, owner, 0)?,

@@ -778,6 +778,8 @@ enum CompletionSource<'store> {
         schema: u32,
         key: Digest,
     },
+    /// Only tests replay a pending bundle; production completes after publication.
+    #[cfg(test)]
     Pending {
         store: PathBuf,
         charge: Charge,
@@ -918,6 +920,7 @@ impl<'store> Completion<'store> {
                 accounting::registered_with_budget(store, &record, Some(budget))?;
                 Ok(())
             }
+            #[cfg(test)]
             CompletionSource::Pending {
                 store,
                 charge,

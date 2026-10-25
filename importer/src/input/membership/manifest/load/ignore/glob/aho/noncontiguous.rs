@@ -15,7 +15,7 @@ mod tests;
 const DEAD: u32 = 0;
 const FAIL: u32 = 1;
 
-pub(super) struct Nfa {
+pub(in super::super) struct Nfa {
     states: Buffer<State>,
     sparse: Buffer<Transition>,
     dense: Buffer<u32>,

@@ -23,6 +23,7 @@ pub(crate) struct Stored {
 pub(crate) struct Sealed {
     stored: Stored,
     pending: bundle::Pending,
+    #[cfg(test)]
     graph: node::GraphBudget,
 }
 
@@ -229,6 +230,7 @@ impl Stored {
             let sealed = Sealed {
                 stored,
                 pending,
+                #[cfg(test)]
                 graph,
             };
             // This returns unpublished historical ownership only. The owner

@@ -6,6 +6,8 @@ use rawr_toml::document::Admission;
 use std::borrow::Cow;
 
 #[derive(Debug)]
+// gix-config's value error; read only through Debug.
+#[allow(dead_code)]
 pub(super) struct Failure {
     pub(super) message: &'static str,
     pub(super) input: Vec<u8>,

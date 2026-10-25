@@ -28,7 +28,7 @@ pub(in super::super) struct Unstable {
 
 #[derive(Clone, Copy)]
 pub(in crate::input::membership::manifest) struct Context<'a> {
-    pub(in crate::input::membership::manifest) unstable: Unstable,
+    pub(in super::super) unstable: Unstable,
     pub(in crate::input::membership::manifest) cargo_version: &'a str,
 }
 

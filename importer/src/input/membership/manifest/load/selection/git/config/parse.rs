@@ -14,7 +14,9 @@ pub(super) enum Node {
     Value,
 }
 #[derive(Debug)]
-pub(super) struct Failure {
+// gix-config's parse error; read only through Debug.
+#[allow(dead_code)]
+pub(in super::super) struct Failure {
     pub(super) line: usize,
     pub(super) node: Node,
     pub(super) remaining: Vec<u8>,

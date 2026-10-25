@@ -21,6 +21,8 @@ pub(super) struct Group {
 }
 pub(super) struct Repetition {
     pub(super) span: Span,
+    // regex-syntax's operator span; the arena admits Node at its full size.
+    #[allow(dead_code)]
     pub(super) operator: Span,
     pub(super) kind: Repeat,
     pub(super) greedy: bool,

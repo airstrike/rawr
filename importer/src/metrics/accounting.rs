@@ -441,6 +441,8 @@ impl Evidence {
             .all(|tag| account::required(*tag) && commands & command(*tag) != 0)
     }
 
+    // Only the recorder that tests and fixtures install calls these.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn record_native_fault(&mut self, runner_pid: u32, epoch: u64, cause: NativeFault) {
         self.fault.get_or_insert(Fault::Native {
             runner_pid,
@@ -449,6 +451,7 @@ impl Evidence {
         });
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn record_native(
         &mut self,
         runner_pid: u32,
@@ -511,6 +514,7 @@ impl Evidence {
         }
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn native_row(
         rows: &mut [Option<NativeRow>; NATIVE_ACCOUNTS],
         runner_pid: u32,
@@ -565,6 +569,7 @@ impl Evidence {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn record_scalar(&mut self, scalar: Scalar, value: u64, limit: u64) {
         if self.fault.is_some() {
             return;
@@ -588,10 +593,12 @@ impl Evidence {
         }
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn scalar_overflow(&mut self, scalar: Scalar) {
         self.fault.get_or_insert(Fault::ScalarOverflow(scalar));
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn record_graph(&mut self, graph: Graph, limit: u64) {
         if self.fault.is_some() {
             return;
@@ -646,6 +653,7 @@ impl Evidence {
 }
 
 impl Range {
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn push(self, value: u64, limit: u64) -> Option<Self> {
         Some(Self {
             count: self.count.checked_add(1).filter(|count| *count <= limit)?,

@@ -88,7 +88,7 @@ impl<'a, 'd> Target<'a, 'd> {
 }
 pub(in super::super) enum Failure {
     Semantic(String),
-    Edition(edition::Failure),
+    Edition,
 }
 
 pub(super) fn boolean<A: document::Admission>(
@@ -224,7 +224,7 @@ pub(in super::super) fn library<'a, 'd, A: document::Admission>(
         session,
     )? {
         Ok(settings) => settings,
-        Err(error) => return Ok(Err(Failure::Edition(error))),
+        Err(_) => return Ok(Err(Failure::Edition)),
     };
     let inferred = field::field(lib.original(), "name", session)?.is_none();
     Ok(Ok(Some(Target {
@@ -312,7 +312,7 @@ pub(in super::super) fn group<'a, 'd, A: document::Admission>(
             session,
         )? {
             Ok(settings) => settings,
-            Err(error) => return Ok(Err(Failure::Edition(error))),
+            Err(_) => return Ok(Err(Failure::Edition)),
         };
         output.push(
             Target {

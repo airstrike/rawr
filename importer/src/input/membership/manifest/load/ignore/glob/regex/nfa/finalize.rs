@@ -23,6 +23,8 @@ pub(super) enum State {
         look: u32,
         next: Id,
     },
+    // regex-automata's State::Capture; admitted state storage keeps its size.
+    #[allow(dead_code)]
     Capture {
         next: Id,
         pattern: u32,
@@ -74,9 +76,9 @@ impl Graph {
     ) -> Step<[u8; 256]> {
         let mut classes = [0; 256];
         let mut class = 0_u8;
-        for byte in 0..256 {
+        for (byte, slot) in classes.iter_mut().enumerate() {
             session.items(1)?;
-            classes[byte] = class;
+            *slot = class;
             if byte < 255 && self.boundaries[byte / 128] & (1_u128 << (byte % 128)) != 0 {
                 class += 1;
             }

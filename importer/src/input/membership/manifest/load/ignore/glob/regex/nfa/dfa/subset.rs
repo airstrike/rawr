@@ -43,7 +43,6 @@ struct Scratch {
 struct Runner<'a> {
     nfa: &'a finalize::Nfa,
     dense: &'a mut initial::Initial,
-    kind: info::Kind,
     dfa_limit: Option<usize>,
     auxiliary_limit: Option<usize>,
     states: States,
@@ -103,7 +102,6 @@ pub(super) fn run<A: Admission>(
     let mut runner = Runner {
         nfa,
         dense,
-        kind,
         dfa_limit,
         auxiliary_limit,
         states,

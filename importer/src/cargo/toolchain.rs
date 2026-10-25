@@ -12,7 +12,10 @@ use crate::process::{self, Program, ToolPaths};
 use crate::{Error, Result};
 
 mod cached;
-pub(crate) mod host;
+// The build script includes host.rs to read the triple; the library only
+// tests that it reads the same one.
+#[cfg(test)]
+mod host;
 
 pub use cached::{cached, Attestation};
 

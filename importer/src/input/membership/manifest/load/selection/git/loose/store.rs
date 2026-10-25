@@ -5,6 +5,7 @@ use std::{
     alloc::Layout,
     cell::UnsafeCell,
     path,
+    rc::Rc,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -26,7 +27,8 @@ struct Empty {
 /// This private owner exists only after its path and actual Arc were admitted.
 pub(in super::super) struct Store {
     directory: path::PathBuf,
-    _packed: Arc<Empty>,
+    // gix's Arc, never shared across threads here; an Rc has the same layout.
+    _packed: Rc<Empty>,
 }
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
@@ -57,7 +59,7 @@ impl Store {
             bytes: layout.size(),
             alignment: layout.align(),
         })?;
-        let packed = Arc::new(empty);
+        let packed = Rc::new(empty);
         session.items(1)?;
         Ok(Self {
             directory,

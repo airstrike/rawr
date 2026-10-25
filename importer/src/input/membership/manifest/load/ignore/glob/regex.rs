@@ -19,7 +19,7 @@ mod translate;
 
 pub(super) struct Regex(Text);
 impl Regex {
-    pub(super) fn tree<A: Admission>(
+    fn tree<A: Admission>(
         &self,
         session: &mut Session<'_, A>,
     ) -> Step<Result<parser::Parsed, parser::Failure>> {

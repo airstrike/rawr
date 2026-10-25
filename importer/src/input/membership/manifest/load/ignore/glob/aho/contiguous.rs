@@ -19,7 +19,7 @@ const DENSE: u32 = 0xFF;
 const ONE: u32 = 0xFE;
 const MAX_SPARSE: usize = 127;
 
-pub(super) struct Nfa {
+pub(in super::super) struct Nfa {
     repr: Buffer<u32>,
     pattern_lens: Buffer<u32>,
     state_len: usize,

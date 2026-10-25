@@ -19,9 +19,9 @@ mod git;
 mod walk;
 
 pub(super) enum Failure {
-    Rule(ignore::Failure),
-    Compile(ignore::compiled::Failure),
-    Walk(walk::Failure),
+    Rule,
+    Compile,
+    Walk,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,23 +86,23 @@ pub(super) fn included<'package, 'inputs>(
     // explicit includes make the exclude query branch unreachable.
     let mut exclude_builder = ignore::Builder::prepare(package.root, session)?;
     for rule in package.exclude {
-        if let Err(error) = exclude_builder.add(rule, session)? {
-            return Ok(Err(Failure::Rule(error)));
+        if exclude_builder.add(rule, session)?.is_err() {
+            return Ok(Err(Failure::Rule));
         }
     }
     let mut exclude = match exclude_builder.build(session)? {
         Ok(matcher) => matcher,
-        Err(error) => return Ok(Err(Failure::Compile(error))),
+        Err(_) => return Ok(Err(Failure::Compile)),
     };
     let mut include_builder = ignore::Builder::prepare(package.root, session)?;
     for rule in package.include {
-        if let Err(error) = include_builder.add(rule, session)? {
-            return Ok(Err(Failure::Rule(error)));
+        if include_builder.add(rule, session)?.is_err() {
+            return Ok(Err(Failure::Rule));
         }
     }
     let mut include = match include_builder.build(session)? {
         Ok(matcher) => matcher,
-        Err(error) => return Ok(Err(Failure::Compile(error))),
+        Err(_) => return Ok(Err(Failure::Compile)),
     };
     let mut filter = Filter {
         root: package.root,
@@ -111,15 +111,17 @@ pub(super) fn included<'package, 'inputs>(
     };
     let mut entries = Buffer::new();
     let mut warnings = Warnings::new();
-    if let Err(error) = append(
+    if append(
         package.root,
         &mut entries,
         true,
         &mut filter,
         &mut warnings,
         session,
-    )? {
-        return Ok(Err(Failure::Walk(error)));
+    )?
+    .is_err()
+    {
+        return Ok(Err(Failure::Walk));
     }
     Ok(Ok(Some(Files {
         package,

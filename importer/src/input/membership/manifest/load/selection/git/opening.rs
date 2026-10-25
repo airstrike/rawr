@@ -1,7 +1,7 @@
 // Copyright the gitoxide contributors. MIT OR Apache-2.0.
 //! Discovery through local configuration. This is not a completed repository.
 
-use super::{config, path, precompose, trust, upwards, whitespace};
+use super::{config, path, precompose, upwards, whitespace};
 use crate::input::membership::{
     host,
     manifest::{io, session::Session, Step},
@@ -17,7 +17,6 @@ pub(super) struct Local {
     worktree: Option<PathBuf>,
     common_dir: Option<PathBuf>,
     current_dir: PathBuf,
-    trust: trust::Level,
     stage: config::Stage,
 }
 
@@ -46,6 +45,8 @@ impl Local {
 }
 
 #[derive(Debug)]
+// gix's open error payloads; read only through Debug.
+#[allow(dead_code)]
 pub(super) enum Failure {
     Discover(upwards::Failure),
     CommonDirectory(io::Failure),
@@ -99,7 +100,6 @@ pub(super) fn discover<'image, 'budget>(
         worktree,
         common_dir,
         current_dir: cwd,
-        trust,
         stage,
     }
     .precomposed(session)

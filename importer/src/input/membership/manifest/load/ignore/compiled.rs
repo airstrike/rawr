@@ -25,6 +25,8 @@ pub(in super::super) struct Matcher {
     matches: Option<Buffer<usize>>,
 }
 
+// ignore's build errors, rendered and charged as ignore renders them; nothing reports them yet.
+#[allow(dead_code)]
 pub(in super::super) enum Failure {
     /// Original outer ignore::Error::Glob, rendered at the build map_err site.
     Glob { glob: Option<String>, error: String },

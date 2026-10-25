@@ -10,7 +10,7 @@ mod equal;
 mod singleton;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Id(usize);
+pub(in super::super) struct Id(usize);
 pub(super) struct Arena(Buffer<Option<Expr>>);
 impl Arena {
     pub(super) fn new() -> Self {

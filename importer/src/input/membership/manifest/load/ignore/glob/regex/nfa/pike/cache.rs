@@ -16,6 +16,8 @@ pub(super) struct Cache {
 #[derive(Clone, Copy)]
 pub(super) enum Frame {
     Explore(Id),
+    // The PikeVM restore frame; the admitted stack keeps Frame at its size.
+    #[allow(dead_code)]
     Restore {
         slot: u32,
         offset: Option<NonZeroUsize>,

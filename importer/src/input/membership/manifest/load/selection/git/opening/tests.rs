@@ -1,3 +1,4 @@
+use super::super::trust;
 use super::*;
 use crate::input::membership::{
     manifest::{self, load},
@@ -197,7 +198,6 @@ fn local_configuration_controls_all_four_transforms_after_original_spelling_read
             worktree: Some(load::path::copy(worktree, &mut session).unwrap()),
             common_dir: Some(load::path::copy(common, &mut session).unwrap()),
             current_dir: load::path::copy(cwd, &mut session).unwrap(),
-            trust: trust::Level::Full,
             stage,
         };
         let result = local.precomposed(&mut session);

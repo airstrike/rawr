@@ -226,7 +226,7 @@ fn every_interner_refusal_preserves_entries_capacity_and_first_cause() {
     }
     before.push((60, capacity)); // entry-release admission at clear
     assert_eq!(before.len(), baseline.calls);
-    for refuse in 0..baseline.calls {
+    for (refuse, &expected) in before.iter().enumerate() {
         let mut count = Count {
             refuse: Some(refuse),
             ..Count::default()
@@ -238,7 +238,7 @@ fn every_interner_refusal_preserves_entries_capacity_and_first_cause() {
         assert!(matches!(result, Err(Stop::Refused)));
         let length = interner.len();
         let capacity = interner.entries.capacity();
-        assert_eq!((length, capacity), before[refuse]);
+        assert_eq!((length, capacity), expected);
         assert!(matches!(
             interner.get(&[], &mut session),
             Err(Stop::Refused)

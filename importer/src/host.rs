@@ -172,7 +172,7 @@ fn prune(hosts: &Path, keep: &[&Path], idle: Duration, kept: usize) {
         }
         candidates.push((used, idle, name, path));
     }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     for (_, idle, name, path) in candidates.into_iter().skip(kept) {
         if !idle {
             continue;

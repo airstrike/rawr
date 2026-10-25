@@ -7,7 +7,8 @@
 
 use std::str;
 
-enum SyntaxViolation {
+// Public like url's own, because the unchanged upstream `Input::new` takes it.
+pub enum SyntaxViolation {
     C0SpaceIgnored,
     TabOrNewlineIgnored,
 }

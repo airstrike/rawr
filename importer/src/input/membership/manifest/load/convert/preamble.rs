@@ -17,7 +17,7 @@ use crate::input::membership::host;
 use std::{os::unix::ffi::OsStrExt, path::Path};
 
 pub(in super::super) enum Failure {
-    Edition(edition::Failure),
+    Edition,
     Semantic(String),
 }
 
@@ -65,7 +65,7 @@ pub(in super::super) fn check(
     )?;
     let selected = match selected {
         Ok(edition) => edition,
-        Err(error) => return Ok(Err(Failure::Edition(error))),
+        Err(_) => return Ok(Err(Failure::Edition)),
     };
     if !selected.is_stable() {
         let version = match context.package.get(Field::Version) {

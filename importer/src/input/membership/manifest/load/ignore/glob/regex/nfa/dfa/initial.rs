@@ -13,6 +13,8 @@ pub(super) struct Initial {
     pub(super) special: [u32; 8],
     pub(super) accelerators: Array<u32>,
     pre: Option<info::Prefilter>,
+    // dense::DFA's quit set; the shared Core is admitted at its full size.
+    #[allow(dead_code)]
     quit: [u128; 2],
     pub(super) flags: Flags,
 }

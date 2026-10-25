@@ -20,6 +20,8 @@ pub(in super::super) struct Stage {
     config: File,
     buffer: git_read::Buffer,
     is_bare: Option<bool>,
+    // gix's lossy-config option; read only through Debug.
+    #[allow(dead_code)]
     lossy: bool,
     object_hash: Hash,
     reflog: Option<Reflog>,
@@ -38,6 +40,8 @@ enum Reflog {
 }
 
 #[derive(Debug)]
+// gix's open error payloads; read only through Debug.
+#[allow(dead_code)]
 pub(in super::super) enum Failure {
     Parse(parse::Failure),
     Unsigned(Key),
@@ -47,7 +51,9 @@ pub(in super::super) enum Failure {
     Io { source: io::Failure, path: PathBuf },
 }
 #[derive(Debug)]
-pub(super) struct Key {
+// gix's config key error; read only through Debug.
+#[allow(dead_code)]
+pub(in super::super) struct Key {
     key: Vec<u8>,
     value: Option<Vec<u8>>,
     environment_override: Option<&'static str>,

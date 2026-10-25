@@ -5351,15 +5351,12 @@ pub(super) fn dependency_order(units: &[Value]) -> Result<Vec<usize>> {
         while let Some((index, dependencies, next)) = stack.last_mut() {
             if let Some(&dependency) = dependencies.get(*next) {
                 *next += 1;
-                match state[dependency] {
-                    NEW => {
-                        state[dependency] = OPEN;
-                        let nested = unit_dependency_indices(&units[dependency], units.len())?;
-                        stack.push((dependency, nested, 0));
-                    }
-                    // Cargo's graphs have no cycles; an edge back into the
-                    // open path adds nothing to the order.
-                    _ => {}
+                // Cargo's graphs have no cycles; an edge back into the
+                // open path adds nothing to the order.
+                if state[dependency] == NEW {
+                    state[dependency] = OPEN;
+                    let nested = unit_dependency_indices(&units[dependency], units.len())?;
+                    stack.push((dependency, nested, 0));
                 }
             } else {
                 state[*index] = DONE;

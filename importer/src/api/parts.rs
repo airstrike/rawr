@@ -266,7 +266,9 @@ mod tests {
         // A missing or altered part refuses the API rather than misreading it.
         let (victim, _) = &after[after.len() / 2];
         let mut permissions = fs::metadata(victim).unwrap().permissions();
-        permissions.set_readonly(false);
+        // Owner write is enough to alter it; nothing else needs access.
+        let mode = std::os::unix::fs::PermissionsExt::mode(&permissions) | 0o200;
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, mode);
         fs::set_permissions(victim, permissions).unwrap();
         fs::write(victim, b"altered").unwrap();
         assert!(

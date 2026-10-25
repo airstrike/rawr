@@ -19,6 +19,8 @@ use crate::{
 use std::path::Path;
 
 pub(in super::super::super) enum Failure {
+    // Cargo's contextual key error, formatted and charged as Cargo builds it; nothing reports it yet.
+    #[allow(dead_code)]
     Key(Box<InvalidKey>),
     Conversion(String),
     MissingFeatureDependency(super::super::summary::Missing),

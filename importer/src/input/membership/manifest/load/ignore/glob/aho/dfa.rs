@@ -16,7 +16,7 @@ const DEAD: u32 = 0;
 const FAIL: u32 = 1;
 
 /// Owns the converted table and match rows; the input NFA stays borrowed.
-pub(super) struct Dfa {
+pub(in super::super) struct Dfa {
     trans: Buffer<u32>,
     matches: Rows,
     matches_memory_usage: usize,

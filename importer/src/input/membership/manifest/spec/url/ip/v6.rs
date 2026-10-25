@@ -78,7 +78,7 @@ fn longest(pieces: &[u16; 8]) -> Option<(usize, usize)> {
     let mut longest = None;
     let mut start = None;
     for index in 0..=8 {
-        if index < 8 && pieces[index] == 0 {
+        if pieces.get(index) == Some(&0) {
             if start.is_none() {
                 start = Some(index);
             }

@@ -18,6 +18,8 @@ pub(super) struct Machine {
 
 // Retain the pinned fixed Config shape. These fields are only populated by
 // the closed Core wrapper; no general configuration surface is introduced.
+// The pinned hybrid Config keeps every field; it is admitted at its full size.
+#[allow(dead_code)]
 struct Config {
     match_kind: Option<info::Kind>,
     pre: Option<Option<info::Prefilter>>,

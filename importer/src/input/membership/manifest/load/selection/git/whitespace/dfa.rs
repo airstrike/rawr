@@ -30,8 +30,12 @@ struct Transitions<'a> {
 struct Starts<'a> {
     table: Words<'a>,
     kind: Kind,
+    // dense::DFA's start map, kept in the pinned start-table layout.
+    #[allow(dead_code)]
     map: [Start; 256],
     stride: usize,
+    // dense::DFA's start-table pattern count, kept in the pinned layout.
+    #[allow(dead_code)]
     pattern_len: Option<usize>,
     universal_unanchored: Option<u32>,
     universal_anchored: Option<u32>,

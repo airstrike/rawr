@@ -187,7 +187,7 @@ impl Stored {
         codec::encode(budget, |writer| self.write(writer))
     }
 
-    pub(super) fn write(&self, writer: &mut codec::Writer<'_>) -> Result<()> {
+    fn write(&self, writer: &mut codec::Writer<'_>) -> Result<()> {
         writer.header(self.schema, self.usage)?;
         writer.entries(&self.entries)?;
         writer.raw(self.fingerprint.as_bytes())?;

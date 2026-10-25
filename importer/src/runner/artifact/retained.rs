@@ -66,6 +66,8 @@ pub(crate) enum Mode {
 #[cfg(feature = "rustc-driver")]
 #[derive(Clone, Copy)]
 pub(crate) enum Origin<'a> {
+    /// Only tests replay an unpublished bundle; production replays after publication.
+    #[cfg(test)]
     Unpublished(Mode),
     Published(&'a store::Store, node::Kind, u32, node::Digest),
 }
@@ -74,6 +76,7 @@ pub(crate) enum Origin<'a> {
 impl Origin<'_> {
     pub(crate) fn mode(self) -> Mode {
         match self {
+            #[cfg(test)]
             Self::Unpublished(mode) => mode,
             Self::Published(..) => Mode::Frozen,
         }
@@ -83,10 +86,12 @@ impl Origin<'_> {
         self,
         evidence: Mismatch,
         root: &Path,
-        path: &Path,
+        // Only a test's unpublished bundle reports the path itself.
+        #[cfg_attr(not(test), allow(unused_variables))] path: &Path,
         budget: &node::GraphBudget,
     ) -> node::Error {
         match self {
+            #[cfg(test)]
             Self::Unpublished(_) => corrupt(path),
             Self::Published(store, kind, schema, key) => {
                 bundle::Corruption::member(evidence, root, store.root(), kind, schema, key, budget)
