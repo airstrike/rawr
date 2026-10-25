@@ -2020,7 +2020,15 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
 }
 
 fn signature(source: &representability::signature::Signature) -> Result<Signature, super::Error> {
-    let parameters = parameters(source.parameters())?;
+    // A future parameter is no type parameter of Rawr's signature: its
+    // input is the core future of its synthetic output (D527).
+    let kept = source
+        .parameters()
+        .iter()
+        .filter(|parameter| parameter.kind() != representability::signature::Kind::Future)
+        .cloned()
+        .collect::<Vec<_>>();
+    let parameters = parameters(&kept)?;
     let mut inputs = Vec::new();
     inputs
         .try_reserve_exact(source.inputs().len())

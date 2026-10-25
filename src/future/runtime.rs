@@ -4,7 +4,9 @@
 // Without `sync` the values are not `Send`, and one thread runs everything.
 #![cfg_attr(not(feature = "sync"), allow(clippy::arc_with_non_send_sync))]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+#[cfg(feature = "sync")]
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -302,6 +304,8 @@ enum State {
     Awaiting(Future),
     /// The body ended.
     Done(RawrResultOf<Dynamic>),
+    /// A step panicked; its poller panics with the same payload.
+    Panicked(Box<dyn std::any::Any + Send>),
     /// The output was taken.
     Taken,
 }
@@ -351,10 +355,17 @@ impl Stepper {
                         step.state = State::Queued;
                         step.waker = Some(cx.waker().clone());
                         drop(step);
-                        let shared = self.shared.clone();
+                        // A queued step holds its body weakly: a future
+                        // dropped before the owner reaches it runs no more.
+                        let shared = Arc::downgrade(&self.shared);
                         send(Job::new(move || {
+                            let Some(shared) = shared.upgrade() else {
+                                return;
+                            };
                             run(&shared);
-                            if let Some(waker) = lock(&shared).waker.take() {
+                            let waker = lock(&shared).waker.take();
+                            drop(shared);
+                            if let Some(waker) = waker {
                                 waker.wake();
                             }
                         }));
@@ -371,10 +382,28 @@ impl Stepper {
                     self.awaiting = Some(Box::new(Poller::from(&future)));
                 }
                 State::Done(output) => return Ready(output),
+                State::Panicked(payload) => std::panic::resume_unwind(payload),
                 State::Taken => {
                     return Ready(Err(failure("rawr: a future was polled after it ended")))
                 }
             }
+        }
+    }
+}
+
+impl Drop for Stepper {
+    /// A body dropped before it ends, as a cancelled task's is, drops what it
+    /// holds on the owner thread: a suspended `for` loop's iterator can only
+    /// be dropped where it was made.
+    fn drop(&mut self) {
+        if owns() {
+            return;
+        }
+        let mut step = lock(&self.shared);
+        let held = (step.frame.take(), step.step.take(), step.input.take());
+        drop(step);
+        if held.0.is_some() || held.1.is_some() || held.2.is_some() {
+            send(Job::new(move || drop(held)));
         }
     }
 }
@@ -397,10 +426,23 @@ fn run(shared: &Mutex<Step>) {
         };
         (step, argument)
     };
-    let result = with_host(|host| host.invoke(&step, &mut [argument]))
-        .unwrap_or_else(|| Err(failure("rawr: no program runs async code on this thread")));
+    // A panic in a step, as native code's, is its future's: it reaches the
+    // thread that polls it, not the owner's runtime.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_host(|host| host.invoke(&step, &mut [argument]))
+            .unwrap_or_else(|| Err(failure("rawr: no program runs async code on this thread")))
+    }));
     let mut state = lock(shared);
     let state = &mut *state;
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => {
+            state.state = State::Panicked(payload);
+            state.step = None;
+            state.frame = None;
+            return;
+        }
+    };
     state.state = match result {
         Err(error) => State::Done(Err(error)),
         // A body that never awaits gives its output as it is.
@@ -437,8 +479,11 @@ impl Slot {
         if owns() {
             lock(&slot.output).0 = Some(finish());
         } else {
-            let shared = slot.clone();
+            let shared = Arc::downgrade(&slot);
             send(Job::new(move || {
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
                 let output = finish();
                 let waker = {
                     let mut state = lock(&shared.output);
@@ -547,6 +592,62 @@ impl Job {
 #[allow(clippy::type_complexity)]
 static FORWARD: OnceLock<Box<dyn Fn(Job) + Send + Sync>> = OnceLock::new();
 
+/// Jobs for an owner that drives them itself, as the thread running the
+/// runtime entry's `block_on` does (D527): it drains them in its own poll.
+#[cfg(feature = "sync")]
+static QUEUE: Mutex<VecDeque<Job>> = Mutex::new(VecDeque::new());
+/// What wakes that owner when a job arrives.
+#[cfg(feature = "sync")]
+static DRIVER: Mutex<Option<Waker>> = Mutex::new(None);
+
+thread_local! {
+    /// Whether this thread is inside the runtime entry's poll (D527).
+    static ENTERED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Make the owner the thread that polls with `waker`, as the runtime entry
+/// does each time it polls the program's `main`: jobs from other threads
+/// queue for [`drain`] and wake it (D527).
+#[cfg(feature = "sync")]
+pub fn drive(waker: &Waker) {
+    *lock(&DRIVER) = Some(waker.clone());
+}
+
+/// Run every job queued for the owner, in order, on this, the owner thread.
+pub fn drain() {
+    #[cfg(feature = "sync")]
+    loop {
+        let job = lock(&QUEUE).pop_front();
+        match job {
+            Some(job) => job.run(),
+            None => break,
+        }
+    }
+}
+
+/// This thread is inside the runtime entry's poll until the guard drops: a
+/// native function that returns a future runs at once, in the runtime's
+/// context, as Rust calls it (D527).
+#[must_use]
+pub fn enter() -> Entered {
+    Entered(ENTERED.with(|entered| entered.replace(true)))
+}
+
+/// The guard [`enter`] gives.
+pub struct Entered(bool);
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        ENTERED.with(|entered| entered.set(self.0));
+    }
+}
+
+/// Whether this thread runs inside the runtime entry's poll (D527).
+#[must_use]
+pub fn entered() -> bool {
+    ENTERED.with(Cell::get)
+}
+
 /// Make this thread the owner that runs async steps in `host`, from now on.
 pub fn serve(host: Rc<dyn Host>) {
     HOST.with(|slot| *slot.borrow_mut() = Some(host));
@@ -586,6 +687,15 @@ pub(crate) fn debug(value: &Dynamic) -> Option<String> {
 }
 
 fn send(job: Job) {
+    #[cfg(feature = "sync")]
+    {
+        let driver = lock(&DRIVER).clone();
+        if let Some(driver) = driver {
+            lock(&QUEUE).push_back(job);
+            driver.wake();
+            return;
+        }
+    }
     match FORWARD.get() {
         Some(forward) => forward(job),
         // No owner serves this process: the job runs where it is, and

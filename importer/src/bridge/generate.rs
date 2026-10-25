@@ -850,6 +850,18 @@ fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__r
     Ok(__rawr_internal::Value::from((**value).take()))
 }
 
+/// A script future a generic item's `F: Future` takes, as the std future
+/// that runs it (D527).
+#[allow(dead_code)]
+fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Script, Error> {
+    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    (**value)
+        .take()
+        .try_cast_result::<__rawr_internal::future::Future>()
+        .map(__rawr_internal::future::Future::into_script)
+        .map_err(|_| Error::TypeMismatch)
+}
+
 /// Check script values that came back from an erased generic against the
 /// script type they stand for, on the thread that owns the program.
 #[allow(dead_code)]
@@ -1604,6 +1616,13 @@ mod __rawr_profile_host {
             F: std::future::Future + Send + 'static,
             F::Output: Send + 'static,
         {
+            // Inside the runtime entry's poll, the call runs now, in the
+            // runtime's context, as Rust makes it: `spawn` starts its task
+            // and `sleep` fixes its deadline (D527).
+            if __rawr_internal::future::entered() {
+                let future = make();
+                return Task(Box::new(move || Box::pin(future)));
+            }
             Task(Box::new(move || Box::pin(make())))
         }
 
@@ -1699,12 +1718,12 @@ mod __rawr_profile {
     pub fn run(
         program: &mut super::Program,
         forward: impl Fn(__rawr_internal::island::Call) + Send + Sync + 'static,
-    ) -> Option<i32> {
+    ) -> super::Started {
         let bootstrap = match bind(program) {
             Ok(bootstrap) => bootstrap,
             Err(error) => {
                 eprintln!("error: {error}");
-                return Some(101);
+                return super::Started::Exit(101);
             }
         };
         __rawr_internal::island::publish(bootstrap);
@@ -1719,16 +1738,19 @@ mod __rawr_profile {
                 unreachable!("the result was just matched");
             };
             __rawr_internal::island::await_main(value.cast());
-            if !__rawr_internal::island::start(forward) {
-                eprintln!("error[E0752]: `main` function is not allowed to be `async` without a runtime's entry, such as `#[tokio::main]`");
-                return Some(101);
-            }
-            return None;
+            // This thread owns the program and runs the entry (D527).
+            return match __rawr_internal::island::take_entry() {
+                Some(entry) => super::Started::Entry(entry),
+                None => {
+                    eprintln!("error[E0752]: `main` function is not allowed to be `async` without a runtime's entry, such as `#[tokio::main]`");
+                    super::Started::Exit(101)
+                }
+            };
         }
         if __rawr_internal::island::start(forward) {
-            return None;
+            return super::Started::Serving;
         }
-        Some(match result {
+        super::Started::Exit(match result {
             None => 0,
             Some(Ok(value)) => match value.try_cast::<Result<__rawr_internal::Dynamic, __rawr_internal::Dynamic>>() {
                 Some(Err(error)) => {
@@ -1847,6 +1869,58 @@ fn next_frame(events: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<(u8,
             Ok(Event::Call(call)) => call.answer(),
             Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
         }
+    }
+}
+
+/// What starting the program left this thread to do.
+enum Started {
+    /// The program ended with this status.
+    Exit(i32),
+    /// A native `main` runs on its own thread, and this one serves its calls.
+    Serving,
+    /// An async `main`'s runtime entry, for this thread to run.
+    Entry(fn() -> i32),
+}
+
+fn exit(status: i32) -> ! {
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(status)
+}
+
+/// The protocol while an async `main`'s runtime entry runs on the owner
+/// thread: the running program asks for no refresh, carries no State and
+/// takes no hot generation, since a save restarts it (D527).
+fn serve_entry(
+    mut stream: std::os::unix::net::UnixStream,
+    received: std::sync::mpsc::Receiver<Event>,
+    key: [u8; 32],
+) {
+    let mut serve = || -> std::io::Result<()> {
+        loop {
+            let (tag, payload) = next_frame(&received)?;
+            match tag {
+                43 | 46 | 48 if payload.len() >= 32 && payload[..32] == key => {
+                    let mut response = [0_u8; 33];
+                    response[..32].copy_from_slice(&key);
+                    send_frame(&mut stream, tag + 1, &response)?;
+                }
+                35 | 11 if payload.len() >= 32 && payload[..32] == key => {
+                    send_frame(&mut stream, if tag == 35 { 36 } else { 11 }, &key)?;
+                }
+                17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
+                12 if payload.as_slice() == key => {
+                    send_frame(&mut stream, 13, &key)?;
+                    exit(0);
+                }
+                _ => return Err(std::io::Error::other(format!("invalid protocol transition while the program runs (message {tag})"))),
+            }
+        }
+    };
+    if let Err(error) = serve() {
+        eprintln!("runner protocol failed: {error}");
+        exit(1);
     }
 }
 
@@ -2041,16 +2115,24 @@ fn run_protocol() -> std::io::Result<()> {
                 let forward = move |call| {
                     let _ = calls.send(Event::Call(call));
                 };
-                let status = match &mut program {
+                let started = match &mut program {
                     Some(program) => __rawr_profile::run(program, forward),
-                    None => Some(0),
+                    None => Started::Exit(0),
                 };
-                // A native `main` runs on its own thread; this one serves it.
-                if let Some(status) = status {
-                    use std::io::Write as _;
-                    let _ = std::io::stdout().flush();
-                    let _ = std::io::stderr().flush();
-                    std::process::exit(status);
+                match started {
+                    // A native `main` runs on its own thread; this one serves it.
+                    Started::Serving => {}
+                    Started::Exit(status) => exit(status),
+                    // An async `main`'s runtime entry runs here, on the thread
+                    // that owns the program, and the protocol goes on beside
+                    // it (D527).
+                    Started::Entry(entry) => {
+                        let stream = stream.try_clone()?;
+                        std::thread::Builder::new()
+                            .name("rawr protocol".into())
+                            .spawn(move || serve_entry(stream, received, key))?;
+                        exit(std::panic::catch_unwind(entry).unwrap_or(101));
+                    }
                 }
             }
             17 if admitted => match invoke_adapter(&key, &payload) {
@@ -6170,6 +6252,8 @@ fn render_take(
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
         ty if is_duration(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",
+        // A script future, run as a std future (D527).
+        ty if is_future(ty) => "take_script",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -6594,6 +6678,15 @@ fn substitute<'a>(
     let convert::Type::Parameter(index) = ty else {
         return Ok(ty);
     };
+    // A script future's output is a `rawr::Value`, whatever type the script
+    // gives it, which comes back checked (D527).
+    if index & crate::classify::representability::signature::FUTURE_OUTPUT != 0 {
+        static VALUE: std::sync::OnceLock<convert::Type> = std::sync::OnceLock::new();
+        return Ok(VALUE.get_or_init(|| convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::value(),
+            arguments: Box::default(),
+        }));
+    }
     let position = signature
         .parameters()
         .iter()
@@ -6891,12 +6984,20 @@ fn render_generic_arguments(
         .map_err(|_| request::Error::Encoding)?;
     let mut type_index = 0_usize;
     let mut constant_index = 0_usize;
-    for (index, parameter) in parameters.iter().enumerate() {
-        if index != 0 {
+    let mut written = 0_usize;
+    for parameter in parameters {
+        // `F::Output` of a future parameter is no parameter of the item:
+        // the instance infers it (D527).
+        if parameter.is_future_output() {
+            type_index += 1;
+            continue;
+        }
+        if written != 0 {
             output
                 .write_all(b", ")
                 .map_err(|_| request::Error::Encoding)?;
         }
+        written += 1;
         match parameter.kind() {
             crate::classify::representability::signature::Kind::Type => {
                 let ty = substitutions.get(type_index).ok_or(request::Error::Drift {
@@ -6961,7 +7062,8 @@ fn render_generic_arguments(
                 constant_index += 1;
                 render_constant(constant, output)?;
             }
-            crate::classify::representability::signature::Kind::Callable => {
+            crate::classify::representability::signature::Kind::Callable
+            | crate::classify::representability::signature::Kind::Future => {
                 output
                     .write_all(b"_")
                     .map_err(|_| request::Error::Encoding)?;

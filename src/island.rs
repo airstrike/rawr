@@ -144,7 +144,13 @@ pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Outp
         });
     };
     let mut script = future.into_script();
+    // The entry's `block_on` polls this on the thread that owns the program
+    // (D527): each poll runs the steps other threads queued, then `main`'s,
+    // all in the runtime's context.
     Box::pin(std::future::poll_fn(move |cx| {
+        crate::future::drive(cx.waker());
+        let _entered = crate::future::enter();
+        crate::future::drain();
         script.poll_output(cx).map(|output| match output {
             Ok(value) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
                 Some(Err(error)) => {
@@ -184,6 +190,12 @@ pub fn validate(witness: &crate::host::runtime::Witness, value: &Dynamic) -> Res
 #[must_use]
 pub fn running() -> bool {
     RUNNING.load(Ordering::Acquire)
+}
+
+/// The runtime entry an async `main` registered (D513.4), for the thread
+/// that owns the program to run: its `block_on` drives the program (D527).
+pub fn take_entry() -> Option<fn() -> i32> {
+    START.lock().ok().and_then(|mut start| start.take())
 }
 
 /// Start the native `main` the program registered, if it did: `false`

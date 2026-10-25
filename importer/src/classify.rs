@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 13;
+const CLASSIFIER_VERSION: u32 = 14;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1020,6 +1020,62 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .zip(returned)
                 .map(|(inputs, returned)| (parameter, inputs, returned)),
         })
+    }
+
+    /// The type parameters bounded by `core::future::Future`, marked as
+    /// future parameters, each with a synthetic `F::Output` parameter
+    /// appended: `(index, owner)`.
+    fn future_parameters(
+        &self,
+        generics: &model::Generics,
+        parameters: &mut Box<[representability::signature::Parameter]>,
+        callable: bool,
+    ) -> Vec<(u32, api::identity::Definition)> {
+        use representability::signature;
+        if callable {
+            return Vec::new();
+        }
+        let mut futures = Vec::new();
+        for predicate in generics.predicates() {
+            let model::Predicate::Bound {
+                ty: model::Type::Parameter { owner, index },
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+            } = predicate
+            else {
+                continue;
+            };
+            if !self.is_core_trait(trait_id, "Future")
+                || futures.iter().any(|(known, _)| known == index)
+            {
+                continue;
+            }
+            futures.push((*index, owner.clone()));
+        }
+        if futures.is_empty() {
+            return futures;
+        }
+        let mut extended = parameters.to_vec();
+        for (index, _) in &futures {
+            let Some(parameter) = extended.iter_mut().find(|parameter| {
+                parameter.index() == *index && parameter.kind() == signature::Kind::Type
+            }) else {
+                continue;
+            };
+            parameter.mark_future();
+            let name = format!("{}Output", parameter.name());
+            extended.push(signature::Parameter::new(
+                signature::future_output(*index),
+                name.into_boxed_str(),
+                signature::Kind::Type,
+            ));
+        }
+        *parameters = extended.into_boxed_slice();
+        futures
     }
 
     fn definition_name(&self, definition: &api::identity::Definition) -> Option<&str> {
@@ -3369,12 +3425,27 @@ impl<P: api::Phase> Context<'_, P> {
         }
         let strings = self.string_parameters(generics);
         let FunctionParameters {
-            parameters,
+            mut parameters,
             callable: callable_class,
             binders,
-            predicates,
+            mut predicates,
             call,
         } = self.function_parameters(generics, &strings)?;
+        // `F: Future` takes a script future as `rawr::future::Script`, and
+        // `F::Output` is a synthetic type parameter the script infers (D527).
+        let futures = self.future_parameters(generics, &mut parameters, callable_class.is_some());
+        if !futures.is_empty() {
+            predicates = predicates
+                .iter()
+                .copied()
+                .filter(|bound| !futures.iter().any(|(index, _)| *index == bound.parameter()))
+                .collect();
+        }
+        let rewrite = |ty: &model::Type| {
+            future_projections(ty, &futures, |trait_id| {
+                self.is_core_trait(trait_id, "Future")
+            })
+        };
         let mut inputs = Vec::new();
         self.retain_array::<representability::convert::Type>(signature.inputs().len())?;
         inputs
@@ -3387,7 +3458,8 @@ impl<P: api::Phase> Context<'_, P> {
                         representability::convert::Builtin::String,
                     )
                 }
-                input => self.convert_input(input)?,
+                input if futures.is_empty() => self.convert_input(input)?,
+                input => futurize(self.convert_input(&rewrite(input))?, &futures),
             });
         }
         // A Rust future crosses as a host's future from a free function, or
@@ -3396,14 +3468,15 @@ impl<P: api::Phase> Context<'_, P> {
         // the borrow across its awaits: its future holds a copy of a `Clone`
         // receiver or the receiver itself, lent from Rawr until the future
         // ends (D513.6).
+        let rewritten = rewrite(signature.output());
         let output = match signature.receiver() {
             model::Receiver::None | model::Receiver::Value { .. } => {
-                self.convert_output(signature.output())
+                self.convert_output(&rewritten)
             }
             model::Receiver::Reference { .. } if signature.async_function() => {
-                self.convert_output(signature.output())
+                self.convert_output(&rewritten)
             }
-            _ => self.convert_value(signature.output()),
+            _ => self.convert_value(&rewritten),
         };
         let output = match output {
             Ok(output) => output,
@@ -3916,6 +3989,98 @@ fn late_binders_lend_strings(signature: &model::Signature) -> bool {
             _ => true,
         })
         && !matches!(signature.output(), model::Type::Reference { .. })
+}
+
+/// `ty` with each `<F as Future>::Output` of a future parameter `F` named
+/// as its synthetic output parameter (D527).
+fn future_projections(
+    ty: &model::Type,
+    futures: &[(u32, api::identity::Definition)],
+    is_future: impl Fn(&api::identity::Definition) -> bool + Copy,
+) -> model::Type {
+    if futures.is_empty() {
+        return ty.clone();
+    }
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => {
+            model::Argument::Type(future_projections(ty, futures, is_future))
+        }
+        other => other.clone(),
+    };
+    match ty {
+        model::Type::Projection {
+            trait_id,
+            arguments,
+            ..
+        } if is_future(trait_id) => {
+            if let Some(model::Argument::Type(model::Type::Parameter { owner, index })) =
+                arguments.first()
+                && futures.iter().any(|(future, _)| future == index)
+            {
+                return model::Type::Parameter {
+                    owner: owner.clone(),
+                    index: representability::signature::future_output(*index),
+                };
+            }
+            ty.clone()
+        }
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| future_projections(member, futures, is_future))
+                .collect(),
+        ),
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: Box::new(future_projections(ty, futures, is_future)),
+        },
+        other => other.clone(),
+    }
+}
+
+/// `ty` with each future parameter `F` given as the core future of its
+/// synthetic output: a script future crosses there (D527).
+fn futurize(
+    ty: representability::convert::Type,
+    futures: &[(u32, api::identity::Definition)],
+) -> representability::convert::Type {
+    use representability::convert::Type;
+    match ty {
+        Type::Parameter(index) if futures.iter().any(|(future, _)| *future == index) => {
+            Type::Nominal {
+                definition: crate::surface::identity::Definition::future(),
+                arguments: Box::from([Type::Parameter(
+                    representability::signature::future_output(index),
+                )]),
+            }
+        }
+        Type::Option(element) => Type::Option(Box::new(futurize(*element, futures))),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(futurize(*ok, futures)),
+            Box::new(futurize(*err, futures)),
+        ),
+        Type::Nominal {
+            definition,
+            arguments,
+        } => Type::Nominal {
+            definition,
+            arguments: arguments
+                .into_vec()
+                .into_iter()
+                .map(|argument| futurize(argument, futures))
+                .collect(),
+        },
+        other => other,
+    }
 }
 
 /// `ty` with each impl parameter in `substitutions` replaced.

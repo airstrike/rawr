@@ -116,3 +116,53 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
         run.seen.join("\n")
     );
 }
+
+/// `rawr-import run` on the `tokio-spawn` fixture with `attribute` in place
+/// of its `#[tokio::main]`: its whole output.
+fn spawned(name: &str, attribute: &str) -> String {
+    let root = fixture("tokio-spawn");
+    let copy_root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = fs::remove_dir_all(copy_root.join("src"));
+    copy(&root, &copy_root);
+    let main = copy_root.join("src/main.rs");
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(&main, text.replace("#[tokio::main]", attribute)).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&copy_root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert!(
+        run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    stdout
+}
+
+/// D527's falsifying test: the owner thread runs the runtime entry, so a
+/// spawned script future runs though nobody awaits it, `.await` on its
+/// handle gives its value, and an unawaited `spawn_blocking` runs, under
+/// both of tokio's runtimes.
+#[test]
+fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
+    for (name, attribute) in [
+        ("tokio-spawn-multi", "#[tokio::main]"),
+        (
+            "tokio-spawn-current",
+            "#[tokio::main(flavor = \"current_thread\")]",
+        ),
+    ] {
+        assert_eq!(
+            spawned(name, attribute),
+            "ran\njoined 42\nblocking ran\n",
+            "{attribute}"
+        );
+    }
+}

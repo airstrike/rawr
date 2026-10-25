@@ -1775,13 +1775,14 @@ fn ty_ok(
 /// A generic item Rawr calls directly: every parameter a type, none a
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
-    let types = plan
-        .signature()
-        .parameters()
-        .iter()
-        .all(|parameter| parameter.kind() == representability::signature::Kind::Type);
     match plan.class() {
-        None => types,
+        // `F: Future` takes a script future (D527).
+        None => plan.signature().parameters().iter().all(|parameter| {
+            matches!(
+                parameter.kind(),
+                representability::signature::Kind::Type | representability::signature::Kind::Future
+            )
+        }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
         // runs there (D513.7 b).
         Some(rawr_import::surface::callable::Class::Once(_)) => plan.call().is_some(),

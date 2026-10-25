@@ -18,6 +18,21 @@ pub enum Kind {
     Type,
     Constant,
     Callable,
+    /// `F: Future`: a script future fills it as `rawr::future::Script`, and
+    /// the instance writes it `_` (D527). Its `F::Output` is the synthetic
+    /// type parameter [`future_output`] names.
+    Future,
+}
+
+/// The bit that marks a synthetic type parameter: the `Output` of the
+/// future parameter in its low bits (D527).
+pub const FUTURE_OUTPUT: u32 = 0x8000_0000;
+
+/// The synthetic parameter that stands for `F::Output` of the future
+/// parameter at `index`.
+#[must_use]
+pub const fn future_output(index: u32) -> u32 {
+    FUTURE_OUTPUT | index
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -65,6 +80,16 @@ impl Parameter {
 
     pub(crate) fn mark_callable(&mut self) {
         self.kind = Kind::Callable;
+    }
+
+    pub(crate) fn mark_future(&mut self) {
+        self.kind = Kind::Future;
+    }
+
+    /// Whether this is the synthetic `F::Output` of a future parameter.
+    #[must_use]
+    pub const fn is_future_output(&self) -> bool {
+        self.index & FUTURE_OUTPUT != 0
     }
 }
 
