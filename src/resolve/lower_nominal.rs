@@ -4715,19 +4715,24 @@ fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
         code => {
             let index = usize::try_from(code).ok()?;
             let id = models.by_definition.keys().find(|id| id.index() == index)?;
-            script_type(models, *id)
+            script_type(models, *id, Box::default())
         }
     })
 }
 
-/// The runtime type of the script type `id`.
-fn script_type(models: &Models, id: type_def::Id) -> intrinsic::Type {
+/// The runtime type of the script type `id` given `arguments`.
+fn script_type(
+    models: &Models,
+    id: type_def::Id,
+    arguments: Box<[intrinsic::Type]>,
+) -> intrinsic::Type {
     let model = models.definition(id);
     intrinsic::Type::script(
         model.identity(),
         model.definition().schema().clone(),
         model.definition().kind(),
         model.ty().type_id(models),
+        arguments,
     )
 }
 
@@ -13686,7 +13691,18 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => {
                 return self.proven_type(&target, operation, span);
             }
-            Ty::Script(id, ..) => script_type(&self.models, id),
+            // A generic type's arguments go in its witness, so a value that
+            // comes back is checked against them (review 1).
+            // Arguments that are still generic parameters leave the type's
+            // members unchecked, as before.
+            Ty::Script(id, arguments) => {
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| self.proven_type(argument, operation, span))
+                    .collect::<Result<Box<[_]>, _>>()
+                    .unwrap_or_default();
+                script_type(&self.models, id, arguments)
+            }
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
                 // iced's `Span<'a, Link = ()>`: a span no `.link(..)` gave a

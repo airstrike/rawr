@@ -3,6 +3,7 @@
 //! native `main` calls marked code that a save swaps; an async `main` runs on
 //! the project's own tokio, and a save restarts it.
 
+mod erasure;
 mod islands;
 mod plain;
 mod support;

@@ -534,6 +534,7 @@ impl Type {
                 schema.clone(),
                 *kind,
                 runtime.runtime(),
+                Box::default(),
             )),
             Shape::Tuple(members) => Some(host::runtime::type_ref::Type::Tuple(
                 members

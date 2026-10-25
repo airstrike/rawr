@@ -29,11 +29,27 @@ pub(crate) struct Model {
 
 #[derive(Clone)]
 struct Definition {
+    /// The type's name and its members' names, which a derived `Debug`
+    /// writes.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    names: Names,
+    /// The type's generic type parameters, in order.
+    generics: Box<[ImmutableString]>,
     schema: schema::Fingerprint,
     capabilities: capability::Set,
     shape: Shape,
     /// An enum's `#[default]` variant, which a derived `Default` builds.
     default_variant: Option<nominal::variant::Id>,
+}
+
+#[derive(Clone)]
+#[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+struct Names {
+    name: ImmutableString,
+    /// A struct's fields, `None` for a tuple or unit struct.
+    fields: Option<Box<[ImmutableString]>>,
+    /// Each struct variant's fields.
+    variants: BTreeMap<nominal::variant::Id, Box<[ImmutableString]>>,
 }
 
 #[derive(Clone)]
@@ -69,6 +85,42 @@ impl Model {
         let mut runtime = BTreeMap::new();
 
         for shell in program.items() {
+            let names = match &shell.kind {
+                item::Kind::Struct(item) => Names {
+                    name: item.name.text.clone(),
+                    fields: matches!(item.form, crate::item::StructForm::Named).then(|| {
+                        item.fields
+                            .iter()
+                            .map(|field| field.name.text.clone())
+                            .collect()
+                    }),
+                    variants: BTreeMap::new(),
+                },
+                item::Kind::Enum(item) => Names {
+                    name: item.name.text.clone(),
+                    fields: None,
+                    variants: item
+                        .variants
+                        .iter()
+                        .filter_map(|variant| {
+                            let fields = variant.fields.as_ref()?;
+                            Some((
+                                nominal::variant::Id::from_name(&variant.name),
+                                fields.iter().map(|field| field.text.clone()).collect(),
+                            ))
+                        })
+                        .collect(),
+                },
+                _ => continue,
+            };
+            let generics = match &shell.kind {
+                item::Kind::Struct(item) => &item.generics,
+                item::Kind::Enum(item) => &item.generics,
+                _ => continue,
+            }
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect();
             let (definition, shape, default_variant) = match &shell.kind {
                 item::Kind::Struct(item) => {
                     let definition = definitions[&item.definition];
@@ -102,6 +154,8 @@ impl Model {
             runtime.insert(
                 type_def::Identity::Script(definition.key().clone()),
                 Definition {
+                    names,
+                    generics,
                     schema: definition.schema().clone(),
                     capabilities: definition.capabilities(),
                     shape,
@@ -185,15 +239,111 @@ impl Model {
         self.validate_nominal(value, identity, definition, &mut BTreeSet::new())
     }
 
+    /// Validate `value` as the script type `identity` given `arguments`:
+    /// a member of a parameter's type is checked against its argument, and
+    /// skipped when the type's arguments aren't known.
     pub(crate) fn validate_value_exact(
         &self,
         value: &Dynamic,
         identity: &type_def::Identity,
         schema: &schema::Fingerprint,
+        arguments: &[crate::host::runtime::type_ref::Type],
         registry: &crate::host::runtime::Registry,
     ) -> Result<(), crate::host::runtime::type_ref::Error> {
         let definition = self.definition(identity, schema)?;
-        self.validate_nominal_exact(value, identity, definition, registry, &mut BTreeSet::new())
+        let parameters = if arguments.len() == definition.generics.len() {
+            definition
+                .generics
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        self.validate_nominal_exact(
+            value,
+            identity,
+            definition,
+            &parameters,
+            registry,
+            &mut BTreeSet::new(),
+        )
+    }
+
+    /// `value`'s text as a derived `Debug` writes it, for a value of a
+    /// script type; `None` for any other value.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    pub(crate) fn debug_text(&self, value: &Dynamic) -> Option<String> {
+        let (identity, members, variant) = match &value.0 {
+            Union::Struct(value, ..) => (value.identity(), value.fields(), None),
+            Union::Enum(value, ..) => (value.identity(), value.payload(), Some(value.variant())),
+            _ => return None,
+        };
+        let names = &self.definitions.get(identity)?.names;
+        let members = members.iter().map(|member| self.member_debug(member));
+        let (name, fields) = match variant {
+            None => (names.name.as_str(), names.fields.as_deref()),
+            Some(variant) => (
+                variant.name(),
+                names.variants.get(variant).map(AsRef::as_ref),
+            ),
+        };
+        let mut text = name.to_owned();
+        match fields {
+            Some(fields) => {
+                let members = fields
+                    .iter()
+                    .zip(members)
+                    .map(|(field, member)| format!("{field}: {member}"))
+                    .collect::<Vec<_>>();
+                if members.is_empty() {
+                    text.push_str(" {}");
+                } else {
+                    text.push_str(&format!(" {{ {} }}", members.join(", ")));
+                }
+            }
+            None => {
+                let members = members.collect::<Vec<_>>();
+                if !members.is_empty() {
+                    text.push_str(&format!("({})", members.join(", ")));
+                }
+            }
+        }
+        Some(text)
+    }
+
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    fn member_debug(&self, value: &Dynamic) -> String {
+        if let Some(text) = self.debug_text(value) {
+            return text;
+        }
+        if let Some(option) = crate::option::read(value) {
+            return match option {
+                Some(inner) => format!("Some({})", self.member_debug(&inner)),
+                None => "None".to_owned(),
+            };
+        }
+        if let Some(result) = crate::result::read(value) {
+            return match result {
+                Ok(inner) => format!("Ok({})", self.member_debug(&inner)),
+                Err(inner) => format!("Err({})", self.member_debug(&inner)),
+            };
+        }
+        if let Some(text) = value.read_lock::<ImmutableString>() {
+            return format!("{:?}", text.as_str());
+        }
+        if let Some(array) = value.read_lock::<crate::Array>() {
+            return format!(
+                "[{}]",
+                array
+                    .iter()
+                    .map(|element| self.member_debug(element))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        format!("{value:?}")
     }
 
     pub(crate) fn schema(&self, identity: &type_def::Identity) -> Option<&schema::Fingerprint> {
@@ -568,6 +718,7 @@ impl Model {
         value: &Dynamic,
         identity: &type_def::Identity,
         definition: &Definition,
+        parameters: &[(ImmutableString, crate::host::runtime::type_ref::Type)],
         registry: &crate::host::runtime::Registry,
         shared: &mut BTreeSet<usize>,
     ) -> Result<(), crate::host::runtime::type_ref::Error> {
@@ -586,8 +737,8 @@ impl Model {
                     actual: value.type_name().into(),
                 }
             })?;
-            let result =
-                self.validate_nominal_exact(&guard, identity, definition, registry, shared);
+            let result = self
+                .validate_nominal_exact(&guard, identity, definition, parameters, registry, shared);
             shared.remove(&address);
             return result;
         }
@@ -647,11 +798,13 @@ impl Model {
         }
         for (index, (member, expected)) in members.iter().zip(expected).enumerate() {
             // A generic type's value does not carry its type arguments, so a
-            // member of a parameter's type (`content: W`) holds any value.
-            if names_parameter(expected) {
+            // member of a parameter's type (`content: W`) holds any value,
+            // unless the witness gave the arguments (review 1).
+            if names_parameter(expected) && parameters.is_empty() {
                 continue;
             }
-            let ty = crate::host::runtime::type_ref::Type::from_resolved(expected, self)?;
+            let ty =
+                crate::host::runtime::type_ref::Type::from_resolved_in(expected, self, parameters)?;
             ty.validate(member, self, registry).map_err(|source| {
                 crate::host::runtime::type_ref::Error::Member {
                     target: identity.clone(),

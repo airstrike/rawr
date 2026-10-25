@@ -1211,8 +1211,8 @@ fn signature(
     installed: &[host::facade::Definition],
 ) -> Result<host::signature::Definition, Error> {
     let mut builder = host::signature::Builder::new();
-    for parameter in signature.parameters() {
-        builder.type_parameter(parameter, &[])?;
+    for (index, parameter) in signature.parameters().enumerate() {
+        builder.type_parameter(parameter, &super::requirements(signature.bounds(index)))?;
     }
     for input in signature.inputs() {
         builder.try_parameter(ty(facade, input, profile, installed)?)?;

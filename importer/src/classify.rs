@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 14;
+const CLASSIFIER_VERSION: u32 = 15;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3434,6 +3434,16 @@ impl<P: api::Phase> Context<'_, P> {
         // `F: Future` takes a script future as `rawr::future::Script`, and
         // `F::Output` is a synthetic type parameter the script infers (D527).
         let futures = self.future_parameters(generics, &mut parameters, callable_class.is_some());
+        // `T: Clone` keeps `Clone`: a script type fills `T` as `Value`,
+        // which implements it, so Rawr checks the script type (review 3).
+        parameters = parameters
+            .into_vec()
+            .into_iter()
+            .map(|parameter| {
+                let bounds = self.derivable_bounds(generics, parameter.index());
+                parameter.with_bounds(bounds)
+            })
+            .collect();
         if !futures.is_empty() {
             predicates = predicates
                 .iter()
@@ -3843,6 +3853,47 @@ impl<P: api::Phase> Context<'_, P> {
                 }
             })
         })
+    }
+
+    /// The derivable std traits the bounds on type parameter `index` name.
+    fn derivable_bounds(&self, generics: &model::Generics, index: u32) -> Box<[Box<str>]> {
+        let declared = generics
+            .parameters()
+            .filter(|parameter| parameter.index() == index)
+            .flat_map(|parameter| match parameter.kind() {
+                model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            });
+        let predicated = generics
+            .predicates()
+            .filter_map(|predicate| match predicate {
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound,
+                } if *bounded == index => Some(bound),
+                _ => None,
+            });
+        let mut names: Vec<Box<str>> = Vec::new();
+        for bound in declared.chain(predicated) {
+            let model::Bound::Trait {
+                trait_id,
+                polarity: model::Polarity::Positive,
+                ..
+            } = bound
+            else {
+                continue;
+            };
+            let Some(name) = representability::signature::DERIVABLE
+                .into_iter()
+                .find(|name| self.is_core_trait(trait_id, name))
+            else {
+                continue;
+            };
+            if !names.iter().any(|known| &**known == name) {
+                names.push(name.into());
+            }
+        }
+        names.into_boxed_slice()
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {

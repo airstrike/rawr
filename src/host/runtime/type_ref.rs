@@ -46,6 +46,9 @@ pub(crate) enum Type {
         schema: program::schema::Fingerprint,
         kind: type_def::Kind,
         runtime: Representation,
+        /// A generic type's type arguments, which its value doesn't carry:
+        /// a member of a parameter's type is checked against them.
+        arguments: Box<[Type]>,
     },
     Host {
         path: ImmutableString,
@@ -453,12 +456,14 @@ impl Type {
         schema: program::schema::Fingerprint,
         kind: type_def::Kind,
         runtime: TypeId,
+        arguments: Box<[Self]>,
     ) -> Self {
         Self::Script {
             identity,
             schema,
             kind,
             runtime: Representation::exact(runtime),
+            arguments,
         }
     }
 
@@ -530,6 +535,7 @@ impl Type {
             Self::Host { arguments, .. } => arguments,
             #[cfg(feature = "rust-import")]
             Self::Imported { arguments, .. } => arguments,
+            Self::Script { arguments, .. } => arguments,
             Self::Unit
             | Self::Array { .. }
             | Self::Option(_)
@@ -538,7 +544,6 @@ impl Type {
             | Self::Callable { .. }
             | Self::Builtin { .. }
             | Self::Object(_)
-            | Self::Script { .. }
             | Self::Support { .. } => &[],
         }
     }
@@ -701,8 +706,11 @@ impl Type {
                 }
             }
             Self::Script {
-                identity, schema, ..
-            } => model.validate_value_exact(value, identity, schema, registry),
+                identity,
+                schema,
+                arguments,
+                ..
+            } => model.validate_value_exact(value, identity, schema, arguments, registry),
             Self::Host {
                 path,
                 identity,
@@ -799,6 +807,17 @@ impl Type {
         ty: &crate::resolve::type_ref::Type,
         model: &program::model::Model,
     ) -> Result<Self, Error> {
+        Self::from_resolved_in(ty, model, &[])
+    }
+
+    /// [`Self::from_resolved`] with each generic parameter named in
+    /// `parameters` given its type: a generic script type's member of a
+    /// parameter's type takes the type its value was given (review 1).
+    pub(crate) fn from_resolved_in(
+        ty: &crate::resolve::type_ref::Type,
+        model: &program::model::Model,
+        parameters: &[(ImmutableString, Self)],
+    ) -> Result<Self, Error> {
         use crate::resolve::type_ref::{Argument, Target};
 
         let crate::resolve::type_ref::Type::Path(path) = ty else {
@@ -807,7 +826,7 @@ impl Type {
                 crate::resolve::type_ref::Type::Tuple { members, .. } => Ok(Self::Tuple(
                     members
                         .iter()
-                        .map(|member| Self::from_resolved(member, model))
+                        .map(|member| Self::from_resolved_in(member, model, parameters))
                         .collect::<Result<_, _>>()?,
                 )),
                 // A shared reference is its referent's value at runtime.
@@ -815,7 +834,7 @@ impl Type {
                     mutable: false,
                     target,
                     ..
-                } => Self::from_resolved(target, model),
+                } => Self::from_resolved_in(target, model, parameters),
                 crate::resolve::type_ref::Type::Reference { .. } => Err(Error::Unsupported {
                     ty: "reference".into(),
                 }),
@@ -824,27 +843,32 @@ impl Type {
         };
 
         if let Some(element) = ty.option_element() {
-            return Ok(Self::option(Self::from_resolved(element, model)?));
+            return Ok(Self::option(Self::from_resolved_in(
+                element, model, parameters,
+            )?));
         }
         if let Some((ok, err)) = ty.result_elements() {
             return Ok(Self::result(
-                Self::from_resolved(ok, model)?,
-                Self::from_resolved(err, model)?,
+                Self::from_resolved_in(ok, model, parameters)?,
+                Self::from_resolved_in(err, model, parameters)?,
             ));
         }
         // A `Vec` is an array, a `Box` its value, and a map or set an array
         // sorted by key: `(key, value)` pairs or keys.
         if let Some(element) = ty.vec_element() {
-            return Ok(Self::array(Self::from_resolved(element, model)?, None));
+            return Ok(Self::array(
+                Self::from_resolved_in(element, model, parameters)?,
+                None,
+            ));
         }
         if let Some((element, length)) = ty.array_element() {
             return Ok(Self::array(
-                Self::from_resolved(element, model)?,
+                Self::from_resolved_in(element, model, parameters)?,
                 Some(length),
             ));
         }
         if let Some(element) = ty.box_element() {
-            return Self::from_resolved(element, model);
+            return Self::from_resolved_in(element, model, parameters);
         }
         if ty.dyn_trait().is_some() {
             return Ok(Self::Object(path.name.clone()));
@@ -852,7 +876,7 @@ impl Type {
         if let Some((_, arguments)) = ty.keyed_arguments() {
             let mut arguments = arguments
                 .into_iter()
-                .map(|argument| Self::from_resolved(argument, model))
+                .map(|argument| Self::from_resolved_in(argument, model, parameters))
                 .collect::<Result<Vec<_>, _>>()?;
             let element = if arguments.len() == 1 {
                 arguments.remove(0)
@@ -874,6 +898,11 @@ impl Type {
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
+            Target::Parameter
+                if let Some((_, ty)) = parameters.iter().find(|(name, _)| *name == path.name) =>
+            {
+                Ok(ty.clone())
+            }
             Target::Parameter | Target::Projection(..) | Target::Alias(_) => {
                 Err(Error::Unsupported {
                     ty: path.name.clone(),
@@ -898,6 +927,15 @@ impl Type {
                             target: identity.clone(),
                         })
                     })?,
+                    path.arguments
+                        .iter()
+                        .filter_map(|argument| match argument {
+                            Argument::Type(ty) => {
+                                Some(Self::from_resolved_in(ty, model, parameters))
+                            }
+                            Argument::Lifetime(_) => None,
+                        })
+                        .collect::<Result<Box<[_]>, _>>()?,
                 ))
             }
             Target::Host { definition, owner } => {
@@ -905,7 +943,7 @@ impl Type {
                     .arguments
                     .iter()
                     .filter_map(|argument| match argument {
-                        Argument::Type(ty) => Some(Self::from_resolved(ty, model)),
+                        Argument::Type(ty) => Some(Self::from_resolved_in(ty, model, parameters)),
                         Argument::Lifetime(_) => None,
                     })
                     .collect::<Result<Vec<_>, _>>()?
@@ -1004,12 +1042,20 @@ impl crate::preview::digest::Write for Type {
                 schema,
                 kind: _,
                 runtime: _,
+                arguments,
             } => {
                 writer.tag(0x2104);
                 writer.tag(0x2121);
                 write_script_identity(writer, identity, "preview runtime script identity")?;
                 writer.tag(0x2122);
                 schema.write(writer)?;
+                // A type without arguments writes as it did before them.
+                if !arguments.is_empty() {
+                    writer.tag(0x2123);
+                    for argument in arguments {
+                        argument.write(writer)?;
+                    }
+                }
             }
             Self::Host {
                 path,
@@ -1095,8 +1141,22 @@ impl fmt::Display for Type {
             Self::Builtin { name, .. } => formatter.write_str(name),
             Self::Script {
                 identity: type_def::Identity::Script(key),
+                arguments,
                 ..
-            } => key.fmt(formatter),
+            } if arguments.is_empty() => key.fmt(formatter),
+            Self::Script {
+                identity: type_def::Identity::Script(key),
+                arguments,
+                ..
+            } => write!(
+                formatter,
+                "{key}<{}>",
+                arguments
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Self::Script {
                 identity: type_def::Identity::Host(identity),
                 ..

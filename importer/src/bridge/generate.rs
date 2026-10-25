@@ -53,6 +53,18 @@ struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64, release: Opti
 /// The claim the copies of one handle share on its slot.
 struct Release { epoch: [u8; 32], slot: u32, generation: u64 }
 
+/// Values futures lent and gave back, restored to their slots on the owner
+/// thread the next time it has the arena (D513.6).
+#[allow(clippy::type_complexity)]
+static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+thread_local! {
+    /// The handles the protocol gave out: a handle on the wire keeps its
+    /// value alive, as the caller may pass it back (review 5).
+    static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Slots whose last handle was dropped, freed on the owner thread the next
 /// time it has the arena.
 static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -607,6 +619,18 @@ impl Arena {
     /// Free each slot whose last handle was dropped. Dropping a native value
     /// may drop handles it holds, which are freed in the next round.
     fn release_dropped(&mut self) {
+        // Another arena's values wait for their own arena.
+        let restores = {
+            let mut queued = RESTORES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (mine, others) = std::mem::take(&mut *queued)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(handle, _)| handle.epoch == self.epoch);
+            *queued = others;
+            mine
+        };
+        for (handle, value) in restores {
+            self.restore(handle, value);
+        }
         loop {
             let batch = std::mem::take(
                 &mut *RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
@@ -643,7 +667,7 @@ impl Arena {
     }
 
     /// The value a future borrowed, back in its slot.
-    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any>) {
+    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any + Send>) {
         if handle.epoch != self.epoch { return; }
         if let Some(entry) = self.slots.get_mut(handle.slot as usize)
             && entry.generation == handle.generation
@@ -687,6 +711,8 @@ fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
+    // A new program's arena: the handles the last one gave out are stale.
+    EXPORTED.with_borrow_mut(Vec::clear);
 }
 
 fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
@@ -724,13 +750,15 @@ impl<T: Send + 'static> Drop for Held<T> {
         if let Self::Leased { value, handle } = self
             && let Some(value) = value.take()
         {
-            let handle = handle.clone();
-            // The arena is the owner thread's; a future may end anywhere.
-            __rawr_internal::future::on_owner(move || {
-                let _ = with_arena(|arena| {
-                    arena.restore(handle, Box::new(value));
-                    Ok(())
-                });
+            // The arena is the owner thread's, and may be borrowed by the
+            // native call that drops this future, or absent on an executor's
+            // thread: the value waits in the queue its next use drains.
+            RESTORES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((handle.clone(), Box::new(value)));
+            __rawr_internal::future::on_owner(|| {
+                let _ = with_arena(|_| Ok(()));
             });
         }
     }
@@ -908,7 +936,14 @@ fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
             let epoch = take_bytes(input, 32)?.try_into().map_err(|_| Error::Malformed)?;
             let slot = u32::from_le_bytes(take_bytes(input, 4)?.try_into().map_err(|_| Error::Malformed)?);
             let generation = u64::from_le_bytes(take_bytes(input, 8)?.try_into().map_err(|_| Error::Malformed)?);
-            Dynamic::from(NativeHandle { epoch, slot, generation, release: None })
+            // A handle the protocol gave out shares its claim (review 5).
+            let release = EXPORTED.with_borrow(|exported| {
+                exported
+                    .iter()
+                    .find(|handle| handle.epoch == epoch && handle.slot == slot && handle.generation == generation)
+                    .and_then(|handle| handle.release.clone())
+            });
+            Dynamic::from(NativeHandle { epoch, slot, generation, release })
         }
         7 => match take_bytes(input, 1)?[0] {
             0 => __rawr_internal::option::none(),
@@ -956,6 +991,7 @@ fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
         push_bytes(output, value.as_bytes())?;
     } else if value.is::<NativeHandle>() {
         let value = value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+        EXPORTED.with_borrow_mut(|exported| exported.push(value.clone()));
         output.push(6);
         push_bytes(output, &value.epoch)?;
         push_bytes(output, &value.slot.to_le_bytes())?;
@@ -1024,7 +1060,43 @@ fn runtime_error(error: impl std::fmt::Debug) -> Box<__rawr_internal::EvalAltRes
 /// erased generic gave back, which are checked against the call's witness.
 const CHECK_VALUES: u8 = 0x80;
 
+thread_local! {
+    /// The witness of each operand of the call an adapter runs: a closure's
+    /// parameters take theirs (review 2).
+    static OPERANDS: RefCell<Vec<Option<__rawr_internal::host::runtime::Witness>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// The witnesses of the `count` parameters of the closure that is operand
+/// `index` of the running call.
+#[allow(dead_code)]
+fn closure_inputs(index: usize, count: usize) -> Vec<Option<__rawr_internal::host::runtime::Witness>> {
+    OPERANDS.with_borrow(|operands| {
+        let closure = operands.get(index).cloned().flatten();
+        (0..count)
+            .map(|input| closure.as_ref().and_then(|closure| closure.argument_witness(input)))
+            .collect()
+    })
+}
+
 fn runtime_invoke(
+    adapter: Adapter,
+    call: &__rawr_internal::host::runtime::Call<'_>,
+    values: &mut [&mut Dynamic],
+) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+    OPERANDS.set((0..values.len()).map(|index| call.operand_witness(index).ok()).collect());
+    let output = invoke_in_arena(adapter, call, values);
+    OPERANDS.with_borrow_mut(Vec::clear);
+    let output = output?;
+    // Script values that came back are checked outside the arena's borrow:
+    // a member of an imported type attests through the arena (review 9).
+    if adapter.witness & CHECK_VALUES != 0 {
+        check_values(call.output_witness().ok().as_ref(), &output).map_err(runtime_error)?;
+    }
+    Ok(output)
+}
+
+fn invoke_in_arena(
     adapter: Adapter,
     call: &__rawr_internal::host::runtime::Call<'_>,
     values: &mut [&mut Dynamic],
@@ -1055,9 +1127,6 @@ fn runtime_invoke(
             }
             Err(output) => output,
         };
-        if adapter.witness & CHECK_VALUES != 0 {
-            check_values(call.output_witness().ok().as_ref(), &output)?;
-        }
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| value.clone()) {
             let witness = match adapter.witness & !CHECK_VALUES {
                 1 => call.output_witness().ok(),
@@ -1560,11 +1629,11 @@ mod native_arena_tests {
     fn non_clone_values_borrow_move_reuse_and_reject_stale_handles() {
         let mut arena = Arena::new([7; 32]);
         let handle = arena.insert(NonClone { value: 2 }).expect("insert");
-        assert_eq!(arena.shared::<NonClone, _>(handle, |value| value.value).expect("shared"), 2);
-        arena.mutable::<NonClone, _>(handle, |value| value.value += 1).expect("mutable");
-        assert!(matches!(arena.shared::<String, _>(handle, |_| ()), Err(Error::TypeMismatch)));
-        assert_eq!(arena.take::<NonClone>(handle).expect("owned").value, 3);
-        assert!(matches!(arena.take::<NonClone>(handle), Err(Error::StaleHandle)));
+        assert_eq!(arena.shared::<NonClone, _>(handle.clone(), |value| value.value).expect("shared"), 2);
+        arena.mutable::<NonClone, _>(handle.clone(), |value| value.value += 1).expect("mutable");
+        assert!(matches!(arena.shared::<String, _>(handle.clone(), |_| ()), Err(Error::TypeMismatch)));
+        assert_eq!(arena.take::<NonClone>(handle.clone()).expect("owned").value, 3);
+        assert!(matches!(arena.take::<NonClone>(handle.clone()), Err(Error::StaleHandle)));
         let reused = arena.insert(NonClone { value: 5 }).expect("reuse");
         assert_eq!(reused.slot, handle.slot);
         assert_ne!(reused.generation, handle.generation);
@@ -1579,9 +1648,54 @@ mod native_arena_tests {
         let mut handle = arena.insert(NonClone { value: 1 }).expect("insert");
         arena.slots[handle.slot as usize].generation = u64::MAX;
         handle.generation = u64::MAX;
-        assert_eq!(arena.take::<NonClone>(handle).expect("last take").value, 1);
+        assert_eq!(arena.take::<NonClone>(handle.clone()).expect("last take").value, 1);
         let next = arena.insert(NonClone { value: 2 }).expect("new slot");
         assert_ne!(next.slot, handle.slot);
+    }
+
+    /// A value in the owner's arena, and that handle.
+    fn installed(epoch: u8, value: i64) -> NativeHandle {
+        install_arena([epoch; 32]);
+        with_arena(|arena| arena.insert(NonClone { value })).expect("insert")
+    }
+
+    fn read(handle: &NativeHandle) -> Result<i64, Error> {
+        with_arena(|arena| arena.shared::<NonClone, _>(handle.clone(), |value| value.value))
+    }
+
+    #[test]
+    fn a_handle_the_protocol_gave_out_stays_alive_for_its_next_call() {
+        let handle = installed(21, 6);
+        let mut wire = Vec::new();
+        // Encoding takes the call's output, its only handle (review 5).
+        encode_value(Dynamic::from(handle), &mut wire).expect("encode");
+        let decoded = decode_value(&mut wire.as_slice())
+            .expect("decode")
+            .try_cast::<NativeHandle>()
+            .expect("a handle");
+        assert_eq!(read(&decoded).expect("alive"), 6);
+    }
+
+    #[test]
+    fn a_lent_value_given_back_on_a_thread_without_the_arena_returns_at_its_next_use() {
+        let handle = installed(22, 4);
+        let held = with_arena(|arena| arena.lease::<NonClone>(handle.clone())).expect("lease");
+        // An executor's thread, as iced's, has no arena (review 6).
+        std::thread::spawn(move || drop(held)).join().expect("dropped elsewhere");
+        assert_eq!(read(&handle).expect("restored"), 4);
+    }
+
+    #[test]
+    fn a_lent_value_given_back_while_the_arena_is_borrowed_returns_after() {
+        let handle = installed(23, 5);
+        let held = with_arena(|arena| arena.lease::<NonClone>(handle.clone())).expect("lease");
+        // A native call that drops the future holds the arena (review 7).
+        with_arena(|_| {
+            drop(held);
+            Ok(())
+        })
+        .expect("dropped inside a call");
+        assert_eq!(read(&handle).expect("restored"), 5);
     }
 }
 "#;
@@ -1623,7 +1737,27 @@ mod __rawr_profile_host {
                 let future = make();
                 return Task(Box::new(move || Box::pin(future)));
             }
-            Task(Box::new(move || Box::pin(make())))
+            // Elsewhere it runs at the first poll, on whatever runs the
+            // future: a runtime the call needs and that thread lacks is
+            // named, not reported as tokio's missing reactor (D527).
+            Task(Box::new(move || {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)) {
+                    Ok(future) => Box::pin(future),
+                    Err(payload) => {
+                        let said = payload
+                            .downcast_ref::<&str>()
+                            .map(|said| (*said).to_owned())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_default();
+                        if said.contains("reactor") || said.contains("runtime") {
+                            panic!(
+                                "rawr: this native call needs its async runtime, and the program runs none: give `async fn main` the runtime's attribute, as `#[tokio::main]` (D527). It said: {said}"
+                            );
+                        }
+                        std::panic::resume_unwind(payload)
+                    }
+                }
+            }))
         }
 
         pub struct Project<T>(std::cell::Cell<Option<T>>);
@@ -6211,9 +6345,22 @@ fn render_take_callable(
     })?;
     let mut converted = String::new();
     render_from_dynamic(&returned, "value", 0, &mut converted)?;
+    // A script value native code gives the closure is checked against the
+    // closure's parameter (review 2).
+    let (witnesses, call) = if inputs.iter().any(is_value) {
+        (
+            format!(
+                "\n        let witnesses = closure_inputs({index}, {});",
+                inputs.len()
+            ),
+            "callable.call_checked(&mut values, &witnesses)",
+        )
+    } else {
+        (String::new(), "callable.call(&mut values)")
+    };
     writeln!(
         output,
-        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;\n        move |{}| -> {rust} {{\n            let mut values = [{}];\n            let value = callable.call(&mut values).unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            ({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
+        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = [{}];\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            ({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
         parameters.join(", "),
         values.join(", "),
     )
@@ -7164,7 +7311,7 @@ fn render_execution_tests<'a>(
                   for producer in PRODUCERS.iter().flat_map(|producers| producers.iter()) {\n\
                       let mut arena = Arena::new([11; 32]);\n\
                       let handle = producer(&mut arena).expect(\"nominal producer\");\n\
-                      match invoke_one(identity, handle, &mut arena) {\n\
+                      match invoke_one(identity, handle.clone(), &mut arena) {\n\
                           Ok(_) => {\n\
                               if consumes {\n\
                                   assert!(matches!(invoke_one(identity, handle, &mut arena), Err(Error::StaleHandle)));\n\

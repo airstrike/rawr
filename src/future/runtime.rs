@@ -520,24 +520,68 @@ pub trait Host {
     fn share(&self) -> Option<Program> {
         None
     }
-
-    /// `value`'s `Debug` text as the program's types print it.
-    fn debug(&self, value: &Dynamic) -> Option<String> {
-        let _ = value;
-        None
-    }
 }
 
 thread_local! {
     static HOST: RefCell<Option<Rc<dyn Host>>> = const { RefCell::new(None) };
 }
 
+/// The running program as any thread may use it: each call runs with an
+/// evaluation of its own (D490).
+pub trait Remote: crate::func::SendSync {
+    /// Call `function` with `arguments`.
+    fn invoke(&self, function: &item::Value, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic>;
+
+    /// Check `value` against the exact type `witness` proves.
+    fn validate(
+        &self,
+        witness: &crate::host::runtime::Witness,
+        value: &Dynamic,
+    ) -> Result<(), String>;
+
+    /// A copy of `value` made by its type's own `Clone`, when the program
+    /// wrote one; `None` for a derived `Clone`, which copies the value.
+    fn clone_value(&self, value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
+        let _ = value;
+        None
+    }
+
+    /// `value`'s `Debug` text as its derived `Debug` writes it.
+    fn debug(&self, value: &Dynamic) -> Option<String> {
+        let _ = value;
+        None
+    }
+}
+
 /// A program any thread may call into.
+pub type Program = Arc<dyn Remote>;
+
+/// The program the process runs, for script values native code holds
+/// (`rawr::Value`'s `Clone` and `Debug`) on any thread.
 #[cfg(feature = "sync")]
-pub type Program = Arc<dyn Fn(&item::Value, &mut [Dynamic]) -> RawrResultOf<Dynamic> + Send + Sync>;
-/// A program any thread may call into.
-#[cfg(not(feature = "sync"))]
-pub type Program = Arc<dyn Fn(&item::Value, &mut [Dynamic]) -> RawrResultOf<Dynamic>>;
+static PUBLISHED: std::sync::RwLock<Option<Program>> = std::sync::RwLock::new(None);
+
+/// Make `program` the one script values native code holds belong to.
+pub fn publish(program: Program) {
+    #[cfg(feature = "sync")]
+    {
+        *PUBLISHED.write().unwrap_or_else(PoisonError::into_inner) = Some(program);
+    }
+    #[cfg(not(feature = "sync"))]
+    let _ = program;
+}
+
+fn published() -> Option<Program> {
+    #[cfg(feature = "sync")]
+    return PUBLISHED.read().ok()?.clone();
+    #[cfg(not(feature = "sync"))]
+    return None;
+}
+
+/// A copy of `value` by its script type's own `Clone` (review 8).
+pub(crate) fn clone_value(value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
+    published()?.clone_value(value)
+}
 
 /// A script closure native code calls (D513.7 b): `F: FnOnce() -> R` takes
 /// one, as `spawn_blocking` does. Each call runs the closure with what it
@@ -571,7 +615,27 @@ impl Callable {
 
     /// Call the closure with `arguments`.
     pub fn call(&self, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
-        (self.program)(&self.function, arguments)
+        self.program.invoke(&self.function, arguments)
+    }
+
+    /// Call the closure with `arguments`, each first checked against the
+    /// witness of the closure's parameter at its place: native code that
+    /// gives a closure a value of another type is refused (review 2).
+    pub fn call_checked(
+        &self,
+        arguments: &mut [Dynamic],
+        witnesses: &[Option<crate::host::runtime::Witness>],
+    ) -> RawrResultOf<Dynamic> {
+        for (index, (argument, witness)) in arguments.iter().zip(witnesses).enumerate() {
+            if let Some(witness) = witness {
+                self.program.validate(witness, argument).map_err(|reason| {
+                    failure(format!(
+                        "rawr: native code gave a closure's argument {index} a value that is not its type: {reason}"
+                    ))
+                })?;
+            }
+        }
+        self.call(arguments)
     }
 }
 
@@ -681,9 +745,9 @@ fn with_host<T>(work: impl FnOnce(&dyn Host) -> T) -> Option<T> {
     Some(work(host.as_ref()))
 }
 
-/// `value`'s `Debug` text through the owner's program, on its thread.
+/// `value`'s `Debug` text through the program it belongs to (review 8).
 pub(crate) fn debug(value: &Dynamic) -> Option<String> {
-    with_host(|host| host.debug(value)).flatten()
+    published()?.debug(value)
 }
 
 fn send(job: Job) {

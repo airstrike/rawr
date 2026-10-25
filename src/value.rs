@@ -17,9 +17,24 @@
 use crate::Dynamic;
 
 /// A script value standing for a script type in native generic code.
-#[derive(Clone)]
 #[repr(transparent)]
 pub struct Value(Dynamic);
+
+impl Clone for Value {
+    /// The script type's own `Clone` where the program wrote one, as
+    /// `T::clone` calls it, and else a copy, as a derived `Clone` makes
+    /// (review 8). A hand-written `clone` that fails panics, as in Rust.
+    fn clone(&self) -> Self {
+        #[cfg(all(feature = "std", not(feature = "no_function")))]
+        if let Some(copy) = crate::future::clone_value(&self.0) {
+            return match copy {
+                Ok(copy) => Self(copy),
+                Err(error) => panic!("{}", crate::future::message(&error)),
+            };
+        }
+        Self(self.0.clone())
+    }
+}
 
 impl Value {
     /// The script value.
@@ -46,8 +61,8 @@ impl From<Value> for Dynamic {
 }
 
 impl std::fmt::Debug for Value {
-    /// The script type's own `Debug` text where the program that owns the
-    /// value can print it, on its thread, and else the value's.
+    /// The script type's derived `Debug` text, through the program the
+    /// value belongs to, and else the value's own (review 8).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[cfg(all(feature = "std", not(feature = "no_function")))]
         if let Some(text) = crate::future::debug(&self.0) {

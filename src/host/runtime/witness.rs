@@ -98,6 +98,8 @@ impl Witness {
             | (Type::Array { element, .. }, 0) => (**element).clone(),
             (Type::Result(_, error), 1) => (**error).clone(),
             (Type::Tuple(members), index) => members.get(index)?.clone(),
+            // A closure's parameter, which native code fills.
+            (Type::Callable { inputs, .. }, index) => inputs.get(index)?.clone(),
             _ => self.ty.arguments().get(index)?.clone(),
         };
         Some(Self::issue(self.authority, ty))

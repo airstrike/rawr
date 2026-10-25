@@ -114,6 +114,8 @@ impl Call {
 pub fn publish(bootstrap: Bootstrap) {
     let current = Rc::new(Current::new(bootstrap));
     crate::future::serve(current.clone());
+    #[cfg(feature = "sync")]
+    crate::future::publish(current.shared.clone());
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
 }
 
@@ -246,6 +248,8 @@ fn failure(message: &str) -> Vec<u8> {
 /// One published generation with what its calls look up, found once.
 struct Current {
     bootstrap: Bootstrap,
+    #[cfg(feature = "sync")]
+    shared: crate::future::Program,
     /// Each function by whether it belongs to a type, and its path.
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
@@ -265,12 +269,74 @@ impl crate::future::Host for Current {
 
     #[cfg(feature = "sync")]
     fn share(&self) -> Option<crate::future::Program> {
-        let (authority, runtime) = self.bootstrap.catalog().shared();
-        Some(std::sync::Arc::new(move |function, arguments| {
-            authority
-                .invoke_bound(function, arguments, runtime.clone())
-                .map_err(|error| crate::future::error(error.to_string()))
-        }))
+        Some(self.shared.clone())
+    }
+}
+
+/// `authority` with `runtime` as any thread may use it, with each script
+/// type's own `Clone` found once.
+#[cfg(feature = "sync")]
+pub(crate) fn shared(
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+) -> crate::future::Program {
+    let clones = authority
+        .items()
+        .filter(|item| item.kind() == item::Kind::Method && item.key().name() == "Clone::clone")
+        .filter_map(|item| Some((item.key().owner()?.clone(), item.clone())))
+        .collect();
+    std::sync::Arc::new(Shared {
+        authority,
+        runtime,
+        clones,
+    })
+}
+
+/// The published program as any thread may use it (D490): calls with an
+/// evaluation of their own, checks of values native code gives, and each
+/// script type's own `Clone`.
+#[cfg(feature = "sync")]
+struct Shared {
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+    clones: HashMap<type_def::Identity, item::Value>,
+}
+
+#[cfg(feature = "sync")]
+impl crate::future::Remote for Shared {
+    fn invoke(
+        &self,
+        function: &item::Value,
+        arguments: &mut [Dynamic],
+    ) -> crate::RawrResultOf<Dynamic> {
+        self.authority
+            .invoke_bound(function, arguments, self.runtime.clone())
+            .map_err(|error| crate::future::error(error.to_string()))
+    }
+
+    fn validate(
+        &self,
+        witness: &crate::host::runtime::Witness,
+        value: &Dynamic,
+    ) -> Result<(), String> {
+        witness
+            .ty()
+            .validate(value, self.authority.model(), &self.runtime)
+            .map_err(|error| error.to_string())
+    }
+
+    fn clone_value(&self, value: &Dynamic) -> Option<crate::RawrResultOf<Dynamic>> {
+        let identity = match &value.0 {
+            crate::types::dynamic::Union::Struct(value, ..) => value.identity(),
+            crate::types::dynamic::Union::Enum(value, ..) => value.identity(),
+            _ => return None,
+        };
+        let clone = self.clones.get(identity)?;
+        Some(self.invoke(clone, &mut [value.clone()]))
+    }
+
+    fn debug(&self, value: &Dynamic) -> Option<String> {
+        self.authority.model().debug_text(value)
     }
 }
 
@@ -304,8 +370,15 @@ impl Current {
             items.insert(entry, item.clone());
         }
         let types = authority.model().island_types();
+        #[cfg(feature = "sync")]
+        let shared = {
+            let (authority, runtime) = bootstrap.catalog().shared();
+            shared(authority, runtime)
+        };
         Self {
             bootstrap,
+            #[cfg(feature = "sync")]
+            shared,
             items,
             types,
         }
@@ -349,5 +422,57 @@ impl Current {
             }
         }
         Ok(reply)
+    }
+}
+
+#[cfg(all(test, feature = "sync"))]
+mod tests {
+    use crate::{host, Dynamic, Engine, Shared};
+
+    /// Native code that clones or prints a script value it holds as
+    /// `rawr::Value` gets the script type's own `Clone` and its derived
+    /// `Debug` text (review 8).
+    #[test]
+    fn a_value_clones_and_prints_as_its_script_type_does() {
+        let engine = Shared::new(Engine::new());
+        let authority = engine
+            .compile_authority(
+                r#"
+                struct Counter { n: i64 }
+                impl Clone for Counter {
+                    fn clone(&self) -> Self { Counter { n: self.n + 1 } }
+                }
+                #[derive(Debug, Clone)]
+                struct Job { id: i64, name: String, tags: Vec<String>, next: Option<Step> }
+                #[derive(Debug, Clone)]
+                enum Step { Wait(i64), Done { at: i64 } }
+                pub fn counter() -> Counter { Counter { n: 1 } }
+                pub fn job() -> Job {
+                    Job { id: 7, name: "seven".to_string(), tags: vec!["a".to_string()], next: Some(Step::Done { at: 3 }) }
+                }
+                pub fn count(counter: Counter) -> i64 { counter.n }
+                "#,
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        let runtime = Shared::new(host::runtime::Registry::new());
+        let call = |name: &str, arguments: &mut [Dynamic]| {
+            let item = authority
+                .items()
+                .find(|item| item.key().name() == name)
+                .unwrap()
+                .clone();
+            authority
+                .invoke_bound(&item, arguments, runtime.clone())
+                .unwrap_or_else(|error| panic!("{error}"))
+        };
+        let counter = call("counter", &mut []);
+        let job = call("job", &mut []);
+        crate::future::publish(super::shared(authority.clone(), runtime.clone()));
+        let copy = crate::Value::from(counter).clone();
+        assert_eq!(call("count", &mut [copy.into_inner()]).as_int().unwrap(), 2);
+        assert_eq!(
+            format!("{:?}", crate::Value::from(job)),
+            r#"Job { id: 7, name: "seven", tags: ["a"], next: Some(Done { at: 3 }) }"#
+        );
     }
 }

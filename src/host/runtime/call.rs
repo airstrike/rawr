@@ -186,6 +186,21 @@ impl<'a> Call<'a> {
         Ok(Witness::issue(self.authority, output.clone()))
     }
 
+    /// The witness of this call's operand at `index`, as the checked call
+    /// typed it: a closure's, whose parameters native code fills, checks
+    /// what it gives (review 2).
+    #[doc(hidden)]
+    pub fn operand_witness(&self, index: usize) -> Result<Witness, Error> {
+        let operands = match &self.operation {
+            Operation::Item { operands, .. } | Operation::Structural { operands, .. } => *operands,
+            Operation::Projection { .. } => return Err(Error::OutputRequiresConstructor),
+        };
+        let operand = operands
+            .get(index)
+            .ok_or(Error::OutputRequiresConstructor)?;
+        Ok(Witness::issue(self.authority, operand.clone()))
+    }
+
     /// The output witness of a method that borrows its receiver, whose
     /// output is a new value, as an async method's future is (D513.6). An
     /// owned builder's output carries its receiver's witness instead.

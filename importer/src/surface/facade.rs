@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 11;
+const SCHEMA: u32 = 12;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -242,6 +242,9 @@ pub enum ItemKind {
 #[derive(Deserialize, Serialize)]
 pub struct Signature {
     parameters: Box<[Box<str>]>,
+    /// The derivable std traits each parameter's bounds name, by position:
+    /// what a script type that fills it must implement (review 3).
+    bounds: Bounds,
     inputs: Box<[Type]>,
     output: Type,
 }
@@ -1841,6 +1844,11 @@ impl Signature {
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
         self.parameters.iter().map(AsRef::as_ref)
     }
+    /// Return the derivable std traits the bounds on the parameter at
+    /// `index` name.
+    pub fn bounds(&self, index: usize) -> &[Box<str>] {
+        self.bounds.get(index).map_or(&[], |bounds| bounds)
+    }
     /// Return ordered input types.
     pub const fn inputs(&self) -> &[Type] {
         &self.inputs
@@ -1849,6 +1857,30 @@ impl Signature {
     pub const fn output(&self) -> &Type {
         &self.output
     }
+}
+
+/// The derivable std traits each parameter's bounds name, by position.
+type Bounds = Box<[Box<[Box<str>]>]>;
+
+/// Each parameter's derivable std bounds, or none when no parameter has any.
+fn bounds(source: &[representability::signature::Parameter]) -> Result<Bounds, super::Error> {
+    if source.iter().all(|parameter| parameter.bounds().is_empty()) {
+        return Ok(Box::default());
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(source.len())
+        .map_err(|_| super::Error::Allocation)?;
+    for parameter in source {
+        output.push(
+            parameter
+                .bounds()
+                .iter()
+                .map(|name| copy(name))
+                .collect::<Result<Box<[_]>, _>>()?,
+        );
+    }
+    Ok(output.into_boxed_slice())
 }
 
 fn type_definition(
@@ -1957,6 +1989,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             },
             Signature {
                 parameters: Box::default(),
+                bounds: Box::default(),
                 inputs: Box::default(),
                 output: ty(plan.ty(), &[])?,
             },
@@ -2029,6 +2062,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         .cloned()
         .collect::<Vec<_>>();
     let parameters = parameters(&kept)?;
+    let bounds = bounds(&kept)?;
     let mut inputs = Vec::new();
     inputs
         .try_reserve_exact(source.inputs().len())
@@ -2038,6 +2072,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
     }
     Ok(Signature {
         parameters,
+        bounds,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), source.parameters())?,
     })
@@ -2056,6 +2091,7 @@ fn callable_signature(
         .cloned()
         .collect::<Vec<_>>();
     let parameters = parameters(&kept)?;
+    let bounds = bounds(&kept)?;
     let all = source.parameters();
     let closure = || -> Result<Type, super::Error> {
         let input = match call.inputs() {
@@ -2087,6 +2123,7 @@ fn callable_signature(
     }
     Ok(Signature {
         parameters,
+        bounds,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), all)?,
     })

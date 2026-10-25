@@ -10,7 +10,24 @@ pub struct Parameter {
     /// A type's defaulted parameter (`Hsl<S = Srgb>`): what a type written
     /// without the argument takes.
     default: Option<super::convert::Type>,
+    /// The derivable std traits its bounds name (`T: Clone`): the script
+    /// type that fills it must implement them, as rustc requires of the
+    /// type it erases to `Value` (review 3).
+    bounds: Box<[Box<str>]>,
 }
+
+/// The std traits a type parameter's bound names that a script type
+/// implements or not, and an imported type reports: what an erased
+/// parameter's bounds keep.
+pub const DERIVABLE: [&str; 7] = [
+    "Clone",
+    "Copy",
+    "Debug",
+    "Default",
+    "PartialEq",
+    "Eq",
+    "Hash",
+];
 
 /// One admitted generic substitution kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -43,13 +60,25 @@ pub struct Signature {
 }
 
 impl Parameter {
-    pub(crate) const fn new(index: u32, name: Box<str>, kind: Kind) -> Self {
+    pub(crate) fn new(index: u32, name: Box<str>, kind: Kind) -> Self {
         Self {
             index,
             name,
             kind,
             default: None,
+            bounds: Box::new([]),
         }
+    }
+
+    pub(crate) fn with_bounds(mut self, bounds: Box<[Box<str>]>) -> Self {
+        self.bounds = bounds;
+        self
+    }
+
+    /// The derivable std traits its bounds name.
+    #[must_use]
+    pub fn bounds(&self) -> &[Box<str>] {
+        &self.bounds
     }
 
     pub(crate) fn with_default(mut self, default: Option<super::convert::Type>) -> Self {

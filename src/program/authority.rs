@@ -467,6 +467,7 @@ impl Authority {
                 &data,
                 promotion.definition().owner(),
                 promotion.definition().schema(),
+                &[],
                 runtime,
             )
             .map_err(crate::widget::Error::Data)?;
@@ -487,6 +488,7 @@ impl Authority {
                 descriptor.data(),
                 promotion.definition().owner(),
                 promotion.definition().schema(),
+                &[],
                 &runtime,
             )
             .map_err(crate::widget::Error::Data)?;

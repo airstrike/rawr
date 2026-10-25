@@ -2,7 +2,7 @@
 
 use rawr_import::classify::representability::{self, Representability};
 
-use crate::{diagnostic, host, receiver, ImmutableString};
+use crate::{capability, diagnostic, host, receiver, ImmutableString};
 
 #[doc(hidden)]
 pub mod runner;
@@ -1899,6 +1899,30 @@ impl Types {
     }
 }
 
+/// What the type that fills an imported type parameter must implement: the
+/// derivable std traits its bounds name, which a script type filling it as
+/// `Value` is checked for (review 3). `Copy` and `Eq` bring the traits they
+/// extend.
+pub(crate) fn requirements(bounds: &[Box<str>]) -> Vec<capability::Kind> {
+    let mut kinds = Vec::new();
+    for name in bounds {
+        let Some(kind) = capability::Kind::from_derive(name) else {
+            continue;
+        };
+        let implied = match kind {
+            capability::Kind::Copy => Some(capability::Kind::Clone),
+            capability::Kind::Eq => Some(capability::Kind::PartialEq),
+            _ => None,
+        };
+        for kind in [Some(kind), implied].into_iter().flatten() {
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+    }
+    kinds
+}
+
 fn signature(
     types: &Types,
     signature: &representability::signature::Signature,
@@ -1917,7 +1941,7 @@ fn signature(
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         if parameter.kind() == representability::signature::Kind::Type {
-            builder.type_parameter(parameter.name(), &[])?;
+            builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
         }
     }
     for input in signature.inputs() {
@@ -1942,7 +1966,7 @@ fn callable_signature(
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         if parameter.kind() == representability::signature::Kind::Type {
-            builder.type_parameter(parameter.name(), &[])?;
+            builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
         }
     }
     let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {

@@ -2608,6 +2608,7 @@ mod tests {
             current_definition.schema().clone(),
             current_definition.kind(),
             TypeId::of::<Dynamic>(),
+            Box::default(),
         );
         let registry = Registry::new();
         let error = expected
