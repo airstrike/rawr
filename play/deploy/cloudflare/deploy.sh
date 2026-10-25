@@ -4,7 +4,8 @@
 # release.sh and the GitHub Actions release both call it. It runs the tests,
 # deploys the container in one step (--containers-rollout=immediate),
 # retries the deploy when Cloudflare answers 100146 (wrangler only waits 2 s
-# for a new image version) or a 500, waits for the bot to report the image
+# for a new image version), a 500 or 10013 (an assets upload session's
+# "unknown error", which passed on a re-run each time), waits for the bot to report the image
 # named by PLAY_VERSION, and runs the landing page's own snippets and the
 # docs' through /play/run. Logs go to target/logs.
 set -eu
@@ -28,9 +29,9 @@ until npx wrangler deploy --containers-rollout=immediate >"$logs/release-deploy.
     echo "Cloudflare answered 100146 after the upload; checking the bot instead of deploying again."
     break
   fi
-  if grep -q -e 100146 -e "Internal Server Error" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
-    echo "Cloudflare answered 100146 or a 500; retrying in 30 s (attempt $attempt)."
-    grep -e 100146 -e "Internal Server Error" -e ERROR "$logs/release-deploy.log" | head -5
+  if grep -q -e 100146 -e "Internal Server Error" -e "code: 10013" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
+    echo "Cloudflare answered 100146, a 500 or 10013; retrying in 30 s (attempt $attempt)."
+    grep -e 100146 -e "Internal Server Error" -e "code: 10013" -e ERROR "$logs/release-deploy.log" | head -5
     attempt=$((attempt + 1))
     sleep 30
   else
