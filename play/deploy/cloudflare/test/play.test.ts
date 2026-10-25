@@ -266,10 +266,12 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
   assert.deepEqual(at("docs/index.html"), []);
   assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
-  assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
-  assert.deepEqual(at("docs/iced/reference.html"), ["sun.rs", "widget.rs"]);
+  assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
+  assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs"]);
+  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs"]);
+  assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
   assert.deepEqual(at("docs/play/index.html"), [""]);
-  assert.deepEqual(at("docs/play/reference.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
+  assert.deepEqual(at("docs/reference/play.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
   // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 1);
@@ -315,11 +317,47 @@ test("docs pages that moved redirect to their new paths", async () => {
   const block = source.match(/export const DOCS_MOVED[^{]*\{([^}]*)\}/);
   assert.ok(block);
   const moved = Object.fromEntries([...block[1].matchAll(/"([^"]+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual(Object.keys(moved).sort(), ["/docs/faq", "/docs/faq.html", "/docs/iced.html", "/docs/play.html"]);
+  assert.deepEqual(Object.keys(moved).sort(), [
+    "/docs/cli",
+    "/docs/cli.html",
+    "/docs/faq",
+    "/docs/faq.html",
+    "/docs/iced.html",
+    "/docs/iced/reference",
+    "/docs/iced/reference.html",
+    "/docs/language",
+    "/docs/language.html",
+    "/docs/play.html",
+    "/docs/play/reference",
+    "/docs/play/reference.html",
+    "/docs/reference",
+    "/docs/requirements",
+    "/docs/requirements.html",
+  ]);
   for (const [from, to] of Object.entries(moved)) {
-    assert.ok(!existsSync(root + from.slice(1)) && !existsSync(root + from.slice(1) + ".html"), `${from} is still a page`);
+    assert.ok(!existsSync(root + from.slice(1) + (from.endsWith(".html") ? "" : ".html")), `${from} is still a page`);
     assert.ok(existsSync(root + to.slice(1) + ".html") || existsSync(root + to.slice(1) + "/index.html"), `${to} is not a page`);
   }
+});
+
+test("docs.js sends a moved anchor to a page and an id that exist", async () => {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const script = readFileSync(root + "docs/docs.js", "utf8");
+  const moved: Record<string, Record<string, string>> = JSON.parse(script.match(/const MOVED = (\{.*\});/)![1]);
+  const page = (path: string) =>
+    [`${path.slice(1)}.html`, `${path.slice(1)}/index.html`].find((candidate) => existsSync(root + candidate));
+  const broken: string[] = [];
+  for (const [from, anchors] of Object.entries(moved)) {
+    if (!page(from)) broken.push(`${from} is not a page`);
+    for (const [id, to] of Object.entries(anchors)) {
+      const [path, anchor] = to.split("#");
+      const file = page(path);
+      if (!file) broken.push(`${from}#${id}: ${path} is not a page`);
+      else if (anchor && !readFileSync(root + file, "utf8").includes(` id="${anchor}"`)) broken.push(`${from}#${id}: ${to} has no such id`);
+    }
+  }
+  assert.deepEqual(broken, []);
 });
 
 test("the allow-list build fails on empty, marked-up or disagreeing blocks", async () => {

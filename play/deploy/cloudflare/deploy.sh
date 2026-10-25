@@ -56,7 +56,7 @@ echo "The bot runs image $want after $((i * 5)) s of polling."
 # Smoke test: the runnable snippets on the landing page and in the docs must still run.
 node --input-type=module -e '
   const blocks = [];
-  for (const path of ["/", "/docs/start", "/docs/language", "/docs/iced/reference", "/docs/play/reference"]) {
+  for (const path of ["/", "/docs/start", "/docs/play", "/docs/reference/overview", "/docs/reference/generics", "/docs/reference/closures", "/docs/reference/iced", "/docs/reference/play"]) {
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);

@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How rawr works | rawr docs</title>
-<meta name="description" content="How rawr&#x27;s interpreter works, how fast it is, how it handles borrow checking and generics, why it doesn&#x27;t use Miri, and where its evaluator came from.">
-<meta property="og:title" content="How rawr works | rawr docs">
-<meta property="og:description" content="How rawr&#x27;s interpreter works, how fast it is, how it handles borrow checking and generics, why it doesn&#x27;t use Miri, and where its evaluator came from.">
+<title>How it works | rawr docs</title>
+<meta name="description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
+<meta property="og:title" content="How it works | rawr docs">
+<meta property="og:description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/how-it-works">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -33,78 +33,62 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp" data-here>Reference</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works" aria-current="page">How rawr works</a><ol><li><a href="#interpreter">What kind of interpreter is rawr?</a></li><li><a href="#evaluator">Where does the evaluator come from?</a></li><li><a href="#speed">How fast is it?</a></li><li><a href="#borrowing">How does rawr handle borrow checking?</a></li><li><a href="#generics">How are generics handled?</a></li><li><a href="#miri">Why not use Miri or interpret rustc&rsquo;s MIR?</a></li></ol></li>
+    <li><a href="/docs/how-it-works" aria-current="page">How it works</a><ol class="secs"><li><a href="#interpreter">What kind of interpreter is rawr?</a></li><li><a href="#evaluator">Where does the evaluator come from?</a></li><li><a href="#speed">How fast is it?</a></li><li><a href="#borrowing">How does rawr handle borrow checking?</a></li><li><a href="#generics">How are generics handled?</a></li><li><a href="#miri">Why not use Miri or interpret rustc&rsquo;s MIR?</a></li></ol></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>reference</p>
-<h1>How rawr works</h1>
-<p class="lede">How the interpreter works, what it costs and where it came from.</p>
+<h1>How it works</h1>
+<p class="lede">How rawr runs Rust without compiling it, and why it is built this way.</p>
 <h2 id="interpreter">What kind of interpreter is rawr?</h2>
-<p>rawr is a tree-walking interpreter over a typed program. Its front end parses Rust. It resolves names and checks types, traits and generics before anything runs. It reports errors the way rustc does. Then an evaluator walks the checked program and runs it.</p>
-<p>Values at run time carry a tag for their type. They are reference-counted. Standard library types such as <code>Vec</code> and <code>HashMap</code> are backed by native Rust code. So are the crates a program imports and iced&rsquo;s widgets.</p>
-<p>An experimental bytecode VM also exists. It is off by default.</p>
+<p>rawr is a tree-walking interpreter over a typed program. Its front end checks names, types, traits and generics before anything runs. Then an evaluator walks the checked program.</p>
+<p>Values at run time carry a tag for their type and are reference-counted. Standard library types such as <code>Vec</code> and <code>HashMap</code> are backed by native Rust code. So are the crates a program imports and iced&rsquo;s widgets.</p>
 
 <h2 id="evaluator">Where does the evaluator come from?</h2>
-<p>rawr began as a fork of <a href="https://rhai.rs">Rhai</a>. Rhai is an embedded scripting language for Rust. Its source is on <a href="https://github.com/rhaiscript/rhai">GitHub</a>. rawr keeps Rhai&rsquo;s evaluator as its foundation. It also keeps Rhai&rsquo;s dynamic values and its machinery for calling host functions. These parts are mature. rawr adds a typed Rust front end on top of them, and every program and script is typed Rust.</p>
+<p>rawr began as a fork of <a href="https://rhai.rs">Rhai</a>. Rhai is an embedded scripting language for Rust, and its source is on <a href="https://github.com/rhaiscript/rhai">GitHub</a>. rawr keeps Rhai&rsquo;s evaluator, its dynamic values and its machinery for calling host functions. rawr adds a typed Rust front end on top of them, and every program and script is typed Rust.</p>
 <p>Thank you to the Rhai authors for the work that rawr is built on.</p>
-<p>rawr doesn&rsquo;t run Rhai scripts. Rhai is licensed under MIT or Apache-2.0. rawr uses the same two licenses. The LICENSE files in the repository carry the attribution.</p>
+<p>rawr doesn&rsquo;t run Rhai scripts. Rhai is licensed under MIT or Apache-2.0, and rawr uses the same two licenses. The LICENSE files in the repository carry the attribution.</p>
 
 <h2 id="speed">How fast is it?</h2>
-<p>Interpreted code runs slower than the same code compiled by rustc. Calls into native code run at native speed. In an iced app most of the time goes to native iced code, such as layout and drawing.</p>
+<p>Calls into native code run at native speed. In an iced app most of the time goes to native iced code, such as layout and drawing.</p>
 <p>The interpreter shows in a tight loop that runs many times. Keep a loop like that in a native module or a crate, and <a href="/docs/imports">Cargo compiles it</a>.</p>
-<p>An edit to a marked file needs no native build. In RawrGallery, a gallery app built with rawr-iced, such an edit was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
+<p>In RawrGallery, an edit to a marked file was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
 
 <h2 id="borrowing">How does rawr handle borrow checking?</h2>
-<p>rawr doesn&rsquo;t have a full borrow checker. It rejects a use after a move, as rustc&rsquo;s E0382 does. It also rejects two live <code>&amp;mut</code> borrows of one value. It accepts some programs that rustc rejects, and <a href="/docs/language#lenient">Supported Rust</a> lists them.</p>
+<p>rawr doesn&rsquo;t have a full borrow checker. It rejects a use after a move, as rustc&rsquo;s E0382 does. It also rejects two live <code>&amp;mut</code> borrows of one value. It accepts some programs that rustc rejects, and the <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
 <p>Values are reference-counted, so a program can&rsquo;t corrupt memory. Borrow checking only rejects programs. It never changes what a valid program does.</p>
-<p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/language#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
-<p>rustc says whether a program is valid Rust. <code>rawr check</code> runs <code>cargo check</code> on the crate after its own check, and fails if either check fails. Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them as well.</p>
+<p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/reference/overview#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
+<p>Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them too.</p>
 
 <h2 id="generics">How are generics handled?</h2>
-<p>rawr checks generics as rustc does. Each call is checked against the bounds of the function it calls. A missing bound is an error.</p>
-<p>At run time each generic function has one body. rawr does not make a copy for each type. Values carry their types, so a trait method call dispatches on the value it is called on. A call like <code>T::default()</code> has no value to dispatch on. rawr passes the type to the function as a hidden argument for these calls.</p>
+<p>rawr checks each generic call against the bounds of the function it calls, as rustc does.</p>
+<p>At run time each generic function has one body. Values carry their types, so a trait method call dispatches on the value it is called on. A call like <code>T::default()</code> has no value to dispatch on. rawr passes the type to the function as a hidden argument for these calls.</p>
 <p>In an iced app, a function whose signature names a type parameter inside an iced type gets the same hidden argument. <code>fn card&lt;Message: Clone&gt;(label: &amp;str) -&gt; Element&lt;'static, Message&gt;</code> is one such function. Each iced call in its body uses the caller&rsquo;s message type at run time.</p>
-<p>Generic code in an imported Rust crate is compiled natively. It is compiled for the concrete types your program uses.</p>
+<p>Generic code in an imported crate is compiled natively for the concrete types your program uses.</p>
 <p>Code that relies on a separate copy of a function for each type is not supported. <code>std::mem::size_of::&lt;T&gt;()</code> is an example.</p>
 
 <h2 id="miri">Why not use Miri or interpret rustc&rsquo;s MIR?</h2>
-<p>Miri interprets the whole program. It cannot call native code. iced, wgpu and the window system all need native code, so Miri cannot drive them. Miri is also slow on purpose. It checks each operation for undefined behaviour.</p>
-<p>An interpreter for rustc&rsquo;s MIR would still have two problems. The first is that iced is generic over your app&rsquo;s message type. Native iced code is compiled for concrete types. A type defined in interpreted code has no compiled copy of iced to call. The second is that rustc&rsquo;s front end would run on each edit. That takes much longer than reloading a marked file does today.</p>
+<p>Miri cannot call native code, so it cannot drive iced, wgpu or the window system. Miri is also slow on purpose, because it checks each operation for undefined behaviour.</p>
+<p>An interpreter for rustc&rsquo;s MIR would have two problems. Native iced code is compiled for concrete message types, and a type defined in interpreted code has no compiled copy of iced to call. rustc&rsquo;s front end would also run on each edit. That takes much longer than a reload does today.</p>
 <p>Using rustc&rsquo;s typed output as rawr&rsquo;s front end is a possible future direction.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/troubleshooting">Previous<b>Troubleshooting</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/troubleshooting">Previous<b>Troubleshooting</b></a><a class="next" href="/docs/reference/overview">Next<b>Overview</b></a></nav>
 </article>
 </main>
 </div>

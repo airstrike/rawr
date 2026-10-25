@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Get started | rawr docs</title>
-<meta name="description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
-<meta property="og:title" content="Get started | rawr docs">
-<meta property="og:description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
+<title>Start | rawr docs</title>
+<meta name="description" content="Install rawr and run your first Rust crate without compiling it. The same files build for release with Cargo.">
+<meta property="og:title" content="Start | rawr docs">
+<meta property="og:description" content="Install rawr and run your first Rust crate without compiling it. The same files build for release with Cargo.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -34,53 +34,38 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start" aria-current="page">Get started</a><ol><li><a href="#install">Install</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#errors">Errors</a></li><li><a href="#check">Check without running</a></li><li><a href="#first-program">A single file</a></li><li><a href="#native">Native modules and dependencies</a></li><li><a href="#release">Build for release</a></li><li><a href="#next">Next steps</a></li></ol></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start" aria-current="page">Start</a><ol class="secs"><li><a href="#install">Install</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#errors">Errors</a></li><li><a href="#check">Check without running</a></li><li><a href="#first-program">A single file</a></li><li><a href="#native">Native modules and dependencies</a></li><li><a href="#release">Build for release</a></li><li><a href="#next">Next steps</a></li></ol></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>get started</p>
-<h1>Get started</h1>
-<p class="lede">Install the <code>rawr</code> command and start a crate. Run it, make an error, then build it for release with Cargo.</p>
+<h1>Start</h1>
+<p class="lede">Install rawr and run your first crate without compiling it. The same files build for release with Cargo.</p>
 <h2 id="install">Install</h2>
-<p>Install the <code>rawr</code> command. It needs Rust 1.95 or newer.</p>
+<p>rawr needs Rust 1.95 or newer.</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>The <code>rawr-cli</code> package installs <code>rawr</code>. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. Run <code>rawr doctor</code> to see what is installed.</p>
+<p>This also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too.</p>
 
 <h2 id="first-crate">A first crate</h2>
 <div class="block"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre></div>
-<p><code>rawr new hello</code> creates the <code>hello</code> directory. It holds a Cargo crate with <code>Cargo.toml</code> and <code>src/main.rs</code>. The crate has no dependencies.</p>
+<p><code>rawr new hello</code> creates a Cargo crate with no dependencies.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">// rawr
@@ -111,8 +96,8 @@ fn main() {
 2. Hello, rawr!
 3. Hello, rawr!</span></div>
 </div>
-<p>The first line, <code>// rawr</code>, marks the file. <code>rawr run</code> checks it and then interprets it. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
-<p><code>rawr run</code> runs the program once and exits. Edit <code>src/main.rs</code> and run it again. A crate with no dependencies needs no build, so the edit runs at once. Reload on save for a program like this one is planned. iced apps reload today, with <a href="/docs/iced">rawr-iced</a>.</p>
+<p>The <code>// rawr</code> line marks the file for rawr to interpret. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
+<p>A crate with no dependencies needs no build, so an edit runs at once.</p>
 
 <h2 id="errors">Errors</h2>
 <p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and run it again:</p>
@@ -123,12 +108,11 @@ fn main() {
  <span class="c">22 |</span>         println!("{}", greeting.lines(count));
     <span class="c">|</span>                                 <span class="e">^^^^^</span></code></pre>
 </div>
-<p>The program doesn&rsquo;t start, so nothing is printed before the error. Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
-<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code> beside the program. Its errors are printed after the program ends, so here rustc reports the same mistake a second time.</p>
+<p>Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
+<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code>. Its errors are printed after the program ends, so rustc reports this mistake a second time.</p>
 
 <h2 id="check">Check without running</h2>
-<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. It prints <code>Checked</code> and the path, then <code>cargo check passed</code>. It exits with status 1 if either check fails.</p>
-<p>rawr&rsquo;s check is not rustc. It accepts some code that rustc rejects, so rustc has the final word. <a href="/docs/language#lenient">Supported Rust</a> lists those cases.</p>
+<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. rawr&rsquo;s check accepts some code that rustc rejects, so rustc has the final word. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
 
 <h2 id="first-program">A single file</h2>
 <p><code>rawr run</code> also takes one <code>.rs</code> file. A single file doesn&rsquo;t need the marker.</p>
@@ -167,26 +151,24 @@ fn main() {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run cart.rs</b><span id="out-cart" aria-live="polite">total: 27</span></div>
 </div>
-<p>A single file can hold items, top-level statements, or both. Top-level statements run first, as the body of <code>fn main</code> would, and then <code>fn main</code> runs. Cargo would not build a file of top-level statements, so keep those to snippets and the playground.</p>
-<p>The run button sends the file to rawr&rsquo;s server and shows what it printed there.</p>
+<p>A single file may also hold top-level statements. They run first, and then <code>fn main</code> runs. Cargo won&rsquo;t build a file of top-level statements, so keep them to snippets and the playground.</p>
 
 <h2 id="native">Native modules and dependencies</h2>
-<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. A crate with either one goes to <a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo. The marked code calls it.</p>
-<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls it through rawr. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">A native main</a> says what crosses and when the program restarts.</p>
+<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. rawr-import compiles native code with Cargo, and marked code calls it. <a href="/docs/imports">Imports</a> sets it up.</p>
+<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls into it. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says what crosses and when the program restarts.</p>
 
 <h2 id="release">Build for release</h2>
 <div class="block"><pre><code>cargo build --release</code></pre></div>
-<p>Cargo compiles every file natively. The marker is a comment, so the release build has no interpreter in it.</p>
+<p>The marker is a comment, so the release build has no interpreter in it.</p>
 
 <h2 id="next">Next steps</h2>
 <ul>
-  <li><a href="/docs/run">Run Rust with rawr</a> says which files are interpreted and who runs a program.</li>
-  <li><a href="/docs/imports">Cargo dependencies</a> sets up rawr-import.</li>
-  <li><a href="/docs/iced">rawr-iced</a> starts an iced app that reloads when you save.</li>
+  <li><a href="/docs/run">Run</a> says which files rawr interprets and how they meet native code.</li>
+  <li><a href="/docs/iced">iced</a> starts an app that reloads when you save.</li>
   <li><a href="/docs/embedding">Embedding</a> runs Rust scripts inside your own app.</li>
   <li><a href="/play">The playground</a> runs snippets in a browser.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Overview</b></a><a class="next" href="/docs/run">Next<b>Run Rust with rawr</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Docs</b></a><a class="next" href="/docs/run">Next<b>Run</b></a></nav>
 </article>
 </main>
 </div>

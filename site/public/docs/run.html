@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Run Rust with rawr | rawr docs</title>
-<meta name="description" content="Which files rawr interprets, how the // rawr marker works, what rawr check does, which binary runs a program, what reloads today and what ships in a release build.">
-<meta property="og:title" content="Run Rust with rawr | rawr docs">
-<meta property="og:description" content="Which files rawr interprets, how the // rawr marker works, what rawr check does, which binary runs a program, what reloads today and what ships in a release build.">
+<title>Run | rawr docs</title>
+<meta name="description" content="Which files rawr interprets, how marked code and a native main share one program, and what ships in a release build.">
+<meta property="og:title" content="Run | rawr docs">
+<meta property="og:description" content="Which files rawr interprets, how marked code and a native main share one program, and what ships in a release build.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/run">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -33,72 +33,54 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp" data-here>Develop with rawr</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run" aria-current="page">Run Rust with rawr</a><ol><li><a href="#programs">What rawr runs</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run" aria-current="page">Run</a><ol class="secs"><li><a href="#programs">What rawr runs</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#native-main">A native main</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
+    <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">rawr-iced</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp">Playground and Discord</p>
-  <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>develop with rawr</p>
-<h1>Run Rust with rawr</h1>
-<p class="lede">What <code>rawr run</code> and <code>rawr check</code> do with a crate or a file. Which files are interpreted, who runs a program and what ships in release.</p>
+<h1>Run</h1>
+<p class="lede">How <code>rawr run</code> splits a crate between interpreted and native code, and how the two share one program.</p>
 <h2 id="programs">What rawr runs</h2>
-<p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate with a marked file. The crate&rsquo;s root file may start with <code>// rawr</code>, or a module it declares may. The root file is <code>src/main.rs</code> or <code>src/lib.rs</code>.</p>
-<p>A single file runs with or without the marker. It may hold top-level statements. rawr runs them first and then calls <code>fn main</code>.</p>
-<p>A program with a <code>main</code> that returns <code>Err</code> prints <code>Error: ..</code> and exits with status 1. A panic exits with status 101, as in Rust.</p>
+<p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate.</p>
 
 <h2 id="marker">The <code>// rawr</code> marker</h2>
-<p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust. The marker is a comment, so Cargo ignores it.</p>
+<p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust.</p>
 <ul>
-  <li>The crate root may be marked or not. An unmarked root is native Rust, and the crate runs when a module it declares is marked. The module may be declared by the root or through native modules. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code> and says to add the line.</li>
-  <li>A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code>. That module is interpreted when its first line is <code>// rawr</code>. Otherwise it is native, and Cargo compiles it.</li>
+  <li>The crate root may be marked or native. A crate with a native root runs when a module it declares is marked. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code>.</li>
   <li>Marked code may call native modules.</li>
-  <li>Native code may call marked modules when the crate root is native. <a href="#native-main">A native main</a> says how.</li>
-  <li>With a marked root, native code must not use code from marked files yet, and rawr reports an error if it does.</li>
+  <li>Native code may call marked modules when the crate root is native.</li>
+  <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
   <li>A path dependency is compiled natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</li>
 </ul>
 
 <h2 id="native-main">A native main</h2>
-<p>An ordinary app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of the marked module that native code can call gets a generated stub. The stub has the function&rsquo;s signature, and it runs the function in the interpreter.</p>
-<p>The stubs live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. Your crate never depends on rawr. <code>cargo build</code> compiles your files as they are.</p>
+<p>An app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of that module that native code can call gets a generated stub with the same signature. The stub runs the function in the interpreter.</p>
+<p>The stubs live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. Your crate never depends on rawr.</p>
 <p>Native code sees the public items of a marked module: its functions, methods, structs, enums, constants and type aliases. Private items stay in the interpreter.</p>
 <p>Numbers, <code>bool</code>, <code>char</code>, <code>String</code> and <code>&amp;str</code> cross between native code and a marked module. <code>Vec</code> and <code>Option</code> of them cross too. So do the structs and enums of marked modules whose fields cross.</p>
 <p>A parameter may be one of those values or a reference to one. A <code>&amp;mut</code> argument comes back with the changes the function made.</p>
 <p>A function whose values can&rsquo;t cross yet panics when native code calls it, and the message names the function. A public function that returns <code>impl Trait</code> stops <code>rawr run</code> with an error that names it.</p>
-<p>A save of a marked file reaches the running program at its next call into that file. An edit to a function body or to a private item swaps in place, and the program keeps its state. An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr then restarts the program and prints one line that says why:</p>
+<p>A save of a marked file reaches the running program at its next call into that file. An edit to a function body or to a private item swaps in place, and the program keeps its state. An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr then restarts the program and prints why:</p>
 <div class="block"><pre><code>rawr: `physics::Ball` changed its fields; restarting the program</code></pre></div>
 <p>An edit to a native file restarts the program too.</p>
-<p>The <code>examples/islands</code> crate in rawr&rsquo;s repository is such an app. Its native <code>main</code> moves a ball each tick through the marked <code>physics.rs</code>.</p>
+<p>The <code>examples/islands</code> crate in rawr&rsquo;s repository is such an app.</p>
 <p>Limits today:</p>
 <ul>
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
@@ -108,34 +90,31 @@
 </ul>
 
 <h2 id="check">Checking</h2>
-<p>rawr checks a whole program before any of it runs. The check resolves names, types, traits and method calls. It also checks that every <code>match</code> covers every case.</p>
-<p><code>rawr check</code> runs that check without running the program. Then it runs <code>cargo check</code> on the crate, because rawr&rsquo;s check accepts some code that rustc rejects. <a href="/docs/language#lenient">Supported Rust</a> lists those cases.</p>
+<p><code>rawr check</code> checks a program without running it. Then it runs <code>cargo check</code>, because rawr&rsquo;s check accepts some code that rustc rejects. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
 <p><code>rawr run</code> runs <code>cargo check</code> beside the program. For a program that runs once, its errors are printed after the program ends.</p>
 
 <h2 id="who">Who runs a program</h2>
-<p>The <code>rawr</code> command parses a program once. Then it runs the program itself or hands it to an installed extension.</p>
+<p><code>rawr</code> runs a program itself or hands it to an installed extension.</p>
 <table class="wide">
   <tr><th>Program</th><th>Runs in</th></tr>
   <tr><td>No dependencies and no native modules</td><td><code>rawr</code> itself.</td></tr>
   <tr><td>Dependencies in <code>Cargo.toml</code> or native modules</td><td><a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo.</td></tr>
-  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which opens the app in a window.</td></tr>
+  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which reloads the app on save.</td></tr>
 </table>
-<p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> says which one and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
+<p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 
 <h2 id="reload">Reload</h2>
-<p>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload an iced app</a> says what it keeps.</p>
-<p>A program with a native <code>main</code> keeps running, and a save of a marked file reaches it at its next call. <a href="#native-main">A native main</a> covers it.</p>
-<p>Any other program that isn&rsquo;t an iced app runs once and exits. Run it again after an edit. A crate with no dependencies needs no build, so it starts at once. With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build. On an Apple Silicon Mac, a small crate with one path dependency ran again in about 2.4&nbsp;s after an edit to its marked file.</p>
-<p>Planned: <code>rawr run</code> will watch every program and restart it on save.</p>
+<p>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</p>
+<p>Any other program runs once and exits. With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build. Restart on save for these programs is planned.</p>
 
 <h2 id="release">Release builds</h2>
-<p><code>cargo build --release</code> compiles every file natively, the marked ones included. No interpreter ships with the build.</p>
+<p><code>cargo build --release</code> compiles the marked files natively too. No interpreter ships with the build.</p>
 <p>rawr-iced&rsquo;s <code>#[preview]</code> and <code>#[widget]</code> attributes come from the <code>rawr-macros</code> crate. Under Cargo they leave the item as written.</p>
-<p>Embedding is different. An app that runs scripts with the <code>rawr</code> crate ships the interpreter. <a href="/docs/embedding">Embedding</a> covers that use.</p>
+<p>An app that embeds the <code>rawr</code> crate to run scripts does ship the interpreter. <a href="/docs/embedding">Embedding</a> covers that case.</p>
 
 <h2 id="speed">Speed</h2>
-<p>Interpreted code runs slower than the same code compiled by rustc. Calls into native code run at native speed. Keep a hot loop in a native module or a crate, and Cargo compiles it.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Get started</b></a><a class="next" href="/docs/imports">Next<b>Cargo dependencies</b></a></nav>
+<p>Calls into native code run at native speed. Keep a hot loop in a native module or a crate, and Cargo compiles it.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Start</b></a><a class="next" href="/docs/imports">Next<b>Imports</b></a></nav>
 </article>
 </main>
 </div>

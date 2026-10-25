@@ -31,7 +31,10 @@
 // POST /play/run runs the site's own snippets without Turnstile: only
 // sources whose SHA-256 is one of the `<code data-run>` texts in the site's
 // pages. build.mjs collects those hashes into src/runnable.gen.ts, so the
-// list is the deployed pages'. Results are cached per image version.
+// list is the deployed pages'. Results are cached per image version. A
+// snippet edited on the site is the visitor's own code: run.js sends it to
+// POST /play/render with the playground's Turnstile, pass and limits, and
+// learns the site key and whether it holds a pass from GET /play/gate.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
@@ -108,15 +111,28 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
 /**
- * Docs pages that moved when the docs were split by task. The FAQ's answers
- * went to /docs/how-it-works and elsewhere (docs.js follows a moved anchor),
- * and rawr-iced's and ?play's pages became directories.
+ * Docs pages that moved. The FAQ's answers went to /docs/how-it-works and
+ * elsewhere. rawr-iced's and ?play's pages became directories. The reference
+ * pages went under /docs/reference, and /docs/language became its overview
+ * and one page per topic. A redirect keeps the URL's #anchor, and docs.js
+ * sends an anchor that moved on to its new page.
  */
 export const DOCS_MOVED: Record<string, string> = {
   "/docs/faq": "/docs/how-it-works",
   "/docs/faq.html": "/docs/how-it-works",
   "/docs/iced.html": "/docs/iced",
   "/docs/play.html": "/docs/play",
+  "/docs/language": "/docs/reference/overview",
+  "/docs/language.html": "/docs/reference/overview",
+  "/docs/cli": "/docs/reference/commands",
+  "/docs/cli.html": "/docs/reference/commands",
+  "/docs/requirements": "/docs/reference/requirements",
+  "/docs/requirements.html": "/docs/reference/requirements",
+  "/docs/iced/reference": "/docs/reference/iced",
+  "/docs/iced/reference.html": "/docs/reference/iced",
+  "/docs/play/reference": "/docs/reference/play",
+  "/docs/play/reference.html": "/docs/reference/play",
+  "/docs/reference": "/docs/reference/overview",
 };
 
 /**
@@ -756,6 +772,15 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   }
   if (path === "/play/run" && request.method === "POST") {
     return landingRun(request, env, ctx);
+  }
+  if (path === "/play/gate" && request.method === "GET") {
+    // What the site's run.js needs to send an edited snippet to
+    // /play/render: the Turnstile site key, and whether this browser holds a
+    // pass (the cookie is HttpOnly, so the page can't read it).
+    return Response.json(
+      { sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env) },
+      { headers: { "cache-control": "no-store" } },
+    );
   }
   if (path === "/play/share" && request.method === "POST") {
     const snippet = parseSnippet(await readJson(request, 2 * MAX_SHARE));

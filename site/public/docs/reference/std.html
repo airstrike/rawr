@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>std | rawr API Reference</title>
+<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell, mem, conversions, path and io.">
+<meta property="og:title" content="std | rawr API Reference">
+<meta property="og:description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell, mem, conversions, path and io.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/reference/std">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/reference/std">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="grp">Guides</p>
+  <ol>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
+  </ol>
+  <p class="grp" data-here>API Reference</p>
+  <ol data-here>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std" aria-current="page">std</a><ol class="secs"><li><a href="#string"><code>String</code> and <code>&amp;str</code></a></li><li><a href="#vec"><code>Vec</code> and slices</a></li><li><a href="#iterators">Iterators</a></li><li><a href="#arrays">Arrays</a></li><li><a href="#numbers">Numbers</a></li><li><a href="#time"><code>Duration</code> and <code>Instant</code></a></li><li><a href="#collections">Collections</a></li><li><a href="#refcell"><code>RefCell</code></a></li><li><a href="#mem"><code>std::mem</code> and <code>PhantomData</code></a></li><li><a href="#traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></a></li><li><a href="#conversions">Conversions</a></li><li><a href="#path-io"><code>path</code>, <code>ffi</code> and <code>io</code></a></li></ol></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<h1>std</h1>
+<p class="lede">The parts of the standard library that rawr provides.</p>
+<h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
+<p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
+<div class="block"><pre><code data-lang="rust">let line = "  id=7, name=rawr ";
+let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
+let id: i64 = fields[0].replace("id=", "").parse().unwrap();</code></pre></div>
+<h2 id="vec"><code>Vec</code> and slices</h2>
+<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
+<div class="block"><pre><code data-lang="rust">struct Item {
+    id: u32,
+    n: u32,
+}
+
+let mut items = vec![Item { id: 1, n: 0 }, Item { id: 2, n: 0 }];
+if let Some(item) = items.iter_mut().find(|i| i.id == 2) {
+    item.n += 1;
+}
+items.retain(|i| i.n &gt; 0);</code></pre></div>
+<h2 id="iterators">Iterators</h2>
+<p><code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one. An iterator can be cloned and walked again.</p>
+<div class="block"><pre><code data-lang="rust">let words = ["one", "two", "three"];
+let long: Vec&lt;(usize, &amp;str)&gt; = words.iter().copied().enumerate().filter(|(_, w)| w.len() &gt; 3).collect();
+let total = (1..=10).step_by(3).fold(0, |acc, x| acc + x); // 22</code></pre></div>
+<h2 id="arrays">Arrays</h2>
+<p><code>[T; N]::map</code> gives a <code>[U; N]</code>.</p>
+<div class="block"><pre><code data-lang="rust">let squares = [1, 2, 3].map(|x| x * x);</code></pre></div>
+<h2 id="numbers">Numbers</h2>
+<p><code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path.</p>
+<div class="block"><pre><code data-lang="rust">let angle = 1.0_f64.atan2(1.0).to_degrees(); // 45.0
+let wrapped = f32::rem_euclid(-0.25, 1.0); // 0.75</code></pre></div>
+<h2 id="time"><code>Duration</code> and <code>Instant</code></h2>
+<p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
+<div class="block"><pre><code data-lang="rust">use std::time::{Duration, Instant};
+
+let start = Instant::now();
+let step = Duration::from_millis(500) * 3;
+println!("{step:?}"); // 1.5s
+let spent = start.elapsed();</code></pre></div>
+<h2 id="collections">Collections</h2>
+<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
+<div class="block"><pre><code data-lang="rust">use std::collections::HashMap;
+
+let mut counts: HashMap&lt;&amp;str, i64&gt; = HashMap::new();
+for word in "a b a".split(' ') {
+    let n = counts.entry(word).or_default();
+    *n += 1;
+}</code></pre></div>
+<h2 id="refcell"><code>RefCell</code></h2>
+<p><code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
+<div class="block"><pre><code data-lang="rust">use std::cell::RefCell;
+
+let cell = RefCell::new(vec![1]);
+cell.borrow_mut().push(2);
+let len = cell.borrow().len(); // 2</code></pre></div>
+<h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
+<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>.</p>
+<div class="block"><pre><code data-lang="rust">let mut a = vec![1];
+let mut b = vec![2, 3];
+std::mem::swap(&amp;mut a, &amp;mut b);
+let old = std::mem::take(&amp;mut a); // [2, 3], and a is empty</code></pre></div>
+<h2 id="traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></h2>
+<p><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits, and <code>std::cmp::Ordering</code>.</p>
+<div class="block"><pre><code data-lang="rust">use std::cmp::Ordering;
+
+let order = 3.cmp(&amp;5);
+assert_eq!(order, Ordering::Less);</code></pre></div>
+<h2 id="conversions">Conversions</h2>
+<p><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type. <code>TryFrom</code> between integer types. <code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code>, <code>ToString::to_string</code>, the methods of <code>Option</code> and <code>Result</code>, and your own associated functions all work as values.</p>
+<div class="block"><pre><code data-lang="rust">struct Celsius(f64);
+
+impl From&lt;Celsius&gt; for f64 {
+    fn from(c: Celsius) -&gt; f64 {
+        c.0
+    }
+}
+
+let names: Vec&lt;String&gt; = ["a", "b"].iter().map(|s| s.to_string()).collect();
+let parsed: Vec&lt;i64&gt; = vec!["1", "x"].into_iter().map(|s| s.parse::&lt;i64&gt;()).filter_map(Result::ok).collect();
+let byte = u8::try_from(300_i64); // Err
+let degrees: f64 = Celsius(21.5).into();</code></pre></div>
+<h2 id="path-io"><code>path</code>, <code>ffi</code> and <code>io</code></h2>
+<p>In an iced app, <code>std::path</code> and <code>std::ffi</code> work. <code>PathBuf</code>, <code>Path</code>, <code>OsString</code> and <code>OsStr</code> are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function doesn&rsquo;t take one yet.</p>
+<p>In an iced app, <code>std::io</code> has <code>Error</code> and <code>ErrorKind</code>, with <code>Error::new</code>, <code>Error::other</code>, <code>Error::from</code> and <code>kind</code>. Nothing in it reads or writes a file.</p>
+<div class="block"><pre><code data-lang="rust">use std::path::PathBuf;
+
+let path = PathBuf::from("src").join("main.rs");
+let ext = path.extension().unwrap().to_str().unwrap(); // "rs"
+let err = std::io::Error::other("disk full");</code></pre></div>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/reference/macros">Previous<b>Macros</b></a><a class="next" href="/docs/reference/iced">Next<b>iced</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

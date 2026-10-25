@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rawr-iced | rawr docs</title>
-<meta name="description" content="rawr-iced is an extension for iced apps. Install it, start an app from the iced template, and learn the app shapes it runs: iced::run and the application builder.">
-<meta property="og:title" content="rawr-iced | rawr docs">
-<meta property="og:description" content="rawr-iced is an extension for iced apps. Install it, start an app from the iced template, and learn the app shapes it runs: iced::run and the application builder.">
+<title>iced | rawr docs</title>
+<meta name="description" content="rawr-iced runs an iced app with its marked files interpreted, and a save reloads them while the app runs. Install it, start from the iced template and learn the app shapes it runs.">
+<meta property="og:title" content="iced | rawr docs">
+<meta property="og:description" content="rawr-iced runs an iced app with its marked files interpreted, and a save reloads them while the app runs. Install it, start from the iced template and learn the app shapes it runs.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -33,48 +33,33 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
-  </ol>
-  <p class="grp" data-here>rawr-iced</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/iced" aria-current="page">Overview and setup</a><ol><li><a href="#when">When rawr-iced is used</a></li><li><a href="#install">Install</a></li><li><a href="#new">The <code>iced</code> template</a></li><li><a href="#shapes">App shapes</a></li></ol></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced" aria-current="page">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
   </ol>
-  <p class="grp">Playground and Discord</p>
+  <p class="grp">API Reference</p>
   <ol>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>rawr-iced</p>
-<h1>rawr-iced</h1>
-<p class="lede">rawr-iced is an extension for <a href="https://github.com/iced-rs/iced">iced</a> apps. iced draws the window, and rawr interprets the marked files. Saving a marked file reloads the running app.</p>
+<h1>iced</h1>
+<p class="lede">rawr-iced runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Saving a marked file reloads that code while the app keeps running.</p>
 <h2 id="when">When rawr-iced is used</h2>
-<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. A program that imports Rust crates from its <code>Cargo.toml</code> but doesn&rsquo;t use iced goes to <a href="/docs/imports">rawr-import</a>. rawr-iced imports an iced app&rsquo;s other crates the same way and adds iced to its runner. Every other program runs in <code>rawr</code> itself. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
-<p>rawr-iced follows iced master. It is built against one iced revision, <code>be88873d</code>, and <code>rawr doctor</code> prints it. A project on another revision is refused with a message.</p>
+<p>The <code>rawr</code> command hands a program to rawr-iced when it names the <code>iced</code> crate. rawr-iced imports the app&rsquo;s other crates as <a href="/docs/imports">rawr-import</a> does. Set <code>RAWR_VERBOSE=1</code> to see which runner a program went to.</p>
+<p>rawr-iced is built against iced master at revision <code>be88873d</code>, which <code>rawr doctor</code> prints. A project on another revision is refused.</p>
 
 
 <h2 id="install">Install</h2>
@@ -82,16 +67,13 @@
 <div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
-<p>The <code>rawr-iced-cli</code> package installs <code>rawr-iced</code>. The <code>rawr-import</code> package installs <code>rawr-import-driver</code>, which reads the API of iced and your other dependencies. rawr-iced imports an app&rsquo;s dependencies the way <a href="/docs/imports">rawr-import</a> does, and adds iced to its runner.</p>
-<p>Run <code>rawr doctor</code> to see what is installed. Its report from rawr-iced adds the iced revision, the renderer and the manifest.</p>
+<p>The last line installs <code>rawr-import-driver</code>, which reads the API of iced and your other dependencies.</p>
 
 <h2 id="new">The <code>iced</code> template</h2>
-<p>rawr-iced offers one template to <code>rawr new</code>. It writes a starter iced crate.</p>
 <div class="block">
   <pre><code>rawr new counter --template iced &amp;&amp; cd counter &amp;&amp; rawr run</code></pre>
 </div>
-<p><code>rawr new counter --template iced</code> creates the <code>counter</code> directory. It holds an ordinary Cargo crate. <code>rawr run</code> opens the app in a window.</p>
-<p><code>counter/Cargo.toml</code> depends on iced from git. The revision is the one rawr-iced is built against. <code>rawr doctor</code> prints it. iced turns on every widget rawr offers.</p>
+<p><code>counter</code> is an ordinary Cargo crate. Its <code>Cargo.toml</code> depends on iced at the revision rawr-iced is built against. The features turn on every widget rawr-iced supports.</p>
 <div class="block">
   <div class="file"><b>Cargo.toml</b></div>
   <pre><code data-lang="toml">[package]
@@ -102,7 +84,7 @@ edition = "2024"
 [dependencies]
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["advanced", "canvas", "image-without-codecs", "qr_code", "selector", "sipper", "svg"] }</code></pre>
 </div>
-<p>Two more files make the crate build as rawr builds it. <code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>. With both, <code>rawr run</code> and <code>cargo build</code> compile iced once and share it. Whichever runs second reuses what the first compiled.</p>
+<p>Two more files let <code>rawr run</code> and <code>cargo build</code> share one build of iced. <code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>.</p>
 <div class="block">
   <div class="file"><b>rust-toolchain.toml</b></div>
   <pre><code data-lang="toml">[toolchain]
@@ -115,7 +97,7 @@ components = ["rust-src", "rustfmt", "clippy"]</code></pre>
 target = "host-tuple"</code></pre>
 </div>
 <p>A crate of your own needs the same two files. Without them, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add.</p>
-<p><code>counter/src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line. <code>rawr check</code> accepts it.</p>
+<p><code>src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">// rawr
@@ -161,27 +143,25 @@ impl Counter {
 }</code></pre>
 </div>
 
-<p><code>cargo run</code> compiles and runs the same app natively. <code>cargo build --release</code> compiles it for release, and the release build doesn&rsquo;t need the interpreter.</p>
-<p>The first <code>rawr run</code> compiles iced and the runner in the project&rsquo;s <code>target/</code>. For a new template project on an Apple Silicon Mac that took about 2 minutes. Later runs reuse the build. <a href="/docs/iced/reload">Reload an iced app</a> covers editing the app while it runs.</p>
+<p><code>cargo run</code> compiles the same app natively. A release build doesn&rsquo;t need the interpreter.</p>
+<p>The first <code>rawr run</code> compiles iced and the runner in the project&rsquo;s <code>target/</code>. On an Apple Silicon Mac that took about 2 minutes. Later runs reuse the build. <a href="/docs/iced/reload">Reload</a> covers what a save does.</p>
 
 
 <h2 id="shapes">App shapes</h2>
-<p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>
 <h3 id="iced-run"><code>iced::run</code></h3>
-<p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>. The state type needs <code>#[derive(Default)]</code>. The counter from <a href="#new">the template</a> has this shape.</p>
-<p><code>update</code> and <code>view</code> can also be closures with typed parameters. <code>iced::run(|state: &amp;mut State, message: Message| state.update(message), State::view)</code> is one example. A parameter can be a pattern such as <code>_: Message</code>. An update closure returns <code>()</code> unless it is written with a return type such as <code>-&gt; Task&lt;Message&gt;</code>. An untyped closure parameter fails the check with an error that asks for its type.</p>
-<p>The state can be any type with a <code>Default</code>. <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code> keeps a <code>u32</code>.</p>
+<p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>, as the counter does. The state can be any type with a <code>Default</code>.</p>
+<p><code>update</code> and <code>view</code> can be closures, as in <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code>. Each parameter needs its type. An untyped one fails the check. An update closure returns <code>()</code> unless it declares a return type such as <code>-&gt; Task&lt;Message&gt;</code>.</p>
 <h3 id="application">The application builder</h3>
-<p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders before <code>.run()</code>:</p>
+<p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders:</p>
 <ul>
   <li><code>.title(..)</code> with a method of the state or a string literal.</li>
   <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>, or with a theme such as <code>Theme::Dark</code>.</li>
   <li><code>.subscription(..)</code> with a method that returns a <code>Subscription</code>.</li>
   <li><code>.centered()</code>.</li>
 </ul>
-<p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
-<p>The builder may come from a function of your own, as iced&rsquo;s todos example writes it. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns the chain, and <code>main</code> ends with <code>application().run()</code>. rawr reads the chain as if <code>main</code> held it. <code>main</code> must be the function&rsquo;s only caller. <code>use iced::{Application, Program};</code> imports the two names.</p>
-<p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
+<p><code>.window_size(..)</code>, <code>.font(..)</code>, <code>.style(..)</code> and other window and renderer settings are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
+<p>The chain may come from a function of your own, as in iced&rsquo;s todos example. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns it, and <code>main</code> ends with <code>application().run()</code>. <code>main</code> must be that function&rsquo;s only caller.</p>
+<p>This app uses the builder and an <code>update</code> that returns a <code>Task</code>:</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">// rawr
@@ -259,8 +239,8 @@ impl Todos {
   <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
   <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
 </figure>
-<p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-macros</code> dependency provides it, as <a href="/docs/iced/previews#previews">Previews and snapshots</a> describes.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/iced/reload">Next<b>Reload an iced app</b></a></nav>
+<p><code>use rawr::preview;</code> comes from the <code>rawr-macros</code> dependency, as <a href="/docs/iced/previews#previews">Previews</a> describes.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/iced/reload">Next<b>Reload</b></a></nav>
 </article>
 </main>
 </div>

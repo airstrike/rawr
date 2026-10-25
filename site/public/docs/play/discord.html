@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Use rawr in Discord | rawr docs</title>
+<title>Discord | rawr docs</title>
 <meta name="description" content="Post ?play above a Rust code block in Discord and the bot replies with the program&#x27;s output or a rendered iced frame. Options, and how moderators turn the bot on in a channel.">
-<meta property="og:title" content="Use rawr in Discord | rawr docs">
+<meta property="og:title" content="Discord | rawr docs">
 <meta property="og:description" content="Post ?play above a Rust code block in Discord and the bot replies with the program&#x27;s output or a rendered iced frame. Options, and how moderators turn the bot on in a channel.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/play/discord">
@@ -33,45 +33,30 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>docs</p>
-  <p class="grp">Develop with rawr</p>
-  <ol>
-    <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Get started</a></li>
-    <li><a href="/docs/run">Run Rust with rawr</a></li>
-    <li><a href="/docs/imports">Cargo dependencies</a></li>
-  </ol>
-  <p class="grp">Embed rawr</p>
-  <ol>
-    <li><a href="/docs/embedding">Embedding</a></li>
-  </ol>
-  <p class="grp">Reference</p>
-  <ol>
-    <li><a href="/docs/language">Supported Rust</a></li>
-    <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/requirements">Requirements and status</a></li>
-    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
-    <li><a href="/docs/how-it-works">How rawr works</a></li>
-  </ol>
-  <p class="grp">rawr-iced</p>
-  <ol>
-    <li><a href="/docs/iced">Overview and setup</a></li>
-    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
-    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
-    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
-  </ol>
-  <p class="grp" data-here>Playground and Discord</p>
+  <p class="grp" data-here>Guides</p>
   <ol data-here>
-    <li><a href="/docs/play">Use the playground</a></li>
-    <li><a href="/docs/play/discord" aria-current="page">Use rawr in Discord</a><ol><li><a href="#discord">In Discord</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li>
-    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+    <li><a href="/docs/start">Start</a></li>
+    <li><a href="/docs/run">Run</a></li>
+    <li><a href="/docs/imports">Imports</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
+    <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord" aria-current="page">Discord</a><ol class="secs"><li><a href="#discord">In Discord</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li></ol></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How it works</a></li>
+  </ol>
+  <p class="grp">API Reference</p>
+  <ol>
+    <li><a href="/docs/reference/overview">Overview</a><ol class="kids"><li><a href="/docs/reference/items">Items</a></li><li><a href="/docs/reference/types">Types</a></li><li><a href="/docs/reference/generics">Generics</a></li><li><a href="/docs/reference/patterns">Patterns</a></li><li><a href="/docs/reference/moves">Moves</a></li><li><a href="/docs/reference/closures">Closures</a></li><li><a href="/docs/reference/macros">Macros</a></li><li><a href="/docs/reference/std">std</a></li></ol></li>
+    <li><a href="/docs/reference/iced">iced</a></li>
+    <li><a href="/docs/reference/play">Play</a></li>
+    <li><a href="/docs/reference/commands">Commands</a></li>
+    <li><a href="/docs/reference/requirements">Requirements</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>playground and Discord</p>
-<h1>Use rawr in Discord</h1>
-<p class="lede">The <code class="nw">?play</code> bot runs a Rust snippet posted in Discord and replies with the result. It answers in channels where a moderator turned it on.</p>
+<h1>Discord</h1>
+<p class="lede">The <code class="nw">?play</code> bot runs a Rust snippet posted in Discord and replies with the result.</p>
 <h2 id="discord">In Discord</h2>
 <p>Write <code>?play</code> on the first line of a message and put the snippet in a code block below it. The fence can be <code>```rust</code>, <code>```rs</code> or a bare <code>```</code>. The bot also answers when <code>?play</code> is in the fence&rsquo;s info string, as in <code>```rust ?play</code>.</p>
 <div class="block">
@@ -81,22 +66,22 @@
 column![text("hi"), button("go")]
 <span class="c">```</span></code></pre>
 </div>
-<p>The bot runs the first code block in the message. It reads a snippet the way <a href="/docs/play#shapes">the playground</a> does. A snippet that uses iced gets an image. A plain program gets its output in a text block. An error gets the report that <code>rawr check</code> would print. The report names the snippet <code>play.rs</code>. The bot cuts an error reply to fit Discord&rsquo;s 2000 characters.</p>
-<p>The bot shows Discord&rsquo;s typing indicator while it runs a snippet. If you edit a <code>?play</code> message, the bot runs the snippet again and edits its reply, or replies anew if it has no reply to edit. The bot ignores messages from other bots.</p>
+<p>The bot runs the first code block in the message. It reads a snippet the way <a href="/docs/play#shapes">the playground</a> does. An error gets the report that <code>rawr check</code> would print.</p>
+<p>If you edit a <code>?play</code> message, the bot runs the snippet again and edits its reply.</p>
 
 <h3 id="options">Options</h3>
-<p>Options go on the <code>?play</code> line after the command. They are separated by spaces.</p>
+<p>Options go on the <code>?play</code> line after the command.</p>
 <table>
   <tr><th>Option</th><th>Meaning</th></tr>
-  <tr><td><code>WxH</code> or <code>size=WxH</code></td><td>The canvas size in logical pixels. Each side can be from 1 to 2048. Without a size the canvas fits the content.</td></tr>
+  <tr><td><code>WxH</code> or <code>size=WxH</code></td><td>The canvas size in logical pixels. Each side can be from 1 to 2048. Without a size the canvas <a href="/docs/reference/play#size">fits the content</a>.</td></tr>
   <tr><td><code>dark</code>, <code>light</code> or <code>theme=..</code></td><td>The theme to render with. The default is dark. An app that passes its own function to <code>.theme(..)</code> uses its own theme.</td></tr>
-  <tr><td><code>msg=EXPR</code> or <code>message=EXPR</code></td><td>A message to apply to an app. Repeat it to apply several in order. The expression can&rsquo;t contain <code>;</code>, <code>{</code>, <code>}</code> or <code>#</code>.</td></tr>
+  <tr><td><code>msg=EXPR</code> or <code>message=EXPR</code></td><td>A message to apply to an app. Repeat it to apply several in order.</td></tr>
 </table>
 
 
 <h2 id="add-bot">Adding the bot to a server</h2>
 <p>Use the <a href="/bot/invite">invite link</a> to add the bot to a Discord server you manage. The bot answers only in channels a moderator turns on. It doesn&rsquo;t answer in direct messages.</p>
-<p>Moderators choose the channels with the <code>/play-channel</code> command. It needs the Manage Channels permission in the channel it changes. Its replies are visible only to the moderator who ran it.</p>
+<p>Moderators choose the channels with the <code>/play-channel</code> command. It needs the Manage Channels permission in the channel it changes.</p>
 <table>
   <tr><th>Command</th><th>What it does</th></tr>
   <tr><td><code>/play-channel add [channel]</code></td><td>Turns the bot on in a channel. The default is the current channel.</td></tr>
@@ -104,8 +89,8 @@ column![text("hi"), button("go")]
   <tr><td><code>/play-channel list</code></td><td>Lists the channels where the bot answers.</td></tr>
 </table>
 <p>A thread follows its parent channel. Running <code>/play-channel add</code> in a thread turns the bot on for the parent channel.</p>
-<p>The <a href="/bot">status page</a> shows whether the bot is up. It also counts recent runs.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play">Previous<b>Use the playground</b></a><a class="next" href="/docs/play/reference">Next<b>Hosted execution reference</b></a></nav>
+<p>The <a href="/bot">status page</a> shows whether the bot is up.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play">Previous<b>Play</b></a><a class="next" href="/docs/troubleshooting">Next<b>Troubleshooting</b></a></nav>
 </article>
 </main>
 </div>
