@@ -100,7 +100,7 @@ pub fn run_program(
                 Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
-                Err(report) => eprint!("{}", diagnostic::render(&report)),
+                Err(report) => rawr_import::process::say(diagnostic::render(&report)),
             }
             let Some(waiting) = watcher.as_ref() else {
                 return Ok(0);
@@ -246,15 +246,15 @@ fn session(
                     });
                 match prepared {
                     Ok(prepared) => {
-                        eprintln!(
+                        rawr_import::process::say(format_args!(
                             "rawr: {}; restarting the program",
                             manifests.restart_line(&prepared.manifests)
-                        );
+                        ));
                         return Ok(Ended::Restart);
                     }
                     // Latest wins: a newer save reports for itself.
                     Err(_) if adapter.deadline().is_some() => {}
-                    Err(report) => eprint!("{}", diagnostic::render(&report)),
+                    Err(report) => rawr_import::process::say(diagnostic::render(&report)),
                 }
                 // A failed save is reported once.
                 started_from = changed;
@@ -300,6 +300,8 @@ fn session(
             };
             let prepared = match profile.prepare(&next_target, None, revision, &scope) {
                 Ok(prepared) => prepared,
+                // A newer save; its own attempt follows.
+                Err(crate::Error::Rawr(error)) if error.source_changed() => continue,
                 Err(error) => {
                     settle_failure(&mut lane, &adapter, import(error, source.clone()))?;
                     continue;
@@ -370,14 +372,23 @@ fn session(
                     // the parent gate through validation, pinning or hot IPC.
                     .and_then(|prepared| lane.commit_compile(prepared))
                     .map(|_| crate::native::Watched::Installed)
-                    .map_err(|error| framework(error, source.clone())),
+                    .or_else(|error| {
+                        // A newer save supersedes it, and its attempt follows.
+                        if error.source_changed() {
+                            Ok(crate::native::Watched::Obsolete)
+                        } else {
+                            Err(framework(error, source.clone()))
+                        }
+                    }),
                 rawr_import::process::hot::Preparation::Miss(miss) => {
                     // D500.4: a new native build restarts the program, and
                     // says why in one line, once for each new build.
                     if (announced.as_ref() != Some(&next_manifests) || manifests.restarts_on_save())
                         && let Some(reason) = manifests.restart_reason(&next_manifests)
                     {
-                        eprintln!("rawr: {reason}; restarting the program");
+                        rawr_import::process::say(format_args!(
+                            "rawr: {reason}; restarting the program"
+                        ));
                         announced = Some(next_manifests.clone());
                     }
                     let (request, snapshot) = miss.into_parts();
@@ -416,7 +427,9 @@ fn session(
                         .commit_inputs(staged)
                         .map_err(|error| framework(error, source.clone()))?
                     {
-                        eprintln!("Rawr imported-owner watcher warning: {error}");
+                        rawr_import::process::say(format_args!(
+                            "Rawr imported-owner watcher warning: {error}"
+                        ));
                     }
                 }
                 Ok(crate::native::Watched::Obsolete) => drop(staged),
@@ -565,7 +578,10 @@ fn initial_watched_program(
         let native_baseline = adapter.native_baseline();
         match initial.built.revalidate_prepared() {
             Ok(()) => {}
-            Err(rawr_import::node::Error::StaleReadSet { .. }) => {
+            Err(
+                rawr_import::node::Error::StaleReadSet { .. }
+                | rawr_import::node::Error::SourceChanged(_),
+            ) => {
                 drop(staged);
                 initial = refresh_initial(&mut lane, target_path, profile, &source)?;
                 continue;
@@ -592,12 +608,23 @@ fn initial_watched_program(
                     .commit_inputs(staged)
                     .map_err(|error| framework(error, source.clone()))?
                 {
-                    eprintln!("Rawr imported-owner watcher warning: {error}");
+                    rawr_import::process::say(format_args!(
+                        "Rawr imported-owner watcher warning: {error}"
+                    ));
                 }
                 return Ok((lane, adapter, initial.manifests, native_baseline));
             }
             Ok(crate::native::Watched::Obsolete) => {
                 drop(staged);
+                initial = refresh_initial(&mut lane, target_path, profile, &source)?;
+            }
+            // A save as the program started (D531.9): it starts again from
+            // the saved files.
+            Err(error) if error.source_changed() => {
+                drop(staged);
+                rawr_import::process::say(
+                    "rawr: the source changed as the program started; starting it again",
+                );
                 initial = refresh_initial(&mut lane, target_path, profile, &source)?;
             }
             Err(error) => {
@@ -628,41 +655,61 @@ fn open_lane(
 fn prepare_on_lane(
     lane: &mut Lane,
     target: &rawr::project::Target,
-    graph: Option<rawr::package::Graph>,
+    mut graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
 ) -> Result<Initial, diagnostic::Report> {
-    let revision = lane
-        .revision()
-        .map_err(|error| framework(error, source.clone()))?;
-    let prepared = profile
-        .prepare(
+    // A save while the runner builds (D531.9): the build is kept, and the
+    // program is prepared again from the saved files.
+    let mut saved = None;
+    loop {
+        let target = saved.as_ref().unwrap_or(target);
+        let revision = lane
+            .revision()
+            .map_err(|error| framework(error, source.clone()))?;
+        let prepared = match profile.prepare(
             target,
-            graph,
+            graph.take(),
             revision,
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
-        )
-        .map_err(|error| import(error, source.clone()))?;
-    let manifests = prepared.manifests.clone();
-    let limits = prepared.limits();
-    let (request, snapshot, _, inputs) = prepared.into_parts();
-    let generated = request
-        .generate(&limits)
-        .map_err(|error| framework(error, source.clone()))?;
-    // The API phase has ended; hand its freed allocator pages back before the build.
-    crate::release::freed_memory();
-    let mut built = lane
-        .build(generated)
-        .map_err(|error| framework(error, source.clone()))?;
-    built
-        .retain_startup(&snapshot)
-        .map_err(|error| framework(error, source.clone()))?;
-    Ok(Initial {
-        built,
-        snapshot,
-        inputs,
-        manifests,
-    })
+        ) {
+            Ok(prepared) => prepared,
+            Err(crate::Error::Rawr(error)) if error.source_changed() => {
+                saved = Some(discover(target)?);
+                continue;
+            }
+            Err(error) => return Err(import(error, source.clone())),
+        };
+        let manifests = prepared.manifests.clone();
+        let limits = prepared.limits();
+        let (request, snapshot, _, inputs) = prepared.into_parts();
+        let generated = request
+            .generate(&limits)
+            .map_err(|error| framework(error, source.clone()))?;
+        // The API phase has ended; hand its freed allocator pages back before the build.
+        crate::release::freed_memory();
+        let mut built = lane
+            .build(generated)
+            .map_err(|error| framework(error, source.clone()))?;
+        match built.retain_startup(&snapshot) {
+            Ok(()) => {
+                return Ok(Initial {
+                    built,
+                    snapshot,
+                    inputs,
+                    manifests,
+                });
+            }
+            Err(rawr_import::node::Error::SourceChanged(_)) => saved = Some(discover(target)?),
+            Err(error) => return Err(framework(error, source.clone())),
+        }
+    }
+}
+
+/// The program as it is on disk now.
+fn discover(target: &rawr::project::Target) -> Result<rawr::project::Target, diagnostic::Report> {
+    rawr::project::Target::discover(location(target))
+        .map_err(|error| rawr::diagnostic::Report::from_project(&error))
 }
 
 fn refresh_initial(
@@ -692,7 +739,9 @@ fn settle_failure(
 
 fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diagnostic::Report> {
     let rendered = diagnostic::render(&report);
-    eprintln!("Rawr imported owner kept the last good generation:\n{rendered}");
+    rawr_import::process::say(format_args!(
+        "Rawr imported owner kept the last good generation:\n{rendered}"
+    ));
     lane.report(&rendered)
         .map_err(|error| framework(error, None))
 }

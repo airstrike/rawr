@@ -124,7 +124,7 @@ pub fn note(key: &str, line: &str) {
     state.notes.push(key.into());
     let shown = state.drawn;
     clear(&mut state);
-    eprintln!("{line}");
+    crate::process::say(line);
     if shown {
         state.drawn = true;
         draw(&mut state);
@@ -291,6 +291,10 @@ fn draw(state: &mut State) {
     if !state.drawn && since.elapsed() < QUIET {
         return;
     }
+    // A program that has the screen draws it alone.
+    if crate::process::terminal::raw() {
+        return;
+    }
     let percent = state.percent(Instant::now());
     let mut stderr = std::io::stderr().lock();
     if stderr.is_terminal() {
@@ -324,7 +328,7 @@ fn draw(state: &mut State) {
 }
 
 fn clear(state: &mut State) {
-    if std::mem::take(&mut state.drawn) {
+    if std::mem::take(&mut state.drawn) && !crate::process::terminal::raw() {
         let _ = write!(std::io::stderr(), "\r\x1b[2K");
     }
 }

@@ -12,6 +12,9 @@ pub(super) struct Child {
     /// Whether the child's group has this process's terminal, to give back
     /// when it ends.
     terminal: bool,
+    /// Whether it gets the terminal when it starts, if another runner had
+    /// it when this one was spawned.
+    wants_terminal: bool,
 }
 
 impl Child {
@@ -22,6 +25,7 @@ impl Child {
             child,
             retained: true,
             terminal: false,
+            wants_terminal: false,
         })
     }
 
@@ -31,8 +35,22 @@ impl Child {
     /// stopped goes on.
     pub(super) fn spawn_with_terminal(command: &mut process::Command) -> Result<Self> {
         let mut child = Self::spawn(command)?;
-        child.terminal = terminal::give(child.id());
+        child.wants_terminal = true;
+        child.terminal = super::terminal::give(child.id());
         Ok(child)
+    }
+
+    /// Give the terminal to a child spawned while another runner had it,
+    /// now that this process has it back.
+    pub(super) fn claim_terminal(&mut self) {
+        if self.wants_terminal && !self.terminal && self.retained {
+            self.terminal = super::terminal::give(self.id());
+        }
+    }
+
+    /// Whether the child's group has the terminal.
+    pub(super) const fn has_terminal(&self) -> bool {
+        self.terminal
     }
 
     pub(super) fn id(&self) -> u32 {
@@ -64,18 +82,32 @@ impl Child {
             .try_wait()
             .map_err(|error| io("observe runner exit", error))?;
         if status.is_some() {
-            self.take_terminal();
+            let terminal = self.take_terminal();
             super::kill_group(self.id());
             super::groups::release(self.id());
             self.retained = false;
+            if terminal {
+                super::terminal::restore();
+            }
         }
         Ok(status)
     }
 
-    /// Take the terminal back from an ending child's group.
-    fn take_terminal(&mut self) {
-        if std::mem::take(&mut self.terminal) {
-            terminal::take_back(self.id());
+    /// Take the terminal back from an ending child's group. Whether it had
+    /// it: once the group is gone, [`super::terminal::restore`] follows.
+    fn take_terminal(&mut self) -> bool {
+        let terminal = std::mem::take(&mut self.terminal);
+        if terminal {
+            super::terminal::take_back(self.id());
+        }
+        terminal
+    }
+
+    /// Wake a program that has the terminal after a new generation
+    /// reached it, as a resize would (D534.4).
+    pub(super) fn wake(&self) {
+        if self.terminal && self.retained {
+            super::terminal::wake(self.id());
         }
     }
 
@@ -105,8 +137,12 @@ impl Child {
     }
 
     fn reap(&mut self) -> Result<ExitStatus> {
-        self.take_terminal();
-        let status = super::reap_group(&mut self.child)?;
+        let terminal = self.take_terminal();
+        let status = super::reap_group(&mut self.child);
+        if terminal {
+            super::terminal::restore();
+        }
+        let status = status?;
         super::groups::release(self.id());
         self.retained = false;
         Ok(status)
@@ -117,53 +153,6 @@ impl Drop for Child {
     fn drop(&mut self) {
         let _ = self.terminate();
     }
-}
-
-/// The controlling terminal on stdin, handed between this process's group
-/// and a runner's.
-#[cfg(unix)]
-mod terminal {
-    use rustix::process::{getpgrp, Pid};
-    use rustix::termios::{tcgetpgrp, tcsetpgrp};
-
-    /// Give stdin's terminal to the group `leader` leads, when this
-    /// process's group has it in the foreground. Whether it did.
-    pub(super) fn give(leader: u32) -> bool {
-        let stdin = std::io::stdin();
-        let Some(leader) = i32::try_from(leader).ok().and_then(Pid::from_raw) else {
-            return false;
-        };
-        if !tcgetpgrp(&stdin).is_ok_and(|foreground| foreground == getpgrp()) {
-            return false;
-        }
-        if tcsetpgrp(&stdin, leader).is_err() {
-            return false;
-        }
-        // A read before the hand-off stopped the program with SIGTTIN.
-        let _ = rustix::process::kill_process_group(leader, rustix::process::Signal::CONT);
-        true
-    }
-
-    /// Take stdin's terminal back from the group `leader` leads, when it
-    /// still has it.
-    pub(super) fn take_back(leader: u32) {
-        let stdin = std::io::stdin();
-        let Some(leader) = i32::try_from(leader).ok().and_then(Pid::from_raw) else {
-            return;
-        };
-        if tcgetpgrp(&stdin).is_ok_and(|foreground| foreground == leader) {
-            let _ = tcsetpgrp(&stdin, getpgrp());
-        }
-    }
-}
-
-#[cfg(not(unix))]
-mod terminal {
-    pub(super) fn give(_leader: u32) -> bool {
-        false
-    }
-
-    pub(super) fn take_back(_leader: u32) {}
 }
 
 fn io(operation: &'static str, error: std::io::Error) -> Error {

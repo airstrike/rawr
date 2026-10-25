@@ -16,7 +16,9 @@ rawr-watch = { path = "../watch" }
 nix = { version = "0.27.1", features = ["process", "signal"] }
 
 [dev-dependencies]
-rawr-import = { path = "../importer", features = ["rustc-driver", "test-fixtures"] }
+# A pseudo-terminal for the terminal tests.
+nix = { version = "0.27.1", features = ["process", "signal", "term"] }
+rawr-import ={ path = "../importer", features = ["rustc-driver", "test-fixtures"] }
 rawr-watch = { path = "../watch", features = ["manual"] }
 serde_json = "1"
 

@@ -8,4 +8,6 @@ mod islands;
 mod plain;
 mod support;
 mod tokio;
+#[cfg(unix)]
+mod tui;
 mod unit_graph;

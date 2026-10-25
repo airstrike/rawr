@@ -1,7 +1,7 @@
 //! Authenticated Unix-socket runner process ownership and staged handshake.
 
 use std::fs::{self, File};
-use std::io::Read as _;
+use std::io::{IsTerminal as _, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -345,6 +345,16 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
                 .arg0(&program.name)
                 .args(&program.arguments)
                 .stdin(Stdio::inherit());
+            // At a terminal, the program writes to it itself, so it sees a
+            // terminal as under `cargo run` (D534.5). The protocol has its
+            // own socket. A failure's stderr is then on the screen, not in
+            // the error.
+            if std::io::stdout().is_terminal() {
+                command.stdout(Stdio::inherit());
+            }
+            if std::io::stderr().is_terminal() {
+                command.stderr(Stdio::inherit());
+            }
             if let Some(prepare) = program.prepare {
                 prepare(&mut command);
             }
@@ -365,20 +375,24 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         let runner_pid = child.id();
         crate::metrics::record_process(crate::metrics::ProcessKind::Runner);
         crate::metrics::record_milestone(crate::metrics::Milestone::RunnerSpawned);
-        let Some(stdout) = child.stdout() else {
+        // What a program writes to the terminal itself has no log.
+        let stdout = child.stdout();
+        let stderr = child.stderr();
+        if program.is_none() && (stdout.is_none() || stderr.is_none()) {
             terminate(&mut child);
             let _ = fs::remove_file(&socket);
-            return Err(Error::MissingLog("stdout"));
-        };
-        let Some(stderr) = child.stderr() else {
-            terminate(&mut child);
-            let _ = fs::remove_file(&socket);
-            return Err(Error::MissingLog("stderr"));
-        };
+            return Err(Error::MissingLog(if stdout.is_none() {
+                "stdout"
+            } else {
+                "stderr"
+            }));
+        }
         // `rawr run` shows what the program prints as it prints it.
         let forward = process.lifecycle == Lifecycle::Run;
-        let stdout = thread::spawn(move || tail(stdout, forward.then_some(Forward::Stdout)));
-        let stderr = thread::spawn(move || tail(stderr, forward.then_some(Forward::Stderr)));
+        let stdout = stdout
+            .map(|stdout| thread::spawn(move || tail(stdout, forward.then_some(Forward::Stdout))));
+        let stderr = stderr
+            .map(|stderr| thread::spawn(move || tail(stderr, forward.then_some(Forward::Stderr))));
         let stream = match accept(&listener, &mut child) {
             Ok(stream) => stream,
             Err(error) => {
@@ -400,8 +414,8 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             let failure = Error::ProtocolIo(source);
             let cleanup = child.terminate();
             if child.is_reaped() {
-                let _ = stdout.join();
-                let _ = stderr.join();
+                let _ = stdout.map(thread::JoinHandle::join);
+                let _ = stderr.map(thread::JoinHandle::join);
             }
             return match cleanup {
                 Ok(()) => Err(failure),
@@ -419,8 +433,8 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             manifest: self,
             route: None,
             sequence: crate::profile::message::Sequence::first(),
-            stdout: Some(stdout),
-            stderr: Some(stderr),
+            stdout,
+            stderr,
             reaped: false,
             lifecycle: process.lifecycle,
             started: false,
@@ -627,6 +641,9 @@ impl<B> Candidate<Admitted, B> {
             return Err(Error::Lifecycle);
         }
         let key = *inner.key.as_bytes();
+        // A runner spawned while the one it replaces had the terminal gets
+        // it now, once that one has ended.
+        inner.child.claim_terminal();
         exchange(
             inner,
             crate::protocol::Tag::Start,
@@ -1062,7 +1079,11 @@ impl<B> Candidate<Admitted, B> {
         identity[32..].copy_from_slice(&prepared.nonce);
         prepared.commit(|transition| {
             let result = match transition {
-                super::hot::Transition::Commit => hot_commit_exchange(inner, &identity),
+                // A program blocked reading the terminal draws again with
+                // the generation it just got (D534.4).
+                super::hot::Transition::Commit => {
+                    hot_commit_exchange(inner, &identity).inspect(|()| inner.child.wake())
+                }
                 super::hot::Transition::Abort => exchange(
                     inner,
                     crate::protocol::Tag::HotAbort,
@@ -1097,6 +1118,14 @@ impl<B> Candidate<Admitted, B> {
             return Err(Error::Stale);
         }
         abort_hot(inner, &prepared)
+    }
+
+    /// Whether its program has the terminal.
+    #[must_use]
+    pub fn has_terminal(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.child.has_terminal())
     }
 
     /// Shut down and reap this exact admitted process group.
