@@ -30,9 +30,10 @@ struct Part {
 }
 
 enum PartKind {
-    /// A test of the part: a discriminant, a literal, a range or a slice's
-    /// length, read where the subject is.
-    Test(Access),
+    /// A test of the part: a discriminant, a literal or a range, read
+    /// where the subject is, or a slice's length, read where its pattern is
+    /// (`Some`), as rustc reports them.
+    Test(Access, Option<Span>),
     /// A binding of the part, by value or by reference (`Some` with its
     /// mutability), of type `ty`.
     Bind {
@@ -112,13 +113,14 @@ impl Parser<'_> {
         }
     }
 
-    /// The pattern being resolved tests its part.
-    pub(super) fn trace_test(&self, access: Access) {
+    /// The pattern being resolved tests its part, where the subject is or
+    /// at `at`.
+    pub(super) fn trace_test(&self, access: Access, at: Option<Span>) {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             let path = trace.path.clone();
             trace.parts.push(Part {
                 path,
-                kind: PartKind::Test(access),
+                kind: PartKind::Test(access, at),
             });
         }
     }
@@ -186,8 +188,8 @@ impl Parser<'_> {
         };
         let mut flow = self.flow();
         for part in &trace.parts {
-            if let PartKind::Test(access) = &part.kind {
-                flow.part(below(base, &part.path), *access, subject);
+            if let PartKind::Test(access, at) = &part.kind {
+                flow.part(below(base, &part.path), *access, at.unwrap_or(subject));
             }
         }
     }
@@ -220,37 +222,41 @@ impl Parser<'_> {
                     let moves = self.moves_by_value(&ty);
                     Some((part.path, name, span, by_ref, holds, moves))
                 }
-                PartKind::Test(_) => None,
+                PartKind::Test(..) => None,
             })
             .collect();
         let mut flow = self.flow();
         if let Some((what, span)) = trace.unmodeled {
             flow.unmodeled(what, span);
         }
+        // An or-pattern's alternatives bind one local: it is given its
+        // value once, and takes each alternative's loans.
+        let mut defined = std::collections::BTreeSet::new();
         for (path, name, span, by_ref, holds, moves) in binds {
             let declaration = declarations
                 .iter()
                 .find(|binding| binding.name == name)
                 .map_or(span, |binding| binding.span);
             let into = flow.local(&name, declaration);
+            let define = defined.insert(into);
             match (matched, by_ref) {
                 (Matched::Place(base), Some(mutable)) => {
-                    flow.part_borrow(below(base, &path), mutable, span, into);
+                    flow.part_borrow(below(base, &path), mutable, span, into, define);
                 }
                 (Matched::Place(base), None) => {
                     let access = if moves { Access::Move } else { Access::Read };
                     flow.part(below(base, &path), access, span);
                     // The whole of a local that holds borrows: its loans.
                     if holds && path.is_empty() && base.projection.is_empty() {
-                        flow.take(into, &[Origin::Local(base.local)]);
+                        flow.take(into, &[Origin::Local(base.local)], define);
                     }
                 }
                 // Below a reference made for the match, a binding by
                 // reference reborrows through it; the reference itself,
                 // bound whole, is its loans.
-                (Matched::Origins(origins), Some(_)) => flow.take(into, origins),
+                (Matched::Origins(origins), Some(_)) => flow.take(into, origins, define),
                 (Matched::Origins(origins), None) if holds && path.is_empty() => {
-                    flow.take(into, origins);
+                    flow.take(into, origins, define);
                 }
                 (Matched::Origins(_), None) => {}
                 (Matched::Value { made }, by_ref) => {
@@ -297,7 +303,7 @@ impl Parser<'_> {
         if tests {
             trace.parts.push(Part {
                 path: derefs.clone(),
-                kind: PartKind::Test(Access::Read),
+                kind: PartKind::Test(Access::Read, None),
             });
         }
         match binding {
@@ -333,7 +339,7 @@ impl Parser<'_> {
         if !compiled.tests.is_empty() {
             trace.parts.push(Part {
                 path: self.derefs(written),
-                kind: PartKind::Test(Access::Read),
+                kind: PartKind::Test(Access::Read, None),
             });
         }
         if !compiled.binds.is_empty() {

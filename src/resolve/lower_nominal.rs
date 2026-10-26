@@ -22914,7 +22914,7 @@ impl<'a> Parser<'a> {
         {
             // The facade's tests read the part; what they bind is not in
             // the borrow facts.
-            self.trace_test(FactAccess::Read);
+            self.trace_test(FactAccess::Read, None);
             if !drops::pattern_names(syntax).is_empty() {
                 self.trace_unmodeled("a pattern binding a part of a facade value", syntax.span());
             }
@@ -23042,7 +23042,7 @@ impl<'a> Parser<'a> {
             }
             PatternSyntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
-                self.trace_test(FactAccess::Read);
+                self.trace_test(FactAccess::Read, None);
                 Ok((
                     NominalPattern::Literal(literal.clone()),
                     CoveragePattern::Constructor {
@@ -23069,7 +23069,7 @@ impl<'a> Parser<'a> {
                     self.require_pattern_type(&expected, ty, *span)?;
                 }
                 reject_empty_range(low.as_ref(), high.as_ref(), *inclusive, owner, *span)?;
-                self.trace_test(FactAccess::Read);
+                self.trace_test(FactAccess::Read, None);
                 Ok((
                     NominalPattern::Range {
                         low: low.as_ref().map(|(literal, _)| literal.clone()),
@@ -23322,7 +23322,7 @@ impl<'a> Parser<'a> {
                 }
                 // A slice's length is tested; an array's is known.
                 if length.is_none() {
-                    self.trace_test(FactAccess::Length);
+                    self.trace_test(FactAccess::Length, Some(*span));
                 }
                 let mut resolve = |members: &[PatternSyntax], after: bool| {
                     let mut proofs = Vec::with_capacity(members.len());
@@ -23518,7 +23518,7 @@ impl<'a> Parser<'a> {
             }
         };
         // The pattern tests the discriminant; its payload is below it.
-        self.trace_test(FactAccess::Read);
+        self.trace_test(FactAccess::Read, None);
         let (child, coverage) = match (payload, element) {
             (Some(payload), Some(element)) => {
                 let path = self.trace_enter(FactStep::Downcast(variant.name().into()));
@@ -23728,7 +23728,7 @@ impl<'a> Parser<'a> {
         // An enum of more than one variant is tested by its discriminant, and
         // the payload is below the variant.
         if item.variants.len() > 1 {
-            self.trace_test(FactAccess::Read);
+            self.trace_test(FactAccess::Read, None);
         }
         let path = self.trace_enter(FactStep::Downcast(variant.name.text.clone()));
         let names = variant.fields.as_deref().unwrap_or_default();

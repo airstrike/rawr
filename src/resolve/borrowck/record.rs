@@ -336,8 +336,16 @@ impl Recorder {
 
     /// A pattern binds `into` by reference to the part `place` of what it
     /// matches (`ref x`, or a binding below a reference): a borrow of the
-    /// part made here, at `span`, which `into` takes.
-    pub(crate) fn part_borrow(&mut self, place: Place, mutable: bool, span: Span, into: Local) {
+    /// part made here, at `span`, which `into` takes, given its value here
+    /// when `define` says so (once for an or-pattern's alternatives).
+    pub(crate) fn part_borrow(
+        &mut self,
+        place: Place,
+        mutable: bool,
+        span: Span,
+        into: Local,
+        define: bool,
+    ) {
         let through = (place.projection.first() == Some(&Projection::Deref)).then_some(place.local);
         if let Some(holder) = through {
             self.push(Fact::Use(holder));
@@ -362,13 +370,16 @@ impl Recorder {
                 at: point,
             });
         }
-        self.take(into, &[Origin::Loan(loan)]);
+        self.take(into, &[Origin::Loan(loan)], define);
     }
 
-    /// `into` is given a value holding the loans `origins` here: a pattern's
-    /// binding of a reference's part, or of the reference itself.
-    pub(crate) fn take(&mut self, into: Local, origins: &[Origin]) {
-        self.push(Fact::Def(into));
+    /// `into` takes the loans `origins` here: a pattern's binding of a
+    /// reference's part, or of the reference itself. It is given its value
+    /// here when `define` says so.
+    pub(crate) fn take(&mut self, into: Local, origins: &[Origin], define: bool) {
+        if define {
+            self.push(Fact::Def(into));
+        }
         for origin in origins {
             let from = self.origin_local(*origin);
             let at = self.push(Fact::Use(from));

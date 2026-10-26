@@ -541,6 +541,8 @@ patterns/let_tuple_copy_part_apart.rs	ok	0	"1 (1, 3)\n"
 patterns/let_tuple_copy_part_conflict.rs	E0503:4
 patterns/let_tuple_mut_ref_conflict.rs	E0499:4
 patterns/let_tuple_mut_ref_ended.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/match_arm_order_fake_edge.rs	E0503:4
+patterns/match_arm_order_fine.rs	ok	0	"(false, 1)\n"
 patterns/match_move_part_other_shared.rs	ok	0	"1 [2]\n"
 patterns/match_move_part_while_shared.rs	E0505:9
 patterns/match_ref_mut_arm_conflict.rs	E0502:5
@@ -550,6 +552,8 @@ patterns/match_ref_while_mut.rs	E0502:9
 patterns/nested_option_ref.rs	ok	0	"(Some([1, 4]), 3)\n"
 patterns/nested_option_ref_conflict.rs	E0502:4
 patterns/option_test_while_borrowed.rs	E0503:4
+patterns/or_ref_mut_conflict.rs	E0506:5
+patterns/or_ref_mut_ended.rs	ok	0	"(Some(2), 5)\n"
 patterns/ref_let_conflict.rs	E0502:4
 patterns/ref_let_ended.rs	ok	0	"[1]\n[1, 1]\n"
 patterns/ref_mut_let_conflict.rs	E0499:4
@@ -560,6 +564,9 @@ patterns/scalar_subject_wildcard_while_borrowed.rs	ok	0	"20 2\n"
 patterns/shared_default_mode_assign.rs	E0506:9
 patterns/single_variant_let_discard.rs	ok	0	"ok\n"
 patterns/single_variant_match_discard.rs	ok	0	"a\n"
+patterns/slice_length_test_element_borrowed.rs	ok	0	"1 [2, 2]\n"
+patterns/slice_length_test_whole_borrowed.rs	E0503:6
+patterns/slice_ref_parts.rs	ok	0	"[11, 2, 23]\n"
 patterns/struct_field_test_other_borrowed.rs	ok	0	"10 [1]\n"
 patterns/struct_field_test_while_borrowed.rs	E0503:8
 patterns/struct_subject_read_other_field.rs	ok	0	"2 2 2\n"
@@ -699,6 +706,20 @@ patterns/mutations/let_tuple_mut_ref_ended_t_6_mut_across.rs	E0502:7
 patterns/mutations/let_tuple_mut_ref_ended_t_6_mut_ended.rs	ok	0	"([1, 4], [2, 3])\n"
 patterns/mutations/let_tuple_mut_ref_ended_t_6_other_arm.rs	ok	0	"([1, 4], [2, 3])\n"
 patterns/mutations/let_tuple_mut_ref_ended_t_6_shared_across.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/match_arm_order_fake_edge_t_9_back_edge.rs	E0503:4 E0502:12
+patterns/mutations/match_arm_order_fake_edge_t_9_fresh_each_iteration.rs	E0503:4
+patterns/mutations/match_arm_order_fake_edge_t_9_into_branch.rs	E0503:4 E0502:10
+patterns/mutations/match_arm_order_fake_edge_t_9_mut_across.rs	E0503:4 E0502:10
+patterns/mutations/match_arm_order_fake_edge_t_9_mut_ended.rs	E0503:4
+patterns/mutations/match_arm_order_fake_edge_t_9_other_arm.rs	E0503:4
+patterns/mutations/match_arm_order_fake_edge_t_9_shared_across.rs	E0503:4
+patterns/mutations/match_arm_order_fine_t_9_back_edge.rs	E0502:12
+patterns/mutations/match_arm_order_fine_t_9_fresh_each_iteration.rs	ok	0	"(false, 1)\n(false, 1)\n"
+patterns/mutations/match_arm_order_fine_t_9_into_branch.rs	E0502:10
+patterns/mutations/match_arm_order_fine_t_9_mut_across.rs	E0502:10
+patterns/mutations/match_arm_order_fine_t_9_mut_ended.rs	ok	0	"(false, 1)\n"
+patterns/mutations/match_arm_order_fine_t_9_other_arm.rs	ok	0	"(false, 1)\n"
+patterns/mutations/match_arm_order_fine_t_9_shared_across.rs	ok	0	"(false, 1)\n"
 patterns/mutations/match_ref_mut_arm_conflict_o_11_back_edge.rs	E0502:5 E0502:14
 patterns/mutations/match_ref_mut_arm_conflict_o_11_fresh_each_iteration.rs	E0502:5
 patterns/mutations/match_ref_mut_arm_conflict_o_11_into_branch.rs	E0502:5 E0502:12
@@ -748,6 +769,20 @@ patterns/mutations/option_test_while_borrowed_o_9_mut_across.rs	E0503:4 E0502:10
 patterns/mutations/option_test_while_borrowed_o_9_mut_ended.rs	E0503:4
 patterns/mutations/option_test_while_borrowed_o_9_other_arm.rs	E0503:4
 patterns/mutations/option_test_while_borrowed_o_9_shared_across.rs	E0503:4
+patterns/mutations/or_ref_mut_conflict_p_9_back_edge.rs	E0506:5 E0502:12
+patterns/mutations/or_ref_mut_conflict_p_9_fresh_each_iteration.rs	E0506:5
+patterns/mutations/or_ref_mut_conflict_p_9_into_branch.rs	E0506:5 E0502:10
+patterns/mutations/or_ref_mut_conflict_p_9_mut_across.rs	E0506:5 E0502:10
+patterns/mutations/or_ref_mut_conflict_p_9_mut_ended.rs	E0506:5
+patterns/mutations/or_ref_mut_conflict_p_9_other_arm.rs	E0506:5
+patterns/mutations/or_ref_mut_conflict_p_9_shared_across.rs	E0506:5
+patterns/mutations/or_ref_mut_ended_p_9_back_edge.rs	E0502:12
+patterns/mutations/or_ref_mut_ended_p_9_fresh_each_iteration.rs	ok	0	"(Some(2), 5)\n(Some(2), 5)\n"
+patterns/mutations/or_ref_mut_ended_p_9_into_branch.rs	E0502:10
+patterns/mutations/or_ref_mut_ended_p_9_mut_across.rs	E0502:10
+patterns/mutations/or_ref_mut_ended_p_9_mut_ended.rs	ok	0	"(Some(2), 5)\n"
+patterns/mutations/or_ref_mut_ended_p_9_other_arm.rs	ok	0	"(Some(2), 5)\n"
+patterns/mutations/or_ref_mut_ended_p_9_shared_across.rs	ok	0	"(Some(2), 5)\n"
 patterns/mutations/ref_let_conflict_v_4_back_edge.rs	E0502:4 E0499:7
 patterns/mutations/ref_let_conflict_v_4_fresh_each_iteration.rs	E0502:5 E0502:7
 patterns/mutations/ref_let_conflict_v_4_into_branch.rs	E0502:4 E0499:5
@@ -825,6 +860,27 @@ patterns/mutations/shared_default_mode_assign_s_13_mut_across.rs	E0506:9 E0502:1
 patterns/mutations/shared_default_mode_assign_s_13_mut_ended.rs	E0506:9
 patterns/mutations/shared_default_mode_assign_s_13_other_arm.rs	E0506:9
 patterns/mutations/shared_default_mode_assign_s_13_shared_across.rs	E0506:9
+patterns/mutations/slice_length_test_element_borrowed_v_10_back_edge.rs	E0502:13
+patterns/mutations/slice_length_test_element_borrowed_v_10_fresh_each_iteration.rs	ok	0	"1 [2, 2]\n1 [2, 2]\n"
+patterns/mutations/slice_length_test_element_borrowed_v_10_into_branch.rs	E0502:11
+patterns/mutations/slice_length_test_element_borrowed_v_10_mut_across.rs	E0502:11
+patterns/mutations/slice_length_test_element_borrowed_v_10_mut_ended.rs	ok	0	"1 [2, 2]\n"
+patterns/mutations/slice_length_test_element_borrowed_v_10_other_arm.rs	ok	0	"1 [2, 2]\n"
+patterns/mutations/slice_length_test_element_borrowed_v_10_shared_across.rs	ok	0	"1 [2, 2]\n"
+patterns/mutations/slice_length_test_whole_borrowed_v_10_back_edge.rs	E0503:6 E0502:13
+patterns/mutations/slice_length_test_whole_borrowed_v_10_fresh_each_iteration.rs	E0503:6
+patterns/mutations/slice_length_test_whole_borrowed_v_10_into_branch.rs	E0503:6 E0502:11
+patterns/mutations/slice_length_test_whole_borrowed_v_10_mut_across.rs	E0503:6 E0502:11
+patterns/mutations/slice_length_test_whole_borrowed_v_10_mut_ended.rs	E0503:6
+patterns/mutations/slice_length_test_whole_borrowed_v_10_other_arm.rs	E0503:6
+patterns/mutations/slice_length_test_whole_borrowed_v_10_shared_across.rs	E0503:6
+patterns/mutations/slice_ref_parts_v_8_back_edge.rs	E0502:11
+patterns/mutations/slice_ref_parts_v_8_fresh_each_iteration.rs	ok	0	"[11, 2, 23]\n[11, 2, 23]\n"
+patterns/mutations/slice_ref_parts_v_8_into_branch.rs	E0502:9
+patterns/mutations/slice_ref_parts_v_8_mut_across.rs	E0502:9
+patterns/mutations/slice_ref_parts_v_8_mut_ended.rs	ok	0	"[11, 2, 23]\n"
+patterns/mutations/slice_ref_parts_v_8_other_arm.rs	ok	0	"[11, 2, 23]\n"
+patterns/mutations/slice_ref_parts_v_8_shared_across.rs	ok	0	"[11, 2, 23]\n"
 patterns/mutations/struct_field_test_other_borrowed_s_13_back_edge.rs	E0502:16
 patterns/mutations/struct_field_test_other_borrowed_s_13_fresh_each_iteration.rs	ok	0	"10 [1]\n10 [1]\n"
 patterns/mutations/struct_field_test_other_borrowed_s_13_into_branch.rs	E0502:14
