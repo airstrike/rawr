@@ -5,6 +5,7 @@
 //! reads `v[i]`, and `*x = ..` (or `x.push(..)`) writes it there.
 
 use super::*;
+use crate::engine::{KEYWORD_LOCATE, KEYWORD_THIS, KEYWORD_THROUGH};
 
 /// What a mutable loop walks: a `Vec`'s elements, or a map's values with
 /// or without their keys.
@@ -59,11 +60,11 @@ impl Parser<'_> {
 
     /// A use of `name` (declared at `declaration`) that reaches the local
     /// holding its place by that local's name: a `&mut` local that is the
-    /// place it borrows, or a `&mut` pattern binding written back into its
-    /// place. Once a new local shadows that name, the name reaches the new
-    /// local, which would be a wrong answer (T125), so the use is refused.
-    /// A `let r = &mut b;` whose `b` is shadowed ahead holds where `b` is
-    /// instead (`reborrow.rs`).
+    /// place it borrows. Once a new local shadows that name, the name
+    /// reaches the new local, which would be a wrong answer (T125), so the
+    /// use is refused. A `let r = &mut b;` whose `b` is shadowed ahead
+    /// holds where `b` is instead (`reborrow.rs`), as a `&mut` pattern
+    /// binding holds its part's path (`PlacePattern`).
     pub(super) fn reject_shadowed_root(
         &self,
         name: &str,
@@ -83,19 +84,7 @@ impl Parser<'_> {
                 let at = self.alias_roots.get(&declaration)?;
                 Some((lvalue.binding().clone(), *at))
             });
-        let written = self.write_backs.iter().find_map(|write_back| {
-            write_back
-                .bindings
-                .iter()
-                .any(|(bound, at)| bound == name && *at == declaration)
-                .then(|| write_back.root.clone())
-                .flatten()
-        });
-        match alias
-            .into_iter()
-            .chain(written)
-            .find(|(root, at)| moved(root, *at))
-        {
+        match alias.filter(|(root, at)| moved(root, *at)) {
             Some((root, _)) => Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "a borrow of `{root}` used after a new local named `{root}` shadows it: \
@@ -130,6 +119,63 @@ impl Parser<'_> {
         );
         self.note_alias_root(declaration, lvalue.binding());
         self.aliases.insert(name, (declaration, lvalue));
+    }
+
+    /// `name` (declared at `declaration`, of type `ty`) is a `&mut` borrow
+    /// of the place whose path the runtime local `holder` holds
+    /// (`place_located`): each use reaches it there, though a new local
+    /// takes the name of the place's local.
+    pub(super) fn borrow_located(
+        &mut self,
+        name: ImmutableString,
+        declaration: Span,
+        ty: Ty,
+        holder: &str,
+    ) {
+        self.bindings.insert(
+            name.clone(),
+            Binding {
+                ty,
+                mutable: false,
+                available: true,
+                moved_fields: Default::default(),
+                declaration,
+                kind: BindingKind::Local,
+            },
+        );
+        self.alias_through(name, declaration, holder);
+    }
+
+    /// `name` (declared at `declaration`) is the place whose path, or whose
+    /// local's slot, the runtime local `holder` holds.
+    fn alias_through(&mut self, name: ImmutableString, declaration: Span, holder: &str) {
+        let place = origin::Fragment::plain(format!("{KEYWORD_THROUGH}{holder}"));
+        let lvalue = Lvalue::Place {
+            binding: name.clone(),
+            ty: Ty::Unknown,
+            place,
+        };
+        self.aliases.insert(name.clone(), (declaration, lvalue));
+        self.alias_by_itself(&name);
+    }
+
+    /// Whether the body being read is an async one, whose locals move
+    /// between scopes at each `.await`, so where a local is doesn't last.
+    pub(super) fn in_async_body(&self) -> bool {
+        self.closures.last().is_some_and(|scope| scope.asynchronous)
+    }
+
+    /// The alias `name` reaches its place by where its local is, not by the
+    /// local's name, which a new local may take: the place's local was
+    /// checked mutable when it was borrowed, and a write through the alias
+    /// needs only the `&mut` it is, so the alias is its own local.
+    fn alias_by_itself(&mut self, name: &ImmutableString) {
+        if let Some((_, Lvalue::Place { binding, .. })) = self.aliases.get_mut(name) {
+            *binding = name.clone();
+        }
+        if let Some(binding) = self.bindings.get_mut(name) {
+            binding.mutable = true;
+        }
     }
 
     /// `name` (declared at `declaration`) is a `&mut` borrow of `place` in
@@ -172,7 +218,9 @@ impl Parser<'_> {
             .any(|scope| scope.outer.get(name) == Some(&declaration))
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a closure using an element of a mutable loop".into(),
+                construct: "a closure using a `&mut` borrow of a place, such as a mutable loop's \
+                            element or a `&mut` pattern binding"
+                    .into(),
                 source: span,
             });
         }
@@ -459,17 +507,27 @@ impl Parser<'_> {
             target: Box::new(ty),
         };
         let mut head = String::new();
+        // When a `let` ahead shadows the local walked, each iteration takes
+        // where the local is first, and the element is reached from there.
+        let shadowed = !self.in_async_body() && self.root_shadowed_later(&root);
+        let base = if shadowed {
+            let holder = self.temporary("walked");
+            head += &format!("let {holder} = {}{root}; ", crate::engine::KEYWORD_SLOT_OF);
+            format!("{KEYWORD_THROUGH}{holder}")
+        } else {
+            root.clone()
+        };
         let (element_place, element_ty, first, first_ty) = match walk {
             Walk::Elements { element, enumerate } => (
-                format!("{root}[{index}]"),
+                format!("{base}[{index}]"),
                 mutable(element),
                 enumerate.then(|| index.clone()),
                 Ty::Int(Int::Usize),
             ),
             Walk::Values { key, value, keys } => (
-                format!("{root}[{index}][1]"),
+                format!("{base}[{index}][1]"),
                 mutable(value),
-                keys.then(|| format!("{root}[{index}][0]")),
+                keys.then(|| format!("{base}[{index}][0]")),
                 shared(key),
             ),
         };
@@ -533,15 +591,19 @@ impl Parser<'_> {
         };
         if let Some((name, declaration)) = element {
             self.alias_element(
-                name,
+                name.clone(),
                 declaration,
                 element_ty.clone(),
                 origin::Fragment::plain(element_place.clone()),
                 owner.clone(),
             );
+            // Reached by where the local is, the element outlives its name.
+            if shadowed {
+                self.alias_roots.remove(&declaration);
+                self.alias_by_itself(&name);
+            }
         }
         let mut head = origin::Fragment::plain(head);
-        let write_backs = self.write_backs.len();
         if let Some(parts) = parts {
             let target = match &element_ty {
                 Ty::Reference { target, .. } => (**target).clone(),
@@ -578,7 +640,6 @@ impl Parser<'_> {
             self.last_expression = last_expression;
             if let Err(error) = bound {
                 self.bindings = outer;
-                self.write_backs.truncate(write_backs);
                 return Err(error);
             }
             head.push(statement);
@@ -594,7 +655,6 @@ impl Parser<'_> {
         };
         let wrap = Some((head, origin::Fragment::default()));
         let looped = self.parse_loop_body(header, start, label, false, wrap, Some(&outer));
-        self.write_backs.truncate(write_backs);
         let inner = std::mem::replace(&mut self.bindings, outer);
         self.aliases = outer_aliases;
         self.keep_moves_from(&inner);
@@ -603,9 +663,9 @@ impl Parser<'_> {
 
     /// `Some(&mut v[slot])`, or `None` when `locate` sets `slot` below 0:
     /// what `v.get_mut(i)` and `v.iter_mut().find(f)` are. The value has
-    /// the element's place, which a pattern's `&mut` binding writes back
-    /// (`pattern_write_back`). `slot` is a local declared before the
-    /// statement; `locate` sets it each time the value is evaluated.
+    /// the element's place, which a pattern's `&mut` binding reaches
+    /// (`pattern_place`). `slot` is a local declared before the statement;
+    /// `locate` sets it each time the value is evaluated.
     pub(super) fn optional_element(
         &mut self,
         value: &ParsedExpr,
@@ -678,6 +738,9 @@ impl Parser<'_> {
         element_at.push_text(format!("[{slot}]{member}"));
         let some = self.prelude_op(PreludeOp::Some, [element_at]);
         let none = self.prelude_op(PreludeOp::None, []);
+        let missing = origin::Fragment::plain(format!("{slot} < 0"));
+        self.optional_subjects
+            .insert(expression, (locate.clone(), missing));
         let mut source = origin::Fragment::plain("{ ");
         source.push(locate);
         source.push_text(format!("if {slot} < 0 {{ "));
@@ -970,6 +1033,463 @@ impl Parser<'_> {
             output,
             span,
         )))
+    }
+}
+
+/// A pattern with `&mut` bindings matched on a place: `match &mut p`,
+/// `Some(ref mut v)`, `if let Some(x) = v.get_mut(i)`. Rawr has no
+/// references at runtime, so the scrutinee holds the place's path
+/// (`KEYWORD_LOCATE`), the switch matches the place where it is, and each
+/// `&mut` binding holds the path of its part. A use of the binding is
+/// `__rawr_through_` of that path, which the evaluator resolves to the part
+/// itself, so nothing is copied out of the place or written back.
+pub(super) struct PlacePattern {
+    /// The scrutinee's value: the place's path, or for `Some(&mut place)`
+    /// (`optional`), `()` for `None`.
+    pub(super) locate: origin::Fragment,
+    optional: bool,
+    /// Each `&mut` binding's name and declaration, and the runtime local
+    /// holding its part's path, which no `let` of the script shadows.
+    parts: Vec<(ImmutableString, Span, ImmutableString)>,
+    /// A place behind a borrow guard, which each use of a binding reaches
+    /// through the guard again: the path is that of a copy of the guard's
+    /// target, matched once.
+    guard: Option<NestedLvalue>,
+}
+
+impl PlacePattern {
+    /// Whether the subject is `Some(&mut place)`.
+    pub(super) fn optional(&self) -> bool {
+        self.optional
+    }
+
+    /// What the switch is on: the place, through the scrutinee's path.
+    pub(super) fn operand(&self, scrutinee: &str) -> String {
+        let through = if self.optional {
+            crate::engine::KEYWORD_SOME_THROUGH
+        } else {
+            KEYWORD_THROUGH
+        };
+        format!("{through}{scrutinee}")
+    }
+
+    /// The runtime name of the binding `name` declared at `at`.
+    pub(super) fn runtime_name(
+        place: Option<&Self>,
+        name: &ImmutableString,
+        at: Span,
+    ) -> ImmutableString {
+        place
+            .and_then(|place| {
+                place
+                    .parts
+                    .iter()
+                    .find(|(bound, declaration, _)| bound == name && *declaration == at)
+            })
+            .map_or_else(|| name.clone(), |(_, _, holder)| holder.clone())
+    }
+}
+
+/// The local a place's chain starts at, as `__rawr_locate`'s root: a local
+/// holding a path or a slot (`__rawr_through_x`), or a local by where it
+/// is (`-1` for the receiver). An async body's locals move between scopes
+/// at each `.await`, so there (`by_name`) a local is found by its name.
+/// `None` for a chain that starts at something else.
+fn located_root(base: &str, by_name: bool) -> Option<String> {
+    let local = base.split('[').next()?;
+    if let Some(holder) = local.strip_prefix(KEYWORD_THROUGH) {
+        return Some(holder.to_string());
+    }
+    let named = !local.is_empty()
+        && local
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_');
+    if !named {
+        return None;
+    }
+    Some(if by_name && local != KEYWORD_THIS {
+        format!("{local:?}")
+    } else {
+        format!("{}{local}", crate::engine::KEYWORD_SLOT_OF)
+    })
+}
+
+impl Parser<'_> {
+    /// For a pattern matched on a `&mut` place, or on a place whose pattern
+    /// binds `ref mut`: the place's path and the bindings reaching parts of
+    /// it, with each such binding of `proof` made a [`NominalPattern::Part`]
+    /// held by a runtime local of its own. `None` for another subject, or
+    /// no such binding.
+    pub(super) fn pattern_place(
+        &mut self,
+        subject: &ParsedExpr,
+        proof: &mut NominalPattern,
+        bindings: &[PatternBinding],
+    ) -> Result<Option<PlacePattern>, Error> {
+        let borrowed = matches!(
+            self.inference.resolve(&subject.ty),
+            Ty::Reference { mutable: true, .. }
+        );
+        if !borrowed && subject.lvalue.is_none() {
+            return Ok(None);
+        }
+        let mut parts = Vec::new();
+        for binding in bindings {
+            if matches!(
+                self.inference.resolve(&binding.ty),
+                Ty::Reference { mutable: true, .. }
+            ) {
+                let holder = self.temporary("part").into();
+                parts.push((binding.name.clone(), binding.span, holder));
+            }
+        }
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        // `match self` in a `&mut self` method matches the receiver.
+        let receiver = subject.lvalue.is_none()
+            && self.closures.is_empty()
+            && subject.source.as_str() == "this"
+            && self.bindings.get("this").is_some_and(|binding| {
+                binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+            });
+        let lvalue = if receiver {
+            Lvalue::Binding {
+                binding: "this".into(),
+                ty: Ty::Unknown,
+            }
+        } else {
+            match subject.lvalue.clone() {
+                Some(lvalue) => lvalue,
+                None => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "binding parts of a `&mut` value that is not a local, a \
+                                    field or an element"
+                            .into(),
+                        source: subject.span,
+                    })
+                }
+            }
+        };
+        self.require_mutable_binding(&lvalue.binding().clone(), subject.span)?;
+        // `Some(&mut place)` (`optional_element`): the pattern's `Some` is
+        // matched on the place.
+        let optional = !borrowed
+            && matches!(
+                self.inference.resolve(&subject.ty),
+                Ty::Option(inner) if matches!(*inner, Ty::Reference { mutable: true, .. })
+            );
+        let unreached = |source: Span| Error::UnsupportedNominalSyntax {
+            construct: "a `&mut` pattern binding of a place not reached from a local, or \
+                        through a `RefCell` borrowed below its start: not supported in Rawr yet"
+                .into(),
+            source,
+        };
+        // A range of elements is matched by a slice pattern, not bound whole.
+        if matches!(lvalue, Lvalue::Slice(_))
+            && !matches!(proof, NominalPattern::Slice { .. } | NominalPattern::Or(_))
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a `&mut` binding of a whole range of elements: not supported in \
+                            Rawr yet"
+                    .into(),
+                source: subject.span,
+            });
+        }
+        // A place behind a borrow guard (a `RefCell` borrow, an imported
+        // method's guard, a facade accessor) is reached only through the
+        // guard, which rawr can't keep: each use of a binding goes through
+        // the guard again, and the pattern is matched on a copy of the
+        // guard's target.
+        let mut guard = match &lvalue {
+            Lvalue::Nested(nested)
+                if nested.steps.iter().any(|step| {
+                    matches!(step, PlaceStep::Cell { .. } | PlaceStep::Accessor { .. })
+                }) =>
+            {
+                Some((**nested).clone())
+            }
+            _ => None,
+        };
+        let located = match &mut guard {
+            Some(guarded) => self
+                .guarded_located(guarded)
+                .ok_or_else(|| unreached(subject.span))?,
+            None => self
+                .place_located(&lvalue)
+                .ok_or_else(|| unreached(subject.span))?,
+        };
+        let locate = if optional {
+            let (find, none) = self
+                .optional_subjects
+                .get(&subject.span)
+                .cloned()
+                .ok_or_else(|| unreached(subject.span))?;
+            let mut locate = origin::Fragment::plain("{ ");
+            locate.push(find);
+            locate.push_text("if ");
+            locate.push(none);
+            locate.push_text(" { () } else { ");
+            locate.push(located);
+            locate.push_text(" } }");
+            locate
+        } else {
+            located
+        };
+        if let Err(construct) = mark_parts(proof, &parts, false) {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!("{construct}: not supported in Rawr yet").into(),
+                source: subject.span,
+            });
+        }
+        Ok(Some(PlacePattern {
+            locate,
+            optional,
+            parts,
+            guard,
+        }))
+    }
+
+    /// The path of a copy of the target behind a borrow guard (`nested`),
+    /// read through the guard once, for a pattern to be matched on. A
+    /// `RefCell` borrow the place starts with is made once and held to the
+    /// statement's end, as Rust holds it while the pattern's bindings live:
+    /// `nested` becomes the place through that held borrow, which each use
+    /// of a binding reaches. `None` for a borrow made below the place's
+    /// start, which each use would make again.
+    fn guarded_located(&mut self, nested: &mut NestedLvalue) -> Option<origin::Fragment> {
+        let copy = self.temporary("guarded");
+        let mut before = format!("let {copy} = (); ");
+        let mut after = String::new();
+        let mut located = origin::Fragment::plain("{ ");
+        if let Some(PlaceStep::Cell {
+            release: release @ true,
+            ..
+        }) = nested.steps.first_mut()
+        {
+            let (held, made) = (self.temporary("held"), self.temporary("made"));
+            let release_op = self.push_op(Op::Prelude(PreludeOp::CellRelease));
+            before += &format!("let {held} = (); let {made} = false; ");
+            after = format!("if {made} {{ {release_op}({held}); }} ");
+            located.push_text(format!("{held} = "));
+            located.push(std::mem::replace(
+                &mut nested.base,
+                origin::Fragment::plain(held.as_str()),
+            ));
+            located.push_text(format!("; {made} = true; "));
+            *release = false;
+        }
+        if nested
+            .steps
+            .iter()
+            .any(|step| matches!(step, PlaceStep::Cell { release: true, .. }))
+        {
+            return None;
+        }
+        self.field_entries.push((
+            origin::Fragment::plain(before),
+            origin::Fragment::plain(after),
+        ));
+        let (read, place, store) = self.nested_parts(nested);
+        let root = located_root(&copy, self.in_async_body()).expect("a local's name");
+        located.push(read);
+        located.push_text(format!("{copy} = "));
+        located.push(place);
+        located.push_text("; ");
+        located.push(store);
+        located.push_text(format!("{KEYWORD_LOCATE}({copy}, {root}) }}"));
+        Some(located)
+    }
+
+    /// The path of the place `lvalue` (`KEYWORD_LOCATE`): the chain of
+    /// indexes reaching it below its local, a struct's field by its slot,
+    /// a function's `&mut` output by the path the function gives, and a
+    /// range of elements last. `None` for a place no path reaches.
+    pub(super) fn place_located(&mut self, lvalue: &Lvalue) -> Option<origin::Fragment> {
+        let (mut chain, steps, range) = match lvalue {
+            Lvalue::Binding { binding, .. } => {
+                (origin::Fragment::plain(binding.as_str()), &[][..], None)
+            }
+            Lvalue::Place { place, .. } => (place.clone(), &[][..], None),
+            Lvalue::Field(field) => (
+                origin::Fragment::plain(format!("{}[{}]", field.binding, field.slot)),
+                &[][..],
+                None,
+            ),
+            Lvalue::Nested(nested) => (nested.base.clone(), &nested.steps[..], None),
+            Lvalue::Slice(slice) => (slice.base.clone(), &[][..], Some(&**slice)),
+        };
+        let by_name = self.in_async_body();
+        let mut root = located_root(chain.as_str(), by_name)?;
+        let mut located = origin::Fragment::plain("{ ");
+        let index = |chain: &mut origin::Fragment, index: origin::Fragment| {
+            chain.push_text("[");
+            chain.push(index);
+            chain.push_text("]");
+        };
+        for step in steps {
+            match step {
+                PlaceStep::Field { slot, .. } | PlaceStep::Member(slot) => {
+                    index(&mut chain, slot.to_string().into());
+                }
+                PlaceStep::Index(at)
+                | PlaceStep::Path {
+                    path: at,
+                    call: None,
+                } => {
+                    index(&mut chain, at.clone());
+                }
+                // The call is made on the place it borrows, reached by its
+                // path, and gives the path below it.
+                PlaceStep::Path {
+                    path,
+                    call: Some((before, after)),
+                } => {
+                    let reached = self.temporary("reached");
+                    located.push_text(format!("let {reached} = {KEYWORD_LOCATE}("));
+                    located.push(chain);
+                    located.push_text(format!(", {root}); let {} = ", path.as_str()));
+                    located.push(before.clone());
+                    located.push_text(format!("{KEYWORD_THROUGH}{reached}"));
+                    located.push(after.clone());
+                    located.push_text("; ");
+                    chain = origin::Fragment::plain(format!("{KEYWORD_THROUGH}{reached}"));
+                    index(&mut chain, path.clone());
+                    root = reached;
+                }
+                PlaceStep::Setup(setup) => {
+                    located.push(setup.clone());
+                    located.push_text(" ");
+                }
+                PlaceStep::Accessor { .. } | PlaceStep::Cell { .. } => return None,
+            }
+        }
+        if let Some(range) = range {
+            let mut bounds = range.low.clone();
+            bounds.push_text(if range.inclusive { "..=" } else { ".." });
+            bounds.push(range.high.clone());
+            index(&mut chain, bounds);
+        }
+        located.push_text(format!("{KEYWORD_LOCATE}("));
+        located.push(chain);
+        located.push_text(format!(", {root}) }}"));
+        Some(located)
+    }
+
+    /// Each `&mut` binding of a place pattern is a `&mut` local that is
+    /// its part: a use reaches the part through the path its holder holds.
+    pub(super) fn bind_parts(&mut self, place: &PlacePattern) {
+        for (name, declaration, holder) in &place.parts {
+            let Some(guard) = &place.guard else {
+                self.alias_through(name.clone(), *declaration, holder);
+                continue;
+            };
+            // Below the guard's target: the path past the copy's local.
+            let step = PlaceStep::Path {
+                path: origin::Fragment::plain(format!("{holder}.extract(1)")),
+                call: None,
+            };
+            let guarded = Lvalue::Nested(Box::new(guard.clone()));
+            let lvalue = place_step(&guarded, step, Ty::Unknown);
+            self.note_alias_root(*declaration, lvalue.binding());
+            self.aliases.insert(name.clone(), (*declaration, lvalue));
+        }
+    }
+
+    /// A match's catch-all `&mut` binding `name` (declared at
+    /// `declaration`) of the whole place, whose path `scrutinee` holds.
+    pub(super) fn bind_whole(
+        &mut self,
+        place: &PlacePattern,
+        name: ImmutableString,
+        declaration: Span,
+        scrutinee: &str,
+    ) {
+        match &place.guard {
+            Some(guard) => {
+                self.note_alias_root(declaration, &guard.binding);
+                let lvalue = Lvalue::Nested(Box::new(guard.clone()));
+                self.aliases.insert(name, (declaration, lvalue));
+            }
+            None => self.alias_through(name, declaration, scrutinee),
+        }
+    }
+}
+
+/// Make each binding of `pattern` that `parts` names a `Part` held by its
+/// runtime local, or what refuses that: a binding in a slice's rest (`rest`
+/// is whether `pattern` is in one), a copy no path reaches.
+fn mark_parts(
+    pattern: &mut NominalPattern,
+    parts: &[(ImmutableString, Span, ImmutableString)],
+    rest: bool,
+) -> Result<(), &'static str> {
+    let holder = |name: &ImmutableString| {
+        parts
+            .iter()
+            .find(|(bound, ..)| bound == name)
+            .map(|(.., holder)| holder.clone())
+    };
+    match pattern {
+        NominalPattern::Binding { name, expected } => {
+            let Some(holder) = holder(name) else {
+                return Ok(());
+            };
+            if rest {
+                return Err("a `&mut` binding in a slice pattern's `..` rest");
+            }
+            *pattern = NominalPattern::Part {
+                name: holder,
+                expected: expected.clone(),
+            };
+            Ok(())
+        }
+        NominalPattern::At {
+            name,
+            pattern,
+            part,
+        } => {
+            if let Some(holder) = holder(name) {
+                if rest {
+                    return Err("a `&mut` binding in a slice pattern's `..` rest");
+                }
+                *name = holder;
+                *part = true;
+            }
+            mark_parts(pattern, parts, rest)
+        }
+        NominalPattern::Part { .. }
+        | NominalPattern::Discard { .. }
+        | NominalPattern::Literal(_)
+        | NominalPattern::Range { .. }
+        | NominalPattern::Option(None) => Ok(()),
+        NominalPattern::Option(Some(child)) | NominalPattern::Result(Ok(child) | Err(child)) => {
+            mark_parts(child, parts, rest)
+        }
+        NominalPattern::Enum(child) => child
+            .payload
+            .iter_mut()
+            .try_for_each(|child| mark_parts(child, parts, rest)),
+        NominalPattern::Tuple(members) | NominalPattern::Struct(members) => members
+            .iter_mut()
+            .try_for_each(|member| mark_parts(member, parts, rest)),
+        NominalPattern::Slice {
+            before,
+            rest: middle,
+            after,
+        } => {
+            before
+                .iter_mut()
+                .chain(after.iter_mut())
+                .try_for_each(|member| mark_parts(member, parts, rest))?;
+            match middle {
+                Some(middle) => mark_parts(middle, parts, true),
+                None => Ok(()),
+            }
+        }
+        NominalPattern::Or(alternatives) => alternatives
+            .iter_mut()
+            .try_for_each(|alternative| mark_parts(alternative, parts, rest)),
     }
 }
 
@@ -1410,6 +1930,20 @@ impl Parser<'_> {
                 let (read, place, store) = self.nested_parts(&as_nested(receiver));
                 let unwrapped = self.prelude_op(PreludeOp::Unwrap, [path.as_str().into()]);
                 let test = self.prelude_op(PreludeOp::IsSome, [path.as_str().into()]);
+                // A pattern matching the value calls the function on the
+                // receiver where it is, and reaches the path it gives.
+                if let Some(located) = self.place_located(receiver) {
+                    let reached = self.temporary("reached");
+                    let mut find = origin::Fragment::plain(format!("let {reached} = "));
+                    find.push(located);
+                    find.push_text(format!("; {path} = "));
+                    find.push(before.clone());
+                    find.push_text(format!("{KEYWORD_THROUGH}{reached}"));
+                    find.push(after.clone());
+                    find.push_text("; ");
+                    let missing = test.clone().surrounded("!(", ")");
+                    self.optional_subjects.insert(expression, (find, missing));
+                }
                 let getter = self.push_op(Op::Prelude(PreludeOp::PathGet));
                 let mut element = place.clone();
                 element.push_text(format!(".{getter}("));

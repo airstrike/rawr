@@ -541,7 +541,7 @@ impl Engine {
     }
 
     /// Evaluate a chain of indexes and store the results in a [`FnArgsVec`].
-    fn eval_dot_index_chain_arguments(
+    pub(crate) fn eval_dot_index_chain_arguments(
         &self,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,

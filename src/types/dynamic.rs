@@ -1882,6 +1882,26 @@ impl Dynamic {
             _ => None,
         }
     }
+    /// The part at `index` of a value made of parts, in place: an array's
+    /// element (a `Vec`'s, a tuple's), a struct's field, an enum's payload
+    /// value, or at `0` an option's `Some` value or a result's value.
+    /// `None` for another value, a shared one, or an index past its parts.
+    #[must_use]
+    pub(crate) fn part_mut(&mut self, index: usize) -> Option<&mut Self> {
+        match self.0 {
+            Union::Array(ref mut array, ..) => return array.get_mut(index),
+            Union::Struct(ref mut value, ..) => return value.fields_mut().get_mut(index),
+            Union::Enum(ref mut value, ..) => return value.payload_mut().get_mut(index),
+            _ if index != 0 => return None,
+            _ => {}
+        }
+        if self.is::<crate::option::Value>() {
+            return self.downcast_mut::<crate::option::Value>()?.as_mut();
+        }
+        match self.downcast_mut::<crate::result::Value>()? {
+            Ok(value) | Err(value) => Some(value),
+        }
+    }
 
     /// Return `true` if the [`Dynamic`] holds a `()`.
     ///

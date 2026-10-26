@@ -52,7 +52,7 @@ impl Parser<'_> {
     /// referent is, and whether it is another such local's. `None` where a
     /// new borrow can't be held yet.
     pub(super) fn reborrow_source(&self, value: &ParsedExpr) -> Option<(String, bool)> {
-        if self.closures.last().is_some_and(|scope| scope.asynchronous) {
+        if self.in_async_body() {
             return None;
         }
         let root = match value.lvalue.as_ref()? {
@@ -101,13 +101,18 @@ impl Parser<'_> {
     /// which would then reach the new one (T125), so it holds where the
     /// local is instead, as one given new borrows does.
     pub(super) fn shadowed_later(&self, value: &ParsedExpr) -> bool {
-        let root = match value.lvalue.as_ref() {
-            Some(Lvalue::Binding { binding, .. }) => binding,
+        match value.lvalue.as_ref() {
+            Some(Lvalue::Binding { binding, .. }) => self.root_shadowed_later(binding),
             Some(Lvalue::Place { binding, place, .. }) if place.as_str() == binding.as_str() => {
-                binding
+                self.root_shadowed_later(binding)
             }
-            _ => return false,
-        };
+            _ => false,
+        }
+    }
+
+    /// Whether a `let` or a `for` ahead, before the block ends, binds the
+    /// name `root`.
+    pub(super) fn root_shadowed_later(&self, root: &str) -> bool {
         let mut ahead = self.input.clone();
         let mut depth = 0usize;
         // The depth of the pattern of a `let` or a `for` being read.
@@ -138,7 +143,7 @@ impl Parser<'_> {
                 Token::Equals | Token::SemiColon | Token::In | Token::Else => pattern = None,
                 Token::Colon if pattern == Some(0) => pattern = None,
                 Token::Identifier(identifier)
-                    if identifier.as_str() == root.as_str()
+                    if identifier.as_str() == root
                         && !matches!(previous, Token::Period | Token::DoubleColon)
                         && !matches!(
                             ahead.peek(),
@@ -445,6 +450,61 @@ mod tests {
         assert_eq!(
             through_copies, named_copies,
             "a copy stood in for the borrow"
+        );
+
+        // A pattern's `&mut` bindings reach their parts of the place: `ref
+        // mut` and default binding modes, through `Option`, a tuple and
+        // `get_mut`, pushing into a 4000-element `Vec` of `Tally`.
+        let (bound, bound_copies) = copies(
+            "let mut slot = Some(Vec::new());
+            let mut pair = (Tally::new(), 0);
+            let mut all = vec![Tally::new()];
+            for n in 0..4000 {
+                match slot {
+                    Some(ref mut v) => v.push(Tally::new()),
+                    None => {}
+                }
+                if let Some(v) = &mut slot {
+                    v.push(Tally::new());
+                }
+                match &mut pair {
+                    (t, count) => {
+                        t.add(n);
+                        *count += 1;
+                    }
+                }
+                if let Some(t) = all.get_mut(0) {
+                    t.add(1);
+                }
+            }
+            let len = match &mut slot {
+                Some(v) => v.len() as i64,
+                None => 0,
+            };
+            len * 1000000000 + pair.0.total() * 10 + pair.1 + all[0].total() * 100000",
+        );
+        let (named, named_copies) = copies(
+            "let mut v = Vec::new();
+            let mut t = Tally::new();
+            let mut count = 0;
+            let mut all = vec![Tally::new()];
+            for n in 0..4000 {
+                v.push(Tally::new());
+                v.push(Tally::new());
+                t.add(n);
+                count += 1;
+                all[0].add(1);
+            }
+            v.len() as i64 * 1000000000 + t.total() * 10 + count + all[0].total() * 100000",
+        );
+        assert_eq!(
+            bound,
+            8000 * 1000000000 + 7998000 * 10 + 4000 + 4000 * 100000
+        );
+        assert_eq!(named, bound);
+        assert_eq!(
+            bound_copies, named_copies,
+            "a copy stood in for a pattern's `&mut` binding"
         );
     }
 }

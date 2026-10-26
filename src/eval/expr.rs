@@ -182,7 +182,9 @@ impl Engine {
     /// `__rawr_slot_of_b`, where the local `b` is (its index in the scope,
     /// or `-1` for `this`), and `__rawr_through_r`, the local itself that
     /// the index `r` holds names: the place, written through, not a copy.
-    fn search_place<'s>(
+    /// `r` may hold a path instead, `[slot, part, ..]`, and the place is
+    /// then the part each step reaches below that local (`KEYWORD_LOCATE`).
+    pub(crate) fn search_place<'s>(
         scope: &'s mut Scope,
         this_ptr: Option<&'s mut Dynamic>,
         name: &str,
@@ -201,15 +203,76 @@ impl Engine {
         }
         let holder = name.strip_prefix(KEYWORD_THROUGH).unwrap_or(name);
         let index = scope.search(holder).ok_or_else(|| missing(holder))?;
-        let slot = scope
-            .get_mut_by_index(index)
-            .as_int()
-            .map_err(|_| missing(name))?;
-        match usize::try_from(slot) {
-            Ok(slot) if slot < scope.len() => scope.get_mut_by_index(slot).try_into(),
-            Ok(_) => Err(missing(name)),
-            Err(_) => this_ptr.ok_or_else(|| missing(KEYWORD_THIS))?.try_into(),
+        let (root, steps) =
+            Self::held_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
+        Self::place_at(scope, this_ptr, &root, &steps, name, expr)?.try_into()
+    }
+
+    /// The place `root` (a local's slot, `-1` for `this`, or in an async
+    /// body the local's name) then `steps` reach, itself. `name` is what
+    /// reached it, for an error.
+    pub(crate) fn place_at<'s>(
+        scope: &'s mut Scope,
+        this_ptr: Option<&'s mut Dynamic>,
+        root: &Dynamic,
+        steps: &[usize],
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<&'s mut Dynamic> {
+        let missing = |name: &str| -> crate::RawrError {
+            ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
+        };
+        let slot = match root.as_int() {
+            Ok(slot) => slot,
+            // An async body's locals move between scopes at each `.await`,
+            // so a place there is found by its local's name.
+            Err(_) => {
+                let local =
+                    (root.read_lock::<crate::ImmutableString>()).ok_or_else(|| missing(name))?;
+                scope.search(&local).ok_or_else(|| missing(&local))? as crate::INT
+            }
+        };
+        let mut place = match usize::try_from(slot) {
+            Ok(slot) if slot < scope.len() => scope.get_mut_by_index(slot),
+            Ok(_) => return Err(missing(name)),
+            Err(_) => this_ptr.ok_or_else(|| missing(KEYWORD_THIS))?,
+        };
+        for &step in steps {
+            if let Ok(array) = place.as_array_ref()
+                && step >= array.len()
+            {
+                let length = array.len();
+                return Err(
+                    ERR::ErrorArrayBounds(length, step as crate::INT, expr.position()).into(),
+                );
+            }
+            place = place.part_mut(step).ok_or_else(|| missing(name))?;
         }
+        Ok(place)
+    }
+
+    /// What a local naming a place holds: where the local is and the parts
+    /// below it, or `None` for another value.
+    pub(crate) fn held_path(held: &Dynamic) -> Option<(Dynamic, crate::StaticVec<usize>)> {
+        if held.is_int() {
+            return Some((held.clone(), crate::StaticVec::new_const()));
+        }
+        Self::path_parts(&held.as_array_ref().ok()?)
+    }
+
+    /// A place's path, `[root, part, ..]`, as where its local is (its slot,
+    /// `-1` for `this`, or its name) and the parts below it.
+    pub(crate) fn path_parts(path: &[Dynamic]) -> Option<(Dynamic, crate::StaticVec<usize>)> {
+        let (root, steps) = path.split_first()?;
+        let steps = steps
+            .iter()
+            .map(|step| {
+                step.as_int()
+                    .ok()
+                    .and_then(|step| usize::try_from(step).ok())
+            })
+            .collect::<Option<_>>()?;
+        Some((root.clone(), steps))
     }
 
     /// Search for a variable within the scope or within imports,

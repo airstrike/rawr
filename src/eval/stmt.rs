@@ -26,11 +26,35 @@ fn matches_nominal_payload_type(value: &Dynamic, expected: &NominalPayloadType) 
     }
 }
 
+/// What a pattern binds as it is matched: each binding's value, and the
+/// path from the place matched to the value being matched now, which a
+/// `&mut` binding of a place takes (`NominalPattern::Part`).
+struct Collected<'a> {
+    bindings: &'a mut Vec<(ImmutableString, Dynamic)>,
+    path: crate::Array,
+}
+
+impl Collected<'_> {
+    /// Match the part at `index` of the value being matched.
+    fn part(
+        &mut self,
+        index: usize,
+        value: &Dynamic,
+        pattern: &NominalPattern,
+        shape: &dyn Fn() -> String,
+    ) -> Result<bool, String> {
+        self.path.push(Dynamic::from_int(index as INT));
+        let matched = collect_nominal(value, pattern, false, self, shape);
+        self.path.pop();
+        matched
+    }
+}
+
 fn collect_nominal_pattern_bindings(
     value: &Dynamic,
     pattern: &NominalEnumPattern,
     root: bool,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
+    collected: &mut Collected,
 ) -> Result<bool, String> {
     let Union::Enum(nominal, ..) = &value.0 else {
         return if root {
@@ -83,31 +107,26 @@ fn collect_nominal_pattern_bindings(
         ));
     }
 
-    let original_bindings = bindings.len();
-    for (value, child) in nominal.payload().iter().zip(pattern.payload.iter()) {
-        let shape = || {
-            format!(
-                "nominal enum '{}::{}' payload no longer matches its proven shape",
-                pattern.enum_name, pattern.variant
-            )
-        };
-        if !collect_nominal_child(value, child, bindings, shape)? {
-            bindings.truncate(original_bindings);
+    let original_bindings = collected.bindings.len();
+    let shape = || {
+        format!(
+            "nominal enum '{}::{}' payload no longer matches its proven shape",
+            pattern.enum_name, pattern.variant
+        )
+    };
+    for (index, (value, child)) in nominal
+        .payload()
+        .iter()
+        .zip(pattern.payload.iter())
+        .enumerate()
+    {
+        if !collected.part(index, value, child, &shape)? {
+            collected.bindings.truncate(original_bindings);
             return Ok(false);
         }
     }
 
     Ok(true)
-}
-
-/// Match one payload `value` against `child`, binding what it names.
-fn collect_nominal_child(
-    value: &Dynamic,
-    child: &NominalPattern,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
-    shape: impl Fn() -> String,
-) -> Result<bool, String> {
-    collect_nominal(value, child, false, bindings, &shape)
 }
 
 /// Match `value` against `pattern`. A value of the wrong shape is a stale
@@ -116,7 +135,7 @@ fn collect_nominal(
     value: &Dynamic,
     pattern: &NominalPattern,
     root: bool,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
+    collected: &mut Collected,
     shape: &dyn Fn() -> String,
 ) -> Result<bool, String> {
     let mismatch = || if root { Ok(false) } else { Err(shape()) };
@@ -125,7 +144,16 @@ fn collect_nominal(
             if !matches_nominal_payload_type(value, expected) {
                 return Err(shape());
             }
-            bindings.push((name.clone(), value.clone()));
+            collected.bindings.push((name.clone(), value.clone()));
+            Ok(true)
+        }
+        // The path to the part, which the binding reaches it by.
+        NominalPattern::Part { name, expected } => {
+            if !matches_nominal_payload_type(value, expected) {
+                return Err(shape());
+            }
+            let path = Dynamic::from_array(collected.path.clone());
+            collected.bindings.push((name.clone(), path));
             Ok(true)
         }
         NominalPattern::Discard { expected } => {
@@ -135,13 +163,30 @@ fn collect_nominal(
             Ok(true)
         }
         NominalPattern::Enum(child) => {
-            collect_nominal_pattern_bindings(value, child, root, bindings)
+            collect_nominal_pattern_bindings(value, child, root, collected)
         }
         NominalPattern::Option(some) => {
-            collect_option_pattern_bindings(value, some, root, bindings)
+            let shape = || "option payload no longer matches its proven shape".to_string();
+            let Some(option) = value.read_lock::<crate::option::Value>() else {
+                return if root { Ok(false) } else { Err(shape()) };
+            };
+            match (&*option, some) {
+                (None, None) => Ok(true),
+                (Some(_), None) | (None, Some(_)) => Ok(false),
+                (Some(inner), Some(child)) => collected.part(0, inner, child, &shape),
+            }
         }
         NominalPattern::Result(variant) => {
-            collect_result_pattern_bindings(value, variant, root, bindings)
+            let shape = || "result payload no longer matches its proven shape".to_string();
+            let Some(result) = value.read_lock::<crate::result::Value>() else {
+                return if root { Ok(false) } else { Err(shape()) };
+            };
+            match (&*result, variant) {
+                (Ok(inner), Ok(child)) | (Err(inner), Err(child)) => {
+                    collected.part(0, inner, child, &shape)
+                }
+                (Ok(_), Err(_)) | (Err(_), Ok(_)) => Ok(false),
+            }
         }
         NominalPattern::Literal(literal) => match compare_literal(value, literal) {
             Some(ordering) => Ok(ordering == std::cmp::Ordering::Equal),
@@ -176,10 +221,10 @@ fn collect_nominal(
             if array.len() != members.len() {
                 return mismatch();
             }
-            let original = bindings.len();
-            for (value, member) in array.iter().zip(members.iter()) {
-                if !collect_nominal(value, member, false, bindings, shape)? {
-                    bindings.truncate(original);
+            let original = collected.bindings.len();
+            for (index, (value, member)) in array.iter().zip(members.iter()).enumerate() {
+                if !collected.part(index, value, member, shape)? {
+                    collected.bindings.truncate(original);
                     return Ok(false);
                 }
             }
@@ -192,10 +237,10 @@ fn collect_nominal(
             if value.fields().len() != members.len() {
                 return mismatch();
             }
-            let original = bindings.len();
-            for (value, member) in value.fields().iter().zip(members.iter()) {
-                if !collect_nominal(value, member, false, bindings, shape)? {
-                    bindings.truncate(original);
+            let original = collected.bindings.len();
+            for (index, (value, member)) in value.fields().iter().zip(members.iter()).enumerate() {
+                if !collected.part(index, value, member, shape)? {
+                    collected.bindings.truncate(original);
                     return Ok(false);
                 }
             }
@@ -209,47 +254,39 @@ fn collect_nominal(
             let Ok(array) = value.as_array_ref() else {
                 return mismatch();
             };
-            let fixed = before.len() + after.len();
-            if array.len() < fixed || rest.is_none() && array.len() != fixed {
-                return Ok(false);
-            }
-            let middle = before.len()..array.len() - after.len();
-            let original = bindings.len();
-            let ends = before
-                .iter()
-                .zip(&array[..middle.start])
-                .chain(after.iter().zip(&array[middle.end..]));
-            for (member, value) in ends {
-                if !collect_nominal(value, member, false, bindings, shape)? {
-                    bindings.truncate(original);
-                    return Ok(false);
-                }
-            }
-            if let Some(rest) = rest {
-                let middle = Dynamic::from_array(array[middle].to_vec());
-                if !collect_nominal(&middle, rest, false, bindings, shape)? {
-                    bindings.truncate(original);
-                    return Ok(false);
-                }
-            }
-            Ok(true)
+            collect_slice(
+                &array,
+                0,
+                (before, rest.as_deref(), after),
+                collected,
+                shape,
+            )
         }
         NominalPattern::Or(alternatives) => {
-            let original = bindings.len();
+            let original = collected.bindings.len();
             for alternative in alternatives.iter() {
-                if collect_nominal(value, alternative, root, bindings, shape)? {
+                if collect_nominal(value, alternative, root, collected, shape)? {
                     return Ok(true);
                 }
-                bindings.truncate(original);
+                collected.bindings.truncate(original);
             }
             Ok(false)
         }
-        NominalPattern::At { name, pattern } => {
-            let original = bindings.len();
-            bindings.push((name.clone(), value.clone()));
-            let matched = collect_nominal(value, pattern, root, bindings, shape)?;
+        NominalPattern::At {
+            name,
+            pattern,
+            part,
+        } => {
+            let original = collected.bindings.len();
+            let bound = if *part {
+                Dynamic::from_array(collected.path.clone())
+            } else {
+                value.clone()
+            };
+            collected.bindings.push((name.clone(), bound));
+            let matched = collect_nominal(value, pattern, root, collected, shape)?;
             if !matched {
-                bindings.truncate(original);
+                collected.bindings.truncate(original);
             }
             Ok(matched)
         }
@@ -273,184 +310,136 @@ fn compare_literal(value: &Dynamic, literal: &NominalLiteral) -> Option<std::cmp
     }
 }
 
-/// Match a Rawr `Result<T, E>` against `Ok(pattern)` or `Err(pattern)`.
-fn collect_result_pattern_bindings(
-    value: &Dynamic,
-    variant: &Result<Box<NominalPattern>, Box<NominalPattern>>,
-    root: bool,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
+/// Match `array`, the elements from `offset` of the array the path reaches,
+/// against a slice pattern's elements before its rest, its rest and the
+/// elements after it.
+fn collect_slice(
+    array: &[Dynamic],
+    offset: usize,
+    (before, rest, after): (
+        &[NominalPattern],
+        Option<&NominalPattern>,
+        &[NominalPattern],
+    ),
+    collected: &mut Collected,
+    shape: &dyn Fn() -> String,
 ) -> Result<bool, String> {
-    let shape = || "result payload no longer matches its proven shape".to_string();
-    let Some(result) = crate::result::read(value) else {
-        return if root { Ok(false) } else { Err(shape()) };
-    };
-    let (inner, child) = match (result, variant) {
-        (Ok(inner), Ok(child)) | (Err(inner), Err(child)) => (inner, child),
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) => return Ok(false),
-    };
-    let original = bindings.len();
-    let matched = collect_nominal_child(&inner, child, bindings, shape)?;
-    if !matched {
-        bindings.truncate(original);
+    let fixed = before.len() + after.len();
+    if array.len() < fixed || rest.is_none() && array.len() != fixed {
+        return Ok(false);
     }
-    Ok(matched)
-}
-
-/// Match a Rawr `Option<T>` against `Some(pattern)` or `None`.
-fn collect_option_pattern_bindings(
-    value: &Dynamic,
-    some: &Option<Box<NominalPattern>>,
-    root: bool,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
-) -> Result<bool, String> {
-    let shape = || "option payload no longer matches its proven shape".to_string();
-    let Some(option) = crate::option::read(value) else {
-        return if root { Ok(false) } else { Err(shape()) };
-    };
-    match (option, some) {
-        (None, None) => Ok(true),
-        (Some(_), None) | (None, Some(_)) => Ok(false),
-        (Some(inner), Some(child)) => {
-            let original = bindings.len();
-            let matched = collect_nominal_child(&inner, child, bindings, shape)?;
-            if !matched {
-                bindings.truncate(original);
-            }
-            Ok(matched)
+    let middle = before.len()..array.len() - after.len();
+    let original = collected.bindings.len();
+    let ends = before
+        .iter()
+        .zip(array[..middle.start].iter().enumerate())
+        .chain(
+            after.iter().zip(
+                array[middle.end..]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (middle.end + index, value)),
+            ),
+        );
+    for (member, (index, value)) in ends {
+        if !collected.part(offset + index, value, member, shape)? {
+            collected.bindings.truncate(original);
+            return Ok(false);
         }
     }
-}
-
-/// Match the scrutinee against one arm's root pattern.
-fn collect_nominal_root(
-    value: &Dynamic,
-    pattern: &NominalPattern,
-    bindings: &mut Vec<(ImmutableString, Dynamic)>,
-) -> Result<bool, String> {
-    let shape = || "a match subject no longer matches its proven shape".to_string();
-    collect_nominal(value, pattern, true, bindings, &shape)
-}
-
-/// Write the values a root pattern bound by `&mut` back into `value`, the
-/// place it matched: the binding `names[i]` takes `values[i]`. `false`, and
-/// `value` unchanged, when the value no longer matches the pattern.
-pub(crate) fn restore_nominal_root(
-    value: &mut Dynamic,
-    pattern: &NominalPattern,
-    names: &[ImmutableString],
-    values: &[Dynamic],
-) -> bool {
-    if !matches!(
-        collect_nominal_root(value, pattern, &mut Vec::new()),
-        Ok(true)
-    ) {
-        return false;
+    // A rest that binds takes a copy of the middle, which no path reaches:
+    // a `&mut` binding in it is refused where it is lowered.
+    if let Some(rest) = rest.filter(|rest| !matches!(rest, NominalPattern::Discard { .. })) {
+        let middle = Dynamic::from_array(array[middle].to_vec());
+        collected.path.push(Dynamic::UNIT);
+        let matched = collect_nominal(&middle, rest, false, collected, shape);
+        collected.path.pop();
+        if !matched? {
+            collected.bindings.truncate(original);
+            return Ok(false);
+        }
     }
-    restore_nominal(value, pattern, names, values);
-    true
+    Ok(true)
 }
 
-/// `restore_nominal_root` below the root, on a value proven to match.
-fn restore_nominal(
-    value: &mut Dynamic,
+/// Match a range of an array's elements (`&mut v[1..3]`), `array` from
+/// `offset`, against one arm's root pattern.
+fn collect_window(
+    array: &[Dynamic],
+    offset: usize,
     pattern: &NominalPattern,
-    names: &[ImmutableString],
-    values: &[Dynamic],
-) {
-    let bound = |name: &ImmutableString| {
-        names
-            .iter()
-            .position(|bound| bound == name)
-            .and_then(|index| values.get(index))
-    };
+    collected: &mut Collected,
+) -> Result<bool, String> {
+    let shape = || "a slice no longer matches its proven shape".to_string();
     match pattern {
-        NominalPattern::Binding { name, .. } => {
-            if let Some(new) = bound(name) {
-                *value = new.clone();
-            }
-        }
-        NominalPattern::Discard { .. }
-        | NominalPattern::Literal(_)
-        | NominalPattern::Range { .. } => {}
-        NominalPattern::Enum(child) => {
-            if let Union::Enum(ref mut nominal, ..) = value.0 {
-                for (value, child) in nominal.payload_mut().iter_mut().zip(child.payload.iter()) {
-                    restore_nominal(value, child, names, values);
-                }
-            }
-        }
-        NominalPattern::Option(Some(child)) => {
-            if let Some(Some(mut inner)) = crate::option::read(value) {
-                restore_nominal(&mut inner, child, names, values);
-                *value = crate::option::some(inner);
-            }
-        }
-        NominalPattern::Option(None) => {}
-        NominalPattern::Result(variant) => match (crate::result::read(value), variant) {
-            (Some(Ok(mut inner)), Ok(child)) => {
-                restore_nominal(&mut inner, child, names, values);
-                *value = crate::result::ok(inner);
-            }
-            (Some(Err(mut inner)), Err(child)) => {
-                restore_nominal(&mut inner, child, names, values);
-                *value = crate::result::err(inner);
-            }
-            _ => {}
-        },
-        NominalPattern::Tuple(members) => {
-            if let Ok(mut array) = value.as_array_mut() {
-                for (value, member) in array.iter_mut().zip(members.iter()) {
-                    restore_nominal(value, member, names, values);
-                }
-            }
-        }
-        NominalPattern::Struct(members) => {
-            if let Some(mut value) = value.write_lock::<crate::types::nominal::Struct>() {
-                for (value, member) in value.fields_mut().iter_mut().zip(members.iter()) {
-                    restore_nominal(value, member, names, values);
-                }
-            }
-        }
         NominalPattern::Slice {
             before,
             rest,
             after,
-        } => {
-            if let Ok(mut array) = value.as_array_mut() {
-                let end = array.len() - after.len();
-                for (value, member) in array.iter_mut().zip(before.iter()) {
-                    restore_nominal(value, member, names, values);
-                }
-                for (value, member) in array[end..].iter_mut().zip(after.iter()) {
-                    restore_nominal(value, member, names, values);
-                }
-                if let Some(rest) = rest {
-                    let mut middle = Dynamic::from_array(array[before.len()..end].to_vec());
-                    restore_nominal(&mut middle, rest, names, values);
-                    if let Ok(middle) = middle.as_array_ref()
-                        && middle.len() == end - before.len()
-                    {
-                        array[before.len()..end].clone_from_slice(&middle);
-                    }
-                }
-            }
-        }
+        } => collect_slice(
+            array,
+            offset,
+            (before, rest.as_deref(), after),
+            collected,
+            &shape,
+        ),
+        NominalPattern::Discard { .. } => Ok(true),
         NominalPattern::Or(alternatives) => {
-            let matched = alternatives.iter().find(|alternative| {
-                matches!(
-                    collect_nominal_root(value, alternative, &mut Vec::new()),
-                    Ok(true)
-                )
-            });
-            if let Some(alternative) = matched {
-                restore_nominal(value, alternative, names, values);
+            let original = collected.bindings.len();
+            for alternative in alternatives.iter() {
+                if collect_window(array, offset, alternative, collected)? {
+                    return Ok(true);
+                }
+                collected.bindings.truncate(original);
             }
+            Ok(false)
         }
-        // `name @ pattern` binds the whole value, which wins over the parts.
-        NominalPattern::At { name, pattern } => match bound(name) {
-            Some(new) => *value = new.clone(),
-            None => restore_nominal(value, pattern, names, values),
-        },
+        _ => Err(shape()),
+    }
+}
+
+/// Match the scrutinee against one arm's root pattern. A `&mut` binding
+/// of a place takes the path below `path`, the place's own.
+fn collect_nominal_root(
+    value: &Dynamic,
+    pattern: &NominalPattern,
+    bindings: &mut Vec<(ImmutableString, Dynamic)>,
+    path: crate::Array,
+) -> Result<bool, String> {
+    let shape = || "a match subject no longer matches its proven shape".to_string();
+    collect_nominal(
+        value,
+        pattern,
+        true,
+        &mut Collected { bindings, path },
+        &shape,
+    )
+}
+
+/// Match `Some(&mut place)` against one arm's root pattern, where `value`
+/// is the place, at `path`: `Some(pattern)` matches the pattern on the
+/// place itself.
+fn collect_some_place(
+    value: &Dynamic,
+    pattern: &NominalPattern,
+    bindings: &mut Vec<(ImmutableString, Dynamic)>,
+    path: &crate::Array,
+) -> Result<bool, String> {
+    match pattern {
+        NominalPattern::Option(Some(child)) => {
+            collect_nominal_root(value, child, bindings, path.clone())
+        }
+        NominalPattern::Option(None) => Ok(false),
+        NominalPattern::Discard { .. } => Ok(true),
+        NominalPattern::Or(alternatives) => {
+            for alternative in alternatives.iter() {
+                if collect_some_place(value, alternative, bindings, path)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Err("a binding of `Some(&mut place)` itself is not supported in Rawr yet".into()),
     }
 }
 
@@ -462,6 +451,86 @@ impl Engine {
             Union::Str(s, ..) => self.get_interned_string(s).into(),
             _ => value,
         }
+    }
+
+    /// Match one arm's root pattern on the place the local `holder` holds
+    /// the path of, where it is. With `some`, the subject is `Some(&mut
+    /// place)`, or `None` when `holder` holds `()`.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_place(
+        scope: &mut Scope,
+        this_ptr: Option<&mut Dynamic>,
+        holder: &str,
+        some: bool,
+        pattern: &NominalPattern,
+        bindings: &mut Vec<(ImmutableString, Dynamic)>,
+        expr: &Expr,
+    ) -> RawrResultOf<Result<bool, String>> {
+        let held = scope
+            .search(holder)
+            .map(|index| scope.get_mut_by_index(index).clone())
+            .ok_or_else(|| ERR::ErrorVariableNotFound(holder.to_string(), expr.position()))?;
+        if some && held.is_unit() {
+            let none = crate::option::none();
+            return Ok(collect_nominal_root(
+                &none,
+                pattern,
+                bindings,
+                crate::Array::new(),
+            ));
+        }
+        let missing = || ERR::ErrorVariableNotFound(holder.to_string(), expr.position());
+        let mut path = if held.is_array() {
+            held.into_array().map_err(|_| missing())?
+        } else {
+            vec![held]
+        };
+        // A range of an array's elements ends its path (`&mut v[1..3]`).
+        let window = path.last().and_then(|last| {
+            let range = last
+                .read_lock::<crate::ExclusiveRange>()
+                .map(|range| (range.start, range.end, false));
+            range.or_else(|| {
+                last.read_lock::<crate::InclusiveRange>()
+                    .map(|range| (*range.start(), *range.end(), true))
+            })
+        });
+        if window.is_some() {
+            path.pop();
+        }
+        let (root, steps) = Self::path_parts(&path).ok_or_else(missing)?;
+        let place = Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?;
+        let Some((low, high, inclusive)) = window else {
+            let place = place.read_lock::<Dynamic>().ok_or_else(missing)?;
+            return Ok(if some {
+                collect_some_place(&place, pattern, bindings, &path)
+            } else {
+                collect_nominal_root(&place, pattern, bindings, path)
+            });
+        };
+        let array = place.as_array_ref().map_err(|_| missing())?;
+        let len = array.len();
+        let low = usize::try_from(low).unwrap_or(usize::MAX);
+        let high = match high {
+            -1 => len,
+            high => usize::try_from(high).unwrap_or(usize::MAX),
+        };
+        let high = if inclusive {
+            high.saturating_add(1)
+        } else {
+            high
+        };
+        let fail = |message: String| Err(ERR::ErrorRuntime(message.into(), expr.position()).into());
+        if high > len {
+            return fail(format!(
+                "range end index {high} out of range for slice of length {len}"
+            ));
+        }
+        if low > high {
+            return fail(format!("slice index starts at {low} but ends at {high}"));
+        }
+        let collected = &mut Collected { bindings, path };
+        Ok(collect_window(&array[low..high], low, pattern, collected))
     }
 
     /// Evaluate a statements block.
@@ -989,9 +1058,26 @@ impl Engine {
 
                 let mut result = None;
 
-                let value = self.eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
+                // A switch on a place (`__rawr_through_x`, or
+                // `__rawr_some_through_x` for `Some(&mut place)`) matches it
+                // where it is, and a `&mut` binding takes its part's path.
+                let place = match expr {
+                    Expr::Variable(v, None, ..) if v.0.is_none() => {
+                        v.1.strip_prefix(crate::engine::KEYWORD_THROUGH)
+                            .map(|holder| (holder, false))
+                            .or_else(|| {
+                                v.1.strip_prefix(crate::engine::KEYWORD_SOME_THROUGH)
+                                    .map(|holder| (holder, true))
+                            })
+                    }
+                    _ => None,
+                };
+                let value = match place {
+                    Some(_) => Dynamic::UNIT,
+                    None => self.eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?,
+                };
 
-                if value.is_hashable() {
+                if place.is_none() && value.is_hashable() {
                     let hasher = &mut get_hasher();
                     value.hash(hasher);
                     let hash = hasher.finish();
@@ -1045,7 +1131,24 @@ impl Engine {
                     for case in enum_cases {
                         let bindings = if let Some(pattern) = &case.nominal {
                             let mut bindings = Vec::new();
-                            match collect_nominal_root(&value, pattern, &mut bindings) {
+                            let matched = match place {
+                                None => collect_nominal_root(
+                                    &value,
+                                    pattern,
+                                    &mut bindings,
+                                    crate::Array::new(),
+                                ),
+                                Some((holder, some)) => Self::collect_place(
+                                    scope,
+                                    this_ptr.as_deref_mut(),
+                                    holder,
+                                    some,
+                                    pattern,
+                                    &mut bindings,
+                                    expr,
+                                )?,
+                            };
+                            match matched {
                                 Ok(true) => {}
                                 Ok(false) => continue,
                                 Err(message) => {

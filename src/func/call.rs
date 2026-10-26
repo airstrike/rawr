@@ -1348,6 +1348,42 @@ impl Engine {
                 return Ok(Dynamic::UNIT);
             }
 
+            // Handle __rawr_locate(place, root): the place's path, `root`
+            // then each index of the chain below the local, which is not
+            // read.
+            crate::engine::KEYWORD_LOCATE if num_args == 2 => {
+                let place = first_arg.unwrap();
+                let (root, _) = self.get_arg_value(
+                    global,
+                    caches,
+                    scope,
+                    this_ptr.as_deref_mut(),
+                    &args_expr[0],
+                )?;
+                // A slot or, in an async body, a local's name; or a path.
+                let mut path = if root.is_array() {
+                    root.into_array().unwrap_or_default()
+                } else {
+                    vec![root]
+                };
+                if let Expr::Index(chain, ..) = place {
+                    let mut steps = crate::FnArgsVec::new_const();
+                    self.eval_dot_index_chain_arguments(
+                        global, caches, scope, this_ptr, place, &chain.rhs, &mut steps,
+                    )?;
+                    // A step that is a path itself (a function's `&mut`
+                    // output below its receiver) is its steps.
+                    for step in steps.into_iter().rev() {
+                        if step.is_array() {
+                            path.extend(step.into_array().unwrap_or_default());
+                        } else {
+                            path.push(step);
+                        }
+                    }
+                }
+                return Ok(Dynamic::from_array(path));
+            }
+
             // Handle is_def_var(fn_name)
             KEYWORD_IS_DEF_VAR if num_args == 1 => {
                 let arg = first_arg.unwrap();
