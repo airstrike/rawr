@@ -42,7 +42,7 @@ Error: "\"forty\": invalid digit found in string"
   <a href="/docs/reference/types">Types<span>Numbers, strings, collections, smart pointers and casts.</span></a>
   <a href="/docs/reference/generics">Generics<span>Bounds, trait objects and operator traits.</span></a>
   <a href="/docs/reference/patterns">Patterns<span><code>match</code>, <code>if let</code>, <code>let else</code> and loops.</span></a>
-  <a href="/docs/reference/moves">Moves<span>Moves, partial moves and clones.</span></a>
+  <a href="/docs/reference/moves">Moves<span>Moves, partial moves, drops and clones.</span></a>
   <a href="/docs/reference/closures">Closures<span>Captures, <code>Fn</code> traits and async code.</span></a>
   <a href="/docs/reference/macros">Macros<span>The built-in macros and format strings.</span></a>
   <a href="/docs/reference/std">std<span>The parts of the standard library that work.</span></a>
@@ -69,7 +69,7 @@ Error: "\"forty\": invalid digit found in string"
   <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
-  <li><code>impl Drop</code>.</li>
+  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
@@ -91,6 +91,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
   <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+  <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
   <li><strong>A large <code>u64</code> in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
 </ul>
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>

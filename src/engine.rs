@@ -30,6 +30,11 @@ pub const KEYWORD_MOVE: &str = "__rawr_move";
 /// Rust's `drop(value)`: the value drops here, and the call is `()`, so a
 /// statement of it keeps nothing.
 pub const KEYWORD_DROP: &str = "__rawr_drop";
+/// A move out of a part of a local, which checked Rawr writes where Rust
+/// moves a part with drop glue out of it: `__rawr_clear(x, 0, 2)` leaves
+/// `()` at field or element 0, then 2, of the local, so the local's own
+/// drop passes over what moved (`lower_nominal::drops`).
+pub const KEYWORD_CLEAR: &str = "__rawr_clear";
 pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
 pub const KEYWORD_THIS: &str = "this";
 pub const KEYWORD_GLOBAL: &str = "global";

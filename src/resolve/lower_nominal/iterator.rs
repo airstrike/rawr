@@ -706,6 +706,20 @@ impl Parser<'_> {
         let (mut pipeline, item) = self
             .pipeline_of(&value)
             .expect("iterator receivers have a chain");
+        // Items with drop glue may only go on to an owner: a container, or
+        // a closure's parameter.
+        if !matches!(member.as_str(), "collect" | "for_each" | "map" | "fold")
+            && self.needs_drop(&item, member_span)?
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`{member}` on an iterator of values whose type implements `Drop`: dropping \
+                     them where Rust does is not supported in Rawr yet"
+                )
+                .into(),
+                source: member_span,
+            });
+        }
         let reference = |ty: &Ty| Ty::Reference {
             mutable: false,
             target: Box::new(ty.clone()),
