@@ -64,7 +64,9 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
 ];
 
 /// The borrow errors this checker reports, with rustc's codes.
-pub(super) const BORROW_CODES: &[&str] = &["E0499", "E0502", "E0503", "E0505", "E0506", "E0597"];
+pub(super) const BORROW_CODES: &[&str] = &[
+    "E0373", "E0499", "E0500", "E0501", "E0502", "E0503", "E0505", "E0506", "E0524", "E0597",
+];
 
 fn load(path: &Path) -> Result<crate::package::Graph, Verdict> {
     let target = crate::project::Target::discover(path).map_err(|error| Verdict::Other {

@@ -22,7 +22,7 @@ mod language_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
 
-use super::borrowck::{record::Matched, Access as FactAccess, Projection as FactStep};
+use super::borrowck::{record, record::Matched, Access as FactAccess, Projection as FactStep};
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
@@ -9697,6 +9697,9 @@ struct Parser<'a> {
     reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
     /// The body's borrow facts, solved once it is read (D572, `borrows.rs`).
     flow: std::cell::RefCell<super::borrowck::record::Recorder>,
+    /// Where the function's parameters are declared: a `&mut` one can be
+    /// changed through, though not declared `mut`.
+    parameter_declarations: BTreeSet<Span>,
     /// The loop about to be read already entered its head (`while`'s
     /// condition is in it).
     loop_entered: bool,
@@ -10014,6 +10017,7 @@ impl<'a> Parser<'a> {
             aliases: BTreeMap::new(),
             reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
+            parameter_declarations: BTreeSet::new(),
             loop_entered: false,
             loop_iterator: None,
             loop_element: None,
@@ -10143,6 +10147,7 @@ impl<'a> Parser<'a> {
         for parameter in definition.parameters() {
             let ty = Ty::from_resolved(&parameter.ty);
             let invocation = ty.invocation().is_some();
+            parser.parameter_declarations.insert(parameter.name.span);
             parser.bindings.insert(
                 parameter.name.text.clone(),
                 Binding {
@@ -10284,6 +10289,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let invocation = ty.invocation().is_some();
+            parser.parameter_declarations.insert(parameter.name.span);
             parser.bindings.insert(
                 parameter.name.text.clone(),
                 Binding {
@@ -34868,9 +34874,21 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         self.record_capture(&name);
         let binding = &self.bindings[name.as_str()];
-        // Calling a local closure borrows it.
+        // Calling a local closure borrows it: `&mut` when it changes what
+        // it captures (`FnMut`).
         self.mention(&name, binding.declaration, &binding.ty, name_span);
-        self.flow().shared(name_span.start());
+        let mutable = match self.inference.resolve(&binding.ty) {
+            Ty::FnItem { key, .. } => self
+                .flow()
+                .closure(&key)
+                .is_some_and(|closure| closure.mutable),
+            _ => false,
+        };
+        if mutable {
+            self.flow().mutable_call(name_span.start(), name_span);
+        } else {
+            self.flow().shared(name_span.start());
+        }
         let binding = &self.bindings[name.as_str()];
         let mut ty = self.inference.resolve(&binding.ty);
         if !binding.available {
@@ -34932,7 +34950,14 @@ impl<'a> Parser<'a> {
         };
         let choice = matches!(ty, Ty::FnChoice { .. });
         // A crate function's signature says what its value keeps; a
-        // closure's does not yet (T105).
+        // closure's body does.
+        let closure = match &ty {
+            Ty::FnItem { key, .. } => self
+                .flow()
+                .closure(key)
+                .map(|closure| closure.keeps.clone()),
+            _ => None,
+        };
         let function = match &ty {
             Ty::FnItem { key, .. } => self
                 .models
@@ -34996,16 +35021,22 @@ impl<'a> Parser<'a> {
         source.push_text(")");
         let source = self.copied_call(source, &places)?;
         let kept = self.inference.resolve(&output);
-        match &function {
-            Some(function) => {
+        match (&function, closure) {
+            (Some(function), _) => {
                 let summary = self.function_summary(function);
                 self.kept_by_call(call, &kept, None, &summary);
             }
-            // A closure's value may keep what it captured (T105).
-            None if self.may_hold_borrow(&kept) => self
+            // A closure's value keeps what its body returns of what it
+            // captured.
+            (None, Some(Some(keeps))) => {
+                if self.may_hold_borrow(&kept) {
+                    self.flow().set_origins(call, keeps);
+                }
+            }
+            (None, _) if self.may_hold_borrow(&kept) => self
                 .flow()
                 .unmodeled("a borrow a closure's value keeps", call),
-            None => {
+            (None, _) => {
                 let summary = super::borrowck::signature::Summary::unknown(arguments.len());
                 self.kept_by_call(call, &kept, None, &summary);
             }
@@ -38794,6 +38825,7 @@ impl<'a> Parser<'a> {
         let outer_drop_base = std::mem::replace(&mut self.drop_base, 0);
         self.open_drops();
         for (name, ty, declaration) in &parameters {
+            self.parameter_declarations.insert(*declaration);
             self.bindings.insert(
                 name.clone(),
                 Binding {
@@ -38896,16 +38928,46 @@ impl<'a> Parser<'a> {
         let returned = std::mem::replace(&mut self.returns, outer_returns) > 0;
         self.return_blocked = outer_blocked;
         let scope = self.closures.pop().expect("the closure pushed its scope");
-        if !scope.captures.is_empty() {
-            let captured: Vec<Span> = scope
-                .captures
-                .iter()
-                .filter_map(|name| scope.outer.get(name).copied())
-                .collect();
+        // What the closure captures, made where it is, and what a call of
+        // it keeps (D572, T105).
+        let captured: Vec<record::Captured> = scope
+            .captures
+            .iter()
+            .filter_map(|name| {
+                let declaration = *scope.outer.get(name)?;
+                let binding = self.bindings.get(name.as_str())?;
+                Some(record::Captured {
+                    declaration,
+                    holder: self.may_hold_borrow(&binding.ty),
+                    copy: !self.moves_by_value(&binding.ty),
+                    // A function's `&mut` parameter can be changed through
+                    // but was not declared `mut`.
+                    declared_mut: binding.mutable
+                        && !self.parameter_declarations.contains(&declaration),
+                })
+            })
+            .collect();
+        let tail = match &body {
+            Ok(value) if self.may_hold_borrow(&value.ty) => {
+                self.flow().origins(value.span).map(<[_]>::to_vec)
+            }
+            _ => Some(Vec::new()),
+        };
+        let declared: Vec<Span> = parameters.iter().map(|(_, _, at)| *at).collect();
+        let closure = {
             let mut flow = self.flow();
-            flow.captured();
-            flow.captures(closure_blocks, &captured, moved, point_span(start.start()));
-        }
+            if !scope.captures.is_empty() {
+                flow.captured();
+            }
+            flow.captures(
+                closure_blocks,
+                &captured,
+                &declared,
+                tail,
+                moved,
+                point_span(start.start()),
+            )
+        };
         let mut body = body?;
         if let Some(expected) = &annotated {
             self.coerce_expr(expected, &mut body)?;
@@ -38976,10 +39038,19 @@ impl<'a> Parser<'a> {
         let inputs: Box<[Ty]> = parameters.into_iter().map(|(_, ty, _)| ty).collect();
         let output = Box::new(annotated.unwrap_or_else(|| body.ty.clone()));
         let expression = span(start.start(), body.span.end());
-        // A closure that captures nothing borrows nothing of the body; one
-        // that captures is left to `cargo check` (T105).
-        if scope.captures.is_empty() {
-            self.flow().set_origins(expression, Vec::new());
+        // How the borrows of a closure's output relate to its inputs' is
+        // rustc's closure signature inference, which may make them one
+        // region for any borrow (`impl Fn(&u32) -> &u32`).
+        if self.may_hold_borrow(&output) && inputs.iter().any(|input| self.may_hold_borrow(input)) {
+            self.flow().unmodeled(
+                "a closure that takes and returns borrows, whose signature relates them",
+                expression,
+            );
+        }
+        // A closure holds its captures' borrows. An async block's are left
+        // to `cargo check`: its value is a future the facts don't follow.
+        if !scope.asynchronous {
+            self.flow().set_origins(expression, closure.origins.clone());
         }
         // `move` moves each capture that is not `Copy` into the closure as
         // it is created, and copies the others. A closure that is not
@@ -39063,6 +39134,9 @@ impl<'a> Parser<'a> {
         // A closure that owns a capture which is not `Copy` is not `Copy`,
         // and one that moves out a capture is called once.
         if let Ty::FnItem { key, .. } = &ty {
+            if !scope.asynchronous {
+                self.flow().set_closure((**key).clone(), closure);
+            }
             if !moving.is_empty() {
                 self.owning_closures.insert((**key).clone());
             }

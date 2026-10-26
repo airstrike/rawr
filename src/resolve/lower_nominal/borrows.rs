@@ -524,12 +524,16 @@ impl Parser<'_> {
 
     /// The function returns the value spanning `value`, of type `ty`: its
     /// borrows flow into the output's region, every point of the body. A
-    /// closure's return is its own, which these facts leave to T105.
+    /// closure's return is its own: what a call of it keeps.
     pub(super) fn returned(&self, value: Span, ty: &Ty) {
-        if !self.closures.is_empty() || !self.may_hold_borrow(ty) {
+        if !self.may_hold_borrow(ty) {
             return;
         }
         let origins = self.flow().origins(value).map(<[Origin]>::to_vec);
+        if !self.closures.is_empty() {
+            self.flow().closure_return(origins);
+            return;
+        }
         match origins {
             Some(origins) => self.flow().give_back(&origins, value),
             None => self.flow().unmodeled(

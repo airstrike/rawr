@@ -265,6 +265,22 @@ fn opaque(name: &str) -> bool {
     }
 }
 
+/// Whether `ty` names the type parameter `name`.
+fn mentions(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::Unit(_) => false,
+        Type::Tuple { members, .. } => members.iter().any(|member| mentions(member, name)),
+        Type::Reference { target, .. } => mentions(target, name),
+        Type::Path(path) => {
+            (matches!(path.target, Target::Parameter) && path.name == name)
+                || path.arguments.iter().any(|argument| match argument {
+                    Argument::Type(ty) => mentions(ty, name),
+                    Argument::Lifetime(_) => false,
+                })
+        }
+    }
+}
+
 /// Whether `longer: shorter` by the signature's outlives bounds.
 fn outlives(bounds: &[(ImmutableString, ImmutableString)], longer: &str, shorter: &str) -> bool {
     let mut seen = vec![longer];
@@ -437,9 +453,25 @@ pub(crate) fn summary(
         .collect();
     let statics = parameters
         .iter()
-        .map(|shape| {
+        .zip(&signature.parameters)
+        .map(|(shape, ty)| {
             if shape.outer == Some(Region::Static) {
                 return Keeps::All;
+            }
+            // `f: F` of `F: Fn() + 'static` is read as a function type, its
+            // parameter gone from the signature: what the bound asks of it
+            // these facts can't tell.
+            if ty.fn_signature().is_some()
+                && bounds.iter().any(|(from, to)| {
+                    to == "static"
+                        && !signature
+                            .parameters
+                            .iter()
+                            .chain([&signature.output])
+                            .any(|ty| mentions(ty, from))
+                })
+            {
+                return Keeps::Unknown;
             }
             let bounded = |region: &Region| match region {
                 Region::Static => true,
