@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 23;
+const CLASSIFIER_VERSION: u32 = 24;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3355,14 +3355,19 @@ impl<P: api::Phase> Context<'_, P> {
             (_, model::Polarity::Negative, _, _) => Some(reject::Kind::NegativeImplementation),
             (_, _, true, _) => Some(reject::Kind::ConstImplementation),
             (_, _, _, true) => Some(reject::Kind::DefaultImplementation),
-            // An implementation that declares lifetimes for another type
-            // that names this one, as cosmic-text's `impl<'a>
+            // An implementation that declares only lifetimes is this type's
+            // own (D558 tier 0) only when its self type is the type with
+            // nothing but lifetimes filled in. One for another type that
+            // names this one, as cosmic-text's `impl<'a>
             // BorrowedWithFontSystem<'a, Buffer>` names `Buffer`, has no
             // members of this type: its `hit(&mut self)` is not
-            // `Buffer::hit(&self)`.
+            // `Buffer::hit(&self)`. One that fixes a type argument, as
+            // `impl BorrowedWithFontSystem<'_, Buffer>` and `impl
+            // BorrowedWithFontSystem<'_, Editor>` each do, is no member of
+            // the generic type: both declare `set_tab_width(&mut self, u16)`.
             _ if implementation.generics().parameters().next().is_some()
                 && lifetime_only(implementation.generics())
-                && !own_implementation(implementation.self_type(), target) =>
+                && !own_form(implementation.self_type(), target) =>
             {
                 Some(reject::Kind::GenericImplementation)
             }
@@ -5281,13 +5286,12 @@ fn borrows_at_early_lifetime(ty: &model::Type) -> bool {
 /// `ty` is the definition `id` whose type arguments are all generic
 /// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
 /// Whether `ty`, an implementation's self type, is the definition `id`
-/// with any arguments, or a reference to it.
-fn own_implementation(ty: &model::Type, id: &api::identity::Definition) -> bool {
-    match ty {
-        model::Type::Definition { id: actual, .. } => actual == id,
-        model::Type::Reference { ty, .. } => own_implementation(ty, id),
-        _ => false,
-    }
+/// with nothing but lifetimes filled in.
+fn own_form(ty: &model::Type, id: &api::identity::Definition) -> bool {
+    matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
+        && arguments
+            .iter()
+            .all(|argument| matches!(argument, model::Argument::Lifetime(_))))
 }
 
 fn any_arguments(ty: &model::Type, id: &api::identity::Definition) -> bool {
@@ -6608,7 +6612,8 @@ mod tests {
     /// be filed as `Buffer::hit` beside `Buffer::hit(&self)`. The same
     /// implementation of the type itself is this type's.
     #[test]
-    fn a_lifetime_only_implementation_of_another_type_gives_no_members() {
+    fn a_lifetime_only_implementation_is_the_type_s_own_only_with_nothing_but_lifetimes_filled_in()
+    {
         use super::representability::reject::Kind;
         use crate::api::model;
 
@@ -6678,6 +6683,25 @@ mod tests {
         };
         let Representability::Rejected(reason) = representability.as_ref() else {
             panic!("a member of another type is not this type's");
+        };
+        assert_eq!(reason.kind(), Kind::GenericImplementation);
+        // The same implementation fixes `Wrapper`'s type argument, so it
+        // gives the generic `Wrapper` no members either: cosmic-text's
+        // `BorrowedWithFontSystem<'_, Buffer>` and `<'_, Editor>` both
+        // declare `set_tab_width(&mut self, u16)`.
+        let wrapper_definition = crate::test_fixture::representability_families();
+        let wrapper_definition = wrapper_definition
+            .definitions()
+            .next()
+            .expect("family fixture retains a distinct definition");
+        let evidence = context
+            .classify_associated(&borrowed, wrapper_definition, &[], &wrapper)
+            .expect("the implementation is classified");
+        let super::OutcomeEvidence::Inline(representability) = evidence else {
+            panic!("a member of a fixed instance is rejected inline");
+        };
+        let Representability::Rejected(reason) = representability.as_ref() else {
+            panic!("a member of a fixed instance is not the generic type's");
         };
         assert_eq!(reason.kind(), Kind::GenericImplementation);
         // `impl<'a> Definition<'a>` is the type's own: its member is read
