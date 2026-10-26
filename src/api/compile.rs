@@ -80,6 +80,18 @@ impl Engine {
         &self,
         graph: crate::package::Graph,
     ) -> Result<(AST, Option<crate::ImmutableString>), crate::package::Error> {
+        self.compile_package_with_positions(graph)
+            .map(|(ast, main, _)| (ast, main))
+    }
+
+    /// [`Engine::compile_package`], with the [`program::Positions`] that map
+    /// a runtime error's position back to the entry source.
+    #[doc(hidden)]
+    pub fn compile_package_with_positions(
+        &self,
+        graph: crate::package::Graph,
+    ) -> Result<(AST, Option<crate::ImmutableString>, program::Positions), crate::package::Error>
+    {
         let (executable, ..) =
             crate::package::compile::executable_from_graph(self, graph, None, false)?;
         let main = executable
@@ -92,7 +104,8 @@ impl Engine {
                     && key.name() == "main"
             })
             .map(|item| crate::resolve::lower_nominal::private_function_name(item.key()));
-        Ok((executable.into_hosted_ast(), main))
+        let (ast, positions) = executable.into_ast_with_positions();
+        Ok((ast, main, positions))
     }
 
     /// Compile one immutable reload candidate from a static package graph.

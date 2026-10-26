@@ -138,17 +138,26 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
     let engine = Engine::new();
-    let (ast, main) = engine
-        .compile_package(graph)
+    let (ast, main, positions) = engine
+        .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
-    let runtime = |error: Box<rawr::EvalAltResult>| {
-        let source = source(target);
-        Failed::Panic(
-            diagnostic::Report::from_evaluation(source.clone(), &error).unwrap_or_else(|_| {
+    // A runtime error's position is in the lowered program: the compiler's
+    // positions map it back to the source, or to none in code it wrote.
+    let runtime =
+        |error: Box<rawr::EvalAltResult>| {
+            let source = source(target);
+            let located = match source.clone() {
+                Some(source) => diagnostic::Report::from_evaluation_located(
+                    source,
+                    positions.translate(&error),
+                    &error,
+                ),
+                None => diagnostic::Report::from_evaluation(None, &error),
+            };
+            Failed::Panic(located.unwrap_or_else(|_| {
                 report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
-            }),
-        )
-    };
+            }))
+        };
     let mut scope = Scope::new();
     let value = engine
         .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
