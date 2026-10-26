@@ -1,9 +1,7 @@
 // rawr
-//! What the keys do and what the screen says. Under `rawr run` this file is
-//! interpreted, and a save shows on the screen at once. `cargo build`
-//! compiles it like any other module.
-
-use ratatui::layout::{Margin, Rect};
+//! What the keys do. Under `rawr run` this file is interpreted, and a save
+//! takes effect at the next key. `cargo build` compiles it like any other
+//! module.
 
 /// One thing to do.
 pub struct Todo {
@@ -11,11 +9,15 @@ pub struct Todo {
     pub done: bool,
 }
 
-/// The list, and the to-do being written.
+/// The list, the to-do being written, and where the list is.
 pub struct App {
     pub todos: Vec<Todo>,
     pub input: String,
     pub editing: bool,
+    /// The selected row, as ratatui's `ListState` keeps it.
+    pub selected: Option<usize>,
+    /// The first row the list shows.
+    pub offset: usize,
 }
 
 /// A key the app acts on. `main.rs` turns crossterm's keys into these.
@@ -24,23 +26,8 @@ pub enum Key {
     Backspace,
     Enter,
     Esc,
-}
-
-/// One line of the list as it is drawn.
-pub struct Row {
-    pub text: String,
-    pub done: bool,
-}
-
-/// Everything the screen says. `main.rs` draws it.
-pub struct View {
-    pub title: String,
-    pub rows: Vec<Row>,
-    pub prompt: String,
-    pub input: String,
-    pub cursor: u16,
-    pub editing: bool,
-    pub help: String,
+    Up,
+    Down,
 }
 
 impl App {
@@ -53,6 +40,8 @@ impl App {
             ],
             input: String::new(),
             editing: false,
+            selected: Some(0),
+            offset: 0,
         }
     }
 }
@@ -64,8 +53,8 @@ fn todo(text: &str) -> Todo {
     }
 }
 
-/// What `key` does, with `selected` the list's selected row.
-pub fn update(app: &mut App, key: Key, selected: Option<usize>) {
+/// What `key` does.
+pub fn update(app: &mut App, key: Key) {
     if app.editing {
         match key {
             Key::Char(char) => app.input.push(char),
@@ -84,12 +73,16 @@ pub fn update(app: &mut App, key: Key, selected: Option<usize>) {
                 app.input.clear();
                 app.editing = false;
             }
+            Key::Up | Key::Down => {}
         }
         return;
     }
     let count = app.todos.len();
-    match (key, selected) {
+    match (key, app.selected) {
         (Key::Char('a'), _) => app.editing = true,
+        (Key::Up, Some(index)) => app.selected = Some(index.saturating_sub(1)),
+        (Key::Down, Some(index)) => app.selected = Some(index + 1),
+        (Key::Up | Key::Down, None) => app.selected = Some(0),
         (Key::Char(' '), Some(index)) if index < count => {
             app.todos[index].done = !app.todos[index].done;
         }
@@ -97,39 +90,5 @@ pub fn update(app: &mut App, key: Key, selected: Option<usize>) {
             app.todos.remove(index);
         }
         _ => {}
-    }
-}
-
-/// The screen for a terminal `width` columns wide.
-pub fn view(app: &App, width: u16) -> View {
-    let left = app.todos.iter().filter(|todo| !todo.done).count();
-    let rows = app
-        .todos
-        .iter()
-        .map(|todo| Row {
-            text: todo.text.clone(),
-            done: todo.done,
-        })
-        .collect();
-    // The input box is the screen's width and three rows high. Inside its
-    // border, the end of a long to-do shows, with room for the cursor.
-    let input_box = Rect::new(0, 0, width, 3);
-    let room = input_box.inner(Margin::new(1, 1)).width as usize;
-    let length = app.input.chars().count();
-    let shown = length.min(room.saturating_sub(1));
-    let input: String = app.input.chars().skip(length - shown).collect();
-    let help = if app.editing {
-        "Enter saves · Esc cancels"
-    } else {
-        "a adds · Space checks off · d deletes · ↑↓ move · q quits"
-    };
-    View {
-        title: format!(" To do: {left} left "),
-        rows,
-        prompt: String::from(" New to-do "),
-        cursor: shown as u16,
-        input,
-        editing: app.editing,
-        help: help.to_string(),
     }
 }

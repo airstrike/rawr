@@ -576,6 +576,7 @@ fn concrete_type_bytes(
                 })
         }
         convert::Type::Option(element)
+        | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => concrete_type_bytes(element, actual, limit)
             .and_then(|bytes| {

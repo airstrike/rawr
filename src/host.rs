@@ -519,11 +519,29 @@ impl Registry {
         let fingerprint = selector.fingerprint();
         // A variant's selector names its constructor and its matcher.
         let matcher = kind == structural::Kind::Match;
-        self.structural.iter().find(|definition| {
-            definition.path() == path
-                && definition.selector() == &fingerprint
+        let selected = |definition: &&structural::Definition| {
+            definition.selector() == &fingerprint
                 && (definition.kind() == structural::Kind::Match) == matcher
-        })
+        };
+        // One type at two paths has one adapter, at one of them (D536.1):
+        // `ratatui::style::Color` is also `ratatui_core::style::Color`
+        // through `ratatui::macros`.
+        let identity = |path: &str| {
+            self.type_(path)
+                .and_then(|definition| definition.identity().imported())
+                .cloned()
+        };
+        self.structural
+            .iter()
+            .filter(selected)
+            .find(|definition| definition.path() == path)
+            .or_else(|| {
+                let wanted = identity(path)?;
+                self.structural
+                    .iter()
+                    .filter(selected)
+                    .find(|definition| identity(definition.path()).as_ref() == Some(&wanted))
+            })
     }
 
     #[cfg(feature = "rust-import")]

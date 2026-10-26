@@ -778,6 +778,19 @@ fn imported_surface_type(
             }
             Type::Tuple(converted.into_boxed_slice())
         }
+        // An array of Rust's own types is a `Vec` of them, as ratatui's
+        // `List::new(rows)` takes `impl IntoIterator<Item: Into<ListItem>>`.
+        Ty::Array { element, .. }
+            if instance_surface_type(inference, ty).is_some_and(|ty| !is_erased(&ty)) =>
+        {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Sequence {
+                element: Box::new(imported_surface_type(
+                    inference, element, operation, imported,
+                )?),
+                owned: true,
+            }
+        }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
@@ -868,6 +881,15 @@ fn instance_surface_type(
         {
             Type::Tuple(converted)
         }
+        Ty::Array { element, .. }
+            if let Some(element) =
+                instance_surface_type(inference, element).filter(|element| !is_erased(element)) =>
+        {
+            Type::Sequence {
+                element: Box::new(element),
+                owned: true,
+            }
+        }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
@@ -889,9 +911,10 @@ fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> boo
                 || arguments.iter().any(is_erased)
         }
         Type::Tuple(members) => members.iter().any(is_erased),
-        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
-            is_erased(element)
-        }
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. } => is_erased(element),
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
         Type::Unit | Type::Builtin(_) | Type::FunctionItem { .. } | Type::Parameter(_) => false,
@@ -15571,6 +15594,16 @@ impl<'a> Parser<'a> {
                 owner,
                 originating,
             )?)),
+            Shape::Reference { mutable, target } => Ty::Reference {
+                mutable: *mutable,
+                target: Box::new(self.instantiate_host_type(
+                    target,
+                    parameters,
+                    operation,
+                    owner,
+                    originating,
+                )?),
+            },
             Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -17600,8 +17633,16 @@ impl<'a> Parser<'a> {
         } else {
             self.hint_closures(&items, Some(&receiver.ty));
             // A std reader appends to its `&mut String` argument.
+            // So does an imported method that borrows a value mutably, as
+            // `render_stateful_widget` takes `&mut state` (D558.5).
             if items.first().is_some_and(|item| {
                 crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
+                    || item.signature().parameters().iter().any(|parameter| {
+                        matches!(
+                            parameter.shape(),
+                            crate::host::type_ref::Shape::Reference { mutable: true, .. }
+                        )
+                    })
             }) {
                 self.parse_borrowing_arguments("host method arguments")?
             } else {
@@ -18324,8 +18365,12 @@ impl<'a> Parser<'a> {
             return None;
         }
         // Every alias names the same Rust type: a method any alias has is
-        // the type's own.
+        // the type's own, and so is a field, as `frame.area().x` reads
+        // `Rect::x` whichever path `Frame::area` names `Rect` by.
         if method && self.imported_member_owner(ty, member).is_some() {
+            return None;
+        }
+        if !method && self.imported_field_owner(ty, member).is_some() {
             return None;
         }
         let paths = self
@@ -18422,6 +18467,28 @@ impl<'a> Parser<'a> {
                     .is_some()
             })
             .and_then(|path| self.models.host.type_(&path).cloned())
+    }
+
+    /// The first alias of an imported type with no alias of its own whose
+    /// struct has the field `member`.
+    #[cfg(feature = "rust-import")]
+    fn imported_field_owner(
+        &self,
+        ty: &Ty,
+        member: &str,
+    ) -> Option<crate::host::type_def::Definition> {
+        let (identity, owner, None) = ty.imported_alias_context()? else {
+            return None;
+        };
+        self.models
+            .host
+            .imported_type_paths(identity, owner)?
+            .filter_map(|path| self.models.host.type_(&path))
+            .find(|definition| {
+                matches!(definition.shape(), crate::host::type_def::Shape::Struct { fields, .. }
+                    if fields.iter().any(|field| field.name() == member))
+            })
+            .cloned()
     }
 
     fn require_mutable_host_receiver(
@@ -18739,6 +18806,10 @@ impl<'a> Parser<'a> {
         operation: &str,
         span: Span,
     ) -> Result<(), Error> {
+        // A borrow moves nothing: `&mut list` lends `list` to the call.
+        if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) {
+            return Ok(());
+        }
         if self
             .inference
             .resolve(&value.ty)
@@ -28545,7 +28616,12 @@ impl<'a> Parser<'a> {
                     resolved
                         .host_alias()
                         .filter(|definition| definition.identity().imported().is_some() && !method)
-                        .cloned(),
+                        .cloned()
+                        .or_else(|| {
+                            (!method)
+                                .then(|| self.imported_field_owner(&resolved, &member))
+                                .flatten()
+                        }),
                 )
             };
             #[cfg(not(feature = "rust-import"))]

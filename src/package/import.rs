@@ -1796,9 +1796,10 @@ fn ty_ok(
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
             ty_ok(input, declared) && ty_ok(output, declared)
         }
-        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
-            ty_ok(element, declared)
-        }
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. } => ty_ok(element, declared),
         Type::Tuple(members) => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
@@ -1920,6 +1921,9 @@ impl Types {
             Type::ProfileMessage { payload, .. } => Self::convert_charged(payload, parameters)?,
             Type::Option(element) => {
                 host::type_ref::Type::option(Self::convert_charged(element, parameters)?)
+            }
+            Type::Borrowed { mutable, ty } => {
+                host::type_ref::Type::reference(*mutable, Self::convert_charged(ty, parameters)?)
             }
             Type::Range(element) => {
                 host::type_ref::Type::range(Self::convert_charged(element, parameters)?)
@@ -2087,9 +2091,10 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
         Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
             arguments.iter().any(names_impl_parameter)
         }
-        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
-            names_impl_parameter(element)
-        }
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. } => names_impl_parameter(element),
         Type::Result(ok, err) => names_impl_parameter(ok) || names_impl_parameter(err),
         Type::FunctionItem { input, output } => {
             names_impl_parameter(input) || names_impl_parameter(output)
@@ -2181,6 +2186,7 @@ fn type_usage(
         }
         Type::ProfileMessage { payload, .. }
         | Type::Option(payload)
+        | Type::Borrowed { ty: payload, .. }
         | Type::Range(payload)
         | Type::Sequence {
             element: payload, ..

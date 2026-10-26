@@ -27,6 +27,9 @@ pub(crate) const NONE: u8 = 10;
 pub(crate) const SOME: u8 = 11;
 pub(crate) const STRUCT: u8 = 15;
 pub(crate) const ENUM: u8 = 16;
+/// A value native code lends for the call (D558.3): its index among the
+/// call's lent values.
+pub(crate) const LENT: u8 = 20;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
@@ -115,10 +118,12 @@ impl Model {
         )
     }
 
-    /// One value from `reader`, built in this model.
+    /// One value from `reader`, built in this model. `lent` holds the
+    /// script values of what the call's trampoline lends.
     pub(crate) fn island_read(
         &self,
         types: &Types,
+        lent: &[crate::scope::Lent],
         reader: &mut Reader<'_>,
         depth: usize,
     ) -> Result<Dynamic, String> {
@@ -140,12 +145,20 @@ impl Model {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
                 for _ in 0..length {
-                    items.push(self.island_read(types, reader, depth)?);
+                    items.push(self.island_read(types, lent, reader, depth)?);
                 }
                 Dynamic::from_array(items)
             }
+            LENT => {
+                let index = reader.count()?;
+                Dynamic::from(
+                    *lent
+                        .get(index)
+                        .ok_or("a lent value the call has no place for")?,
+                )
+            }
             NONE => crate::option::none(),
-            SOME => crate::option::some(self.island_read(types, reader, depth)?),
+            SOME => crate::option::some(self.island_read(types, lent, reader, depth)?),
             STRUCT => {
                 let name = reader.text()?;
                 let identity = types
@@ -156,7 +169,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
                 for _ in 0..length {
-                    fields.push(self.island_read(types, reader, depth)?);
+                    fields.push(self.island_read(types, lent, reader, depth)?);
                 }
                 let proof = self
                     .prove_struct(identity, &definition.schema, fields.into_boxed_slice())
@@ -184,7 +197,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
                 for _ in 0..length {
-                    payload.push(self.island_read(types, reader, depth)?);
+                    payload.push(self.island_read(types, lent, reader, depth)?);
                 }
                 let proof = self
                     .prove_enum(
@@ -264,6 +277,16 @@ impl Model {
             }
             Union::Shared(..) => self.island_write(&value.flatten_clone(), out, depth)?,
             Union::Variant(..) => {
+                // A lent value can't leave the call it was lent for, in its
+                // result or in an argument native code takes back.
+                if let Some(lent) = value.read_lock::<crate::scope::Lent>() {
+                    return Err(format!(
+                        "it keeps the `{}` native code lent it, which is borrowed for that call \
+                         only and can't be returned or stored where native code takes it back \
+                         (E0515, E0521)",
+                        lent.name()
+                    ));
+                }
                 let Some(option) = value.read_lock::<crate::option::Value>() else {
                     return Err(format!("a `{}` can't cross yet", value.type_name()));
                 };

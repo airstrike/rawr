@@ -105,6 +105,13 @@ pub(crate) enum Shape {
     },
     /// Rust's `Option<T>`, Rawr's builtin generic enum.
     Option(Box<Type>),
+    /// An imported input `&T` or `&mut T`, as ratatui's
+    /// `render_stateful_widget` takes `&mut ListState`: a script reference to
+    /// the value, whose slot the call leases (D558.5).
+    Reference {
+        mutable: bool,
+        target: Box<Type>,
+    },
     /// An iterator of `T` (`impl Iterator<Item = T>`): the array of its
     /// items at runtime, made when the call returns.
     Iter(Box<Type>),
@@ -175,6 +182,9 @@ impl Type {
             } => types(values, profile),
             Shape::Array { element, .. }
             | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
             | Shape::Iter(element)
             | Shape::Range(element) => element.normalize_profile(profile),
             Shape::Result(ok, err) => ok
@@ -218,6 +228,9 @@ impl Type {
                 } => types.iter().any(contains),
                 Shape::Array { element, .. }
                 | Shape::Option(element)
+                | Shape::Reference {
+                    target: element, ..
+                }
                 | Shape::Iter(element)
                 | Shape::Range(element) => contains(element),
                 Shape::Result(ok, err) => contains(ok) || contains(err),
@@ -239,6 +252,7 @@ impl Type {
             Shape::Iter(element) if contains(element) => Some("iterator"),
             Shape::Range(element) if contains(element) => Some("range"),
             Shape::Option(element) if contains(element) => Some("option"),
+            Shape::Reference { target, .. } if contains(target) => Some("reference"),
             Shape::Result(ok, err) if contains(ok) || contains(err) => Some("result"),
             Shape::Callable { input, output } if contains(input) || contains(output) => {
                 Some("callable")
@@ -262,6 +276,7 @@ impl Type {
             Shape::Unit
             | Shape::Tuple(_)
             | Shape::Array { .. }
+            | Shape::Reference { .. }
             | Shape::Option(_)
             | Shape::Iter(_)
             | Shape::Range(_)
@@ -294,6 +309,9 @@ impl Type {
             Shape::Unit | Shape::Builtin(_) => Some(0),
             Shape::Array { element, .. }
             | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
             | Shape::Iter(element)
             | Shape::Range(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
@@ -346,6 +364,10 @@ impl Type {
                 length: *length,
             },
             Shape::Option(element) => Shape::Option(Box::new(element.try_clone()?)),
+            Shape::Reference { mutable, target } => Shape::Reference {
+                mutable: *mutable,
+                target: Box::new(target.try_clone()?),
+            },
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
             Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
@@ -424,6 +446,15 @@ impl Type {
     #[must_use]
     pub fn option(element: Self) -> Self {
         Self(Shape::Option(Box::new(element)))
+    }
+
+    /// `&target`, or `&mut target`, an imported input borrows.
+    #[must_use]
+    pub fn reference(mutable: bool, target: Self) -> Self {
+        Self(Shape::Reference {
+            mutable,
+            target: Box::new(target),
+        })
     }
 
     /// Construct an iterator of `element` (`impl Iterator<Item = element>`),
@@ -574,6 +605,10 @@ impl Type {
                 ),
                 length: *length,
             })),
+            Shape::Reference { mutable, target } => Ok(Self::reference(
+                *mutable,
+                target.resolve(root, types, supports, parameters, _imported, item)?,
+            )),
             Shape::Option(element) => Ok(Self::option(
                 element.resolve(root, types, supports, parameters, _imported, item)?,
             )),
@@ -731,6 +766,9 @@ impl Type {
             }
             Shape::Array { element, .. }
             | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
             | Shape::Iter(element)
             | Shape::Range(element) => {
                 element.resolve_imported(
@@ -870,6 +908,9 @@ impl Type {
             }
             Shape::Array { element, .. }
             | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
             | Shape::Iter(element)
             | Shape::Range(element) => {
                 element.collect_exports(exports);
@@ -920,6 +961,9 @@ impl Type {
             }
             Shape::Array { element, .. }
             | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
             | Shape::Iter(element)
             | Shape::Range(element) => {
                 element.collect_support_exports(exports);
@@ -1008,6 +1052,10 @@ impl crate::preview::digest::Write for Type {
             Shape::Option(element) => {
                 writer.tag(0x230c);
                 element.write(writer)?;
+            }
+            Shape::Reference { mutable, target } => {
+                writer.tag(if *mutable { 0x2315 } else { 0x2314 });
+                target.write(writer)?;
             }
             Shape::Iter(element) => {
                 writer.tag(0x230e);

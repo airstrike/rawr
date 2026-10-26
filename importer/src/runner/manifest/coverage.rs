@@ -692,6 +692,7 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
             *mapper != [0; 16] && concrete(payload, depth + 1)
         }
         convert::Type::Option(element)
+        | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => concrete(element, depth + 1),
         convert::Type::Result(ok, err) => concrete(ok, depth + 1) && concrete(err, depth + 1),
