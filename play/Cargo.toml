@@ -38,7 +38,7 @@ http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["http1", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 serenity = { version = "0.12.5", default-features = false, features = ["cache", "client", "gateway", "model", "native_tls_backend"], optional = true }
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"], optional = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

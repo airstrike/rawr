@@ -197,13 +197,23 @@ impl Fingerprint {
         encoder.finish()
     }
 
-    /// A lifted closure: its arity and its rendered signature.
-    pub(crate) fn closure(arity: usize, signature: &str) -> Self {
+    /// A lifted closure: its arity, its rendered signature, and each
+    /// capture's name and type in the order its captures are passed. A
+    /// closure that native code holds runs a new generation's body only
+    /// when this is the same in both (D553.5), so a body never reads its
+    /// captures by the wrong position or as another type.
+    pub(crate) fn closure(arity: usize, signature: &str, captures: &[(&str, String)]) -> Self {
         let mut encoder = Encoder::new();
         encoder.marker(Marker::Free);
         encoder.marker(Marker::Parameters);
         encoder.count(arity);
         encoder.text(signature);
+        encoder.marker(Marker::Arguments);
+        encoder.count(captures.len());
+        for (name, ty) in captures {
+            encoder.text(*name);
+            encoder.text(ty.as_str());
+        }
         encoder.finish()
     }
 

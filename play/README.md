@@ -381,7 +381,7 @@ but run one at a time and never ahead of a waiting Discord render. Each IP
 minute; code is capped at 16 KiB; Cloudflare Turnstile (site key in
 `vars.TURNSTILE_SITEKEY`, secret `TURNSTILE_SECRET`) checks browsers. A
 request carrying `x-play-admin: <hex HMAC-SHA256 of "rawr-play admin">`
-skips Turnstile but not the limits. The HMAC key is the log key's 64 hex
+skips Turnstile but not /play's limits. The HMAC key is the log key's 64 hex
 digits as text, not the 32 bytes they spell:
 `printf 'rawr-play admin' | openssl dgst -sha256 -hmac "$(cat ~/.config/rawr-play/log-key)" -r`. The dashboard counts
 playground runs apart from Discord's.
@@ -392,7 +392,10 @@ accepts only the text of a `<code data-run>` element in the site's built
 pages, checked by SHA-256. `build.mjs` collects them when it builds, so the
 list is always the deployed pages'. A result is
 cached for each image version. Uncached runs are limited per IP (20 a
-minute, 120 an hour).
+minute, 120 an hour). A request whose `x-play-admin` is the admin HMAC
+or the Worker's secret `PLAY_SMOKE_TOKEN` skips that limit. `deploy.sh`
+sends `PLAY_SMOKE_TOKEN` from its environment, or else the admin HMAC of
+the local log key, so its smoke test never waits on the limit.
 
 A deploy does not replace a Durable Object's running container, which keeps
 the image it started from. `push-image.sh` writes the image's commit into
@@ -453,10 +456,17 @@ It never commits, so the committed `wrangler.jsonc` keeps the last image
 image, so release from one place at a time. The job never sees the Discord
 token, which stays among the Worker's secrets.
 
-The repository needs one secret and one variable, under Settings → Secrets
+The job waits for the `web` job's rawr-web artifact before it deploys, so
+the deploy runs on the same runner as the image build.
+
+The repository needs two secrets and one variable, under Settings → Secrets
 and variables → Actions:
 
 - The secret `CLOUDFLARE_API_TOKEN` holds a Cloudflare API token.
+- The secret `PLAY_SMOKE_TOKEN` holds the same random value as the
+  Worker's secret of that name. Make one and set both from stdin, so it is
+  never shown:
+  `t="$(openssl rand -hex 32)"; printf '%s' "$t" | npx wrangler secret put PLAY_SMOKE_TOKEN; printf '%s' "$t" | gh secret set PLAY_SMOKE_TOKEN; unset t`.
 - The variable `CLOUDFLARE_ACCOUNT_ID` is `fce80b8101fbb2f85548560babc6c7bc`.
   It is not a secret.
 

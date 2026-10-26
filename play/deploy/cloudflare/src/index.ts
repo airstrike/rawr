@@ -174,6 +174,11 @@ interface Env {
    * derives keys from it (HMAC) for hashing IPs and the admin header.
    */
   PLAY_LOG_KEY?: string;
+  /**
+   * Secret: the release's smoke test sends it as `x-play-admin`, so the
+   * site's snippets run without the landing page's per-IP limit.
+   */
+  PLAY_SMOKE_TOKEN?: string;
   /** Turnstile: the public site key (a var) and the secret. */
   TURNSTILE_SITEKEY?: string;
   TURNSTILE_SECRET?: string;
@@ -445,6 +450,14 @@ export class PlayBot extends Container<Env> {
     };
   }
 
+  // Every start records what it started. That covers ensure's starts and the
+  // library's own, which a request to a stopped container makes (as after a
+  // rollout), so the next cron does not restart a bot on the deployed image.
+  override async onStart() {
+    await this.ctx.storage.put(STARTED_KEY, this.wanted());
+    await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
+  }
+
   // The bot gets no inbound requests, so idleness means nothing: never sleep.
   override async onActivityExpired() {}
 
@@ -506,8 +519,6 @@ export class PlayBot extends Container<Env> {
         await this.event("worker", "error", `start failed: ${String(error).slice(0, 400)}`);
         return false;
       }
-      await this.ctx.storage.put(STARTED_KEY, deployed);
-      await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
     }
     return this.ctx.container?.running ?? false;
   }
@@ -601,11 +612,21 @@ async function ipHash(request: Request, env: Env): Promise<string> {
   return (await hmac(key, ip)).slice(0, 32);
 }
 
-/** A caller holding the log key (header `x-play-admin`) skips Turnstile, not the limits. */
+/**
+ * A caller holding the log key (header `x-play-admin`) skips Turnstile and
+ * the landing page's limit, not /play's limits.
+ */
 async function admin(request: Request, env: Env): Promise<boolean> {
   const header = request.headers.get("x-play-admin");
   if (!header || !env.PLAY_LOG_KEY) return false;
   return same(header, await hmac(env.PLAY_LOG_KEY, "rawr-play admin"));
+}
+
+/** The release's smoke test (`x-play-admin` is PLAY_SMOKE_TOKEN) or an admin: /play/run is not limited. */
+async function unlimited(request: Request, env: Env): Promise<boolean> {
+  const header = request.headers.get("x-play-admin");
+  if (header && env.PLAY_SMOKE_TOKEN && same(header, env.PLAY_SMOKE_TOKEN)) return true;
+  return admin(request, env);
 }
 
 async function human(token: unknown, request: Request, env: Env): Promise<boolean> {
@@ -695,7 +716,8 @@ const SITE_SOURCES: ReadonlySet<string> = new Set(RUNNABLE);
 /**
  * POST /play/run: one of the site's own snippets, by its exact source and
  * `?play` options, without Turnstile. Any other pair is refused. Each result
- * is cached for the deployed image; uncached runs are limited per IP.
+ * is cached for the deployed image. Uncached runs are limited per IP, except
+ * the release's smoke test's and an admin's.
  */
 async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const snippet = parseSnippet(await readJson(request, 48 * 1024));
@@ -713,7 +735,7 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
     return response;
   }
   const bot = getContainer(env.PLAY_BOT);
-  const wait = await bot.allow("landing", await ipHash(request, env));
+  const wait = (await unlimited(request, env)) ? 0 : await bot.allow("landing", await ipHash(request, env));
   if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
   let response: Response;
   try {

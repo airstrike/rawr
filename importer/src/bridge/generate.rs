@@ -1542,6 +1542,8 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
 enum Compilation<'a> {
     Initial,
     Replacement(&'a Option<Program>),
+    /// Beside a running marked `main`, against the engine it runs.
+    Live(&'a __rawr_internal::Shared<__rawr_internal::Engine>),
 }
 
 fn compile_program(
@@ -1561,6 +1563,7 @@ fn compile_program(
         Compilation::Replacement(current) => current.as_ref()
             .ok_or_else(|| std::io::Error::other("missing original compiler ownership"))?
             .engine.reconstruct_imported_native(GENERATED_MANIFEST),
+        Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
     };
     *observation = Some(observed);
     let mut native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -1868,11 +1871,46 @@ mod __rawr_profile {
             .map_err(|error| std::io::Error::other(error.to_string()))
     }
 
+    thread_local! {
+        /// A marked `main`'s runtime registry, which each generation it
+        /// admits binds a next generation of (D475.2, D553.4), so native
+        /// values keep their witnesses.
+        static RUNTIME: std::cell::RefCell<Option<__rawr_internal::host::runtime::Registry>> =
+            const { std::cell::RefCell::new(None) };
+        /// The program a marked `main` admitted last, kept while it runs.
+        static ADMITTED: std::cell::RefCell<Option<super::Program>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
     fn bind(program: &mut super::Program) -> Result<__rawr_internal::reload::installation::Bootstrap, String> {
         let candidate = program.candidate.take().ok_or("generation program unavailable")?;
-        let runtime = super::imported_runtime(&program.engine, &program._facades)
-            .map_err(|error| error.to_string())?;
+        let kept = program
+            .marked_main
+            .then(|| RUNTIME.with_borrow(|runtime| runtime.as_ref().map(|runtime| runtime.next_generation())))
+            .flatten();
+        let runtime = match kept {
+            Some(runtime) => runtime,
+            None => {
+                let runtime = super::imported_runtime(&program.engine, &program._facades)
+                    .map_err(|error| error.to_string())?;
+                if program.marked_main {
+                    RUNTIME.set(Some(runtime.next_generation()));
+                }
+                runtime
+            }
+        };
         candidate.bind(&program.engine, runtime).map_err(|error| error.to_string())
+    }
+
+    /// Make `program`, compiled beside a running marked `main`, the
+    /// generation its next calls from native code run in (D553.3). This
+    /// runs on the thread that owns the program, at an outermost entry. The
+    /// arena stays: its native values live on (D553.4).
+    pub fn admit(mut program: super::Program) -> Result<(), String> {
+        __rawr_internal::island::publish(bind(&mut program)?);
+        ADMITTED.set(Some(program));
+        super::admitted();
+        Ok(())
     }
 
     /// Run the program's `fn main` once, as Rust runs it, bound to the
@@ -2058,14 +2096,41 @@ fn exit(status: i32) -> ! {
     std::process::exit(status)
 }
 
-/// The protocol while an async `main`'s runtime entry runs on the owner
-/// thread: the running program asks for no refresh, carries no State and
-/// takes no hot generation, since a save restarts it (D527).
+/// What the protocol thread keeps of a running marked `main`'s program to
+/// compile the next generation beside it (D553.3): the engine it compiles
+/// against and the generation it compares with.
+struct Live {
+    engine: __rawr_internal::Shared<__rawr_internal::Engine>,
+    generation: std::sync::Arc<__rawr_internal::reload::Generation>,
+}
+
+/// A generation the owner thread admitted, for a `rawr mcp` that
+/// supervises the run: the owner said `queued` when it committed (D553.3).
+fn admitted() {
+    use std::io::Write as _;
+    let Some(path) = std::env::var_os("RAWR_MCP_EVENTS").filter(|path| !path.is_empty()) else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(b"{\"event\":\"swapped\"}\n");
+    }
+}
+
+/// The protocol while the program's own code runs on the owner thread: an
+/// async `main`'s runtime entry, which asks for no refresh, carries no
+/// State and takes no hot generation, since a save restarts it (D527), or a
+/// marked `main` (`live`). A marked `main`'s next generation compiles here
+/// and is offered to the owner thread, which admits it at its next call
+/// from native code into script code (D553.3). A generation that can't
+/// replace the running one is refused with its reason, and the owner
+/// restarts the program with it.
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
     received: std::sync::mpsc::Receiver<Event>,
-    key: [u8; 32],
+    mut key: [u8; 32],
+    mut live: Option<Live>,
 ) {
+    let mut pending: Option<PendingProgram> = None;
     let mut serve = || -> std::io::Result<()> {
         loop {
             let (tag, payload) = next_frame(&received)?;
@@ -2077,6 +2142,71 @@ fn serve_entry(
                 }
                 35 | 11 if payload.len() >= 32 && payload[..32] == key => {
                     send_frame(&mut stream, if tag == 35 { 36 } else { 11 }, &key)?;
+                }
+                9 if live.is_some() && pending.is_none() && payload.len() >= 112 => {
+                    let Some(running) = live.as_ref() else { unreachable!("matched above") };
+                    let next: [u8; 32] = payload[..32].try_into().map_err(|_| std::io::Error::other("generation key"))?;
+                    let nonce: [u8; 16] = payload[96..112].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
+                    let mut response = Vec::with_capacity(48);
+                    response.extend_from_slice(&next);
+                    response.extend_from_slice(&nonce);
+                    if payload[32..64] != COMPILED_SURFACE {
+                        report_accounts(&mut stream, tag, &payload, [None, None]);
+                        send_frame(&mut stream, 10, &response)?;
+                        continue;
+                    }
+                    let mut ordinal = 0_u8;
+                    let mut progress = |stage| {
+                        ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
+                        send_progress(&mut stream, &next, &nonce, 3, ordinal, stage)
+                    };
+                    let mut observation = None;
+                    let compiled = compile_program(&payload[112..], Compilation::Live(&running.engine), &mut progress, &mut observation);
+                    drop(progress);
+                    let candidate = account_result(compiled, &mut stream, tag, &payload, [None, observed_account(&observation)])?;
+                    let refused = candidate
+                        .as_ref()
+                        .and_then(|program| program.candidate.as_ref())
+                        .and_then(|next| __rawr_internal::island::refusal(&running.generation, next));
+                    report_accounts(&mut stream, tag, &payload, [None, program_account(&candidate)]);
+                    if let Some(reason) = refused {
+                        send_frame(&mut stream, 16, reason.as_bytes())?;
+                        continue;
+                    }
+                    pending = Some(PendingProgram { key: next, nonce, program: candidate });
+                    send_frame(&mut stream, 4, &response)?;
+                }
+                25 | 26 if live.is_some() && payload.len() == 48 => {
+                    let next: [u8; 32] = payload[..32].try_into().map_err(|_| std::io::Error::other("generation key"))?;
+                    let nonce: [u8; 16] = payload[32..48].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
+                    let Some(candidate) = pending.take() else {
+                        return Err(std::io::Error::other("missing hot preparation"));
+                    };
+                    if candidate.key != next || candidate.nonce != nonce {
+                        return Err(std::io::Error::other("stale hot transition"));
+                    }
+                    if tag == 26 {
+                        drop(candidate);
+                        send_frame(&mut stream, 27, &payload)?;
+                        continue;
+                    }
+                    if let Some(mut program) = candidate.program {
+                        let evaluated = evaluate_program(&mut program);
+                        account_result(evaluated, &mut stream, tag, &payload, [None, None])?;
+                        if let (Some(running), Some(next)) = (live.as_mut(), program.candidate.as_ref()) {
+                            running.engine = program.engine.clone();
+                            running.generation = next.generation().clone();
+                        }
+                        // The owner thread admits it at its next call from
+                        // native code; a newer save's replaces it first.
+                        __rawr_internal::future::offer(move || {
+                            if let Err(error) = __rawr_profile::admit(program) {
+                                eprintln!("rawr: the program keeps running the previous generation: {error}");
+                            }
+                        });
+                    }
+                    key = next;
+                    send_frame(&mut stream, 8, &payload)?;
                 }
                 17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
                 12 if payload.as_slice() == key => {
@@ -2313,9 +2443,13 @@ fn run_protocol(
                 // the program with Rust's status, 101.
                 if let Some(running) = program.as_mut().filter(|program| program.marked_main) {
                     let stream = stream.try_clone()?;
+                    let live = running.candidate.as_ref().map(|candidate| Live {
+                        engine: running.engine.clone(),
+                        generation: candidate.generation().clone(),
+                    });
                     std::thread::Builder::new()
                         .name("rawr protocol".into())
-                        .spawn(move || serve_entry(stream, received, key))?;
+                        .spawn(move || serve_entry(stream, received, key, live))?;
                     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         __rawr_profile::run(running, |_| {})
                     }));
@@ -2344,7 +2478,7 @@ fn run_protocol(
                         let stream = stream.try_clone()?;
                         std::thread::Builder::new()
                             .name("rawr protocol".into())
-                            .spawn(move || serve_entry(stream, received, key))?;
+                            .spawn(move || serve_entry(stream, received, key, None))?;
                         exit(std::panic::catch_unwind(entry).unwrap_or(101));
                     }
                 }
@@ -3474,8 +3608,15 @@ pub(crate) fn semantic_digest<B: crate::surface::Runner>(
         }
         None => digest.update([0]),
     }
+    // The native items, not where the program names them: an edit that
+    // moves a use site builds the same runner, and a running program
+    // keeps it (D553).
     let mut entries = Hashing(Sha256::new());
-    serde_json::to_writer(&mut entries, &request.entries).map_err(|_| request::Error::Encoding)?;
+    serde_json::to_writer(
+        &mut entries,
+        &crate::surface::UniqueIdentities(&request.entries),
+    )
+    .map_err(|_| request::Error::Encoding)?;
     digest.update(entries.0.finalize());
     Ok(digest.finalize().into())
 }

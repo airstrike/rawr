@@ -60,9 +60,23 @@ done
 echo "The bot runs image $want after $((i * 5)) s of polling."
 
 # Smoke test: the runnable snippets on the landing page and in the docs must still run.
+# /play/run limits each IP, so the test sends x-play-admin to skip the limit:
+# PLAY_SMOKE_TOKEN (the Worker's secret of that name, which GitHub Actions has
+# too), or else the admin HMAC of ~/.config/rawr-play/log-key.
 node --input-type=module -e '
   import { readdirSync, readFileSync } from "node:fs";
   import { join, relative } from "node:path";
+  import { homedir } from "node:os";
+  import { createHmac } from "node:crypto";
+  const admin = process.env.PLAY_SMOKE_TOKEN || (() => {
+    try {
+      const key = readFileSync(join(homedir(), ".config/rawr-play/log-key"), "utf8").trim();
+      return createHmac("sha256", key).update("rawr-play admin").digest("hex");
+    } catch {
+      return "";
+    }
+  })();
+  const headers = { "content-type": "application/json", ...(admin ? { "x-play-admin": admin } : {}) };
   // Every page of the site that holds a runnable block, read from the files
   // (index.html is its directory'"'"'s path, other pages drop .html).
   const root = process.argv[2];
@@ -90,11 +104,11 @@ node --input-type=module -e '
       sources.add(body);
     }
   }
-  // Each distinct source once. Landing runs are rate limited per IP, so a
-  // 429 waits as long as it asks and tries again.
+  // Each distinct source once. Without the header, landing runs are rate
+  // limited per IP, so a 429 waits as long as it asks and tries again.
   for (const body of sources) {
     for (;;) {
-      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body });
+      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers, body });
       if (response.status === 429) {
         const wait = Number(/(\d+) s/.exec(await response.text())?.[1] ?? 30);
         console.log("rate limited; waiting " + wait + " s");

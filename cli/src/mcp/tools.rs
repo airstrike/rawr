@@ -143,7 +143,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "wait",
-            "description": "Wait for what happens next to the started program: `running`, `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call. Call it after each save.",
+            "description": "Wait for what happens next to the started program: `running`, `queued` (a save reached a program whose native loop takes it at its next call into script code), `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call. Call it after each save.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
