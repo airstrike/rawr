@@ -83,6 +83,23 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
         run.seen.join("\n")
     );
 
+    // `main` ran once: an edit to it restarts the program.
+    edit(
+        &main,
+        "ticker::run(step, 3000);",
+        "ticker::run(step, 2999);",
+    );
+    run.until(Duration::from_secs(600), |line| {
+        parse(line) == Some((1, 100))
+    });
+    assert!(
+        run.seen
+            .iter()
+            .any(|line| line == "stderr: rawr: `main` changed; restarting the program"),
+        "{}",
+        run.seen.join("\n")
+    );
+
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));

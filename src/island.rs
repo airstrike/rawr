@@ -395,6 +395,94 @@ fn same_closures(one: Option<&[item::Value]>, other: Option<&[item::Value]>) -> 
     }
 }
 
+/// The crate root's `fn main`, from `fn` to its closing brace, without its
+/// comments and with each run of whitespace one space: an edit that only
+/// moves or reflows it changes nothing. The closures it writes are part of
+/// it, so an edit to one restarts too. `None` without a `fn main`.
+#[cfg(feature = "sync")]
+fn main_text(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let start = (0..bytes.len()).find(|&at| {
+        text.is_char_boundary(at)
+            && text[at..].starts_with("fn")
+            && (at == 0 || !is_ident(bytes[at - 1]))
+            && text[at + 2..].trim_start().starts_with("main")
+            && text[at + 2..].trim_start()[4..]
+                .trim_start()
+                .starts_with(['(', '<'])
+            && bytes.get(at + 2).is_some_and(u8::is_ascii_whitespace)
+    })?;
+    let mut output = String::new();
+    let mut depth = 0_usize;
+    let mut at = start;
+    let mut space = false;
+    while at < bytes.len() {
+        let rest = &text[at..];
+        let byte = bytes[at];
+        let skip = if rest.starts_with("//") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if let Some(comment) = rest.strip_prefix("/*") {
+            comment.find("*/").map_or(rest.len(), |end| end + 4)
+        } else {
+            0
+        };
+        if skip > 0 {
+            space = true;
+            at += skip;
+            continue;
+        }
+        if byte.is_ascii_whitespace() {
+            space = true;
+            at += 1;
+            continue;
+        }
+        if space && !output.is_empty() {
+            output.push(' ');
+        }
+        space = false;
+        let length = if byte == b'"' || (byte == b'r' && rest[1..].starts_with(['"', '#'])) {
+            // A string: its text counts as it is.
+            let hashes = rest[usize::from(byte == b'r')..]
+                .bytes()
+                .take_while(|&b| b == b'#')
+                .count();
+            let open = usize::from(byte == b'r') + hashes + 1;
+            if byte == b'r' || hashes > 0 {
+                let close = format!("\"{}", "#".repeat(hashes));
+                rest[open..]
+                    .find(&close)
+                    .map_or(rest.len(), |end| open + end + close.len())
+            } else {
+                let mut end = 1;
+                while end < rest.len() && bytes[at + end] != b'"' {
+                    end += if bytes[at + end] == b'\\' { 2 } else { 1 };
+                }
+                (end + 1).min(rest.len())
+            }
+        } else if byte == b'\'' && rest[1..].starts_with('\\') {
+            rest[2..].find('\'').map_or(rest.len(), |end| end + 3)
+        } else if byte == b'\'' && rest[1..].chars().nth(1) == Some('\'') {
+            1 + rest[1..].chars().next().map_or(0, char::len_utf8) + 1
+        } else {
+            rest.chars().next().map_or(1, char::len_utf8)
+        };
+        output.push_str(&rest[..length]);
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(output);
+                }
+            }
+            _ => {}
+        }
+        at += length;
+    }
+    Some(output)
+}
+
 /// Why `candidate` can't replace `current` while a marked `main` runs
 /// (D553.6), in one line for `rawr run` to restart with. `None` when it
 /// swaps in: a body edit, or a new function or type.
@@ -431,6 +519,12 @@ pub fn refusal(
     }
     if !crate::future::called_from_native() {
         return Some("the source changed".to_owned());
+    }
+    // `main` runs once: an edit to it would need it to run again.
+    if main_text(current.source().entry_source().text())
+        != main_text(candidate.source().entry_source().text())
+    {
+        return Some("`main` changed".to_owned());
     }
     let held = crate::future::held();
     if held.is_empty() {
@@ -673,4 +767,20 @@ fn a_compiled_program_moves_to_the_owner_thread() {
     moves::<std::sync::Arc<crate::reload::Generation>>();
     moves::<crate::host::facade::Definition>();
     moves::<crate::package::import::runner::account::Observation>();
+}
+
+/// What of `main` a running program compares: its text without comments
+/// or layout, strings and characters as written, up to its closing brace.
+#[cfg(all(test, feature = "sync"))]
+#[test]
+fn main_text_ignores_layout_and_comments_and_stops_at_its_brace() {
+    let one = "// rawr\nuse x::y;\n\nfn main() {\n    // a comment\n    let s = \"}\";\n    let c = '}';\n    run(|t| { t + 1 }, 40);\n}\n\nfn step() {}\n";
+    let moved = "// rawr\nuse x::y;\nfn helper() -> i64 { 2 }\n\nfn  main()  {\n    let s = \"}\"; /* note */\n    let c = '}';\n    run(|t| {\n        t + 1\n    }, 40);\n}\n";
+    let edited = one.replace("40", "50");
+    let text = main_text(one).unwrap();
+    assert!(text.starts_with("fn main() {"), "{text}");
+    assert!(text.ends_with("40); }"), "{text}");
+    assert_eq!(main_text(moved), main_text(one));
+    assert_ne!(main_text(&edited), main_text(one));
+    assert_eq!(main_text("fn domain() {}"), None);
 }

@@ -66,13 +66,14 @@
 <p>Some saves restart the program with one line that says why:</p>
 <ul>
   <li>a struct or enum with new fields or variants, since native code may hold a value of the old shape;</li>
-  <li>a changed function or closure that <code>main</code> itself gave native code, since <code>main</code> doesn&rsquo;t run again to give a new one;</li>
+  <li>an edit to <code>main</code> itself, closures written in it included, since <code>main</code> runs only once;</li>
+  <li>a changed function that <code>main</code> gave native code, since <code>main</code> doesn&rsquo;t run again to give a new one;</li>
   <li>a program whose native code never called back into marked code;</li>
   <li>a new native call, or an edit to <code>Cargo.toml</code> or a native file;</li>
   <li>a panic after a save, such as a framework&rsquo;s check that its hooks keep their order.</li>
 </ul>
 <div class="block"><pre><code>rawr: `Scale` changed its fields; restarting the program</code></pre></div>
-<p><code>main</code> itself doesn&rsquo;t run again. An edit to the statements of <code>main</code> shows after the next restart.</p>
+
 <h3 id="next-event">When the edit shows</h3>
 <p>A loop that runs every frame shows the edit at its next frame. A game loop and a ratatui loop are such loops.</p>
 <p>A framework that redraws only what changed shows the edit at its next event. Freya is such a framework: it calls a component again only when its state changes, so an edit shows when you next click or type. Showing an edit at once would need the framework to rerun every component and keep its state, and Freya has no call that does both. Its own reload resets every <code>use_state</code>.</p>
