@@ -7,6 +7,7 @@
 mod erasure;
 mod islands;
 mod plain;
+mod scope;
 mod support;
 mod swap;
 mod tokio;

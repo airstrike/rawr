@@ -26,6 +26,20 @@ pub struct Plan {
     partial_eq: bool,
     eq: bool,
     hash: bool,
+    /// How many lifetime parameters the type declares, before its type
+    /// parameters: a value of it may borrow, and lives in a scope frame's
+    /// region when it does (D558 tier 1).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    lifetimes: u32,
+    /// The crate implements `Iterator` for the type: a `for` loop walks it
+    /// by its `next` (D558 slice 2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    iterator: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl Field {
@@ -102,6 +116,8 @@ impl Plan {
             partial_eq,
             eq,
             hash,
+            lifetimes: 0,
+            iterator: false,
         }
     }
 
@@ -174,6 +190,24 @@ impl Plan {
     #[must_use]
     pub const fn hash(&self) -> bool {
         self.hash
+    }
+
+    pub(crate) const fn with_borrowing(mut self, lifetimes: u32, iterator: bool) -> Self {
+        self.lifetimes = lifetimes;
+        self.iterator = iterator;
+        self
+    }
+
+    /// How many lifetime parameters the type declares.
+    #[must_use]
+    pub const fn lifetimes(&self) -> u32 {
+        self.lifetimes
+    }
+
+    /// Whether the crate implements `Iterator` for the type.
+    #[must_use]
+    pub const fn iterator(&self) -> bool {
+        self.iterator
     }
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no

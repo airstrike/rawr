@@ -986,6 +986,7 @@ fn build(
                     ty.partial_eq(),
                     ty.eq(),
                     ty.hash(),
+                    ty.iterator(),
                 ]),
                 parameters,
                 defaults,
@@ -1221,7 +1222,8 @@ fn item_definition(
     });
     Ok(definition
         .imported(item.selector().try_clone()?)
-        .guarded(guard))
+        .guarded(guard)
+        .opening(item.signature().scope().is_some()))
 }
 
 fn signature(

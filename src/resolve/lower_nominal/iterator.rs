@@ -184,15 +184,31 @@ impl Parser<'_> {
                     && self.models.method(id, member).is_none()
                     && self.type_implements(&ty, "Iterator")
             }
+            // An imported type the crate implements `Iterator` for, as
+            // quick-xml's `Attributes` (D558 slice 2): the adaptors its own
+            // methods do not name.
+            ty @ Ty::Host { .. } => {
+                ITERATOR_METHODS.contains(&member)
+                    && !matches!(member, "next" | "clone")
+                    && self.type_implements(&ty, "Iterator")
+                    && ty.host_alias().is_none_or(|definition| {
+                        self.models
+                            .host_items(&format!("{}::{member}", definition.path()))
+                            .is_none()
+                    })
+            }
             _ => false,
         }
     }
 
-    /// A chain over a crate iterator: its `next()` until `None`.
+    /// A chain over a crate iterator: its `next()` until `None`. `id` is
+    /// the script type's, or `None` for an imported type the crate
+    /// implements `Iterator` for, whose `next` is a native call (D558
+    /// slice 2).
     fn user_pipeline(
         &mut self,
         value: &ParsedExpr,
-        id: type_def::Id,
+        id: Option<type_def::Id>,
     ) -> Result<(Pipeline, Ty), Error> {
         let iterator = self.temporary("iterator");
         let ty = self.inference.resolve(&value.ty);
@@ -219,16 +235,25 @@ impl Parser<'_> {
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
         };
-        let name = self.models.definition(id).name().into();
-        let called = self.call_owner_method(
-            receiver,
-            id,
-            name,
-            &"next".into(),
-            value.span,
-            Vec::new(),
-            value.span.end(),
-        );
+        let called = match id {
+            Some(id) => {
+                let name = self.models.definition(id).name().into();
+                self.call_owner_method(
+                    receiver,
+                    id,
+                    name,
+                    &"next".into(),
+                    value.span,
+                    Vec::new(),
+                    value.span.end(),
+                )
+            }
+            None => {
+                self.pending_arguments = Some((Vec::new(), value.span.end()));
+                self.parse_host_method(receiver, "next".into(), value.span)
+                    .map(Ok)
+            }
+        };
         self.bindings.remove(iterator.as_str());
         let Ok(called) = called? else {
             return Err(self.unsupported("an `Iterator` impl without `next`"));
@@ -503,7 +528,10 @@ impl Parser<'_> {
         if let Ty::Script(id, _) = ty
             && self.type_implements(&ty, "Iterator")
         {
-            return self.user_pipeline(value, id).ok();
+            return self.user_pipeline(value, Some(id)).ok();
+        }
+        if matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator") {
+            return self.user_pipeline(value, None).ok();
         }
         let item = match &ty {
             Ty::Iter(item) => (**item).clone(),

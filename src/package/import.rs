@@ -1497,6 +1497,7 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.iterator(),
                 ]),
             ),
             Representability::Enum(plan) => (
@@ -1510,6 +1511,7 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.iterator(),
                 ]),
             ),
             Representability::Value(_)
@@ -1694,7 +1696,8 @@ fn imported_item(
                 signature(types, plan.signature(), allocation)?,
             )?
             .imported(outcome.identity().selector().try_clone()?)
-            .guarded(guard(plan.signature())),
+            .guarded(guard(plan.signature()))
+            .opening(plan.signature().scope().is_some()),
         ),
         Representability::Constant(plan) => Some(
             match outcome.identity().selector() {
@@ -1723,7 +1726,8 @@ fn imported_item(
                 _ => return Err(Error::Cardinality),
             }
             .imported(outcome.identity().selector().try_clone()?)
-            .guarded(guard(plan.signature())),
+            .guarded(guard(plan.signature()))
+            .opening(plan.signature().scope().is_some()),
         ),
         // A generic function Rawr calls at the types it infers or a
         // turbofish names. The bridge calls it at those types, where rustc
@@ -1746,7 +1750,8 @@ fn imported_item(
                 _ => return Err(Error::Cardinality),
             }
             .imported(outcome.identity().selector().try_clone()?)
-            .guarded(guard(plan.signature())),
+            .guarded(guard(plan.signature()))
+            .opening(plan.signature().scope().is_some()),
         ),
         Representability::Value(_)
         | Representability::Struct(_)
@@ -2233,7 +2238,7 @@ fn names(
 /// The traits a crate implements for a type, in the order `copy`,
 /// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
 /// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 7]) -> Vec<crate::capability::Kind> {
+pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -2243,6 +2248,7 @@ pub(crate) fn implemented(traits: [bool; 7]) -> Vec<crate::capability::Kind> {
         Kind::PartialEq,
         Kind::Eq,
         Kind::Hash,
+        Kind::Iterator,
     ]
     .into_iter()
     .zip(traits)

@@ -507,6 +507,12 @@ impl Arena {
     }
 
     /// `==` of two values of one type by its `PartialEq`.
+    /// `call` of the value `handle` names.
+    fn with_value<R>(&self, handle: NativeHandle, call: impl FnOnce(&dyn Any) -> R) -> Option<R> {
+        let (_, value) = self.live(handle)?;
+        Some(call(value))
+    }
+
     fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
         let (entry, lhs) = self.live(lhs)?;
         let (_, rhs) = self.live(rhs)?;
@@ -791,6 +797,8 @@ impl Arena {
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
+    __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
+    __rawr_internal::host::display::register::<__rawr_internal::scope::Scoped>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
     // A new program's arena: the handles the last one gave out are stale.
     EXPORTED.with_borrow_mut(Vec::clear);
@@ -993,6 +1001,16 @@ fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent))
 }
 
+/// The value in a scope frame's region at argument `index` (D558 tier 1),
+/// if that argument is one.
+#[allow(dead_code)]
+fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
+    arguments
+        .values
+        .get(index)
+        .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
+}
+
 fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
@@ -1155,6 +1173,36 @@ thread_local! {
     /// parameters take theirs (review 2).
     static OPERANDS: RefCell<Vec<Option<__rawr_internal::host::runtime::Witness>>> =
         const { RefCell::new(Vec::new()) };
+    /// The witness of the output of the call an adapter runs: a borrow
+    /// guard's place gives its reads it, as the call would its output.
+    static OUTPUT: RefCell<Option<__rawr_internal::host::runtime::Witness>> =
+        const { RefCell::new(None) };
+}
+
+/// The witness of the output of the call the adapter runs.
+#[allow(dead_code)]
+fn output_witness() -> Option<__rawr_internal::host::runtime::Witness> {
+    OUTPUT.with_borrow(Clone::clone)
+}
+
+/// `value`, a read of a guard's target, attested as the guard's call's
+/// output is.
+#[allow(dead_code)]
+fn attest_read(
+    arena: &mut Arena,
+    value: Dynamic,
+    witness: &Option<__rawr_internal::host::runtime::Witness>,
+) -> Result<Dynamic, Error> {
+    if let Some(witness) = witness {
+        match value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
+            Some(handle) => arena.attest(handle, witness.clone())?,
+            None => {
+                attest_inner(&value, witness, arena)?;
+                attest_elements(&value, witness, arena)?;
+            }
+        }
+    }
+    Ok(value)
 }
 
 /// The witnesses of the `count` parameters of the closure that is operand
@@ -1175,8 +1223,14 @@ fn runtime_invoke(
     values: &mut [&mut Dynamic],
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
     OPERANDS.set((0..values.len()).map(|index| call.operand_witness(index).ok()).collect());
+    OUTPUT.set(
+        call.output_witness()
+            .or_else(|_| call.borrowed_output_witness())
+            .ok(),
+    );
     let output = invoke_in_arena(adapter, call, values);
     OPERANDS.with_borrow_mut(Vec::clear);
+    OUTPUT.set(None);
     let output = output?;
     // Script values that came back are checked outside the arena's borrow:
     // a member of an imported type attests through the arena (review 9).
@@ -1344,6 +1398,20 @@ fn native_attestation(
 
 /// `==` of two imported values by their Rust type's `PartialEq`.
 fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
+    // A value in a scope frame's region (D558 tier 1), with one of its
+    // region or one the arena holds.
+    let scoped = |value: &Dynamic| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
+    match (scoped(lhs), scoped(rhs)) {
+        (Some(lhs), Some(rhs)) => return lhs.equal(&rhs).ok().flatten(),
+        (Some(scoped), None) | (None, Some(scoped)) => {
+            let other = if lhs.is::<__rawr_internal::scope::Scoped>() { rhs } else { lhs };
+            let handle = other.read_lock::<NativeHandle>().map(|value| value.clone())?;
+            return arena_access(|arena| arena.with_value(handle, |value| scoped.equal_native(value).ok().flatten()))
+                .flatten()
+                .flatten();
+        }
+        (None, None) => {}
+    }
     let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     arena_access(|arena| arena.equal(lhs, rhs)).flatten()
@@ -1361,6 +1429,7 @@ fn imported_runtime(
     definitions: &[__rawr_internal::host::facade::Definition],
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
+    __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Scoped>(native_equal, native_compare);
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     // The core's future, which a crate's async functions give in a program
     // with no host profile (D513.3), before the facades that name it.
@@ -4093,7 +4162,7 @@ fn render_source(
     }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
         )
         .map_err(|_| request::Error::Encoding)?;
     // The facade plan is megabytes of data: rustc reads it with
@@ -4285,6 +4354,9 @@ fn render_source(
         render_module_execution_tests(plans, indices, primitive, builder, &mut file)?;
         sources.push((path, file));
     }
+    let mut families = Vec::new();
+    render_families(&mut families)?;
+    sources.push((FAMILIES_PATH.into(), families));
     sources.push((SURFACE_PATH.into(), stamps));
     Ok(())
 }
@@ -4343,6 +4415,10 @@ fn span_offset(output: &[u8]) -> Result<u32, request::Error> {
         actual: output.len(),
     })
 }
+
+/// The scope families the adapters name (D558 tier 1), after every adapter
+/// module in path order.
+const FAMILIES_PATH: &str = "src/rawr_families.rs";
 
 /// The per-generation stamps module, after every adapter module in path order.
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
@@ -4780,6 +4856,36 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         matcher_name(plan)
     )
     .map_err(|_| request::Error::Encoding)?;
+    // A value in a scope frame's region (D558 tier 1): its fields that
+    // carry the region's lifetime stay there.
+    if let Some(family) = container_family(&path, &path) {
+        let mut values = String::new();
+        {
+            let _region = InRegion::enter();
+            for (index, field) in fields.iter().enumerate() {
+                let mut converted = String::new();
+                render_to_dynamic(field.ty(), &format!("fields.{index}"), 0, &mut converted)?;
+                values.push_str(&format!("\n            values.push(({converted})?);"));
+            }
+        }
+        writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+            #[allow(unreachable_patterns)]
+            let output = match region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
+            let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+            #[allow(unused_mut)]
+            let mut values: Vec<Dynamic> = Vec::new();
+            #[allow(clippy::let_unit_value)]
+            let _ = &fields;{values}
+            Ok(__rawr_internal::option::some(if values.is_empty() {{ Dynamic::from(()) }} else {{ Dynamic::from_array(values) }}))
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+        )
+        .map_err(|_| request::Error::Encoding)?;
+    }
     writeln!(
         output,
         "    let handle = native_handle(arguments, 0, false)?;\n    #[allow(unreachable_patterns)]\n    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;\n    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
@@ -4885,6 +4991,29 @@ fn render_adapter(
                 .map_err(|_| request::Error::Encoding)?;
         }
         Operation::StructField { field, .. } => {
+            // A field of a value in a scope frame's region (D558 tier 1), as
+            // quick-xml's `Attribute::value`: a copy, which stays in the
+            // region when it carries the region's lifetime.
+            if let Some(family) = container_family(&path, &path) {
+                let converted = {
+                    let _region = InRegion::enter();
+                    let mut converted = String::new();
+                    render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
+                    converted
+                };
+                writeln!(
+                    output,
+                    "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+            let output = Clone::clone(&region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?.{});
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}",
+                    field.name()
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
             if copy_scalar(field.ty()) {
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
@@ -4955,7 +5084,19 @@ fn render_adapter(
                     output,
                 )?;
             }
-            if let Some(replay) = replay {
+            if signature.scope().is_some() {
+                render_opening(
+                    plan,
+                    signature,
+                    substitutions,
+                    constants,
+                    functions,
+                    mappers,
+                    *container_parameters,
+                    *associated,
+                    output,
+                )?;
+            } else if let Some(replay) = replay {
                 output
                     .write_all(b"    let output = __rawr_profile::Replay::new(move |_context| ")
                     .map_err(|_| request::Error::Encoding)?;
@@ -5039,6 +5180,26 @@ fn render_adapter(
                     render_give_with(signature, substitutions, "output", output)?;
                 }
             }
+        }
+        Operation::Method {
+            receiver,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            call: _,
+        } if signature.scope().is_some() => {
+            render_arguments_with(signature, substitutions, 1, output)?;
+            render_method_opening(
+                plan,
+                &path,
+                *receiver,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                output,
+            )?;
         }
         Operation::Method {
             receiver,
@@ -5238,6 +5399,16 @@ fn render_adapter(
             } else {
                 match receiver {
                     Receiver::Owned => {
+                        render_scoped_receiver(
+                            plan,
+                            &path,
+                            *receiver,
+                            signature,
+                            substitutions,
+                            constants,
+                            *container_parameters,
+                            output,
+                        )?;
                         output
                             .write_all(b"    let receiver: ")
                             .map_err(|_| request::Error::Encoding)?;
@@ -5331,6 +5502,394 @@ fn render_adapter(
         .map_err(|_| request::Error::Encoding)
 }
 
+/// A call whose output borrows its `&str` inputs (D558 tier 1), as
+/// `Parser::new(&text)`: it gives a scope frame the `let` that binds it
+/// opens. The frame owns the inputs the adapter took, makes the output,
+/// keeps it in a region at the inputs' borrow, and runs the rest of the
+/// scope with the output's handle.
+#[allow(clippy::too_many_arguments)]
+fn render_opening(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    functions: &[crate::surface::adapter::FunctionItem],
+    mappers: &[crate::surface::adapter::EventMapper],
+    container_parameters: usize,
+    associated: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let mut call = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        associated,
+        &mut call,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    function_argument_list(
+        signature,
+        substitutions,
+        functions,
+        mappers,
+        None,
+        &mut call,
+    )?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let name = rust_path(plan);
+    // The frame owns each `&str` input's `String` and each copied array,
+    // which the call borrows.
+    let FrameCopies {
+        rebound,
+        before,
+        back,
+        with,
+    } = frame_copies(signature)?;
+    writeln!(
+        output,
+        "    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
+        let made = {call};
+        let mut region = __rawr_internal::scope::Region::new();
+        let value = with_arena(|arena| {{
+            let mut values: [&mut Dynamic; 0] = [];
+            #[allow(unused_variables)]
+            let arguments = &mut Arguments {{ values: &mut values, arena }};
+            {converted}
+        }})
+        .map_err(runtime_error)?;
+        let result = __rawr_internal::scope::open(&mut region, || rest(value));{back}
+        result
+    }}){with};
+    Ok(Dynamic::from(output))"
+    )
+    .map_err(encoding)
+}
+
+/// What a frame's opening of a call whose output borrows what it takes
+/// writes besides the call: `rebound`, inside the frame, borrows each
+/// `&str` and copied array the frame owns; `before` and `with` make the
+/// frame's `Copies`; and `back`, once the frame ends and the output no
+/// longer borrows them, gives back each `&mut` array the call changed, for
+/// the statement after the frame to store (D558 slice 2).
+struct FrameCopies {
+    rebound: String,
+    before: String,
+    back: String,
+    with: String,
+}
+
+fn frame_copies(
+    signature: &crate::classify::representability::signature::Signature,
+) -> Result<FrameCopies, request::Error> {
+    let copies = copied_inputs(signature);
+    let mut rebound = String::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if matches!(input, convert::Type::Builtin(convert::Builtin::Str)) {
+            rebound.push_str(&format!(
+                "\n        let argument_{position} = argument_{position}_owned.as_str();"
+            ));
+        }
+    }
+    for (position, _) in &copies {
+        rebound.push_str(&format!(
+            "\n        let argument_{position} = &mut argument_{position}_copy;"
+        ));
+    }
+    if copies.is_empty() {
+        return Ok(FrameCopies {
+            rebound,
+            before: String::new(),
+            back: String::new(),
+            with: String::new(),
+        });
+    }
+    let mut given = Vec::new();
+    for (position, element) in &copies {
+        let mut converted = String::new();
+        render_to_dynamic(
+            element,
+            &format!("argument_{position}_copy"),
+            0,
+            &mut converted,
+        )?;
+        given.push(format!("({converted})?"));
+    }
+    Ok(FrameCopies {
+        rebound,
+        before: "let copies = __rawr_internal::scope::Copies::new();\n    let frame_copies = copies.clone();\n    ".to_owned(),
+        back: format!(
+            "\n        drop(region);\n        let given = with_arena(|arena| {{ let mut values: [&mut Dynamic; 0] = []; #[allow(unused_variables)] let arguments = &mut Arguments {{ values: &mut values, arena }}; Ok::<_, Error>(vec![{}]) }}).map_err(runtime_error)?;\n        frame_copies.set(given);",
+            given.join(", ")
+        ),
+        with: ".with_copies(copies)".to_owned(),
+    })
+}
+
+/// A method call whose output borrows what it takes besides its receiver
+/// (D558 tier 1), as quick-xml's `read_event_into(&mut buf)`: it gives a
+/// scope frame the statement it is in opens. The frame reaches the
+/// receiver for the call alone, in its region or in the arena, makes the
+/// output in a region of its own, and runs the rest of the scope.
+#[allow(clippy::too_many_arguments)]
+fn render_method_opening(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let mut call = format!("receiver.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let (access, reach) = match receiver {
+        Receiver::Shared => ("shared", "get"),
+        Receiver::Mutable => ("mutable", "get_mut"),
+        Receiver::Owned => {
+            return Err(request::Error::Drift {
+                field: "a scope frame's call that takes its receiver",
+            });
+        }
+    };
+    let scoped = match container_family(path, &container) {
+        Some(family) => format!(
+            "Some(scoped) => __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
+                #[allow(unused_mut)]
+                let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+                Ok({call})
+            }})
+            .map_err(|error| Error::Lent(scoped.name(), error))
+            .and_then(|made| made),"
+        ),
+        None => "Some(scoped) => Err(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch)),".to_owned(),
+    };
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let FrameCopies {
+        rebound,
+        before,
+        back,
+        with,
+    } = frame_copies(signature)?;
+    let name = format!("{}::{}", rust_path(plan), plan.name());
+    // The frame itself, once the call has made its output.
+    let frame = format!(
+        "let mut region = __rawr_internal::scope::Region::new();
+            let value = with_arena(|arena| {{
+                let mut values: [&mut Dynamic; 0] = [];
+                #[allow(unused_variables)]
+                let arguments = &mut Arguments {{ values: &mut values, arena }};
+                {converted}
+            }})
+            .map_err(runtime_error)?;
+            let result = __rawr_internal::scope::open(&mut region, || rest(value));{back}
+            result"
+    );
+    if signature.scope() == Some(crate::classify::representability::signature::Scope::Borrows) {
+        // The output borrows the receiver: the frame holds it borrowed in
+        // its region, shared for `&self`, or leased from its arena slot,
+        // until the rest of the scope has run.
+        let (claim, family_reach) = match receiver {
+            Receiver::Shared => ("with_ref", "get"),
+            _ => ("with", "get_mut"),
+        };
+        let scoped = match container_family(path, &container) {
+            Some(family) => format!(
+                "Some(scoped) => __rawr_internal::scope::{claim}::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+            #[allow(unused_mut)]
+            let mut receiver = region.{family_reach}::<{family}>(scoped).map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
+            let made = {call};
+            {frame}
+        }})
+        .map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?,"
+            ),
+            None => "Some(scoped) => Err(runtime_error(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))),".to_owned(),
+        };
+        let borrow = if matches!(receiver, Receiver::Shared) {
+            "&*"
+        } else {
+            ""
+        };
+        return writeln!(
+            output,
+            "    let scoped = scoped_value(arguments, 0);
+    let handle = match scoped {{
+        Some(_) => None,
+        None => Some(native_handle(arguments, 0, false)?),
+    }};
+    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
+        match scoped {{
+            {scoped}
+            None => {{
+                let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                #[allow(unused_mut)]
+                let mut receiver = {borrow}held.get_mut();
+                let made = {call};
+                {frame}
+            }}
+        }}
+    }}){with};
+    Ok(Dynamic::from(output))"
+        )
+        .map_err(encoding);
+    }
+    writeln!(
+        output,
+        "    let scoped = scoped_value(arguments, 0);
+    let handle = match scoped {{
+        Some(_) => None,
+        None => Some(native_handle(arguments, 0, false)?),
+    }};
+    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
+        let made = match scoped {{
+            {scoped}
+            None => with_arena(|arena| arena.{access}::<{container}, _>(handle.ok_or(Error::Stale)?, |receiver| {call})),
+        }}
+        .map_err(runtime_error)?;
+        let mut region = __rawr_internal::scope::Region::new();
+        let value = with_arena(|arena| {{
+            let mut values: [&mut Dynamic; 0] = [];
+            #[allow(unused_variables)]
+            let arguments = &mut Arguments {{ values: &mut values, arena }};
+            {converted}
+        }})
+        .map_err(runtime_error)?;
+        let result = __rawr_internal::scope::open(&mut region, || rest(value));{back}
+        result
+    }}){with};
+    Ok(Dynamic::from(output))"
+    )
+    .map_err(encoding)
+}
+
+/// The call of a method whose receiver is a value in a scope frame's
+/// region (D558 tier 1), when its type carries lifetimes: the receiver is
+/// reached in its region, and an output that carries the region's
+/// lifetime stays there. Nothing for another receiver type.
+#[allow(clippy::too_many_arguments)]
+fn render_scoped_receiver(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let Some(family) = container_family(path, &container) else {
+        return Ok(());
+    };
+    let mut call = format!("receiver.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    let mut call = format!("receiver.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    call.write_all(lent_copy(signature).as_bytes())
+        .map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let reach = match receiver {
+        Receiver::Owned => "take",
+        Receiver::Shared => "get",
+        Receiver::Mutable => "get_mut",
+    };
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "output", 0, &mut converted)?;
+        converted
+    };
+    writeln!(
+        output,
+        "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+            #[allow(unused_mut)]
+            let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+    )
+    .map_err(encoding)
+}
+
 /// The call of a method that borrows its receiver, into `output`. The
 /// receiver is a value in the arena, or one native code lends the call
 /// (D558.3), as ratatui's `&mut Frame<'_>` is. That one is reached through
@@ -5361,6 +5920,8 @@ fn render_borrowed_receiver(
     call.write_all(b"(").map_err(encoding)?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
+    call.write_all(lent_copy(signature).as_bytes())
+        .map_err(encoding)?;
     let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
     let mut container = Vec::new();
     render_container_path(
@@ -5373,6 +5934,16 @@ fn render_borrowed_receiver(
         &mut container,
     )?;
     let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    render_scoped_receiver(
+        plan,
+        path,
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        output,
+    )?;
     let access = if mutable { "mutable" } else { "shared" };
     let borrow = if mutable { "&mut " } else { "&" };
     let mut taken = Vec::new();
@@ -5383,6 +5954,19 @@ fn render_borrowed_receiver(
     } else {
         format!("({taken},)")
     };
+    // An output that borrows what a lent receiver carries can't leave the
+    // accessor's visitor: such a receiver is reached only in the arena, at
+    // `'static`, or in a scope frame's region (D558 tier 1).
+    if container_family(path, &container).is_some()
+        && may_borrow(&substituted(signature.output(), signature, substitutions)?)
+    {
+        return writeln!(
+            output,
+            "    let receiver = native_handle(arguments, 0, false)?;
+    let output = arguments.arena.{access}::<{container}, _>(receiver, |receiver| {call})?;"
+        )
+        .map_err(encoding);
+    }
     writeln!(
         output,
         "    let output = match lent_value(arguments, 0) {{
@@ -5408,6 +5992,138 @@ fn render_borrowed_receiver(
     }};"
     )
     .map_err(encoding)
+}
+
+/// `render_guard` for a receiver in a scope frame's region (D558 tier 1),
+/// as quick-xml's `reader.config_mut()` is on a `Reader<&[u8]>` its
+/// `Reader::from_str` frame holds: the receiver is reached in its region at
+/// each access instead of in the arena. Nothing for a receiver type that
+/// carries no lifetime.
+#[allow(clippy::too_many_arguments)]
+fn render_scoped_guard(
+    plan: &Plan,
+    path: &str,
+    guard: crate::classify::representability::signature::Guard,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use crate::classify::representability::signature::Guard;
+    let encoding = |_| request::Error::Encoding;
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let Some(family) = container_family(path, &container) else {
+        return Ok(());
+    };
+    let target = substituted(signature.output(), signature, substitutions)?;
+    let mut method = format!("receiver.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut method,
+    )?;
+    method.write_all(b"(").map_err(encoding)?;
+    argument_list(signature.inputs().len(), 1, &mut method)?;
+    method.write_all(b")").map_err(encoding)?;
+    let method = String::from_utf8(method).map_err(|_| request::Error::Encoding)?;
+    // The guard on the receiver in its region, inside `with`.
+    let reach = format!(
+        "__rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
+            let receiver = region.get_mut::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+            let mut guard = {method};
+            let _ = &mut guard;"
+    );
+    let close = "})
+        .map_err(|error| Error::Lent(scoped.name(), error))
+        .and_then(|output| output)";
+    let mut give = Vec::new();
+    render_give(&target, "output", &mut give)?;
+    let give = String::from_utf8(give).map_err(|_| request::Error::Encoding)?;
+    match guard {
+        Guard::Shared => writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        return {reach}
+            let output = guard_copy!(&*guard)?;
+            {give}
+        {close};
+    }}"
+        )
+        .map_err(encoding),
+        Guard::Mutable => {
+            let mut take = Vec::new();
+            render_take(0, 0, &target, &mut take)?;
+            let take = String::from_utf8(take).map_err(|_| request::Error::Encoding)?;
+            let give = format!(
+                "let read: Result<Dynamic, Error> = {{\n{give}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))"
+            );
+            writeln!(
+                output,
+                "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        let witness = output_witness();
+        let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {{
+            use __rawr_internal::island::place::Access;
+            let mut stored = match access {{
+                Access::Read => None,
+                Access::Store(value) => Some(value),
+                Access::Update(apply) => {{
+                    return with_arena(|arena| {{
+                        {reach}
+                            let output = guard_copy!(&*guard)?;
+                            let value = {{
+                                #[allow(unused_variables)]
+                                let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
+                                {give}
+                            }}?;
+                            let mut stored = match lend(arena, || apply(value)) {{
+                                Ok(stored) => stored,
+                                Err(error) => return Ok(Err(error)),
+                            }};
+                            let mut values = [&mut stored];
+                            let arguments = &mut Arguments {{ values: &mut values, arena }};
+                            {take}
+                            *guard = argument_0;
+                            Ok(Ok(Dynamic::UNIT))
+                        {close}
+                    }})
+                    .map_err(runtime_error)?;
+                }}
+            }};
+            with_arena(|arena| {{
+                let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
+                let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
+                {reach}
+                    if arguments.values.is_empty() {{
+                        let output = guard_copy!(&*guard)?;
+                        {give}
+                    }} else {{
+                        {take}
+                        *guard = argument_0;
+                        Ok(Dynamic::UNIT)
+                    }}
+                {close}
+            }})
+            .map_err(runtime_error)
+        }});
+        return Ok(Dynamic::from(place));
+    }}"
+            )
+            .map_err(encoding)
+        }
+    }
 }
 
 /// A method whose Rust output is a borrow guard, as Freya's `State::read`
@@ -5484,6 +6200,16 @@ fn render_guard(
         }
         Ok::<_, request::Error>(())
     };
+    render_scoped_guard(
+        plan,
+        path,
+        guard,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        output,
+    )?;
     writeln!(
         output,
         "    let receiver = native_handle(arguments, 0, false)?;"
@@ -5504,13 +6230,19 @@ fn render_guard(
                     field: "a mutable borrow guard's method takes inputs",
                 });
             }
-            let mut give = Vec::new();
-            render_give(&target, "output", &mut give)?;
+            let mut given = Vec::new();
+            render_give(&target, "output", &mut given)?;
+            let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+            // A read is attested as the guard's call's output is.
+            let give = format!(
+                "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
+            )
+            .into_bytes();
             let mut take = Vec::new();
             render_take(0, 0, &target, &mut take)?;
             output
                 .write_all(
-                    b"    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
+                    b"    let witness = output_witness();\n    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
         use __rawr_internal::island::place::Access;
         let mut stored = match access {
             Access::Read => None,
@@ -6901,6 +7633,22 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // `&mut Vec<T>` of scalars: a copy of Rawr's array the call changes,
+    // which goes back after it (D558 slice 2).
+    if let convert::Type::Borrowed {
+        mutable: true,
+        ty: element,
+    } = ty
+        && matches!(**element, convert::Type::Sequence { .. })
+    {
+        let mut converted = String::new();
+        render_from_dynamic(element, "value", 0, &mut converted)?;
+        return writeln!(
+            output,
+            "    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -7161,6 +7909,13 @@ fn render_give(
         convert::Type::Unit | convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
+        // A `&[T]` a method lends: a copy, as Rawr's array.
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if matches!(**lent, convert::Type::Sequence { .. }) => {
+            return render_give(lent, value, output);
+        }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime output encoding",
@@ -7344,6 +8099,17 @@ fn render_to_dynamic(
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
+        // A value that borrows, made in a scope frame: its region holds it
+        // (D558 tier 1).
+        convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
+            let family = family_of(ty).ok_or(request::Error::Drift {
+                field: "a scoped value's family",
+            })?;
+            write!(
+                output,
+                "Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({value})))"
+            )
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
@@ -7353,6 +8119,10 @@ fn render_to_dynamic(
         }
         convert::Type::Builtin(convert::Builtin::F32) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from(f64::from({value})))")
+        }
+        // An output Rawr keeps as its text, as a `Cow<str>` (D558 slice 2).
+        convert::Type::Builtin(convert::Builtin::Text) => {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}.to_string()))")
         }
         convert::Type::Unit | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
@@ -7432,6 +8202,12 @@ fn render_to_dynamic(
                 write!(output, "({converted})?, ").map_err(|_| request::Error::Encoding)?;
             }
             write!(output, "])) }})()")
+        }
+        // A `&[T]` a method lends: a copy, as Rawr's array.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if matches!(**lent, convert::Type::Sequence { .. }) =>
+        {
+            return render_to_dynamic(lent, value, depth, output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
@@ -7544,11 +8320,59 @@ fn render_give_with(
     value: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    let copies = copied_inputs(signature);
+    if copies.is_empty() {
+        return render_give(
+            &substituted(signature.output(), signature, substitutions)?,
+            value,
+            output,
+        );
+    }
+    // The call's value, then each `&mut` array it changed (D558 slice 2).
+    let mut given = Vec::new();
     render_give(
         &substituted(signature.output(), signature, substitutions)?,
         value,
+        &mut given,
+    )?;
+    let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+    let mut copied = String::new();
+    for (position, element) in &copies {
+        let mut converted = String::new();
+        render_to_dynamic(
+            element,
+            &format!("argument_{position}_copy"),
+            0,
+            &mut converted,
+        )?;
+        copied.push_str(&format!(", ({converted})?"));
+    }
+    writeln!(
         output,
+        "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
     )
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// Each input `&mut Vec<T>` a call takes as a copy of Rawr's array, by
+/// position, with the `Vec<T>` it converts as (D558 slice 2).
+fn copied_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+) -> Vec<(usize, convert::Type)> {
+    signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .filter_map(|(position, input)| match input {
+            convert::Type::Borrowed {
+                mutable: true,
+                ty: element,
+            } if matches!(**element, convert::Type::Sequence { .. }) => {
+                Some((position, (**element).clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// `ty` with every type parameter the signature declares replaced by its
@@ -7761,6 +8585,18 @@ fn render_container_path(
     type_position: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // A method of an impl that fixes its type's arguments is reached at
+    // that instance, `quick_xml::reader::Reader<&[u8]>`.
+    if let Some(instance) = signature.instance().and_then(concrete_type) {
+        let instance = if type_position {
+            instance
+        } else {
+            format!("<{instance}>")
+        };
+        return output
+            .write_all(instance.as_bytes())
+            .map_err(|_| request::Error::Encoding);
+    }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
     output
         .write_all(path.as_bytes())
@@ -7785,6 +8621,251 @@ thread_local! {
     /// a field of one through a shared borrow.
     static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    /// The imported types that carry lifetimes (D558 tier 1), by identity:
+    /// how many lifetime parameters each declares, and whether it is
+    /// `Debug` and `Clone`.
+    static SCOPED_TYPES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Lifetimes>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// Every imported type's lifetimes, `Debug` and `Clone`, by Rust path.
+    static SCOPED_PATHS: std::cell::RefCell<std::collections::BTreeMap<String, Lifetimes>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The same, by identity.
+    static TYPE_TRAITS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Lifetimes>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// Each imported type's identity, by every Rust path it has.
+    static PATH_IDENTITIES: std::cell::RefCell<std::collections::BTreeMap<String, [u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The scope families the adapters name, by their type at `'x`: the
+    /// family's name and its type's.
+    static FAMILIES: std::cell::RefCell<std::collections::BTreeMap<String, (String, Lifetimes)>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// Whether a Rust value being converted lives in a scope frame's
+    /// region, the local `region`, when its type carries a lifetime.
+    static IN_REGION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// What a generated scope family needs of an imported type that carries
+/// lifetimes.
+#[derive(Clone, Copy)]
+struct Lifetimes {
+    count: u32,
+    debug: bool,
+    clone: bool,
+    partial_eq: bool,
+}
+
+/// Converts Rust values into a scope frame's region, the local `region`,
+/// while it lives.
+struct InRegion(bool);
+
+impl InRegion {
+    fn enter() -> Self {
+        Self(IN_REGION.replace(true))
+    }
+}
+
+impl Drop for InRegion {
+    fn drop(&mut self) {
+        IN_REGION.set(self.0);
+    }
+}
+
+/// The lifetimes an imported type declares, when it declares any.
+fn scoped_definition(definition: &crate::surface::identity::Definition) -> Option<Lifetimes> {
+    SCOPED_TYPES.with_borrow(|types| types.get(definition.as_bytes()).copied())
+}
+
+/// `ty` spelled at the scope lifetime `'x`: each imported type that
+/// carries lifetimes takes `'x` for each, as a scope family names it.
+fn scoped_type(ty: &convert::Type) -> Option<String> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if scoped_definition(definition).is_some() => {
+            let lifetimes = scoped_definition(definition)?;
+            let mut text =
+                TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
+            let mut parts = vec!["'x".to_owned(); lifetimes.count as usize];
+            for argument in arguments.iter() {
+                parts.push(scoped_type(argument)?);
+            }
+            text.push('<');
+            text.push_str(&parts.join(", "));
+            text.push('>');
+            Some(text)
+        }
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if !arguments.is_empty() => {
+            let mut text =
+                TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
+            let arguments = arguments
+                .iter()
+                .map(scoped_type)
+                .collect::<Option<Vec<_>>>()?;
+            text.push('<');
+            text.push_str(&arguments.join(", "));
+            text.push('>');
+            Some(text)
+        }
+        convert::Type::Option(element) => Some(format!("Option<{}>", scoped_type(element)?)),
+        convert::Type::Result(ok, err) => Some(format!(
+            "Result<{}, {}>",
+            scoped_type(ok)?,
+            scoped_type(err)?
+        )),
+        convert::Type::Borrowed { mutable: false, ty } => {
+            Some(format!("&'x {}", borrowed_target(ty)?))
+        }
+        ty => concrete_type(ty),
+    }
+}
+
+/// `.to_vec()` after a call whose output is a `&[T]` it lends: the copy
+/// Rawr's array is made of, before the borrow ends (D558 slice 2).
+fn lent_copy(signature: &crate::classify::representability::signature::Signature) -> &'static str {
+    match signature.output() {
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(**ty, convert::Type::Sequence { .. }) =>
+        {
+            ".to_vec()"
+        }
+        _ => "",
+    }
+}
+
+/// Whether a value of `ty` may borrow when it is made in a scope frame:
+/// it carries a lifetime, or Rawr keeps it as its text, as a `Cow<str>`.
+fn may_borrow(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Builtin(convert::Builtin::Text) => true,
+        convert::Type::Option(element) => may_borrow(element),
+        convert::Type::Result(ok, err) => may_borrow(ok) || may_borrow(err),
+        ty => carries_lifetime(ty),
+    }
+}
+
+/// Whether a value of `ty` borrows when it is made in a scope frame.
+fn carries_lifetime(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => scoped_definition(definition).is_some() || arguments.iter().any(carries_lifetime),
+        convert::Type::Option(element)
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => carries_lifetime(element),
+        convert::Type::Result(ok, err) => carries_lifetime(ok) || carries_lifetime(err),
+        convert::Type::Tuple(members) => members.iter().any(carries_lifetime),
+        convert::Type::ProfileMessage { payload, .. } => carries_lifetime(payload),
+        convert::Type::Borrowed { .. } => true,
+        _ => false,
+    }
+}
+
+/// The name of the scope family of the imported type spelled `text` at
+/// `'x`, whose own path and lifetimes are `path` and `lifetimes`. The
+/// family is declared in `rawr_families`.
+fn family(text: String, lifetimes: Lifetimes) -> String {
+    FAMILIES.with_borrow_mut(|families| {
+        let next = families.len();
+        families
+            .entry(text)
+            .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
+            .0
+            .clone()
+    })
+}
+
+/// The family of `ty`, an imported type that carries lifetimes.
+fn family_of(ty: &convert::Type) -> Option<String> {
+    let convert::Type::Nominal { definition, .. } = ty else {
+        return None;
+    };
+    if !carries_lifetime(ty) {
+        return None;
+    }
+    let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
+    Some(family(scoped_type(ty)?, lifetimes))
+}
+
+/// The family of a method's container, spelled `container` as
+/// `render_container_path` writes it, at `'x`.
+fn container_family(path: &str, container: &str) -> Option<String> {
+    let lifetimes = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied())?;
+    // A type has one family, by the path its facade names it at, whatever
+    // path the adapter reaches it by (`quick_xml::reader::Reader` is
+    // `quick_xml::Reader`).
+    let canonical = PATH_IDENTITIES
+        .with_borrow(|identities| identities.get(path).copied())
+        .and_then(|identity| TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned()));
+    let rest = container
+        .strip_prefix(path)
+        .or_else(|| container.strip_prefix(canonical.as_deref()?))?;
+    let path = canonical.as_deref().unwrap_or(path);
+    // A borrowed type argument, as `Reader<&[u8]>`'s, borrows at `'x`.
+    let borrowed = rest.contains('&');
+    if lifetimes.count == 0 && !borrowed {
+        return None;
+    }
+    let rest = rest.replace("&[", "&'x [").replace("&str", "&'x str");
+    let marks = vec!["'x"; lifetimes.count as usize].join(", ");
+    let text = match rest.strip_prefix('<') {
+        Some(arguments) if lifetimes.count != 0 => format!("{path}<{marks}, {arguments}"),
+        Some(_) => format!("{path}{rest}"),
+        None if rest.is_empty() => format!("{path}<{marks}>"),
+        None => return None,
+    };
+    Some(family(text, lifetimes))
+}
+
+/// The scope families the adapters named, as the `rawr_families` module.
+fn render_families(output: &mut Vec<u8>) -> Result<(), request::Error> {
+    output
+        .write_all(
+            b"#![allow(dead_code)]
+use super::*;
+
+",
+        )
+        .map_err(|_| request::Error::Encoding)?;
+    let families = FAMILIES.with_borrow(|families| {
+        families
+            .iter()
+            .map(|(text, (name, lifetimes))| (text.clone(), name.clone(), *lifetimes))
+            .collect::<Vec<_>>()
+    });
+    for (text, name, lifetimes) in families {
+        let debug = if lifetimes.debug {
+            "\n    fn debug(value: &Self::Of<'_>) -> Option<String> {\n        Some(format!(\"{value:?}\"))\n    }"
+        } else {
+            ""
+        };
+        let clone = if lifetimes.clone {
+            "\n    fn duplicate<'x>(value: &Self::Of<'x>) -> Option<Self::Of<'x>> {\n        Some(Clone::clone(value))\n    }"
+        } else {
+            ""
+        };
+        // `==` within a region, and with a value of the type at `'static`
+        // the arena holds, which the region's `'x` shortens.
+        let equal = if lifetimes.partial_eq {
+            format!(
+                "\n    fn equal<'x>(a: &Self::Of<'x>, b: &Self::Of<'x>) -> Option<bool> {{\n        Some(a == b)\n    }}\n    fn equal_native<'x>(a: &Self::Of<'x>, b: &dyn std::any::Any) -> Option<bool> {{\n        let b: &Self::Of<'x> = b.downcast_ref::<{}>()?;\n        Some(a == b)\n    }}",
+                text.replace("'x", "'static")
+            )
+        } else {
+            String::new()
+        };
+        let shown = text.replace("'x", "'_");
+        writeln!(
+            output,
+            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{clone}{equal}\n}}\n"
+        )
+        .map_err(|_| request::Error::Encoding)?;
+    }
+    Ok(())
 }
 
 /// Fills `TYPE_PATHS` for one generation and empties it when dropped.
@@ -7819,6 +8900,41 @@ impl TypePaths {
                 );
             }
         });
+        SCOPED_TYPES.with_borrow_mut(|types| {
+            SCOPED_PATHS.with_borrow_mut(|paths| {
+                TYPE_TRAITS.with_borrow_mut(|traits| {
+                    types.clear();
+                    paths.clear();
+                    traits.clear();
+                    for owner in facade
+                        .into_iter()
+                        .flat_map(crate::surface::facade::Plan::facades)
+                    {
+                        for ty in owner.types() {
+                            let lifetimes = Lifetimes {
+                                count: ty.lifetimes(),
+                                debug: ty.debug(),
+                                clone: ty.cloneable(),
+                                partial_eq: ty.partial_eq(),
+                            };
+                            if ty.lifetimes() != 0 {
+                                types.entry(*ty.identity()).or_insert(lifetimes);
+                            }
+                            traits.entry(*ty.identity()).or_insert(lifetimes);
+                            paths
+                                .entry(format!("{}::{}", owner.root(), ty.path()))
+                                .or_insert(lifetimes);
+                            PATH_IDENTITIES.with_borrow_mut(|identities| {
+                                identities
+                                    .entry(format!("{}::{}", owner.root(), ty.path()))
+                                    .or_insert(*ty.identity());
+                            });
+                        }
+                    }
+                });
+            });
+        });
+        FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         Self
     }
 }
@@ -7827,6 +8943,11 @@ impl Drop for TypePaths {
     fn drop(&mut self) {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+        SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+        TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
+        PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
     }
 }
 
@@ -7880,10 +9001,24 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .collect::<Option<Vec<_>>>()?
                 .join(", ")
         ),
+        // A type argument `&[T]` or `&str` (D558 tier 1).
+        convert::Type::Borrowed { mutable: false, ty } => format!("&{}", borrowed_target(ty)?),
         convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }
         | convert::Type::Parameter(_) => return None,
     })
+}
+
+/// What a type argument `&[T]` or `&str` borrows: `[T]` or `str`.
+fn borrowed_target(ty: &convert::Type) -> Option<String> {
+    match ty {
+        convert::Type::Sequence {
+            element,
+            owned: false,
+        } => Some(format!("[{}]", concrete_type(element)?)),
+        convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
+        _ => None,
+    }
 }
 
 fn render_item_turbofish(
@@ -7949,6 +9084,7 @@ fn render_generic_arguments(
                     convert::Type::Nominal { .. }
                     | convert::Type::Option(_)
                     | convert::Type::Range(_)
+                    | convert::Type::Borrowed { .. }
                     | convert::Type::Result(..) => concrete_type(ty),
                     _ => None,
                 };
@@ -7970,6 +9106,11 @@ fn render_generic_arguments(
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
+                        // `&[u8]` or `&str`, as `Reader<&'a [u8]>` takes
+                        // (D558 tier 1).
+                        convert::Type::Borrowed { .. } if concrete.is_some() => {
+                            concrete.as_deref().unwrap_or("_").as_bytes()
+                        }
                         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
                             return Err(request::Error::Drift {
                                 field:

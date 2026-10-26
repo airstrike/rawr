@@ -1,0 +1,12 @@
+[package]
+name = "scope-parsers"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+pulldown-cmark = { version = "0.12", default-features = false }
+quick-xml = "0.41"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

@@ -165,7 +165,18 @@ pub struct TypeDefinition {
     eq: bool,
     #[serde(default)]
     hash: bool,
+    /// How many lifetime parameters the native type declares (D558 tier 1).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    lifetimes: u32,
+    /// Whether the crate implements `Iterator` for the native type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    iterator: bool,
     shape: Shape,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Closed imported nominal shape.
@@ -255,6 +266,10 @@ pub struct Signature {
     /// is one (`representability::signature::Guard`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard: Option<representability::signature::Guard>,
+    /// How the output borrows what the call takes, when it does
+    /// (`representability::signature::Scope`, D558 tier 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<representability::signature::Scope>,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -801,6 +816,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         partial_eq: false,
         eq: false,
         hash: false,
+        lifetimes: 0,
+        iterator: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -866,6 +883,8 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 partial_eq: false,
                 eq: false,
                 hash: false,
+                lifetimes: 0,
+                iterator: false,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -906,6 +925,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         partial_eq: false,
         eq: false,
         hash: false,
+        lifetimes: 0,
+        iterator: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1820,6 +1841,14 @@ impl TypeDefinition {
     pub const fn cloneable(&self) -> bool {
         self.clone
     }
+    /// Return how many lifetime parameters the native type declares.
+    pub const fn lifetimes(&self) -> u32 {
+        self.lifetimes
+    }
+    /// Return whether the crate implements `Iterator` for the native type.
+    pub const fn iterator(&self) -> bool {
+        self.iterator
+    }
     /// Return the exact nominal shape.
     pub const fn shape(&self) -> &Shape {
         &self.shape
@@ -1928,6 +1957,10 @@ impl Signature {
 
     /// How the item's borrow guard output is reached, when it gives one.
     #[must_use]
+    pub const fn scope(&self) -> Option<representability::signature::Scope> {
+        self.scope
+    }
+
     pub const fn guard(&self) -> Option<representability::signature::Guard> {
         self.guard
     }
@@ -1965,6 +1998,11 @@ fn type_definition(
         .identity()
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
+    let borrowing = match outcome.representability() {
+        Representability::Struct(plan) => (plan.lifetimes(), plan.iterator()),
+        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator()),
+        _ => (0, false),
+    };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
             Representability::Struct(plan) => (
@@ -2032,6 +2070,8 @@ fn type_definition(
         partial_eq: compare[0],
         eq: compare[1],
         hash: compare[2],
+        lifetimes: borrowing.0,
+        iterator: borrowing.1,
         shape,
     }))
 }
@@ -2068,6 +2108,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 output: ty(plan.ty(), &[])?,
                 relations: Box::default(),
                 guard: None,
+                scope: None,
             },
         ),
         Representability::Value(_)
@@ -2157,6 +2198,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         output: ty(source.output(), source.parameters())?,
         relations: relations(source)?,
         guard: source.guard(),
+        scope: source.scope(),
     })
 }
 
@@ -2286,6 +2328,7 @@ fn callable_signature(
         output: ty(source.output(), all)?,
         relations: Box::default(),
         guard: source.guard(),
+        scope: source.scope(),
     })
 }
 

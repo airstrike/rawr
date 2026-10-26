@@ -53,6 +53,9 @@ pub struct Definition {
     stream_identity: Option<host::stream::Version>,
     imported: Option<ImportedSelector>,
     guard: Option<Guard>,
+    /// The output borrows what the call takes: the call opens a scope
+    /// frame the statement it is in runs inside (D558 tier 1).
+    opens: bool,
 }
 
 /// How an imported method's borrow guard output is reached: Rawr types the
@@ -79,6 +82,7 @@ pub struct Fingerprint {
     stream_identity: Option<host::stream::Version>,
     imported: Option<[u8; 32]>,
     guard: Option<Guard>,
+    opens: bool,
 }
 
 impl Definition {
@@ -92,6 +96,7 @@ impl Definition {
             && self.evaluation == other.evaluation
             && self.stream_identity == other.stream_identity
             && self.guard == other.guard
+            && self.opens == other.opens
     }
 
     #[cfg(feature = "rust-import")]
@@ -141,6 +146,7 @@ impl Definition {
                 .map(ImportedSelector::try_clone)
                 .transpose()?,
             guard: self.guard,
+            opens: self.opens,
         })
     }
 
@@ -161,6 +167,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -181,6 +188,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -199,6 +207,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -217,6 +226,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -236,6 +246,7 @@ impl Definition {
             stream_identity: Some(identity),
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -254,6 +265,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -275,6 +287,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -293,6 +306,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -312,6 +326,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -331,6 +346,7 @@ impl Definition {
             stream_identity: None,
             imported: None,
             guard: None,
+            opens: false,
         })
     }
 
@@ -412,6 +428,18 @@ impl Definition {
         self.guard
     }
 
+    /// The item's output borrows what the call takes (D558 tier 1).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn opening(mut self, opens: bool) -> Self {
+        self.opens = opens;
+        self
+    }
+
+    /// Whether the call opens a scope frame (D558 tier 1).
+    pub(crate) const fn opens(&self) -> bool {
+        self.opens
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_path_len(&self) -> Option<usize> {
         self.imported.as_ref()?;
@@ -438,6 +466,7 @@ impl Definition {
             stream_identity: self.stream_identity,
             imported,
             guard: self.guard,
+            opens: self.opens,
         }
     }
 
@@ -453,6 +482,7 @@ impl Definition {
             stream_identity: self.stream_identity,
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
+            opens: self.opens,
         })
     }
 
@@ -547,6 +577,7 @@ impl Definition {
             #[cfg(not(feature = "rust-import"))]
             imported: self.imported.clone(),
             guard: self.guard,
+            opens: self.opens,
         })
     }
 
@@ -717,6 +748,9 @@ impl crate::preview::digest::Write for Fingerprint {
                 Guard::Shared => 0x2561,
                 Guard::Mutable => 0x2562,
             });
+        }
+        if self.opens {
+            writer.tag(0x2563);
         }
         Ok(())
     }

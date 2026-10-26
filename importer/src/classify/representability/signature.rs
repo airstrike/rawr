@@ -78,6 +78,30 @@ pub struct Signature {
     /// guard lives inside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard: Option<Guard>,
+    /// An item whose output borrows what the call takes, which it runs in
+    /// a native scope frame (D558 tier 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<Scope>,
+    /// The receiver's type, for a method of an impl that fixes its type's
+    /// arguments, as quick-xml's `Reader::read_event` in `impl<'a>
+    /// Reader<&'a [u8]>`: the instance the bridge reaches it at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instance: Option<super::convert::Type>,
+}
+
+/// How an item's output borrows (D558 tier 1). The call opens a native
+/// scope frame, which holds what the output borrows and puts the output
+/// in the frame's region, and the rest of the Rust scope the output is
+/// bound in runs inside it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Scope {
+    /// The output borrows its `&str` inputs, as `Parser::new(&text)`'s
+    /// does, or `&mut Vec<T>` inputs, as `read_event_into(&mut buf)`'s
+    /// does: the frame owns a copy of each.
+    Opens,
+    /// The output borrows the receiver, as `BytesStart::name(&self)`'s
+    /// does: the frame holds the receiver borrowed.
+    Borrows,
 }
 
 /// How a method's guard output is reached: read through `Deref`, as
@@ -258,7 +282,32 @@ impl Signature {
             output,
             relations: Box::new([]),
             guard: None,
+            scope: None,
+            instance: None,
         }
+    }
+
+    pub(crate) fn with_instance(mut self, instance: Option<super::convert::Type>) -> Self {
+        self.instance = instance;
+        self
+    }
+
+    /// The receiver's type, when the method's impl fixes its type's
+    /// arguments.
+    #[must_use]
+    pub const fn instance(&self) -> Option<&super::convert::Type> {
+        self.instance.as_ref()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: Option<Scope>) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// How the output borrows what the call takes, when it does.
+    #[must_use]
+    pub const fn scope(&self) -> Option<Scope> {
+        self.scope
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

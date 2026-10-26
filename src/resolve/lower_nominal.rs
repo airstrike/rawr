@@ -776,6 +776,15 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
         },
+        // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
+        // (D558 tier 1).
+        Ty::Reference { mutable: false, .. }
+            if let Some(converted @ Type::Borrowed { .. }) =
+                instance_surface_type(inference, ty) =>
+        {
+            imported.retain_checked(Some(2), Some(2 * std::mem::size_of::<Type>()))?;
+            converted
+        }
         // A tuple of Rust's own types is that tuple, as Freya's
         // `background((35, 35, 35))` takes `(u8, u8, u8)`.
         Ty::Tuple(members)
@@ -883,6 +892,22 @@ fn instance_surface_type(
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
+        },
+        // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
+        // (D558 tier 1).
+        Ty::Reference {
+            mutable: false,
+            target,
+        } => Type::Borrowed {
+            mutable: false,
+            ty: Box::new(match inference.resolve(target) {
+                Ty::Array { element, .. } => Type::Sequence {
+                    element: Box::new(instance_surface_type(inference, &element)?),
+                    owned: false,
+                },
+                Ty::Str | Ty::String => Type::Builtin(Builtin::Str),
+                _ => return None,
+            }),
         },
         Ty::Tuple(members)
             if let Some(converted) = members
@@ -3730,6 +3755,9 @@ enum PreludeOp {
     VecMethod,
     /// `v.capacity()`: the runtime `Vec`'s own capacity, read by reference.
     VecCapacity,
+    /// What a scope frame's call changed of the `&mut` array it took at
+    /// `index`, once the frame has ended (D558 slice 2): `copy(made, i)`.
+    FrameCopy,
     /// A set's `union`, `intersection`, `difference`,
     /// `symmetric_difference` (the keys, in order), `is_subset`,
     /// `is_superset` or `is_disjoint` with another, by code
@@ -3850,6 +3878,7 @@ impl PreludeOp {
             Self::CharFrom => "char.from",
             Self::VecMethod => "vec.method",
             Self::VecCapacity => "vec.capacity",
+            Self::FrameCopy => "scope.frame-copy",
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
@@ -4041,6 +4070,10 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
             ],
             Self::VecCapacity => vec![TypeId::of::<crate::Array>()],
+            Self::FrameCopy => vec![
+                TypeId::of::<crate::scope::Opening>(),
+                TypeId::of::<crate::INT>(),
+            ],
             Self::VecMethod => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
@@ -4312,6 +4345,12 @@ impl PreludeOp {
             Self::VecCapacity => {
                 let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
                 return Ok(Dynamic::from(capacity as crate::INT));
+            }
+            Self::FrameCopy => {
+                let index = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
+                return Ok(args[0]
+                    .read_lock::<crate::scope::Opening>()
+                    .map_or(Dynamic::UNIT, |opening| opening.copies().get(index)));
             }
             Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
@@ -6267,6 +6306,27 @@ impl ExecutableOp {
     }
 }
 
+/// The `&mut` arrays a host call copies in and back out (D558 slice 2), as
+/// quick-xml's `read_event_into(&mut buf)` takes its buffer: the arguments
+/// whose input is `&mut [T]` or `&mut Vec<T>`, in order.
+fn copied_places(
+    inference: &Inference,
+    inputs: &[Ty],
+    arguments: &[ParsedExpr],
+) -> Vec<ParsedExpr> {
+    inputs
+        .iter()
+        .zip(arguments)
+        .filter(|(input, _)| {
+            matches!(
+                inference.resolve(input),
+                Ty::Reference { mutable: true, target } if matches!(*target, Ty::Array { .. })
+            )
+        })
+        .map(|(_, argument)| argument.clone())
+        .collect()
+}
+
 fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models: &Shared<Models>) {
     let arg_types = op.argument_types(models);
     // The exact requirement belongs to this immutable registered operation.
@@ -8035,6 +8095,16 @@ enum BindingKind {
     Receiver { owner: ImmutableString },
 }
 
+/// A scope frame a statement's call opens (D558 tier 1): `outer` declares
+/// what keeps the frame, `inner` binds and opens it ahead of the statement,
+/// and `after` stores the copies it gives back once it has ended.
+#[derive(Default)]
+struct Frame {
+    outer: origin::Fragment,
+    inner: origin::Fragment,
+    after: origin::Fragment,
+}
+
 #[derive(Clone)]
 struct ParsedExpr {
     prelude: origin::Fragment,
@@ -9560,6 +9630,10 @@ struct Parser<'a> {
     argument_hints: Vec<Option<Ty>>,
     /// Arguments already parsed for the next call, as for a builder chain.
     pending_arguments: Option<(Vec<ParsedExpr>, Position)>,
+    /// The scope frames each statement being parsed opens (D558 tier 1):
+    /// `let made = call(..);` for each call in it whose value borrows what
+    /// it takes, which the statement then runs inside.
+    frames: Vec<Vec<Frame>>,
     temporaries: usize,
     /// `.into()` conversions, chosen once their target types are known.
     pending_conversions: Vec<PendingConversion>,
@@ -9846,6 +9920,7 @@ impl<'a> Parser<'a> {
             place_root: None,
             argument_hints: Vec::new(),
             pending_arguments: None,
+            frames: Vec::new(),
             temporaries: 0,
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
@@ -11361,6 +11436,16 @@ impl<'a> Parser<'a> {
                         .any(|parent| parent == trait_name)
             }
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
+            // An imported type the crate implements `Iterator` for.
+            Ty::Host { proof, .. }
+                if trait_name == "Iterator"
+                    && proof
+                        .definition
+                        .capabilities()
+                        .contains(capability::Kind::Iterator) =>
+            {
+                true
+            }
             Ty::Param(_) | Ty::Projection(..) => self
                 .bound_traits(ty)
                 .iter()
@@ -16960,6 +17045,8 @@ impl<'a> Parser<'a> {
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
+        let opens = item.opens();
+        let imported = item.imported_identity().is_some();
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -16969,11 +17056,16 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
+        let places = if imported {
+            copied_places(&self.inference, &signature.inputs, &arguments)
+        } else {
+            Vec::new()
+        };
         let runtime_arguments = arguments
             .into_iter()
             .filter(|argument| !argument.ty.is_imported_static_operand());
         let (prelude, source) = self.private_call(&helper, runtime_arguments);
-        Ok(ParsedExpr {
+        let value = ParsedExpr {
             prelude,
             source,
             ty,
@@ -16982,7 +17074,8 @@ impl<'a> Parser<'a> {
             outcome,
             evaluation,
         }
-        .retain_origin())
+        .retain_origin();
+        self.scoped_call(value, opens, &places)
     }
 
     #[cfg(feature = "rust-import")]
@@ -18719,9 +18812,20 @@ impl<'a> Parser<'a> {
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
             self.select_host_signature(items, Some(&receiver.ty), &mut arguments, false, call)?;
+        // `reader.config_mut().trim_text(true)`: a `&mut self` method of an
+        // imported value reached through a method's `&mut` output, which
+        // is read and stored as a borrow guard's place (D554, D558 slice 2).
+        let through_guard = matches!(
+            &receiver.lvalue,
+            Some(Lvalue::Nested(nested)) if nested
+                .steps
+                .iter()
+                .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }))
+        );
         if definition.identity().imported().is_some() && !scoped {
             match item.receiver() {
                 Some(receiver::Mode::Shared) => {}
+                Some(receiver::Mode::Mutable) if through_guard => {}
                 Some(receiver::Mode::Mutable) => {
                     self.require_mutable_host_receiver(&receiver, member_span, &item)?;
                 }
@@ -18763,6 +18867,12 @@ impl<'a> Parser<'a> {
         let ty = facade_output(&item, &output);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
         let guard = item.guard();
+        let opens = item.opens();
+        let places = if item.imported_identity().is_some() {
+            copied_places(&self.inference, &signature.inputs, &arguments)
+        } else {
+            Vec::new()
+        };
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -18776,7 +18886,7 @@ impl<'a> Parser<'a> {
         // changes a copy, which is stored back, as a script `&mut self`
         // method's receiver is.
         if mutable
-            && definition.identity().imported().is_none()
+            && (definition.identity().imported().is_none() || through_guard)
             && !scoped
             && self.host_witnesses.is_empty()
             && let Some(lvalue) = receiver.lvalue.clone()
@@ -18825,6 +18935,7 @@ impl<'a> Parser<'a> {
             evaluation,
         }
         .retain_origin();
+        let value = self.scoped_call(value, opens, &places)?;
         match guard {
             None => Ok(value),
             Some(guard) => Ok(self.guarded_output(value, guard)),
@@ -19137,6 +19248,155 @@ impl<'a> Parser<'a> {
                     if fields.iter().any(|field| field.name() == member))
             })
             .cloned()
+    }
+
+    /// A host call whose value borrows what it takes (`opens`, D558 tier
+    /// 1), or that copies `&mut` arrays in and back out (`places`). A call
+    /// that doesn't open a scope frame gives its value and then each copy.
+    /// One that does is bound by a `let` at the start of the statement it
+    /// is in, so the statement runs inside the frame. Its copies come back
+    /// when the frame ends, and are stored after the statement, where its
+    /// value no longer borrows them, as rustc's borrow of them ends.
+    fn scoped_call(
+        &mut self,
+        mut value: ParsedExpr,
+        opens: bool,
+        places: &[ParsedExpr],
+    ) -> Result<ParsedExpr, Error> {
+        if !opens {
+            if places.is_empty() {
+                return Ok(value);
+            }
+            value.source = self.copied_call(value.rendered_source(), places)?;
+            value.prelude = origin::Fragment::default();
+            return Ok(value);
+        }
+        if self.frames.is_empty() {
+            return Err(
+                self.unsupported("a call whose value borrows what it takes, outside a statement")
+            );
+        }
+        let made = self.temporary("frame");
+        let mut frame = Frame::default();
+        let bound = if places.is_empty() {
+            frame.inner.push_text(format!("let {made} = "));
+            frame.inner.push(value.rendered_source());
+            frame.inner.push_text("; ");
+            made.to_string()
+        } else {
+            // `made` keeps the frame the call made, and `frame` opens it.
+            let opened = self.temporary("opened");
+            frame.outer.push_text(format!("let {made} = (); "));
+            frame.inner.push_text(format!("{made} = "));
+            frame.inner.push(value.rendered_source());
+            frame.inner.push_text(format!("; let {opened} = {made}; "));
+            let helper = self.push_op(Op::Prelude(PreludeOp::FrameCopy));
+            for (index, place) in places.iter().enumerate() {
+                let stored = self.store_into(place, &format!("{helper}({made}, {index})"))?;
+                frame.after.push(stored);
+                frame.after.push_text(" ");
+            }
+            opened.to_string()
+        };
+        if let Some(frames) = self.frames.last_mut() {
+            frames.push(frame);
+        }
+        self.bindings.insert(
+            bound.as_str().into(),
+            Binding {
+                ty: value.ty.clone(),
+                mutable: true,
+                available: true,
+                moved_fields: Default::default(),
+                declaration: value.span,
+                kind: BindingKind::Local,
+            },
+        );
+        value.prelude = origin::Fragment::default();
+        value.source = origin::Fragment::plain(bound.clone());
+        value.lvalue = Some(Lvalue::Binding {
+            binding: bound.as_str().into(),
+            ty: value.ty.clone(),
+        });
+        Ok(value.retain_origin())
+    }
+
+    /// The statement written from `start` with the scope frames its calls
+    /// open: bound ahead of it, and the statement run in their block, or,
+    /// for a `let` (`inline`), ahead of it in its own block, so the rest of
+    /// that block runs inside them.
+    fn statement_frames(
+        &mut self,
+        start: usize,
+        frames: Vec<Frame>,
+        inline: bool,
+    ) -> Result<(), Error> {
+        if frames.is_empty() {
+            return Ok(());
+        }
+        let mut statement = self.output.split_off(start);
+        if inline {
+            if frames.iter().any(|frame| !frame.after.is_empty()) {
+                return Err(self.unsupported(
+                    "a `let` that binds a value borrowing a `&mut` buffer its call fills: \
+                     Rawr gives the buffer back when the value's scope ends, which for a `let` \
+                     is the end of its block; match on the call in a statement of its own",
+                ));
+            }
+            for frame in frames {
+                self.output.push(frame.outer);
+                self.output.push(frame.inner);
+            }
+            self.output.push_text("\n");
+            self.output.push(statement);
+            return Ok(());
+        }
+        statement.trim_end();
+        match self.last_expression {
+            Some((tail, endpoint)) if tail >= start => {
+                let value = statement.split_off(tail - start);
+                let mut body = statement;
+                body.push_text(" ");
+                body.push(value);
+                let block = self.framed(frames, body);
+                let tail = self.write_output(block, endpoint);
+                self.last_expression = Some((tail, endpoint));
+            }
+            _ => {
+                let mut block = self.framed(frames, statement);
+                block.push_text("\n");
+                self.output.push(block);
+            }
+        }
+        Ok(())
+    }
+
+    /// `body` run inside `frames`: `{ frames body }`, or, when a frame
+    /// gives back copies, `{ outer; let kept = { frames body }; stores
+    /// kept }`.
+    fn framed(&mut self, frames: Vec<Frame>, body: origin::Fragment) -> origin::Fragment {
+        let mut inner = origin::Fragment::plain("{ ");
+        let mut outer = origin::Fragment::default();
+        let mut after = origin::Fragment::default();
+        for frame in frames {
+            outer.push(frame.outer);
+            inner.push(frame.inner);
+            after.push(frame.after);
+        }
+        inner.push(body);
+        inner.push_text(" }");
+        if after.is_empty() {
+            return inner;
+        }
+        let kept = self.temporary("kept");
+        let mut block = origin::Fragment::plain("{ ");
+        block.push(outer);
+        block.push_text(format!("let {kept} = "));
+        block.push(inner);
+        block.push_text("; ");
+        block.push(after);
+        block.push_text(format!(" {kept} }}"));
+        block
     }
 
     fn require_mutable_host_receiver(
@@ -19622,7 +19882,9 @@ impl<'a> Parser<'a> {
         let start = self.output.len();
         let depth = self.temporary_scopes.len();
         self.open_temporaries();
+        self.frames.push(Vec::new());
         let bound = self.parse_binding_statement(let_keyword);
+        let frames = self.frames.pop().unwrap_or_default();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.
         while self.temporary_scopes.len() > depth {
@@ -19637,6 +19899,7 @@ impl<'a> Parser<'a> {
             }
         }
         bound?;
+        self.statement_frames(start, frames, true)?;
         self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
         self.settle_parses()
@@ -21050,11 +21313,14 @@ impl<'a> Parser<'a> {
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         self.open_temporaries();
+        self.frames.push(Vec::new());
         let parsed = self.parse_expression_statement(pending);
+        let frames = self.frames.pop().unwrap_or_default();
         let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
         self.statement_temporaries(start, &temporaries);
+        self.statement_frames(start, frames, false)?;
         self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
         self.settle_parses()
@@ -23970,8 +24236,18 @@ impl<'a> Parser<'a> {
                 let original = self.bindings.clone();
                 let scrutinee = self.temporary("match");
                 let depth = self.drop_scopes.len();
-                let (subject, arm, binds, write_back, condition) =
-                    self.parse_let_condition(&scrutinee)?;
+                // A subject that borrows what its call takes opens its frame
+                // in each iteration (D558 tier 1).
+                self.frames.push(Vec::new());
+                let parsed = self.parse_let_condition(&scrutinee);
+                let frames = self.frames.pop().unwrap_or_default();
+                let (subject, arm, binds, write_back, condition) = parsed?;
+                if frames.iter().any(|frame| !frame.after.is_empty()) {
+                    return Err(self.unsupported(
+                        "a `while let` whose subject borrows a `&mut` buffer its call fills: \
+                         match on the call in the loop's body instead",
+                    ));
+                }
                 // The condition's scope ends with each iteration.
                 if self.drops() {
                     self.loop_drop_depth = Some(depth);
@@ -23985,7 +24261,12 @@ impl<'a> Parser<'a> {
                         source: start,
                     });
                 }
-                let mut head = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
+                let mut head = origin::Fragment::plain("{\n");
+                for frame in frames {
+                    head.push(frame.outer);
+                    head.push(frame.inner);
+                }
+                head.push_text(format!("let {scrutinee} = "));
                 head.push(subject);
                 head.push_text(format!(";\n{}switch {scrutinee} {{\n", condition.copies));
                 head.push(arm);
@@ -24016,13 +24297,21 @@ impl<'a> Parser<'a> {
             }
             Token::While => {
                 self.open_temporaries();
+                self.frames.push(Vec::new());
                 let condition = self.parse_head(Self::parse_expr);
+                let frames = self.frames.pop().unwrap_or_default();
                 let temporaries = self.close_temporaries();
                 let mut condition = condition?;
                 if !temporaries.is_empty() {
                     condition.source = self
                         .with_temporaries(&temporaries, condition.rendered_source())
                         .surrounded("(", ")");
+                    condition.prelude = origin::Fragment::default();
+                }
+                // The condition opens its frames each time it is evaluated.
+                if !frames.is_empty() {
+                    let rendered = condition.rendered_source();
+                    condition.source = self.framed(frames, rendered).surrounded("(", ")");
                     condition.prelude = origin::Fragment::default();
                 }
                 self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
@@ -24637,7 +24926,8 @@ impl<'a> Parser<'a> {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
                 if (matches!(iterated, Ty::Iter(_) | Ty::InclusiveRange)
-                    || iterated.script().is_some() && self.type_implements(&iterated, "Iterator"))
+                    || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
+                        && self.type_implements(&iterated, "Iterator"))
                     && let Some((pipeline, item)) = self.for_pipeline(&lhs)
                 {
                     if self.needs_drop(&item, lhs.span)? {
@@ -26351,11 +26641,19 @@ impl<'a> Parser<'a> {
         let start = self.position();
         let pending = self.field_entries.len();
         let block_like = self.peek_block_like();
-        // An arm is a temporary scope.
+        // An arm is a temporary scope, and opens its own scope frames.
         self.open_temporaries();
+        self.frames.push(Vec::new());
         let value = self.parse_expr();
+        let frames = self.frames.pop().unwrap_or_default();
         let temporaries = self.close_temporaries();
         let mut value = value?;
+        if !frames.is_empty() {
+            let rendered = value.rendered_source();
+            value.source = self.framed(frames, rendered);
+            value.prelude = origin::Fragment::default();
+            value.lvalue = None;
+        }
         if !temporaries.is_empty() {
             if assignment_token(&self.peek()) {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -26852,17 +27150,26 @@ impl<'a> Parser<'a> {
             let lazy = matches!(operator, Token::And | Token::Or);
             if lazy {
                 self.open_temporaries();
+                self.frames.push(Vec::new());
             }
             let rhs = self.parse_binary(precedence + 1);
-            let temporaries = if lazy {
-                self.close_temporaries()
+            let (temporaries, frames) = if lazy {
+                let frames = self.frames.pop().unwrap_or_default();
+                (self.close_temporaries(), frames)
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
             let mut rhs = rhs?;
             if !temporaries.is_empty() {
                 rhs.source = self.with_temporaries(&temporaries, rhs.rendered_source());
                 rhs.prelude = origin::Fragment::default();
+            }
+            // It opens its frames only when it is evaluated (D558 tier 1).
+            if !frames.is_empty() {
+                let rendered = rhs.rendered_source();
+                rhs.source = self.framed(frames, rendered);
+                rhs.prelude = origin::Fragment::default();
+                rhs.lvalue = None;
             }
             lhs = self.apply_binary(operator, lhs, rhs)?;
             if precedence == COMPARISON && binary_precedence(&self.peek()) == Some(COMPARISON) {
@@ -29914,6 +30221,9 @@ impl<'a> Parser<'a> {
             }
             ("to_lowercase", []) => (receiver.surrounded("", ".to_lower()"), Ty::String),
             ("to_owned", []) => (receiver, Ty::String),
+            // `Cow<str>::into_owned`: an imported `Cow<'_, str>` is Rawr's
+            // string (D558 slice 2).
+            ("into_owned", []) => (receiver, Ty::String),
             (name, _)
                 if let Some(code) = STR_METHODS.iter().position(|(method, ..)| *method == name) =>
             {
@@ -37647,12 +37957,21 @@ impl<'a> Parser<'a> {
             self.parse_match_action().map(|branch| branch.value)
         } else {
             self.open_temporaries();
+            // A closure's body opens its own scope frames (D558 tier 1).
+            self.frames.push(Vec::new());
             let body = self.parse_expr();
+            let frames = self.frames.pop().unwrap_or_default();
             let temporaries = self.close_temporaries();
             body.and_then(|mut value| {
                 if !temporaries.is_empty() {
                     value.source = self.with_temporaries(&temporaries, value.rendered_source());
                     value.prelude = origin::Fragment::default();
+                }
+                if !frames.is_empty() {
+                    let rendered = value.rendered_source();
+                    value.source = self.framed(frames, rendered);
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
                 }
                 if !assignment_token(&self.peek()) {
                     self.move_out_value(&mut value)?;

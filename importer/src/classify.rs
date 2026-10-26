@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 24;
+const CLASSIFIER_VERSION: u32 = 25;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -279,6 +279,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// The implementation whose self type a trait's `Self` stands for, while
     /// a default method of that trait is classified as its member.
     trait_self: Cell<Option<usize>>,
+    /// The signature being converted opens a scope frame (D558 tier 1):
+    /// its output's late-bound lifetimes are the frame's, as its early
+    /// ones are `'static`, and are written by neither.
+    scope_lifetimes: Cell<bool>,
     /// The classification account the retained and scratch targets record on.
     account: Account,
 }
@@ -533,6 +537,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             retained_bytes: Cell::new(graph.allocation().bytes),
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
+            scope_lifetimes: Cell::new(false),
             account: Account::new(),
         };
         let initialized = (|| {
@@ -3365,12 +3370,34 @@ impl<P: api::Phase> Context<'_, P> {
             // `impl BorrowedWithFontSystem<'_, Buffer>` and `impl
             // BorrowedWithFontSystem<'_, Editor>` each do, is no member of
             // the generic type: both declare `set_tab_width(&mut self, u16)`.
+            // A fixed argument that is its parameter's declared default is
+            // the type as written without it, as rustc resolves
+            // `Parser::new` in `impl<'input> Parser<'input,
+            // DefaultBrokenLinkCallback>` for `Parser`. So is a member of
+            // one instance that no other implementation of the type
+            // declares, as quick-xml's `Reader::from_str` in `impl<'a>
+            // Reader<&'a [u8]>`: no overload can repeat it (D558 slice 2).
             _ if implementation.generics().parameters().next().is_some()
                 && lifetime_only(implementation.generics())
-                && !own_form(implementation.self_type(), target) =>
+                && !self.own_form(implementation.self_type(), target)
+                && !self.sole_instance_member(implementation, definition, target) =>
             {
                 Some(reject::Kind::GenericImplementation)
             }
+            // A trait's impl for another type that names this one, as
+            // crossterm's `impl<D> AsRef<ContentStyle> for StyledContent<D>`
+            // names `ContentStyle`, has no members of this type: its `as_ref`
+            // is `StyledContent`'s.
+            _ if matches!(implementation.trait_ref(), model::Trait::Trait { .. })
+                && matches!(implementation.self_type(), model::Type::Definition { id, .. } if id != target) =>
+            {
+                Some(reject::Kind::GenericImplementation)
+            }
+            // `as_ref` of one of several `AsRef<T>` impls, as a type that is
+            // `AsRef<str>` and `AsRef<[u8]>`: rustc picks one by the type
+            // the caller asks for, which a Rawr call doesn't name, and
+            // they'd repeat one input signature (D558 slice 2).
+            _ if self.ambiguous_as_ref(implementation) => Some(reject::Kind::GenericImplementation),
             _ => None,
         };
         // A trait's default method, as Freya's `ContainerSizeExt::expanded(self)
@@ -3807,6 +3834,10 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "PartialEq"),
             self.implements_for_any(definition, "Eq"),
             self.implements_for_any(definition, "Hash"),
+        )
+        .with_borrowing(
+            lifetime_parameters(generics),
+            self.implements_for_any(definition, "Iterator"),
         ))
     }
 
@@ -3893,6 +3924,10 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "PartialEq"),
             self.implements_for_any(definition, "Eq"),
             self.implements_for_any(definition, "Hash"),
+        )
+        .with_borrowing(
+            lifetime_parameters(generics),
+            self.implements_for_any(definition, "Iterator"),
         ))
     }
 
@@ -4042,7 +4077,6 @@ impl<P: api::Phase> Context<'_, P> {
         signature: &model::Signature,
         generics: &model::Generics,
     ) -> Result<representability::Representability, Failure> {
-        use representability::{callable, function, method, ownership, Representability};
         if signature.safety() != model::Safety::Safe {
             return Err(representability::reject::Kind::UnsafeFunction.into());
         }
@@ -4052,24 +4086,64 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.abi() != "\"Rust\"" {
             return Err(representability::reject::Kind::ForeignAbi.into());
         }
+        let opens_copies = self.late_binders_open_copies(signature);
+        let borrows_receiver = borrows_receiver(signature);
+        let outer_scope = self
+            .scope_lifetimes
+            .replace(opens_copies || borrows_receiver);
+        let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
+        self.scope_lifetimes.set(outer_scope);
+        classified
+    }
+
+    fn function_with(
+        &self,
+        signature: &model::Signature,
+        generics: &model::Generics,
+        opens_copies: bool,
+        borrows_receiver: bool,
+    ) -> Result<representability::Representability, Failure> {
+        use representability::{callable, function, method, ownership, Representability};
         if !receiver_binder_is_exact(signature)
             && !late_binders_lend_strings(signature)
             && !late_binders_lend_inputs(signature)
+            && !opens_copies
         {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
         }
         // An early-bound lifetime is `'static` only where no input borrows
-        // at it (D558 tier 0): `Parser::new(text: &'input str)` refuses.
+        // at it (D558 tier 0). An associated function whose output borrows
+        // its `&str` inputs, as `Parser::new(text: &'input str)`, opens a
+        // native scope frame that owns copies of them and holds the output
+        // in its region (D558 tier 1, slice 2). Any other borrow refuses.
         if matches!(
             signature.receiver(),
             model::Receiver::Reference {
                 lifetime: model::Lifetime::Early { .. },
                 ..
             }
-        ) || signature.inputs().any(borrows_at_early_lifetime)
-        {
+        ) {
             return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
         }
+        let scope = if borrows_receiver {
+            Some(representability::signature::Scope::Borrows)
+        } else if opens_copies {
+            Some(representability::signature::Scope::Opens)
+        } else if signature.inputs().any(borrows_at_early_lifetime) {
+            if matches!(signature.receiver(), model::Receiver::None)
+                && signature
+                    .inputs()
+                    .filter(|input| borrows_at_early_lifetime(input))
+                    .all(is_str_reference)
+                && names_early_lifetime(signature.output())
+            {
+                Some(representability::signature::Scope::Opens)
+            } else {
+                return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
+            }
+        } else {
+            None
+        };
         let converted = self.callable_conversion(generics);
         let generics = converted.as_ref().unwrap_or(generics);
         let strings = self.string_parameters(generics);
@@ -4141,6 +4215,22 @@ impl<P: api::Phase> Context<'_, P> {
             model::Receiver::Reference { .. } if signature.async_function() => {
                 self.convert_output(&rewritten)
             }
+            // A `&[T]` the method lends from its receiver, as QName's
+            // `as_ref(&self) -> &[u8]`: a copy, typed as the slice it is,
+            // so a slice pattern matches it (D558 slice 2).
+            model::Receiver::Reference {
+                lifetime: lifetime @ model::Lifetime::Late { .. },
+                ..
+            } if matches!(&rewritten, model::Type::Reference { lifetime: lent, ty, .. }
+                    if lent == lifetime && matches!(&**ty, model::Type::Slice(_))) =>
+            {
+                self.convert_value(&rewritten).map(|copied| {
+                    representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(copied),
+                    }
+                })
+            }
             _ => self.convert_value(&rewritten),
         };
         let mut guard = None;
@@ -4195,7 +4285,21 @@ impl<P: api::Phase> Context<'_, P> {
             output,
         )
         .with_relations(relations)
-        .with_guard(guard);
+        .with_guard(guard)
+        .with_scope(scope);
+        // A receiver of an impl that fixes its type's arguments, as
+        // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
+        let signature_plan = match signature.receiver() {
+            model::Receiver::Value { ty } | model::Receiver::Reference { ty, .. }
+                if matches!(ty, model::Type::Definition { arguments, .. }
+                    if arguments.iter().any(|argument| matches!(argument,
+                        model::Argument::Type(argument)
+                            if !matches!(argument, model::Type::Parameter { .. })))) =>
+            {
+                signature_plan.with_instance(self.convert(ty).ok())
+            }
+            _ => signature_plan,
+        };
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
             model::Receiver::Value { .. } => Some(ownership::Receiver::Owned),
@@ -4288,6 +4392,25 @@ impl<P: api::Phase> Context<'_, P> {
                         );
                     }
                     Type::Range(Box::new(element))
+                } else if let Some(borrowed) = cow_target(definition, arguments) {
+                    // alloc's `Cow<'a, [T]>` and `Cow<'a, str>`, as
+                    // quick-xml's `Attribute::value` and `decode()` give:
+                    // what they hold, copied out as Rawr's array or string,
+                    // which no longer borrows (D558 slice 2).
+                    match borrowed {
+                        model::Type::Slice(element) => Type::Sequence {
+                            element: Box::new(self.convert(element)?),
+                            owned: false,
+                        },
+                        model::Type::Primitive(name) if &**name == "str" => {
+                            Type::Builtin(Builtin::Text)
+                        }
+                        _ => {
+                            return Err(
+                                representability::reject::Kind::UnsupportedGenericArgument.into()
+                            )
+                        }
+                    }
                 } else if let Some(element) = option_element(definition, arguments) {
                     Type::Option(Box::new(self.convert(element)?))
                 } else if let Some((ok, err)) = result_elements(definition, arguments) {
@@ -4307,6 +4430,12 @@ impl<P: api::Phase> Context<'_, P> {
                             model::Argument::Lifetime(
                                 model::Lifetime::Static | model::Lifetime::Early { .. },
                             ) => continue,
+                            // A scope frame's lifetime (D558 tier 1).
+                            model::Argument::Lifetime(model::Lifetime::Late { .. })
+                                if self.scope_lifetimes.get() =>
+                            {
+                                continue
+                            }
                             _ => {
                                 return Err(
                                     representability::reject::Kind::UnsupportedGenericArgument
@@ -4314,7 +4443,22 @@ impl<P: api::Phase> Context<'_, P> {
                                 )
                             }
                         };
-                        converted.push(self.convert(argument)?);
+                        converted.push(match borrowed_argument(argument) {
+                            // `Reader<&'a [u8]>`: a shared slice of scalars
+                            // or a `&str` a type argument names, which a
+                            // scope frame's value borrows (D558 tier 1).
+                            Some(target) => Type::Borrowed {
+                                mutable: false,
+                                ty: Box::new(match target {
+                                    model::Type::Slice(element) => Type::Sequence {
+                                        element: Box::new(self.convert(element)?),
+                                        owned: false,
+                                    },
+                                    _ => Type::Builtin(Builtin::Str),
+                                }),
+                            },
+                            None => self.convert(argument)?,
+                        });
                     }
                     Type::Nominal {
                         definition: crate::surface::identity::Definition::of(id),
@@ -4376,9 +4520,13 @@ impl<P: api::Phase> Context<'_, P> {
             model::Type::ImplTrait { .. } => {
                 return Err(representability::reject::Kind::OpaqueType.into())
             }
-            model::Type::Projection { .. } => {
-                return Err(representability::reject::Kind::Projection.into())
-            }
+            // `<T as Iterator>::Item` of an `impl Iterator for T` the crate
+            // declares, as `next`'s `Option<Self::Item>` names it (D558
+            // slice 2).
+            model::Type::Projection { .. } => match self.iterator_item(ty) {
+                Some(item) => return self.convert(item),
+                None => return Err(representability::reject::Kind::Projection.into()),
+            },
             model::Type::Tuple(_) => return Err(representability::reject::Kind::TupleType.into()),
             model::Type::Slice(_) => return Err(representability::reject::Kind::SliceType.into()),
             model::Type::Array { .. } => {
@@ -4637,6 +4785,198 @@ impl<P: api::Phase> Context<'_, P> {
         names.into_boxed_slice()
     }
 
+    /// The `Item` of the crate's `impl Iterator for T`, for the projection
+    /// `<T as Iterator>::Item` with that exact `T` (D558 slice 2). The
+    /// driver keeps an iterator impl's `Item` for this.
+    fn iterator_item<'g>(&'g self, ty: &model::Type) -> Option<&'g model::Type> {
+        let model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } = ty
+        else {
+            return None;
+        };
+        if !self.is_core_trait(trait_id, "Iterator")
+            || self
+                .graph
+                .definition_index(associated)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| definition.display_path().last())
+                != Some("Item")
+        {
+            return None;
+        }
+        let [model::Argument::Type(self_type)] = &arguments[..] else {
+            return None;
+        };
+        self.graph.implementations().find_map(|implementation| {
+            let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                return None;
+            };
+            if id != trait_id || implementation.self_type() != self_type {
+                return None;
+            }
+            self.associated_type(implementation, "Item")
+        })
+    }
+
+    /// The type an implementation gives its associated type `name`.
+    fn associated_type<'g>(
+        &'g self,
+        implementation: &'g model::Implementation,
+        name: &str,
+    ) -> Option<&'g model::Type> {
+        implementation.associated().find_map(|associated| {
+            let definition = self
+                .graph
+                .definition_index(associated)
+                .and_then(|index| self.graph.definitions().nth(index))?;
+            match definition.kind() {
+                model::Kind::AssociatedType {
+                    default: model::Default::Present(ty),
+                    ..
+                } if definition.display_path().last() == Some(name) => Some(ty),
+                _ => None,
+            }
+        })
+    }
+
+    /// Whether `ty`, an implementation's self type, is the definition `id`
+    /// with nothing but lifetimes filled in, or type arguments that are
+    /// exactly their parameters' declared defaults.
+    fn own_form(&self, ty: &model::Type, id: &api::identity::Definition) -> bool {
+        let generics = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|definition| match definition.kind() {
+                model::Kind::Struct { generics, .. }
+                | model::Kind::Enum { generics, .. }
+                | model::Kind::Union { generics, .. } => Some(generics),
+                _ => None,
+            });
+        own_form(ty, id, generics)
+    }
+
+    /// `T` of an input `&mut Vec<T>` of a scalar `T`, which a call takes as
+    /// a copy of Rawr's array and gives back (D558 slice 2).
+    fn copied_vec<'t>(&self, ty: &'t model::Type) -> Option<&'t model::Type> {
+        let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            ty,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        let model::Type::Definition { id, arguments } = &**ty else {
+            return None;
+        };
+        let definition = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))?;
+        vec_element(definition, arguments)
+            .filter(|element| matches!(element, model::Type::Primitive(_)))
+    }
+
+    /// A method whose own lifetimes the output borrows only through inputs
+    /// the call can copy, as quick-xml's `read_event_into<'b>(&mut self,
+    /// buf: &'b mut Vec<u8>) -> Result<Event<'b>>`: it opens a scope frame
+    /// that owns the copies and holds the output (D558 tier 1, slice 2).
+    /// The receiver is borrowed for the call alone.
+    fn late_binders_open_copies(&self, signature: &model::Signature) -> bool {
+        let output = signature.output();
+        if !names_late_lifetime(output) {
+            return false;
+        }
+        if let model::Receiver::Reference {
+            lifetime: receiver @ model::Lifetime::Late { .. },
+            ..
+        } = signature.receiver()
+            && names_lifetime(output, receiver)
+        {
+            return false;
+        }
+        signature
+            .inputs()
+            .filter(|input| names_late_lifetime(input))
+            .all(|input| {
+                matches!(
+                    input,
+                    model::Type::Reference {
+                        lifetime: model::Lifetime::Late { .. },
+                        ..
+                    }
+                ) && (is_str_reference(input) || self.copied_vec(input).is_some())
+            })
+            && signature.inputs().any(|input| {
+                matches!(
+                    input,
+                    model::Type::Reference {
+                        lifetime: model::Lifetime::Late { .. },
+                        ..
+                    }
+                )
+            })
+    }
+
+    /// Whether `implementation` is one of several `AsRef` impls for one
+    /// type.
+    fn ambiguous_as_ref(&self, implementation: &model::Implementation) -> bool {
+        let as_ref = |implementation: &model::Implementation| {
+            matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
+                if self.is_core_trait(id, "AsRef"))
+        };
+        if !as_ref(implementation) {
+            return false;
+        }
+        let model::Type::Definition { id: target, .. } = implementation.self_type() else {
+            return false;
+        };
+        self.graph
+            .implementations()
+            .filter(|other| {
+                as_ref(other)
+                    && matches!(other.self_type(), model::Type::Definition { id, .. } if id == target)
+            })
+            .count()
+            > 1
+    }
+
+    /// Whether `definition`, a member of `implementation` of an instance of
+    /// the type `target`, is the only member by its name that any
+    /// implementation of the type declares.
+    fn sole_instance_member(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+        target: &api::identity::Definition,
+    ) -> bool {
+        let instance =
+            |ty: &model::Type| matches!(ty, model::Type::Definition { id, .. } if id == target);
+        if !instance(implementation.self_type()) {
+            return false;
+        }
+        let Some(name) = definition.display_path().last() else {
+            return false;
+        };
+        self.graph
+            .implementations()
+            .filter(|other| instance(other.self_type()))
+            .flat_map(model::Implementation::associated)
+            .filter(|member| {
+                self.graph
+                    .definition_index(member)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|member| member.display_path().last())
+                    == Some(name)
+            })
+            .count()
+            == 1
+    }
+
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
         id.unit().authority().sysroot().is_some()
             && id.unit().crate_name() == "core"
@@ -4664,14 +5004,33 @@ impl<P: api::Phase> Context<'_, P> {
         )>,
         Failure,
     > {
-        let Some(evidence) = signature.guard() else {
-            return Ok(None);
+        // A reference the method lends from its receiver, as quick-xml's
+        // `config_mut(&mut self) -> &mut Config`, is read and written as a
+        // guard is (D558 slice 2, T012).
+        let lent = match (signature.receiver(), signature.output()) {
+            (
+                model::Receiver::Reference {
+                    lifetime: receiver @ model::Lifetime::Late { .. },
+                    ..
+                },
+                model::Type::Reference {
+                    lifetime,
+                    mutability,
+                    ty,
+                },
+            ) if lifetime == receiver => Some((&**ty, *mutability == model::Mutability::Mutable)),
+            _ => None,
+        };
+        let (target, mutable) = match (signature.guard(), lent) {
+            (Some(evidence), _) => (evidence.target(), evidence.mutable()),
+            (None, Some(lent)) => lent,
+            (None, None) => return Ok(None),
         };
         if !matches!(signature.receiver(), model::Receiver::Reference { .. }) {
             return Ok(None);
         }
         use representability::convert::{Builtin, Type};
-        let target = match self.convert_value(evidence.target()) {
+        let target = match self.convert_value(target) {
             Ok(target) => target,
             Err(Failure::Reject(_)) => return Ok(None),
             Err(error) => return Err(error),
@@ -4688,7 +5047,7 @@ impl<P: api::Phase> Context<'_, P> {
         // A store crosses the other way, which a sequence or a tuple
         // doesn't yet.
         let stored = !matches!(target, Type::Sequence { .. } | Type::Tuple(_));
-        let mode = if evidence.mutable() && inputs.is_empty() && stored {
+        let mode = if mutable && inputs.is_empty() && stored {
             representability::signature::Guard::Mutable
         } else {
             representability::signature::Guard::Shared
@@ -4713,6 +5072,17 @@ impl<P: api::Phase> Context<'_, P> {
             return Ok(representability::convert::Type::Builtin(
                 representability::convert::Builtin::Str,
             ));
+        }
+        // `&mut Vec<T>` of scalars, as quick-xml's `read_event_into` takes
+        // its buffer: Rawr's array, copied in and back out (D558 slice 2).
+        if let Some(element) = self.copied_vec(ty) {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Sequence {
+                    element: Box::new(self.convert(element)?),
+                    owned: true,
+                }),
+            });
         }
         // `&T` or `&mut T` of a value Rawr holds, leased from its slot for
         // the call (D558.5), as `render_stateful_widget`'s `&mut W::State`.
@@ -4865,6 +5235,86 @@ fn late_binders_lend_inputs(signature: &model::Signature) -> bool {
             input => !names_late_lifetime(input),
         })
         && !names_late_lifetime(signature.output())
+}
+
+/// A method whose output borrows its receiver, as quick-xml's
+/// `BytesStart::name(&self) -> QName<'_>` does: it opens a scope frame that
+/// holds the receiver borrowed while the output lives (D558 tier 1, slice
+/// 2). A plain `&T` output is read as a borrow guard instead.
+fn borrows_receiver(signature: &model::Signature) -> bool {
+    let model::Receiver::Reference {
+        lifetime: receiver @ model::Lifetime::Late { .. },
+        ..
+    } = signature.receiver()
+    else {
+        return false;
+    };
+    let output = signature.output();
+    // A nominal output, as `QName<'_>`: a borrow guard is read through its
+    // target, an async method's future holds its receiver (D513.6), and an
+    // opaque or reference output is held to its own rules.
+    matches!(output, model::Type::Definition { .. })
+        && signature.guard().is_none()
+        && !signature.async_function()
+        && names_lifetime(output, receiver)
+        && !names_opaque(output)
+        && signature.binders().len() == 1
+        && !signature.inputs().any(names_late_lifetime)
+}
+
+/// Whether `ty` holds an opaque, trait object or function pointer type.
+fn names_opaque(ty: &model::Type) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_opaque(ty),
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => false,
+    };
+    match ty {
+        model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. }
+        | model::Type::Projection { .. } => true,
+        model::Type::Reference { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. }
+        | model::Type::RawPointer { ty, .. } => names_opaque(ty),
+        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
+        model::Type::Tuple(types) => types.iter().any(names_opaque),
+        model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::Never => false,
+    }
+}
+
+/// Whether `ty` names `lifetime` anywhere in it.
+fn names_lifetime(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_lifetime(ty, lifetime),
+        model::Argument::Lifetime(named) => named == lifetime,
+        model::Argument::Const(_) => false,
+    };
+    match ty {
+        model::Type::Reference {
+            lifetime: named,
+            ty,
+            ..
+        } => named == lifetime || names_lifetime(ty, lifetime),
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            arguments.iter().any(argument)
+        }
+        model::Type::Tuple(types) => types.iter().any(|ty| names_lifetime(ty, lifetime)),
+        model::Type::Slice(ty) => names_lifetime(ty, lifetime),
+        model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
+            names_lifetime(element, lifetime)
+        }
+        model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. } => true,
+        model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::Never => false,
+    }
 }
 
 /// Whether `ty` borrows at a late-bound lifetime anywhere in it.
@@ -5243,6 +5693,17 @@ fn is_lifetime_parameter(parameter: &model::Parameter) -> bool {
     matches!(parameter.kind(), model::ParameterKind::Lifetime { .. })
 }
 
+/// How many lifetime parameters `generics` declares.
+fn lifetime_parameters(generics: &model::Generics) -> u32 {
+    u32::try_from(
+        generics
+            .parameters()
+            .filter(|parameter| is_lifetime_parameter(parameter))
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
 /// Generics that declare only lifetimes, each instantiated at `'static`
 /// (D558 tier 0), and bound nothing but lifetimes.
 fn lifetime_only(generics: &model::Generics) -> bool {
@@ -5254,6 +5715,52 @@ fn lifetime_only(generics: &model::Generics) -> bool {
 
 /// Whether `ty` holds a reference at an early-bound lifetime, which
 /// `'static` would make a `'static` borrow.
+/// The target of a type argument `&'a [T]` of scalars, or `&'a str`, at an
+/// early or `'static` lifetime: `Reader<&'a [u8]>`'s.
+fn borrowed_argument(ty: &model::Type) -> Option<&model::Type> {
+    let model::Type::Reference {
+        lifetime: model::Lifetime::Early { .. } | model::Lifetime::Static,
+        mutability: model::Mutability::Shared,
+        ty,
+    } = ty
+    else {
+        return None;
+    };
+    match &**ty {
+        model::Type::Slice(element) if matches!(&**element, model::Type::Primitive(_)) => Some(ty),
+        model::Type::Primitive(name) if &**name == "str" => Some(ty),
+        _ => None,
+    }
+}
+
+/// Whether `ty` names an early-bound lifetime, as `Parser<'input>` does.
+fn names_early_lifetime(ty: &model::Type) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_early_lifetime(ty),
+        model::Argument::Lifetime(lifetime) => matches!(lifetime, model::Lifetime::Early { .. }),
+        model::Argument::Const(_) => false,
+    };
+    match ty {
+        model::Type::Reference { lifetime, ty, .. } => {
+            matches!(lifetime, model::Lifetime::Early { .. }) || names_early_lifetime(ty)
+        }
+        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
+        model::Type::Tuple(types) => types.iter().any(names_early_lifetime),
+        model::Type::Slice(ty) => names_early_lifetime(ty),
+        model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
+            names_early_lifetime(element)
+        }
+        model::Type::Projection { arguments, .. } => arguments.iter().any(argument),
+        model::Type::FunctionPointer(_)
+        | model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::Never
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. } => false,
+    }
+}
+
 fn borrows_at_early_lifetime(ty: &model::Type) -> bool {
     let argument = |argument: &model::Argument| match argument {
         model::Argument::Type(ty) => borrows_at_early_lifetime(ty),
@@ -5283,17 +5790,44 @@ fn borrows_at_early_lifetime(ty: &model::Type) -> bool {
     }
 }
 
-/// `ty` is the definition `id` whose type arguments are all generic
-/// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
-/// Whether `ty`, an implementation's self type, is the definition `id`
-/// with nothing but lifetimes filled in.
-fn own_form(ty: &model::Type, id: &api::identity::Definition) -> bool {
-    matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
+/// Whether `ty`, an implementation's self type, is the definition `id`,
+/// whose `generics` are given, with nothing but lifetimes filled in, or
+/// type arguments that are exactly their parameters' declared defaults.
+fn own_form(
+    ty: &model::Type,
+    id: &api::identity::Definition,
+    generics: Option<&model::Generics>,
+) -> bool {
+    let model::Type::Definition {
+        id: actual,
+        arguments,
+    } = ty
+    else {
+        return false;
+    };
+    actual == id
         && arguments
             .iter()
-            .all(|argument| matches!(argument, model::Argument::Lifetime(_))))
+            .enumerate()
+            .all(|(position, argument)| match argument {
+                model::Argument::Lifetime(_) => true,
+                model::Argument::Type(argument) => generics
+                    .and_then(|generics| generics.parameters().nth(position))
+                    .is_some_and(|parameter| {
+                        matches!(
+                            parameter.kind(),
+                            model::ParameterKind::Type {
+                                default: model::Default::Present(default),
+                                ..
+                            } if default == argument
+                        )
+                    }),
+                model::Argument::Const(_) => false,
+            })
 }
 
+/// `ty` is the definition `id` whose type arguments are all generic
+/// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
 fn any_arguments(ty: &model::Type, id: &api::identity::Definition) -> bool {
     matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
     && arguments.iter().all(|argument| match argument {
@@ -5532,6 +6066,24 @@ fn range_element<'a>(
     }
     match arguments {
         [model::Argument::Type(element)] => Some(element),
+        _ => None,
+    }
+}
+
+/// `B` of alloc's `Cow<'a, B>`.
+fn cow_target<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
+    let unit = definition.id().unit();
+    if unit.authority().sysroot().is_none()
+        || !matches!(unit.crate_name(), "alloc" | "std")
+        || definition.display_path().last() != Some("Cow")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Lifetime(_), model::Argument::Type(target)] => Some(target),
         _ => None,
     }
 }
@@ -6714,6 +7266,143 @@ mod tests {
             context.classify_associated(&own, definition, &[], definition.id()),
             Err(super::Error::Cardinality)
         ));
+    }
+
+    /// A trait's impl for another type that names this one, as crossterm's
+    /// `impl<D> AsRef<ContentStyle> for StyledContent<D>` names
+    /// `ContentStyle`, gives this type no members: its `as_ref` would
+    /// repeat `ContentStyle::as_ref`'s input signature.
+    #[test]
+    fn a_trait_impl_for_another_type_gives_no_members() {
+        use super::representability::reject::Kind;
+        use crate::api::model;
+
+        let graph = crate::test_fixture::graph();
+        let limits = crate::cargo::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let definition = graph
+            .definitions()
+            .next()
+            .expect("fixture retains a definition");
+        let styled = crate::test_fixture::representability_families()
+            .definitions()
+            .next()
+            .expect("family fixture retains a distinct definition")
+            .id()
+            .clone();
+        let implementation = model::Implementation::new(
+            "fixture-impl".into(),
+            styled.clone(),
+            Box::from([definition.id().clone(), styled.clone()]),
+            model::Trait::Trait {
+                id: styled.clone(),
+                arguments: Box::from([model::Argument::Type(model::Type::Definition {
+                    id: definition.id().clone(),
+                    arguments: Box::default(),
+                })]),
+            },
+            model::Type::Definition {
+                id: styled,
+                arguments: Box::default(),
+            },
+            model::Safety::Safe,
+            model::Polarity::Positive,
+            false,
+            false,
+            rejection_generics(),
+            Box::default(),
+            rejection_span(),
+            model::Origin::Source,
+        );
+        let evidence = context
+            .classify_associated(&implementation, definition, &[], definition.id())
+            .expect("the implementation is classified");
+        let super::OutcomeEvidence::Inline(representability) = evidence else {
+            panic!("a member of another type is rejected inline");
+        };
+        let Representability::Rejected(reason) = representability.as_ref() else {
+            panic!("a member of another type is not this type's");
+        };
+        assert_eq!(reason.kind(), Kind::GenericImplementation);
+    }
+
+    /// A lifetime-only implementation that fixes a type argument to its
+    /// parameter's declared default is the type's own, as rustc resolves
+    /// `Parser::new` in `impl<'input> Parser<'input,
+    /// DefaultBrokenLinkCallback>` for `Parser`. Any other fixed argument
+    /// keeps it refused.
+    #[test]
+    fn a_fixed_argument_that_is_its_default_is_the_type_s_own_form() {
+        use crate::api::model;
+
+        let graph = crate::test_fixture::graph();
+        let mut definitions = graph.definitions();
+        let parser = definitions
+            .next()
+            .expect("fixture retains a definition")
+            .id()
+            .clone();
+        let callback = definitions
+            .next()
+            .expect("fixture retains a second definition")
+            .id()
+            .clone();
+        let named = |id: &crate::api::identity::Definition| model::Type::Definition {
+            id: id.clone(),
+            arguments: Box::default(),
+        };
+        // `struct Parser<'input, F = DefaultBrokenLinkCallback>`.
+        let generics = model::Generics::new(
+            Box::from([
+                model::Parameter::new(
+                    parser.clone(),
+                    0,
+                    "'input".into(),
+                    model::ParameterKind::Lifetime {
+                        bounds: Box::default(),
+                    },
+                ),
+                model::Parameter::new(
+                    parser.clone(),
+                    1,
+                    "F".into(),
+                    model::ParameterKind::Type {
+                        bounds: Box::default(),
+                        default: model::Default::Present(named(&callback)),
+                    },
+                ),
+            ]),
+            Box::default(),
+        );
+        let early = model::Argument::Lifetime(model::Lifetime::Early {
+            owner: parser.clone(),
+            index: 0,
+        });
+        let fixed = |argument: model::Type| model::Type::Definition {
+            id: parser.clone(),
+            arguments: Box::from([early.clone(), model::Argument::Type(argument)]),
+        };
+        assert!(super::own_form(
+            &fixed(named(&callback)),
+            &parser,
+            Some(&generics)
+        ));
+        // `Parser<'input, Parser>`: a fixed argument that is no default.
+        assert!(!super::own_form(
+            &fixed(named(&parser)),
+            &parser,
+            Some(&generics)
+        ));
+        // A parameter without a default refuses any fixed argument.
+        assert!(!super::own_form(&fixed(named(&callback)), &parser, None));
+        // Lifetimes alone, and another type, as before.
+        let lifetimes = model::Type::Definition {
+            id: parser.clone(),
+            arguments: Box::from([early.clone()]),
+        };
+        assert!(super::own_form(&lifetimes, &parser, Some(&generics)));
+        assert!(!super::own_form(&lifetimes, &callback, Some(&generics)));
     }
 
     fn rejection<T>(result: Result<T, super::Failure>) -> super::representability::reject::Kind {

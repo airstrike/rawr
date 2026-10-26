@@ -29,10 +29,13 @@ pub enum Kind {
     Send,
     /// A value contains no non-static borrowed data.
     Static,
+    /// An imported type the crate implements `Iterator` for: a `for` loop
+    /// walks it by its `next` (D558 slice 2). Never derived.
+    Iterator,
 }
 
 impl Kind {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Default,
         Self::Debug,
         Self::Clone,
@@ -44,6 +47,7 @@ impl Kind {
         Self::Hash,
         Self::Send,
         Self::Static,
+        Self::Iterator,
     ];
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
@@ -82,6 +86,7 @@ impl Kind {
             Self::Hash => "Hash",
             Self::Send => "Send",
             Self::Static => "Static",
+            Self::Iterator => "Iterator",
         }
     }
 
@@ -98,6 +103,7 @@ impl Kind {
             Self::PartialOrd => 1 << 8,
             Self::Ord => 1 << 9,
             Self::Hash => 1 << 10,
+            Self::Iterator => 1 << 11,
         }
     }
 }
@@ -126,6 +132,7 @@ enum Name {
     Hash,
     Send,
     Static,
+    Iterator,
 }
 
 impl Set {
@@ -195,6 +202,7 @@ impl From<Kind> for Name {
             Kind::Hash => Self::Hash,
             Kind::Send => Self::Send,
             Kind::Static => Self::Static,
+            Kind::Iterator => Self::Iterator,
         }
     }
 }
@@ -233,6 +241,7 @@ impl crate::preview::digest::Write for Fingerprint {
                 Name::PartialOrd => 0x2229,
                 Name::Ord => 0x222a,
                 Name::Hash => 0x222b,
+                Name::Iterator => 0x222c,
             });
         }
         Ok(())
@@ -252,6 +261,7 @@ fn write_kind(writer: &mut crate::preview::digest::Writer, capability: Kind) {
         Kind::PartialOrd => 0x2239,
         Kind::Ord => 0x223a,
         Kind::Hash => 0x223b,
+        Kind::Iterator => 0x223c,
     });
 }
 
