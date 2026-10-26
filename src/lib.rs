@@ -154,6 +154,8 @@ pub mod reload;
 pub mod resolve;
 /// Rawr's `Result<T, E>` at runtime, and its round trip to Rust's `Result<T, E>`.
 pub mod result;
+/// Scoped loans: a borrow native code lends script code for one call.
+pub mod scope;
 #[cfg(feature = "serde")]
 pub mod serde;
 /// Canonical callable signature fingerprints.
