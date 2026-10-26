@@ -185,6 +185,15 @@ impl Parser<'_> {
             }
         }
         if self.may_hold_borrow(ty) {
+            // `impl Copy for Foo<'static>` asks a copied `Foo` for `'static`
+            // borrows, which these facts do not read.
+            if let Ty::Script(id, _) = self.inference.resolve(ty)
+                && self.models.static_impls.contains(&id)
+            {
+                self.flow()
+                    .unmodeled("a value whose type has an impl for `'static` only", whole);
+                return;
+            }
             if self.needs_drop(ty, whole).unwrap_or(true) {
                 self.flow()
                     .unmodeled("a value with drop glue that holds a borrow", whole);

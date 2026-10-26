@@ -195,6 +195,9 @@ pub(crate) struct Impl {
     pub generics: Box<[Generic]>,
     pub trait_: Option<TraitImpl>,
     pub owner: type_ref::Type,
+    /// The owner is written with `'static` (`impl Copy for Foo<'static>`):
+    /// what the impl gives needs a value's borrows to be `'static`.
+    pub statics: bool,
     pub functions: Box<[Function]>,
     /// Associated types: `type Output = i64;`.
     pub associated: Box<[(crate::item::Name, type_ref::Type)]>,
@@ -258,6 +261,13 @@ impl Lifetimes {
             lifetimes.name(output);
         }
         lifetimes.bound(&function.lifetimes);
+        lifetimes
+    }
+
+    /// The lifetimes written in `ty`.
+    pub(crate) fn of_type(ty: &crate::item::type_ref::Type) -> Self {
+        let mut lifetimes = Self::default();
+        lifetimes.name(ty);
         lifetimes
     }
 

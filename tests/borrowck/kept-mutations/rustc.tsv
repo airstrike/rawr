@@ -1,0 +1,1457 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+kept-mutations/array_of_refs_a_5_held_across.rs	E0506:6
+kept-mutations/array_of_refs_a_5_kept_across.rs	E0506:6
+kept-mutations/array_of_refs_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/array_of_refs_a_5_kept_ended.rs	E0506:7
+kept-mutations/array_of_refs_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/array_of_refs_a_5_option_across.rs	E0506:6
+kept-mutations/array_of_refs_a_5_option_replaced.rs	E0506:8
+kept-mutations/array_of_refs_a_5_vec_across.rs	E0506:6
+kept-mutations/assign_after_last_use_x_5_held_across.rs	E0506:6
+kept-mutations/assign_after_last_use_x_5_kept_across.rs	E0506:6
+kept-mutations/assign_after_last_use_x_5_kept_back_edge.rs	E0506:8
+kept-mutations/assign_after_last_use_x_5_kept_ended.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_5_kept_into_branch.rs	E0506:6
+kept-mutations/assign_after_last_use_x_5_option_across.rs	E0506:6
+kept-mutations/assign_after_last_use_x_5_option_replaced.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_5_vec_across.rs	E0506:6
+kept-mutations/assign_after_last_use_x_6_held_across.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_kept_across.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_kept_back_edge.rs	ok	0	"3\n3\n"
+kept-mutations/assign_after_last_use_x_6_kept_ended.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_kept_into_branch.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_option_across.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_option_replaced.rs	ok	0	"3\n"
+kept-mutations/assign_after_last_use_x_6_vec_across.rs	ok	0	"3\n"
+kept-mutations/assign_borrowed_x_4_held_across.rs	E0506:5
+kept-mutations/assign_borrowed_x_4_kept_across.rs	E0506:5
+kept-mutations/assign_borrowed_x_4_kept_back_edge.rs	E0506:7
+kept-mutations/assign_borrowed_x_4_kept_ended.rs	E0506:6
+kept-mutations/assign_borrowed_x_4_kept_into_branch.rs	E0506:5
+kept-mutations/assign_borrowed_x_4_option_across.rs	E0506:5
+kept-mutations/assign_borrowed_x_4_option_replaced.rs	E0506:7
+kept-mutations/assign_borrowed_x_4_vec_across.rs	E0506:5
+kept-mutations/assign_borrowed_x_5_held_across.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_kept_across.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_kept_back_edge.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_kept_ended.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_kept_into_branch.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_option_across.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_option_replaced.rs	E0506:4
+kept-mutations/assign_borrowed_x_5_vec_across.rs	E0506:4
+kept-mutations/associated_new_ended_x_15_held_across.rs	E0506:16
+kept-mutations/associated_new_ended_x_15_kept_across.rs	E0506:16
+kept-mutations/associated_new_ended_x_15_kept_back_edge.rs	E0506:18
+kept-mutations/associated_new_ended_x_15_kept_ended.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_15_kept_into_branch.rs	E0506:16
+kept-mutations/associated_new_ended_x_15_option_across.rs	E0506:16
+kept-mutations/associated_new_ended_x_15_option_replaced.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_15_vec_across.rs	E0506:16
+kept-mutations/associated_new_ended_x_16_held_across.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_kept_across.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_kept_back_edge.rs	ok	0	"1\n2\n2\n"
+kept-mutations/associated_new_ended_x_16_kept_ended.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_kept_into_branch.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_option_across.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_option_replaced.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_ended_x_16_vec_across.rs	ok	0	"1\n2\n"
+kept-mutations/associated_new_keeps_input_x_14_held_across.rs	E0506:15
+kept-mutations/associated_new_keeps_input_x_14_kept_across.rs	E0506:15
+kept-mutations/associated_new_keeps_input_x_14_kept_back_edge.rs	E0506:17
+kept-mutations/associated_new_keeps_input_x_14_kept_ended.rs	E0506:16
+kept-mutations/associated_new_keeps_input_x_14_kept_into_branch.rs	E0506:15
+kept-mutations/associated_new_keeps_input_x_14_option_across.rs	E0506:15
+kept-mutations/associated_new_keeps_input_x_14_option_replaced.rs	E0506:17
+kept-mutations/associated_new_keeps_input_x_14_vec_across.rs	E0506:15
+kept-mutations/block_scope_dead_v_7_held_across.rs	E0502:8
+kept-mutations/block_scope_dead_v_7_kept_across.rs	E0502:8
+kept-mutations/block_scope_dead_v_7_kept_back_edge.rs	E0502:10
+kept-mutations/block_scope_dead_v_7_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_7_kept_into_branch.rs	E0502:8
+kept-mutations/block_scope_dead_v_7_option_across.rs	E0502:8
+kept-mutations/block_scope_dead_v_7_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_7_vec_across.rs	E0502:8
+kept-mutations/block_scope_dead_v_8_held_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_kept_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_kept_back_edge.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_kept_into_branch.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_option_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/block_scope_dead_v_8_vec_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_7_held_across.rs	E0502:8
+kept-mutations/branch_value_after_last_use_b_7_kept_across.rs	E0502:8
+kept-mutations/branch_value_after_last_use_b_7_kept_back_edge.rs	E0502:10
+kept-mutations/branch_value_after_last_use_b_7_kept_ended.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_7_kept_into_branch.rs	E0502:8
+kept-mutations/branch_value_after_last_use_b_7_option_across.rs	E0502:8
+kept-mutations/branch_value_after_last_use_b_7_option_replaced.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_7_vec_across.rs	E0502:8
+kept-mutations/branch_value_after_last_use_b_8_held_across.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_kept_across.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_kept_back_edge.rs	ok	0	"1\n[2, 3]\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_kept_ended.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_kept_into_branch.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_option_across.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_option_replaced.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_after_last_use_b_8_vec_across.rs	ok	0	"1\n[2, 3]\n"
+kept-mutations/branch_value_holds_both_b_6_held_across.rs	E0502:7
+kept-mutations/branch_value_holds_both_b_6_kept_across.rs	E0502:7
+kept-mutations/branch_value_holds_both_b_6_kept_back_edge.rs	E0502:9
+kept-mutations/branch_value_holds_both_b_6_kept_ended.rs	E0502:8
+kept-mutations/branch_value_holds_both_b_6_kept_into_branch.rs	E0502:7
+kept-mutations/branch_value_holds_both_b_6_option_across.rs	E0502:7
+kept-mutations/branch_value_holds_both_b_6_option_replaced.rs	E0502:9
+kept-mutations/branch_value_holds_both_b_6_vec_across.rs	E0502:7
+kept-mutations/break_continue_end_paths_v_16_held_across.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_kept_across.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_kept_back_edge.rs	ok	0	"[1, 1, 3, 9]\n[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_kept_ended.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_kept_into_branch.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_option_across.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_option_replaced.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/break_continue_end_paths_v_16_vec_across.rs	ok	0	"[1, 1, 3, 9]\n"
+kept-mutations/closure_inline_use_v_5_held_across.rs	E0502:6
+kept-mutations/closure_inline_use_v_5_kept_across.rs	E0502:6
+kept-mutations/closure_inline_use_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/closure_inline_use_v_5_kept_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/closure_inline_use_v_5_option_across.rs	E0502:6
+kept-mutations/closure_inline_use_v_5_option_replaced.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_5_vec_across.rs	E0502:6
+kept-mutations/closure_inline_use_v_6_held_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_kept_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_kept_back_edge.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_kept_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_kept_into_branch.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_option_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_option_replaced.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/closure_inline_use_v_6_vec_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+kept-mutations/element_method_cs_12_held_across.rs	E0502:13
+kept-mutations/element_method_cs_12_kept_across.rs	E0502:13
+kept-mutations/element_method_cs_12_kept_back_edge.rs	E0502:15
+kept-mutations/element_method_cs_12_kept_ended.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_12_kept_into_branch.rs	E0502:13
+kept-mutations/element_method_cs_12_option_across.rs	E0502:13
+kept-mutations/element_method_cs_12_option_replaced.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_12_vec_across.rs	E0502:13
+kept-mutations/element_method_cs_13_held_across.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_kept_across.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_kept_back_edge.rs	ok	0	"[1]\n[1]\n"
+kept-mutations/element_method_cs_13_kept_ended.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_kept_into_branch.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_option_across.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_option_replaced.rs	ok	0	"[1]\n"
+kept-mutations/element_method_cs_13_vec_across.rs	ok	0	"[1]\n"
+kept-mutations/element_method_while_borrowed_cs_12_held_across.rs	E0502:13
+kept-mutations/element_method_while_borrowed_cs_12_kept_across.rs	E0502:13
+kept-mutations/element_method_while_borrowed_cs_12_kept_back_edge.rs	E0502:15
+kept-mutations/element_method_while_borrowed_cs_12_kept_ended.rs	E0502:14
+kept-mutations/element_method_while_borrowed_cs_12_kept_into_branch.rs	E0502:13
+kept-mutations/element_method_while_borrowed_cs_12_option_across.rs	E0502:13
+kept-mutations/element_method_while_borrowed_cs_12_option_replaced.rs	E0502:15
+kept-mutations/element_method_while_borrowed_cs_12_vec_across.rs	E0502:13
+kept-mutations/field_conflict_s_10_held_across.rs	E0503:8
+kept-mutations/field_conflict_s_10_kept_across.rs	E0503:8
+kept-mutations/field_conflict_s_10_kept_back_edge.rs	E0503:8
+kept-mutations/field_conflict_s_10_kept_ended.rs	E0503:8
+kept-mutations/field_conflict_s_10_kept_into_branch.rs	E0503:8
+kept-mutations/field_conflict_s_10_option_across.rs	E0503:8
+kept-mutations/field_conflict_s_10_option_replaced.rs	E0503:8
+kept-mutations/field_conflict_s_10_vec_across.rs	E0503:8
+kept-mutations/field_conflict_s_8_held_across.rs	E0502:8 E0503:9
+kept-mutations/field_conflict_s_8_kept_across.rs	E0502:8 E0503:9
+kept-mutations/field_conflict_s_8_kept_back_edge.rs	E0502:8 E0503:11
+kept-mutations/field_conflict_s_8_kept_ended.rs	E0502:8 E0503:10
+kept-mutations/field_conflict_s_8_kept_into_branch.rs	E0502:8 E0503:9
+kept-mutations/field_conflict_s_8_option_across.rs	E0502:8 E0503:9
+kept-mutations/field_conflict_s_8_option_replaced.rs	E0502:8 E0503:11
+kept-mutations/field_conflict_s_8_vec_across.rs	E0502:8 E0503:9
+kept-mutations/fields_apart_s_10_held_across.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_kept_across.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_kept_back_edge.rs	ok	0	"101 12\n101 12\n"
+kept-mutations/fields_apart_s_10_kept_ended.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_kept_into_branch.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_option_across.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_option_replaced.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_10_vec_across.rs	ok	0	"101 12\n"
+kept-mutations/fields_apart_s_8_held_across.rs	E0502:8 E0506:9
+kept-mutations/fields_apart_s_8_kept_across.rs	E0502:8 E0506:9
+kept-mutations/fields_apart_s_8_kept_back_edge.rs	E0502:8 E0506:11
+kept-mutations/fields_apart_s_8_kept_ended.rs	E0502:8
+kept-mutations/fields_apart_s_8_kept_into_branch.rs	E0502:8 E0506:9
+kept-mutations/fields_apart_s_8_option_across.rs	E0502:8 E0506:9
+kept-mutations/fields_apart_s_8_option_replaced.rs	E0502:8
+kept-mutations/fields_apart_s_8_vec_across.rs	E0502:8 E0506:9
+kept-mutations/fn_elided_ended_v_10_held_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_kept_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_kept_back_edge.rs	ok	0	"1\n[1, 2, 3, 4]\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_kept_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_kept_into_branch.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_option_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_option_replaced.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_10_vec_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_9_held_across.rs	E0502:10
+kept-mutations/fn_elided_ended_v_9_kept_across.rs	E0502:10
+kept-mutations/fn_elided_ended_v_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_elided_ended_v_9_kept_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_elided_ended_v_9_option_across.rs	E0502:10
+kept-mutations/fn_elided_ended_v_9_option_replaced.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+kept-mutations/fn_elided_ended_v_9_vec_across.rs	E0502:10
+kept-mutations/fn_elided_mut_then_read_v_9_held_across.rs	E0502:9 E0502:10
+kept-mutations/fn_elided_mut_then_read_v_9_kept_across.rs	E0502:9 E0502:10
+kept-mutations/fn_elided_mut_then_read_v_9_kept_back_edge.rs	E0502:9 E0502:12
+kept-mutations/fn_elided_mut_then_read_v_9_kept_ended.rs	E0502:9 E0502:11
+kept-mutations/fn_elided_mut_then_read_v_9_kept_into_branch.rs	E0502:9 E0502:10
+kept-mutations/fn_elided_mut_then_read_v_9_option_across.rs	E0502:9 E0502:10
+kept-mutations/fn_elided_mut_then_read_v_9_option_replaced.rs	E0502:9 E0502:12
+kept-mutations/fn_elided_mut_then_read_v_9_vec_across.rs	E0502:9 E0502:10
+kept-mutations/fn_elided_then_push_v_8_held_across.rs	E0502:9
+kept-mutations/fn_elided_then_push_v_8_kept_across.rs	E0502:9
+kept-mutations/fn_elided_then_push_v_8_kept_back_edge.rs	E0502:11
+kept-mutations/fn_elided_then_push_v_8_kept_ended.rs	E0502:10
+kept-mutations/fn_elided_then_push_v_8_kept_into_branch.rs	E0502:9
+kept-mutations/fn_elided_then_push_v_8_option_across.rs	E0502:9
+kept-mutations/fn_elided_then_push_v_8_option_replaced.rs	E0502:11
+kept-mutations/fn_elided_then_push_v_8_vec_across.rs	E0502:9
+kept-mutations/fn_generic_copied_out_a_10_held_across.rs	E0506:11
+kept-mutations/fn_generic_copied_out_a_10_kept_across.rs	E0506:11
+kept-mutations/fn_generic_copied_out_a_10_kept_back_edge.rs	E0506:13
+kept-mutations/fn_generic_copied_out_a_10_kept_ended.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_10_kept_into_branch.rs	E0506:11
+kept-mutations/fn_generic_copied_out_a_10_option_across.rs	E0506:11
+kept-mutations/fn_generic_copied_out_a_10_option_replaced.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_10_vec_across.rs	E0506:11
+kept-mutations/fn_generic_copied_out_a_11_held_across.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_kept_across.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_kept_back_edge.rs	ok	0	"2 2\n2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_kept_ended.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_kept_into_branch.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_option_across.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_option_replaced.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_copied_out_a_11_vec_across.rs	ok	0	"2 2\n"
+kept-mutations/fn_generic_identity_ended_v_10_held_across.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_kept_across.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_kept_back_edge.rs	ok	0	"[1]\n[1, 2]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_kept_ended.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_kept_into_branch.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_option_across.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_option_replaced.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_10_vec_across.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_9_held_across.rs	E0502:10
+kept-mutations/fn_generic_identity_ended_v_9_kept_across.rs	E0502:10
+kept-mutations/fn_generic_identity_ended_v_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_generic_identity_ended_v_9_kept_ended.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_generic_identity_ended_v_9_option_across.rs	E0502:10
+kept-mutations/fn_generic_identity_ended_v_9_option_replaced.rs	ok	0	"[1]\n[1, 2]\n"
+kept-mutations/fn_generic_identity_ended_v_9_vec_across.rs	E0502:10
+kept-mutations/fn_generic_identity_v_8_held_across.rs	E0502:9
+kept-mutations/fn_generic_identity_v_8_kept_across.rs	E0502:9
+kept-mutations/fn_generic_identity_v_8_kept_back_edge.rs	E0502:11
+kept-mutations/fn_generic_identity_v_8_kept_ended.rs	E0502:10
+kept-mutations/fn_generic_identity_v_8_kept_into_branch.rs	E0502:9
+kept-mutations/fn_generic_identity_v_8_option_across.rs	E0502:9
+kept-mutations/fn_generic_identity_v_8_option_replaced.rs	E0502:11
+kept-mutations/fn_generic_identity_v_8_vec_across.rs	E0502:9
+kept-mutations/fn_named_both_kept_x_9_held_across.rs	E0502:10
+kept-mutations/fn_named_both_kept_x_9_kept_across.rs	E0502:10
+kept-mutations/fn_named_both_kept_x_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_named_both_kept_x_9_kept_ended.rs	E0502:11
+kept-mutations/fn_named_both_kept_x_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_named_both_kept_x_9_option_across.rs	E0502:10
+kept-mutations/fn_named_both_kept_x_9_option_replaced.rs	E0502:12
+kept-mutations/fn_named_both_kept_x_9_vec_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_conflict_x_9_held_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_conflict_x_9_kept_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_conflict_x_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_named_one_kept_conflict_x_9_kept_ended.rs	E0502:11
+kept-mutations/fn_named_one_kept_conflict_x_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_named_one_kept_conflict_x_9_option_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_conflict_x_9_option_replaced.rs	E0502:12
+kept-mutations/fn_named_one_kept_conflict_x_9_vec_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_y_10_held_across.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_kept_across.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_kept_back_edge.rs	ok	0	"kept free!\nkept free!\n"
+kept-mutations/fn_named_one_kept_y_10_kept_ended.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_kept_into_branch.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_option_across.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_option_replaced.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_10_vec_across.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_9_held_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_y_9_kept_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_y_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_named_one_kept_y_9_kept_ended.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_named_one_kept_y_9_option_across.rs	E0502:10
+kept-mutations/fn_named_one_kept_y_9_option_replaced.rs	ok	0	"kept free!\n"
+kept-mutations/fn_named_one_kept_y_9_vec_across.rs	E0502:10
+kept-mutations/fn_named_second_kept_y_9_held_across.rs	E0502:10
+kept-mutations/fn_named_second_kept_y_9_kept_across.rs	E0502:10
+kept-mutations/fn_named_second_kept_y_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_named_second_kept_y_9_kept_ended.rs	E0502:11
+kept-mutations/fn_named_second_kept_y_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_named_second_kept_y_9_option_across.rs	E0502:10
+kept-mutations/fn_named_second_kept_y_9_option_replaced.rs	E0502:12
+kept-mutations/fn_named_second_kept_y_9_vec_across.rs	E0502:10
+kept-mutations/fn_outlives_bound_y_9_held_across.rs	E0502:10
+kept-mutations/fn_outlives_bound_y_9_kept_across.rs	E0502:10
+kept-mutations/fn_outlives_bound_y_9_kept_back_edge.rs	E0502:12
+kept-mutations/fn_outlives_bound_y_9_kept_ended.rs	E0502:11
+kept-mutations/fn_outlives_bound_y_9_kept_into_branch.rs	E0502:10
+kept-mutations/fn_outlives_bound_y_9_option_across.rs	E0502:10
+kept-mutations/fn_outlives_bound_y_9_option_replaced.rs	E0502:12
+kept-mutations/fn_outlives_bound_y_9_vec_across.rs	E0502:10
+kept-mutations/fn_owned_output_v_8_held_across.rs	E0502:9
+kept-mutations/fn_owned_output_v_8_kept_across.rs	E0502:9
+kept-mutations/fn_owned_output_v_8_kept_back_edge.rs	E0502:11
+kept-mutations/fn_owned_output_v_8_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_8_kept_into_branch.rs	E0502:9
+kept-mutations/fn_owned_output_v_8_option_across.rs	E0502:9
+kept-mutations/fn_owned_output_v_8_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_8_vec_across.rs	E0502:9
+kept-mutations/fn_owned_output_v_9_held_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_kept_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_kept_back_edge.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_kept_into_branch.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_option_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_owned_output_v_9_vec_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/fn_static_output_v_8_held_across.rs	E0502:9
+kept-mutations/fn_static_output_v_8_kept_across.rs	E0502:9
+kept-mutations/fn_static_output_v_8_kept_back_edge.rs	E0502:11
+kept-mutations/fn_static_output_v_8_kept_ended.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_8_kept_into_branch.rs	E0502:9
+kept-mutations/fn_static_output_v_8_option_across.rs	E0502:9
+kept-mutations/fn_static_output_v_8_option_replaced.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_8_vec_across.rs	E0502:9
+kept-mutations/fn_static_output_v_9_held_across.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_kept_across.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_kept_back_edge.rs	ok	0	"vec [1, 2]\nvec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_kept_ended.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_kept_into_branch.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_option_across.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_option_replaced.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_static_output_v_9_vec_across.rs	ok	0	"vec [1, 2]\n"
+kept-mutations/fn_where_outlives_bound_y_12_held_across.rs	E0502:13
+kept-mutations/fn_where_outlives_bound_y_12_kept_across.rs	E0502:13
+kept-mutations/fn_where_outlives_bound_y_12_kept_back_edge.rs	E0502:15
+kept-mutations/fn_where_outlives_bound_y_12_kept_ended.rs	E0502:14
+kept-mutations/fn_where_outlives_bound_y_12_kept_into_branch.rs	E0502:13
+kept-mutations/fn_where_outlives_bound_y_12_option_across.rs	E0502:13
+kept-mutations/fn_where_outlives_bound_y_12_option_replaced.rs	E0502:15
+kept-mutations/fn_where_outlives_bound_y_12_vec_across.rs	E0502:13
+kept-mutations/for_over_iter_push_v_8_held_across.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_kept_across.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_kept_back_edge.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_kept_ended.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_kept_into_branch.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_option_across.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_option_replaced.rs	E0502:5
+kept-mutations/for_over_iter_push_v_8_vec_across.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_held_across.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_kept_across.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_kept_back_edge.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_kept_ended.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_kept_into_branch.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_option_across.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_option_replaced.rs	E0502:5
+kept-mutations/for_over_shared_borrow_mutated_v_8_vec_across.rs	E0502:5
+kept-mutations/for_over_shared_borrow_total_7_held_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_kept_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_kept_back_edge.rs	ok	0	"[1, 2, 3, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_kept_into_branch.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_option_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_total_7_vec_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_7_held_across.rs	E0502:8
+kept-mutations/for_over_shared_borrow_v_7_kept_across.rs	E0502:8
+kept-mutations/for_over_shared_borrow_v_7_kept_back_edge.rs	E0502:10
+kept-mutations/for_over_shared_borrow_v_7_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_7_kept_into_branch.rs	E0502:8
+kept-mutations/for_over_shared_borrow_v_7_option_across.rs	E0502:8
+kept-mutations/for_over_shared_borrow_v_7_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_7_vec_across.rs	E0502:8
+kept-mutations/for_over_shared_borrow_v_8_held_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_kept_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_kept_back_edge.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_kept_into_branch.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_option_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/for_over_shared_borrow_v_8_vec_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/holder_copy_keeps_borrow_v_5_held_across.rs	E0502:6
+kept-mutations/holder_copy_keeps_borrow_v_5_kept_across.rs	E0502:6
+kept-mutations/holder_copy_keeps_borrow_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/holder_copy_keeps_borrow_v_5_kept_ended.rs	E0502:7
+kept-mutations/holder_copy_keeps_borrow_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/holder_copy_keeps_borrow_v_5_option_across.rs	E0502:6
+kept-mutations/holder_copy_keeps_borrow_v_5_option_replaced.rs	E0502:8
+kept-mutations/holder_copy_keeps_borrow_v_5_vec_across.rs	E0502:6
+kept-mutations/holder_reassigned_a_7_held_across.rs	E0502:8
+kept-mutations/holder_reassigned_a_7_kept_across.rs	E0502:8
+kept-mutations/holder_reassigned_a_7_kept_back_edge.rs	E0502:10
+kept-mutations/holder_reassigned_a_7_kept_ended.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_7_kept_into_branch.rs	E0502:8
+kept-mutations/holder_reassigned_a_7_option_across.rs	E0502:8
+kept-mutations/holder_reassigned_a_7_option_replaced.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_7_vec_across.rs	E0502:8
+kept-mutations/holder_reassigned_a_8_held_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_kept_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_kept_back_edge.rs	ok	0	"1\n1 [1, 3]\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_kept_ended.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_kept_into_branch.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_option_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_option_replaced.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_a_8_vec_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_held_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_kept_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_kept_back_edge.rs	ok	0	"1\n1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_kept_ended.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_kept_into_branch.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_option_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_option_replaced.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_5_vec_across.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_6_held_across.rs	E0506:7 E0502:9
+kept-mutations/holder_reassigned_r_6_kept_across.rs	E0506:7 E0502:9
+kept-mutations/holder_reassigned_r_6_kept_back_edge.rs	E0506:9 E0502:11
+kept-mutations/holder_reassigned_r_6_kept_ended.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_6_kept_into_branch.rs	E0506:7 E0502:11
+kept-mutations/holder_reassigned_r_6_option_across.rs	E0506:7 E0502:9
+kept-mutations/holder_reassigned_r_6_option_replaced.rs	ok	0	"1\n1 [1, 3]\n"
+kept-mutations/holder_reassigned_r_6_vec_across.rs	E0506:7 E0502:9
+kept-mutations/index_assign_after_last_use_v_5_held_across.rs	E0502:6
+kept-mutations/index_assign_after_last_use_v_5_kept_across.rs	E0502:6
+kept-mutations/index_assign_after_last_use_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/index_assign_after_last_use_v_5_kept_ended.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/index_assign_after_last_use_v_5_option_across.rs	E0502:6
+kept-mutations/index_assign_after_last_use_v_5_option_replaced.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_5_vec_across.rs	E0502:6
+kept-mutations/index_assign_after_last_use_v_6_held_across.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_kept_across.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_kept_back_edge.rs	ok	0	"1 [5, 2]\n1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_kept_ended.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_kept_into_branch.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_option_across.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_option_replaced.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_after_last_use_v_6_vec_across.rs	ok	0	"1 [5, 2]\n"
+kept-mutations/index_assign_borrowed_v_4_held_across.rs	E0502:5
+kept-mutations/index_assign_borrowed_v_4_kept_across.rs	E0502:5
+kept-mutations/index_assign_borrowed_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/index_assign_borrowed_v_4_kept_ended.rs	E0502:6
+kept-mutations/index_assign_borrowed_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/index_assign_borrowed_v_4_option_across.rs	E0502:5
+kept-mutations/index_assign_borrowed_v_4_option_replaced.rs	E0502:7
+kept-mutations/index_assign_borrowed_v_4_vec_across.rs	E0502:5
+kept-mutations/index_assign_index_reads_v_3_held_across.rs	E0502:4 E0502:4
+kept-mutations/index_assign_index_reads_v_3_kept_across.rs	E0502:4 E0502:4
+kept-mutations/index_assign_index_reads_v_3_kept_back_edge.rs	E0502:6 E0502:6
+kept-mutations/index_assign_index_reads_v_3_kept_ended.rs	E0502:5
+kept-mutations/index_assign_index_reads_v_3_kept_into_branch.rs	E0502:4 E0502:4
+kept-mutations/index_assign_index_reads_v_3_option_across.rs	E0502:4 E0502:4
+kept-mutations/index_assign_index_reads_v_3_option_replaced.rs	E0502:6
+kept-mutations/index_assign_index_reads_v_3_vec_across.rs	E0502:4 E0502:4
+kept-mutations/index_assign_index_reads_v_4_held_across.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_kept_across.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_kept_back_edge.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_kept_ended.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_kept_into_branch.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_option_across.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_option_replaced.rs	E0502:3
+kept-mutations/index_assign_index_reads_v_4_vec_across.rs	E0502:3
+kept-mutations/labeled_break_v_14_held_across.rs	E0502:15
+kept-mutations/labeled_break_v_14_kept_across.rs	E0502:15
+kept-mutations/labeled_break_v_14_kept_back_edge.rs	E0502:17
+kept-mutations/labeled_break_v_14_kept_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_14_kept_into_branch.rs	E0502:15
+kept-mutations/labeled_break_v_14_option_across.rs	E0502:15
+kept-mutations/labeled_break_v_14_option_replaced.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_14_vec_across.rs	E0502:15
+kept-mutations/labeled_break_v_15_held_across.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_kept_across.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_kept_back_edge.rs	ok	0	"[1, 1, 2, 7]\n[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_kept_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_kept_into_branch.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_option_across.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_option_replaced.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_break_v_15_vec_across.rs	ok	0	"[1, 1, 2, 7]\n"
+kept-mutations/labeled_continue_conflict_v_13_held_across.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_kept_across.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_kept_back_edge.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_kept_ended.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_kept_into_branch.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_option_across.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_option_replaced.rs	E0499:8
+kept-mutations/labeled_continue_conflict_v_13_vec_across.rs	E0499:8
+kept-mutations/last_use_ends_borrow_v_5_held_across.rs	E0502:6
+kept-mutations/last_use_ends_borrow_v_5_kept_across.rs	E0502:6
+kept-mutations/last_use_ends_borrow_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/last_use_ends_borrow_v_5_kept_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+kept-mutations/last_use_ends_borrow_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/last_use_ends_borrow_v_5_option_across.rs	E0502:6
+kept-mutations/last_use_ends_borrow_v_5_option_replaced.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+kept-mutations/last_use_ends_borrow_v_5_vec_across.rs	E0502:6
+kept-mutations/last_use_ends_borrow_v_8_held_across.rs	E0502:9
+kept-mutations/last_use_ends_borrow_v_8_kept_across.rs	E0502:9
+kept-mutations/last_use_ends_borrow_v_8_kept_back_edge.rs	E0502:11
+kept-mutations/last_use_ends_borrow_v_8_kept_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+kept-mutations/last_use_ends_borrow_v_8_kept_into_branch.rs	E0502:9
+kept-mutations/last_use_ends_borrow_v_8_option_across.rs	E0502:9
+kept-mutations/last_use_ends_borrow_v_8_option_replaced.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+kept-mutations/last_use_ends_borrow_v_8_vec_across.rs	E0502:9
+kept-mutations/loop_borrow_carried_conflict_a_12_held_across.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_kept_across.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_kept_back_edge.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_kept_ended.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_kept_into_branch.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_option_across.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_option_replaced.rs	E0499:7
+kept-mutations/loop_borrow_carried_conflict_a_12_vec_across.rs	E0499:7
+kept-mutations/loop_borrow_carried_into_next_a_14_held_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_kept_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_kept_back_edge.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_kept_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_kept_into_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_option_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_option_replaced.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_a_14_vec_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_13_held_across.rs	E0502:14
+kept-mutations/loop_borrow_carried_into_next_b_13_kept_across.rs	E0502:14
+kept-mutations/loop_borrow_carried_into_next_b_13_kept_back_edge.rs	E0502:16
+kept-mutations/loop_borrow_carried_into_next_b_13_kept_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_13_kept_into_branch.rs	E0502:14
+kept-mutations/loop_borrow_carried_into_next_b_13_option_across.rs	E0502:14
+kept-mutations/loop_borrow_carried_into_next_b_13_option_replaced.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_13_vec_across.rs	E0502:14
+kept-mutations/loop_borrow_carried_into_next_b_14_held_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_kept_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_kept_back_edge.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_kept_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_kept_into_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_option_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_option_replaced.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_carried_into_next_b_14_vec_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_held_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_kept_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_kept_back_edge.rs	ok	0	"5 [1, 0, 2]\n5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_kept_ended.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_kept_into_branch.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_option_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_option_replaced.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_n_9_vec_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_held_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_kept_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_kept_back_edge.rs	ok	0	"5 [1, 0, 2]\n5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_kept_ended.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_kept_into_branch.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_option_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_option_replaced.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_each_iteration_v_9_vec_across.rs	ok	0	"5 [1, 0, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_held_across.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_kept_across.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_kept_back_edge.rs	ok	0	"[1, 0, 1, 2]\n[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_kept_ended.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_kept_into_branch.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_option_across.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_option_replaced.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/loop_borrow_outlives_iteration_keep_10_vec_across.rs	ok	0	"[1, 0, 1, 2]\n"
+kept-mutations/map_get_ended_m_5_held_across.rs	E0502:6
+kept-mutations/map_get_ended_m_5_kept_across.rs	E0502:6
+kept-mutations/map_get_ended_m_5_kept_back_edge.rs	E0502:8
+kept-mutations/map_get_ended_m_5_kept_ended.rs	ok	0	"Some(\"one\") 2\n"
+kept-mutations/map_get_ended_m_5_kept_into_branch.rs	E0502:6
+kept-mutations/map_get_ended_m_5_option_across.rs	E0502:6
+kept-mutations/map_get_ended_m_5_option_replaced.rs	ok	0	"Some(\"one\") 2\n"
+kept-mutations/map_get_ended_m_5_vec_across.rs	E0502:6
+kept-mutations/map_get_ended_m_7_held_across.rs	E0502:8
+kept-mutations/map_get_ended_m_7_kept_across.rs	E0502:8
+kept-mutations/map_get_ended_m_7_kept_back_edge.rs	E0502:10
+kept-mutations/map_get_ended_m_7_kept_ended.rs	ok	0	"Some(\"one\") 2\n"
+kept-mutations/map_get_ended_m_7_kept_into_branch.rs	E0502:8
+kept-mutations/map_get_ended_m_7_option_across.rs	E0502:8
+kept-mutations/map_get_ended_m_7_option_replaced.rs	ok	0	"Some(\"one\") 2\n"
+kept-mutations/map_get_ended_m_7_vec_across.rs	E0502:8
+kept-mutations/map_get_then_insert_m_5_held_across.rs	E0502:6 E0502:9
+kept-mutations/map_get_then_insert_m_5_kept_across.rs	E0502:6 E0502:9
+kept-mutations/map_get_then_insert_m_5_kept_back_edge.rs	E0502:8 E0502:11
+kept-mutations/map_get_then_insert_m_5_kept_ended.rs	E0502:9
+kept-mutations/map_get_then_insert_m_5_kept_into_branch.rs	E0502:6 E0502:11
+kept-mutations/map_get_then_insert_m_5_option_across.rs	E0502:6 E0502:9
+kept-mutations/map_get_then_insert_m_5_option_replaced.rs	E0502:11
+kept-mutations/map_get_then_insert_m_5_vec_across.rs	E0502:6 E0502:9
+kept-mutations/map_get_then_insert_m_7_held_across.rs	E0502:8
+kept-mutations/map_get_then_insert_m_7_kept_across.rs	E0502:8
+kept-mutations/map_get_then_insert_m_7_kept_back_edge.rs	E0502:10
+kept-mutations/map_get_then_insert_m_7_kept_ended.rs	E0502:9
+kept-mutations/map_get_then_insert_m_7_kept_into_branch.rs	E0502:8
+kept-mutations/map_get_then_insert_m_7_option_across.rs	E0502:8
+kept-mutations/map_get_then_insert_m_7_option_replaced.rs	E0502:10
+kept-mutations/map_get_then_insert_m_7_vec_across.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_a_6_held_across.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_6_kept_across.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_6_kept_back_edge.rs	E0502:11
+kept-mutations/map_insert_ref_then_mutate_a_6_kept_ended.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_6_kept_into_branch.rs	E0502:11
+kept-mutations/map_insert_ref_then_mutate_a_6_option_across.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_6_option_replaced.rs	E0502:11
+kept-mutations/map_insert_ref_then_mutate_a_6_vec_across.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_7_held_across.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_a_7_kept_across.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_a_7_kept_back_edge.rs	E0502:10
+kept-mutations/map_insert_ref_then_mutate_a_7_kept_ended.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_a_7_kept_into_branch.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_a_7_option_across.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_a_7_option_replaced.rs	E0502:10
+kept-mutations/map_insert_ref_then_mutate_a_7_vec_across.rs	E0502:8
+kept-mutations/map_insert_ref_then_mutate_m_6_held_across.rs	E0502:7 E0502:9
+kept-mutations/map_insert_ref_then_mutate_m_6_kept_across.rs	E0502:7 E0502:9
+kept-mutations/map_insert_ref_then_mutate_m_6_kept_back_edge.rs	E0502:9 E0502:11
+kept-mutations/map_insert_ref_then_mutate_m_6_kept_ended.rs	E0502:9
+kept-mutations/map_insert_ref_then_mutate_m_6_kept_into_branch.rs	E0502:7 E0502:11
+kept-mutations/map_insert_ref_then_mutate_m_6_option_across.rs	E0502:7 E0502:9
+kept-mutations/map_insert_ref_then_mutate_m_6_option_replaced.rs	E0502:11
+kept-mutations/map_insert_ref_then_mutate_m_6_vec_across.rs	E0502:7 E0502:9
+kept-mutations/map_insert_ref_then_mutate_m_8_held_across.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_kept_across.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_kept_back_edge.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_kept_ended.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_kept_into_branch.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_option_across.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_option_replaced.rs	E0502:7
+kept-mutations/map_insert_ref_then_mutate_m_8_vec_across.rs	E0502:7
+kept-mutations/match_arm_conflict_v_10_held_across.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_kept_across.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_kept_back_edge.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_kept_ended.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_kept_into_branch.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_option_across.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_option_replaced.rs	E0499:6
+kept-mutations/match_arm_conflict_v_10_vec_across.rs	E0499:6
+kept-mutations/match_arms_v_9_held_across.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_kept_across.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_kept_back_edge.rs	ok	0	"[1, 2, 2]\n[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_kept_ended.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_kept_into_branch.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_option_across.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_option_replaced.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/match_arms_v_9_vec_across.rs	ok	0	"[1, 2, 2]\n"
+kept-mutations/method_elided_self_bag_14_held_across.rs	E0502:15
+kept-mutations/method_elided_self_bag_14_kept_across.rs	E0502:15
+kept-mutations/method_elided_self_bag_14_kept_back_edge.rs	E0502:17
+kept-mutations/method_elided_self_bag_14_kept_ended.rs	E0502:16
+kept-mutations/method_elided_self_bag_14_kept_into_branch.rs	E0502:15
+kept-mutations/method_elided_self_bag_14_option_across.rs	E0502:15
+kept-mutations/method_elided_self_bag_14_option_replaced.rs	E0502:17
+kept-mutations/method_elided_self_bag_14_vec_across.rs	E0502:15
+kept-mutations/method_elided_self_ended_bag_15_held_across.rs	E0502:16
+kept-mutations/method_elided_self_ended_bag_15_kept_across.rs	E0502:16
+kept-mutations/method_elided_self_ended_bag_15_kept_back_edge.rs	E0502:18
+kept-mutations/method_elided_self_ended_bag_15_kept_ended.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_15_kept_into_branch.rs	E0502:16
+kept-mutations/method_elided_self_ended_bag_15_option_across.rs	E0502:16
+kept-mutations/method_elided_self_ended_bag_15_option_replaced.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_15_vec_across.rs	E0502:16
+kept-mutations/method_elided_self_ended_bag_16_held_across.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_kept_across.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_kept_back_edge.rs	ok	0	"1\n3\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_kept_ended.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_kept_into_branch.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_option_across.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_option_replaced.rs	ok	0	"1\n3\n"
+kept-mutations/method_elided_self_ended_bag_16_vec_across.rs	ok	0	"1\n3\n"
+kept-mutations/method_impl_lifetime_not_self_reader_15_held_across.rs	E0506:16
+kept-mutations/method_impl_lifetime_not_self_reader_15_kept_across.rs	E0506:16
+kept-mutations/method_impl_lifetime_not_self_reader_15_kept_back_edge.rs	E0506:18
+kept-mutations/method_impl_lifetime_not_self_reader_15_kept_ended.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_15_kept_into_branch.rs	E0506:16
+kept-mutations/method_impl_lifetime_not_self_reader_15_option_across.rs	E0506:16
+kept-mutations/method_impl_lifetime_not_self_reader_15_option_replaced.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_15_vec_across.rs	E0506:16
+kept-mutations/method_impl_lifetime_not_self_reader_16_held_across.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_kept_across.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_kept_back_edge.rs	ok	0	"abc other\nabc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_kept_ended.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_kept_into_branch.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_option_across.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_option_replaced.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_not_self_reader_16_vec_across.rs	ok	0	"abc other\n"
+kept-mutations/method_impl_lifetime_source_changed_source_15_held_across.rs	E0502:16
+kept-mutations/method_impl_lifetime_source_changed_source_15_kept_across.rs	E0502:16
+kept-mutations/method_impl_lifetime_source_changed_source_15_kept_back_edge.rs	E0502:18
+kept-mutations/method_impl_lifetime_source_changed_source_15_kept_ended.rs	E0502:17
+kept-mutations/method_impl_lifetime_source_changed_source_15_kept_into_branch.rs	E0502:16
+kept-mutations/method_impl_lifetime_source_changed_source_15_option_across.rs	E0502:16
+kept-mutations/method_impl_lifetime_source_changed_source_15_option_replaced.rs	E0502:18
+kept-mutations/method_impl_lifetime_source_changed_source_15_vec_across.rs	E0502:16
+kept-mutations/method_mut_self_kept_bag_14_held_across.rs	E0502:14 E0502:15
+kept-mutations/method_mut_self_kept_bag_14_kept_across.rs	E0502:14 E0502:15
+kept-mutations/method_mut_self_kept_bag_14_kept_back_edge.rs	E0502:14 E0502:17
+kept-mutations/method_mut_self_kept_bag_14_kept_ended.rs	E0502:14 E0502:16
+kept-mutations/method_mut_self_kept_bag_14_kept_into_branch.rs	E0502:14 E0502:15
+kept-mutations/method_mut_self_kept_bag_14_option_across.rs	E0502:14 E0502:15
+kept-mutations/method_mut_self_kept_bag_14_option_replaced.rs	E0502:14 E0502:17
+kept-mutations/method_mut_self_kept_bag_14_vec_across.rs	E0502:14 E0502:15
+kept-mutations/method_owned_output_c_14_held_across.rs	E0506:15
+kept-mutations/method_owned_output_c_14_kept_across.rs	E0506:15
+kept-mutations/method_owned_output_c_14_kept_back_edge.rs	E0506:17
+kept-mutations/method_owned_output_c_14_kept_ended.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_14_kept_into_branch.rs	E0506:15
+kept-mutations/method_owned_output_c_14_option_across.rs	E0506:15
+kept-mutations/method_owned_output_c_14_option_replaced.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_14_vec_across.rs	E0506:15
+kept-mutations/method_owned_output_c_15_held_across.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_kept_across.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_kept_back_edge.rs	ok	0	"2\n2\n"
+kept-mutations/method_owned_output_c_15_kept_ended.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_kept_into_branch.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_option_across.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_option_replaced.rs	ok	0	"2\n"
+kept-mutations/method_owned_output_c_15_vec_across.rs	ok	0	"2\n"
+kept-mutations/method_two_phase_c_14_held_across.rs	E0502:15
+kept-mutations/method_two_phase_c_14_kept_across.rs	E0502:15
+kept-mutations/method_two_phase_c_14_kept_back_edge.rs	E0502:17
+kept-mutations/method_two_phase_c_14_kept_ended.rs	ok	0	"[0, 1]\n"
+kept-mutations/method_two_phase_c_14_kept_into_branch.rs	E0502:15
+kept-mutations/method_two_phase_c_14_option_across.rs	E0502:15
+kept-mutations/method_two_phase_c_14_option_replaced.rs	ok	0	"[0, 1]\n"
+kept-mutations/method_two_phase_c_14_vec_across.rs	E0502:15
+kept-mutations/method_two_phase_c_16_held_across.rs	E0502:17
+kept-mutations/method_two_phase_c_16_kept_across.rs	E0502:17
+kept-mutations/method_two_phase_c_16_kept_back_edge.rs	E0502:19
+kept-mutations/method_two_phase_c_16_kept_ended.rs	ok	0	"[0, 1]\n"
+kept-mutations/method_two_phase_c_16_kept_into_branch.rs	E0502:17
+kept-mutations/method_two_phase_c_16_option_across.rs	E0502:17
+kept-mutations/method_two_phase_c_16_option_replaced.rs	ok	0	"[0, 1]\n"
+kept-mutations/method_two_phase_c_16_vec_across.rs	E0502:17
+kept-mutations/method_while_borrowed_c_15_held_across.rs	E0502:16
+kept-mutations/method_while_borrowed_c_15_kept_across.rs	E0502:16
+kept-mutations/method_while_borrowed_c_15_kept_back_edge.rs	E0502:18
+kept-mutations/method_while_borrowed_c_15_kept_ended.rs	E0502:17
+kept-mutations/method_while_borrowed_c_15_kept_into_branch.rs	E0502:16
+kept-mutations/method_while_borrowed_c_15_option_across.rs	E0502:16
+kept-mutations/method_while_borrowed_c_15_option_replaced.rs	E0502:18
+kept-mutations/method_while_borrowed_c_15_vec_across.rs	E0502:16
+kept-mutations/mutable_twice_v_7_held_across.rs	E0499:4
+kept-mutations/mutable_twice_v_7_kept_across.rs	E0499:4
+kept-mutations/mutable_twice_v_7_kept_back_edge.rs	E0499:4
+kept-mutations/mutable_twice_v_7_kept_ended.rs	E0499:4
+kept-mutations/mutable_twice_v_7_kept_into_branch.rs	E0499:4
+kept-mutations/mutable_twice_v_7_option_across.rs	E0499:4
+kept-mutations/mutable_twice_v_7_option_replaced.rs	E0499:4
+kept-mutations/mutable_twice_v_7_vec_across.rs	E0499:4
+kept-mutations/option_as_ref_ended_o_5_held_across.rs	E0502:6
+kept-mutations/option_as_ref_ended_o_5_kept_across.rs	E0502:6
+kept-mutations/option_as_ref_ended_o_5_kept_back_edge.rs	E0502:8
+kept-mutations/option_as_ref_ended_o_5_kept_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_5_kept_into_branch.rs	E0502:6
+kept-mutations/option_as_ref_ended_o_5_option_across.rs	E0502:6
+kept-mutations/option_as_ref_ended_o_5_option_replaced.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_5_vec_across.rs	E0502:6
+kept-mutations/option_as_ref_ended_o_6_held_across.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_kept_across.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_kept_back_edge.rs	ok	0	"Some(\"x\")\nNone\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_kept_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_kept_into_branch.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_option_across.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_option_replaced.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_ended_o_6_vec_across.rs	ok	0	"Some(\"x\")\nNone\n"
+kept-mutations/option_as_ref_then_take_o_4_held_across.rs	E0502:5
+kept-mutations/option_as_ref_then_take_o_4_kept_across.rs	E0502:5
+kept-mutations/option_as_ref_then_take_o_4_kept_back_edge.rs	E0502:7
+kept-mutations/option_as_ref_then_take_o_4_kept_ended.rs	E0502:6
+kept-mutations/option_as_ref_then_take_o_4_kept_into_branch.rs	E0502:5
+kept-mutations/option_as_ref_then_take_o_4_option_across.rs	E0502:5
+kept-mutations/option_as_ref_then_take_o_4_option_replaced.rs	E0502:7
+kept-mutations/option_as_ref_then_take_o_4_vec_across.rs	E0502:5
+kept-mutations/option_in_struct_a_8_held_across.rs	E0506:9
+kept-mutations/option_in_struct_a_8_kept_across.rs	E0506:9
+kept-mutations/option_in_struct_a_8_kept_back_edge.rs	E0506:11
+kept-mutations/option_in_struct_a_8_kept_ended.rs	E0506:10
+kept-mutations/option_in_struct_a_8_kept_into_branch.rs	E0506:9
+kept-mutations/option_in_struct_a_8_option_across.rs	E0506:9
+kept-mutations/option_in_struct_a_8_option_replaced.rs	E0506:11
+kept-mutations/option_in_struct_a_8_vec_across.rs	E0506:9
+kept-mutations/option_reassigned_a_7_held_across.rs	E0506:8
+kept-mutations/option_reassigned_a_7_kept_across.rs	E0506:8
+kept-mutations/option_reassigned_a_7_kept_back_edge.rs	E0506:10
+kept-mutations/option_reassigned_a_7_kept_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_7_kept_into_branch.rs	E0506:8
+kept-mutations/option_reassigned_a_7_option_across.rs	E0506:8
+kept-mutations/option_reassigned_a_7_option_replaced.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_7_vec_across.rs	E0506:8
+kept-mutations/option_reassigned_a_8_held_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_kept_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_kept_back_edge.rs	ok	0	"Some(1)\nSome(2) 2\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_kept_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_kept_into_branch.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_option_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_option_replaced.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_a_8_vec_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_held_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_kept_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_kept_back_edge.rs	ok	0	"Some(1)\nSome(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_kept_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_kept_into_branch.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_option_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_option_replaced.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_5_vec_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_6_held_across.rs	E0506:7 E0506:9
+kept-mutations/option_reassigned_o_6_kept_across.rs	E0506:7 E0506:9
+kept-mutations/option_reassigned_o_6_kept_back_edge.rs	E0506:9 E0506:11
+kept-mutations/option_reassigned_o_6_kept_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_6_kept_into_branch.rs	E0506:7 E0506:11
+kept-mutations/option_reassigned_o_6_option_across.rs	E0506:7 E0506:9
+kept-mutations/option_reassigned_o_6_option_replaced.rs	ok	0	"Some(1)\nSome(2) 2\n"
+kept-mutations/option_reassigned_o_6_vec_across.rs	E0506:7 E0506:9
+kept-mutations/option_some_ref_ended_a_5_held_across.rs	E0506:6
+kept-mutations/option_some_ref_ended_a_5_kept_across.rs	E0506:6
+kept-mutations/option_some_ref_ended_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/option_some_ref_ended_a_5_kept_ended.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/option_some_ref_ended_a_5_option_across.rs	E0506:6
+kept-mutations/option_some_ref_ended_a_5_option_replaced.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_5_vec_across.rs	E0506:6
+kept-mutations/option_some_ref_ended_a_6_held_across.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_kept_across.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_kept_back_edge.rs	ok	0	"Some(1)\n2\n2\n"
+kept-mutations/option_some_ref_ended_a_6_kept_ended.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_kept_into_branch.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_option_across.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_option_replaced.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_ended_a_6_vec_across.rs	ok	0	"Some(1)\n2\n"
+kept-mutations/option_some_ref_then_mutate_a_4_held_across.rs	E0506:5
+kept-mutations/option_some_ref_then_mutate_a_4_kept_across.rs	E0506:5
+kept-mutations/option_some_ref_then_mutate_a_4_kept_back_edge.rs	E0506:7
+kept-mutations/option_some_ref_then_mutate_a_4_kept_ended.rs	E0506:6
+kept-mutations/option_some_ref_then_mutate_a_4_kept_into_branch.rs	E0506:5
+kept-mutations/option_some_ref_then_mutate_a_4_option_across.rs	E0506:5
+kept-mutations/option_some_ref_then_mutate_a_4_option_replaced.rs	E0506:7
+kept-mutations/option_some_ref_then_mutate_a_4_vec_across.rs	E0506:5
+kept-mutations/option_unwrap_keeps_a_5_held_across.rs	E0506:6
+kept-mutations/option_unwrap_keeps_a_5_kept_across.rs	E0506:6
+kept-mutations/option_unwrap_keeps_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/option_unwrap_keeps_a_5_kept_ended.rs	E0506:7
+kept-mutations/option_unwrap_keeps_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/option_unwrap_keeps_a_5_option_across.rs	E0506:6
+kept-mutations/option_unwrap_keeps_a_5_option_replaced.rs	E0506:8
+kept-mutations/option_unwrap_keeps_a_5_vec_across.rs	E0506:6
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_held_across.rs	E0506:7
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_kept_across.rs	E0506:7
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_kept_back_edge.rs	E0506:9
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_kept_ended.rs	E0506:8
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_kept_into_branch.rs	E0506:7
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_option_across.rs	E0506:7
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_option_replaced.rs	E0506:9
+kept-mutations/option_unwrap_or_keeps_default_fallback_6_vec_across.rs	E0506:7
+kept-mutations/oracle_branch_arms_v_10_held_across.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_kept_across.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_kept_back_edge.rs	ok	0	"[1, 1]\n[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_kept_ended.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_kept_into_branch.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_option_across.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_option_replaced.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_branch_arms_v_10_vec_across.rs	ok	0	"[1, 1]\n"
+kept-mutations/oracle_loop_back_edge_n_12_held_across.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_kept_across.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_kept_back_edge.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_kept_ended.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_kept_into_branch.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_option_across.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_option_replaced.rs	E0502:7
+kept-mutations/oracle_loop_back_edge_n_12_vec_across.rs	E0502:7
+kept-mutations/oracle_stale_shared_v_4_held_across.rs	E0502:5
+kept-mutations/oracle_stale_shared_v_4_kept_across.rs	E0502:5
+kept-mutations/oracle_stale_shared_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/oracle_stale_shared_v_4_kept_ended.rs	E0502:6
+kept-mutations/oracle_stale_shared_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/oracle_stale_shared_v_4_option_across.rs	E0502:5
+kept-mutations/oracle_stale_shared_v_4_option_replaced.rs	E0502:7
+kept-mutations/oracle_stale_shared_v_4_vec_across.rs	E0502:5
+kept-mutations/panic_ends_path_ok_v_10_held_across.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_kept_across.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_kept_back_edge.rs	ok	0	"[1, 2]\n[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_kept_ended.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_kept_into_branch.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_option_across.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_option_replaced.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_ok_v_10_vec_across.rs	ok	0	"[1, 2]\n"
+kept-mutations/panic_ends_path_v_9_held_across.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_kept_across.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_kept_back_edge.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_kept_ended.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_kept_into_branch.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_option_across.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_option_replaced.rs	E0502:4
+kept-mutations/panic_ends_path_v_9_vec_across.rs	E0502:4
+kept-mutations/reborrow_conflict_v_7_held_across.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_kept_across.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_kept_back_edge.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_kept_ended.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_kept_into_branch.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_option_across.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_option_replaced.rs	E0499:5
+kept-mutations/reborrow_conflict_v_7_vec_across.rs	E0499:5
+kept-mutations/reborrow_through_holder_v_7_held_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_kept_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_kept_back_edge.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_kept_ended.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_kept_into_branch.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_option_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_option_replaced.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/reborrow_through_holder_v_7_vec_across.rs	ok	0	"[1, 2, 3]\n"
+kept-mutations/str_trim_of_holder_reassigned_s_6_held_across.rs	E0506:7
+kept-mutations/str_trim_of_holder_reassigned_s_6_kept_across.rs	E0506:7
+kept-mutations/str_trim_of_holder_reassigned_s_6_kept_back_edge.rs	E0506:9
+kept-mutations/str_trim_of_holder_reassigned_s_6_kept_ended.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_6_kept_into_branch.rs	E0506:7
+kept-mutations/str_trim_of_holder_reassigned_s_6_option_across.rs	E0506:7
+kept-mutations/str_trim_of_holder_reassigned_s_6_option_replaced.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_6_vec_across.rs	E0506:7
+kept-mutations/str_trim_of_holder_reassigned_s_7_held_across.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_kept_across.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_kept_back_edge.rs	ok	0	"a b\na b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_kept_ended.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_kept_into_branch.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_option_across.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_option_replaced.rs	ok	0	"a b\n"
+kept-mutations/str_trim_of_holder_reassigned_s_7_vec_across.rs	ok	0	"a b\n"
+kept-mutations/string_as_str_then_push_s_4_held_across.rs	E0502:5
+kept-mutations/string_as_str_then_push_s_4_kept_across.rs	E0502:5
+kept-mutations/string_as_str_then_push_s_4_kept_back_edge.rs	E0502:7
+kept-mutations/string_as_str_then_push_s_4_kept_ended.rs	E0502:6
+kept-mutations/string_as_str_then_push_s_4_kept_into_branch.rs	E0502:5
+kept-mutations/string_as_str_then_push_s_4_option_across.rs	E0502:5
+kept-mutations/string_as_str_then_push_s_4_option_replaced.rs	E0502:7
+kept-mutations/string_as_str_then_push_s_4_vec_across.rs	E0502:5
+kept-mutations/string_push_after_last_use_s_5_held_across.rs	E0502:6
+kept-mutations/string_push_after_last_use_s_5_kept_across.rs	E0502:6
+kept-mutations/string_push_after_last_use_s_5_kept_back_edge.rs	E0502:8
+kept-mutations/string_push_after_last_use_s_5_kept_ended.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_5_kept_into_branch.rs	E0502:6
+kept-mutations/string_push_after_last_use_s_5_option_across.rs	E0502:6
+kept-mutations/string_push_after_last_use_s_5_option_replaced.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_5_vec_across.rs	E0502:6
+kept-mutations/string_push_after_last_use_s_6_held_across.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_kept_across.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_kept_back_edge.rs	ok	0	"1 ab\n1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_kept_ended.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_kept_into_branch.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_option_across.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_option_replaced.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_after_last_use_s_6_vec_across.rs	ok	0	"1 ab\n"
+kept-mutations/string_push_while_borrowed_s_4_held_across.rs	E0502:5
+kept-mutations/string_push_while_borrowed_s_4_kept_across.rs	E0502:5
+kept-mutations/string_push_while_borrowed_s_4_kept_back_edge.rs	E0502:7
+kept-mutations/string_push_while_borrowed_s_4_kept_ended.rs	E0502:6
+kept-mutations/string_push_while_borrowed_s_4_kept_into_branch.rs	E0502:5
+kept-mutations/string_push_while_borrowed_s_4_option_across.rs	E0502:5
+kept-mutations/string_push_while_borrowed_s_4_option_replaced.rs	E0502:7
+kept-mutations/string_push_while_borrowed_s_4_vec_across.rs	E0502:5
+kept-mutations/string_trim_ended_s_5_held_across.rs	E0502:6
+kept-mutations/string_trim_ended_s_5_kept_across.rs	E0502:6
+kept-mutations/string_trim_ended_s_5_kept_back_edge.rs	E0502:8
+kept-mutations/string_trim_ended_s_5_kept_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_5_kept_into_branch.rs	E0502:6
+kept-mutations/string_trim_ended_s_5_option_across.rs	E0502:6
+kept-mutations/string_trim_ended_s_5_option_replaced.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_5_vec_across.rs	E0502:6
+kept-mutations/string_trim_ended_s_6_held_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_kept_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_kept_back_edge.rs	ok	0	"[hi]\n[  hi  !]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_kept_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_kept_into_branch.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_option_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_option_replaced.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/string_trim_ended_s_6_vec_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+kept-mutations/strings_best_21_held_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_kept_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_kept_back_edge.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_kept_ended.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_kept_into_branch.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_option_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_option_replaced.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/strings_best_21_vec_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+kept-mutations/struct_field_assigned_then_mutated_b_11_held_across.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_11_kept_across.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_11_kept_back_edge.rs	E0506:16
+kept-mutations/struct_field_assigned_then_mutated_b_11_kept_ended.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_11_kept_into_branch.rs	E0506:16
+kept-mutations/struct_field_assigned_then_mutated_b_11_option_across.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_11_option_replaced.rs	E0506:16
+kept-mutations/struct_field_assigned_then_mutated_b_11_vec_across.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_12_held_across.rs	E0506:13
+kept-mutations/struct_field_assigned_then_mutated_b_12_kept_across.rs	E0506:13
+kept-mutations/struct_field_assigned_then_mutated_b_12_kept_back_edge.rs	E0506:15
+kept-mutations/struct_field_assigned_then_mutated_b_12_kept_ended.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_b_12_kept_into_branch.rs	E0506:13
+kept-mutations/struct_field_assigned_then_mutated_b_12_option_across.rs	E0506:13
+kept-mutations/struct_field_assigned_then_mutated_b_12_option_replaced.rs	E0506:15
+kept-mutations/struct_field_assigned_then_mutated_b_12_vec_across.rs	E0506:13
+kept-mutations/struct_field_assigned_then_mutated_pair_11_held_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_assigned_then_mutated_pair_11_kept_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_assigned_then_mutated_pair_11_kept_back_edge.rs	E0506:14 E0506:16
+kept-mutations/struct_field_assigned_then_mutated_pair_11_kept_ended.rs	E0506:14
+kept-mutations/struct_field_assigned_then_mutated_pair_11_kept_into_branch.rs	E0506:12 E0506:16
+kept-mutations/struct_field_assigned_then_mutated_pair_11_option_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_assigned_then_mutated_pair_11_option_replaced.rs	E0506:16
+kept-mutations/struct_field_assigned_then_mutated_pair_11_vec_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_assigned_then_mutated_pair_13_held_across.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_kept_across.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_kept_back_edge.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_kept_ended.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_kept_into_branch.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_option_across.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_option_replaced.rs	E0506:12
+kept-mutations/struct_field_assigned_then_mutated_pair_13_vec_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_12_held_across.rs	E0506:13
+kept-mutations/struct_field_overwritten_still_live_b_12_kept_across.rs	E0506:13
+kept-mutations/struct_field_overwritten_still_live_b_12_kept_back_edge.rs	E0506:15
+kept-mutations/struct_field_overwritten_still_live_b_12_kept_ended.rs	E0506:14
+kept-mutations/struct_field_overwritten_still_live_b_12_kept_into_branch.rs	E0506:13
+kept-mutations/struct_field_overwritten_still_live_b_12_option_across.rs	E0506:13
+kept-mutations/struct_field_overwritten_still_live_b_12_option_replaced.rs	E0506:15
+kept-mutations/struct_field_overwritten_still_live_b_12_vec_across.rs	E0506:13
+kept-mutations/struct_field_overwritten_still_live_b_13_held_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_kept_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_kept_back_edge.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_kept_ended.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_kept_into_branch.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_option_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_option_replaced.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_b_13_vec_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_11_held_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_overwritten_still_live_pair_11_kept_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_overwritten_still_live_pair_11_kept_back_edge.rs	E0506:14 E0506:16
+kept-mutations/struct_field_overwritten_still_live_pair_11_kept_ended.rs	E0506:14
+kept-mutations/struct_field_overwritten_still_live_pair_11_kept_into_branch.rs	E0506:12 E0506:16
+kept-mutations/struct_field_overwritten_still_live_pair_11_option_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_overwritten_still_live_pair_11_option_replaced.rs	E0506:16
+kept-mutations/struct_field_overwritten_still_live_pair_11_vec_across.rs	E0506:12 E0506:14
+kept-mutations/struct_field_overwritten_still_live_pair_13_held_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_kept_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_kept_back_edge.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_kept_ended.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_kept_into_branch.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_option_across.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_option_replaced.rs	E0506:12
+kept-mutations/struct_field_overwritten_still_live_pair_13_vec_across.rs	E0506:12
+kept-mutations/struct_field_read_keeps_a_10_held_across.rs	E0506:11
+kept-mutations/struct_field_read_keeps_a_10_kept_across.rs	E0506:11
+kept-mutations/struct_field_read_keeps_a_10_kept_back_edge.rs	E0506:13
+kept-mutations/struct_field_read_keeps_a_10_kept_ended.rs	E0506:12
+kept-mutations/struct_field_read_keeps_a_10_kept_into_branch.rs	E0506:11
+kept-mutations/struct_field_read_keeps_a_10_option_across.rs	E0506:11
+kept-mutations/struct_field_read_keeps_a_10_option_replaced.rs	E0506:13
+kept-mutations/struct_field_read_keeps_a_10_vec_across.rs	E0506:11
+kept-mutations/struct_literal_ended_name_8_held_across.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_kept_across.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_kept_back_edge.rs	ok	0	"a\na\nb\n"
+kept-mutations/struct_literal_ended_name_8_kept_ended.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_kept_into_branch.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_option_across.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_option_replaced.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_8_vec_across.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_9_held_across.rs	E0506:10
+kept-mutations/struct_literal_ended_name_9_kept_across.rs	E0506:10
+kept-mutations/struct_literal_ended_name_9_kept_back_edge.rs	E0506:12
+kept-mutations/struct_literal_ended_name_9_kept_ended.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_9_kept_into_branch.rs	E0506:10
+kept-mutations/struct_literal_ended_name_9_option_across.rs	E0506:10
+kept-mutations/struct_literal_ended_name_9_option_replaced.rs	ok	0	"a\nb\n"
+kept-mutations/struct_literal_ended_name_9_vec_across.rs	E0506:10
+kept-mutations/struct_literal_then_assign_name_8_held_across.rs	E0506:9
+kept-mutations/struct_literal_then_assign_name_8_kept_across.rs	E0506:9
+kept-mutations/struct_literal_then_assign_name_8_kept_back_edge.rs	E0506:11
+kept-mutations/struct_literal_then_assign_name_8_kept_ended.rs	E0506:10
+kept-mutations/struct_literal_then_assign_name_8_kept_into_branch.rs	E0506:9
+kept-mutations/struct_literal_then_assign_name_8_option_across.rs	E0506:9
+kept-mutations/struct_literal_then_assign_name_8_option_replaced.rs	E0506:11
+kept-mutations/struct_literal_then_assign_name_8_vec_across.rs	E0506:9
+kept-mutations/struct_literal_then_assign_name_9_held_across.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_kept_across.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_kept_back_edge.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_kept_ended.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_kept_into_branch.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_option_across.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_option_replaced.rs	E0506:8
+kept-mutations/struct_literal_then_assign_name_9_vec_across.rs	E0506:8
+kept-mutations/struct_moved_into_another_a_9_held_across.rs	E0506:10
+kept-mutations/struct_moved_into_another_a_9_kept_across.rs	E0506:10
+kept-mutations/struct_moved_into_another_a_9_kept_back_edge.rs	E0506:12
+kept-mutations/struct_moved_into_another_a_9_kept_ended.rs	E0506:11
+kept-mutations/struct_moved_into_another_a_9_kept_into_branch.rs	E0506:10
+kept-mutations/struct_moved_into_another_a_9_option_across.rs	E0506:10
+kept-mutations/struct_moved_into_another_a_9_option_replaced.rs	E0506:12
+kept-mutations/struct_moved_into_another_a_9_vec_across.rs	E0506:10
+kept-mutations/struct_reassigned_whole_a_11_held_across.rs	E0506:12
+kept-mutations/struct_reassigned_whole_a_11_kept_across.rs	E0506:12
+kept-mutations/struct_reassigned_whole_a_11_kept_back_edge.rs	E0506:14
+kept-mutations/struct_reassigned_whole_a_11_kept_ended.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_11_kept_into_branch.rs	E0506:12
+kept-mutations/struct_reassigned_whole_a_11_option_across.rs	E0506:12
+kept-mutations/struct_reassigned_whole_a_11_option_replaced.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_11_vec_across.rs	E0506:12
+kept-mutations/struct_reassigned_whole_a_12_held_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_kept_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_kept_back_edge.rs	ok	0	"1\n2 2\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_kept_ended.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_kept_into_branch.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_option_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_option_replaced.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_a_12_vec_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_10_held_across.rs	E0506:11 E0506:13
+kept-mutations/struct_reassigned_whole_view_10_kept_across.rs	E0506:11 E0506:13
+kept-mutations/struct_reassigned_whole_view_10_kept_back_edge.rs	E0506:13 E0506:15
+kept-mutations/struct_reassigned_whole_view_10_kept_ended.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_10_kept_into_branch.rs	E0506:11 E0506:15
+kept-mutations/struct_reassigned_whole_view_10_option_across.rs	E0506:11 E0506:13
+kept-mutations/struct_reassigned_whole_view_10_option_replaced.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_10_vec_across.rs	E0506:11 E0506:13
+kept-mutations/struct_reassigned_whole_view_9_held_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_kept_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_kept_back_edge.rs	ok	0	"1\n1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_kept_ended.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_kept_into_branch.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_option_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_option_replaced.rs	ok	0	"1\n2 2\n"
+kept-mutations/struct_reassigned_whole_view_9_vec_across.rs	ok	0	"1\n2 2\n"
+kept-mutations/try_operator_path_v_9_held_across.rs	E0502:10
+kept-mutations/try_operator_path_v_9_kept_across.rs	E0502:10
+kept-mutations/try_operator_path_v_9_kept_back_edge.rs	E0502:12
+kept-mutations/try_operator_path_v_9_kept_ended.rs	ok	0	"Some(4) [4, 4]\n"
+kept-mutations/try_operator_path_v_9_kept_into_branch.rs	E0502:10
+kept-mutations/try_operator_path_v_9_option_across.rs	E0502:10
+kept-mutations/try_operator_path_v_9_option_replaced.rs	ok	0	"Some(4) [4, 4]\n"
+kept-mutations/try_operator_path_v_9_vec_across.rs	E0502:10
+kept-mutations/tuple_of_refs_a_5_held_across.rs	E0506:6
+kept-mutations/tuple_of_refs_a_5_kept_across.rs	E0506:6
+kept-mutations/tuple_of_refs_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/tuple_of_refs_a_5_kept_ended.rs	E0506:7
+kept-mutations/tuple_of_refs_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/tuple_of_refs_a_5_option_across.rs	E0506:6
+kept-mutations/tuple_of_refs_a_5_option_replaced.rs	E0506:8
+kept-mutations/tuple_of_refs_a_5_vec_across.rs	E0506:6
+kept-mutations/tuple_of_refs_ended_a_6_held_across.rs	E0506:7
+kept-mutations/tuple_of_refs_ended_a_6_kept_across.rs	E0506:7
+kept-mutations/tuple_of_refs_ended_a_6_kept_back_edge.rs	E0506:9
+kept-mutations/tuple_of_refs_ended_a_6_kept_ended.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_6_kept_into_branch.rs	E0506:7
+kept-mutations/tuple_of_refs_ended_a_6_option_across.rs	E0506:7
+kept-mutations/tuple_of_refs_ended_a_6_option_replaced.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_6_vec_across.rs	E0506:7
+kept-mutations/tuple_of_refs_ended_a_7_held_across.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_kept_across.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_kept_back_edge.rs	ok	0	"1 2\n2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_kept_ended.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_kept_into_branch.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_option_across.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_option_replaced.rs	ok	0	"1 2\n2\n"
+kept-mutations/tuple_of_refs_ended_a_7_vec_across.rs	ok	0	"1 2\n2\n"
+kept-mutations/two_phase_holder_arg_v_4_held_across.rs	E0502:4 E0502:5
+kept-mutations/two_phase_holder_arg_v_4_kept_across.rs	E0502:4 E0502:5
+kept-mutations/two_phase_holder_arg_v_4_kept_back_edge.rs	E0502:4 E0502:7
+kept-mutations/two_phase_holder_arg_v_4_kept_ended.rs	E0502:4 E0502:6
+kept-mutations/two_phase_holder_arg_v_4_kept_into_branch.rs	E0502:4 E0502:5
+kept-mutations/two_phase_holder_arg_v_4_option_across.rs	E0502:4 E0502:5
+kept-mutations/two_phase_holder_arg_v_4_option_replaced.rs	E0502:4 E0502:7
+kept-mutations/two_phase_holder_arg_v_4_vec_across.rs	E0502:4 E0502:5
+kept-mutations/two_phase_holder_arg_v_5_held_across.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_kept_across.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_kept_back_edge.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_kept_ended.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_kept_into_branch.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_option_across.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_option_replaced.rs	E0502:4
+kept-mutations/two_phase_holder_arg_v_5_vec_across.rs	E0502:4
+kept-mutations/two_phase_len_v_3_held_across.rs	E0502:4
+kept-mutations/two_phase_len_v_3_kept_across.rs	E0502:4
+kept-mutations/two_phase_len_v_3_kept_back_edge.rs	E0502:6
+kept-mutations/two_phase_len_v_3_kept_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+kept-mutations/two_phase_len_v_3_kept_into_branch.rs	E0502:4
+kept-mutations/two_phase_len_v_3_option_across.rs	E0502:4
+kept-mutations/two_phase_len_v_3_option_replaced.rs	ok	0	"[1, 2, 2, 3]\n"
+kept-mutations/two_phase_len_v_3_vec_across.rs	E0502:4
+kept-mutations/two_phase_len_v_5_held_across.rs	E0502:6
+kept-mutations/two_phase_len_v_5_kept_across.rs	E0502:6
+kept-mutations/two_phase_len_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/two_phase_len_v_5_kept_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+kept-mutations/two_phase_len_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/two_phase_len_v_5_option_across.rs	E0502:6
+kept-mutations/two_phase_len_v_5_option_replaced.rs	ok	0	"[1, 2, 2, 3]\n"
+kept-mutations/two_phase_len_v_5_vec_across.rs	E0502:6
+kept-mutations/two_phase_mutable_arg_v_7_held_across.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_kept_across.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_kept_back_edge.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_kept_ended.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_kept_into_branch.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_option_across.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_option_replaced.rs	E0499:4
+kept-mutations/two_phase_mutable_arg_v_7_vec_across.rs	E0499:4
+kept-mutations/use_while_mutably_borrowed_x_6_held_across.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_kept_across.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_kept_back_edge.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_kept_ended.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_kept_into_branch.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_option_across.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_option_replaced.rs	E0503:4
+kept-mutations/use_while_mutably_borrowed_x_6_vec_across.rs	E0503:4
+kept-mutations/vec_first_ended_before_push_v_5_held_across.rs	E0502:6
+kept-mutations/vec_first_ended_before_push_v_5_kept_across.rs	E0502:6
+kept-mutations/vec_first_ended_before_push_v_5_kept_back_edge.rs	E0502:8
+kept-mutations/vec_first_ended_before_push_v_5_kept_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_5_kept_into_branch.rs	E0502:6
+kept-mutations/vec_first_ended_before_push_v_5_option_across.rs	E0502:6
+kept-mutations/vec_first_ended_before_push_v_5_option_replaced.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_5_vec_across.rs	E0502:6
+kept-mutations/vec_first_ended_before_push_v_6_held_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_kept_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_kept_back_edge.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_kept_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_kept_into_branch.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_option_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_option_replaced.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_ended_before_push_v_6_vec_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+kept-mutations/vec_first_then_push_v_4_held_across.rs	E0502:5
+kept-mutations/vec_first_then_push_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_first_then_push_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_first_then_push_v_4_kept_ended.rs	E0502:6
+kept-mutations/vec_first_then_push_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_first_then_push_v_4_option_across.rs	E0502:5
+kept-mutations/vec_first_then_push_v_4_option_replaced.rs	E0502:7
+kept-mutations/vec_first_then_push_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_get_unwrap_then_clear_v_4_held_across.rs	E0502:5
+kept-mutations/vec_get_unwrap_then_clear_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_get_unwrap_then_clear_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_get_unwrap_then_clear_v_4_kept_ended.rs	E0502:6
+kept-mutations/vec_get_unwrap_then_clear_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_get_unwrap_then_clear_v_4_option_across.rs	E0502:5
+kept-mutations/vec_get_unwrap_then_clear_v_4_option_replaced.rs	E0502:7
+kept-mutations/vec_get_unwrap_then_clear_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_4_held_across.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_iter_counted_first_v_4_kept_ended.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_4_option_across.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_4_option_replaced.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_iter_counted_first_v_5_held_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_kept_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_kept_back_edge.rs	ok	0	"2 [1, 2, 3]\n2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_kept_ended.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_kept_into_branch.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_option_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_option_replaced.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_counted_first_v_5_vec_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_iter_then_push_v_4_held_across.rs	E0502:5
+kept-mutations/vec_iter_then_push_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_iter_then_push_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_iter_then_push_v_4_kept_ended.rs	E0502:6
+kept-mutations/vec_iter_then_push_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_iter_then_push_v_4_option_across.rs	E0502:5
+kept-mutations/vec_iter_then_push_v_4_option_replaced.rs	E0502:7
+kept-mutations/vec_iter_then_push_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_last_mut_ended_v_5_held_across.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_kept_across.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_kept_back_edge.rs	ok	0	"3 [1, 2, 9]\n3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_kept_ended.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_kept_into_branch.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_option_across.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_option_replaced.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_ended_v_5_vec_across.rs	ok	0	"3 [1, 2, 9]\n"
+kept-mutations/vec_last_mut_then_read_v_4_held_across.rs	E0502:4 E0502:5
+kept-mutations/vec_last_mut_then_read_v_4_kept_across.rs	E0502:4 E0502:5
+kept-mutations/vec_last_mut_then_read_v_4_kept_back_edge.rs	E0502:4 E0502:7
+kept-mutations/vec_last_mut_then_read_v_4_kept_ended.rs	E0502:4 E0502:6
+kept-mutations/vec_last_mut_then_read_v_4_kept_into_branch.rs	E0502:4 E0502:5
+kept-mutations/vec_last_mut_then_read_v_4_option_across.rs	E0502:4 E0502:5
+kept-mutations/vec_last_mut_then_read_v_4_option_replaced.rs	E0502:4 E0502:7
+kept-mutations/vec_last_mut_then_read_v_4_vec_across.rs	E0502:4 E0502:5
+kept-mutations/vec_len_owned_v_4_held_across.rs	E0502:5
+kept-mutations/vec_len_owned_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_len_owned_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_len_owned_v_4_kept_ended.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_len_owned_v_4_option_across.rs	E0502:5
+kept-mutations/vec_len_owned_v_4_option_replaced.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_len_owned_v_5_held_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_kept_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_kept_back_edge.rs	ok	0	"2 [1, 2, 3]\n2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_kept_ended.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_kept_into_branch.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_option_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_option_replaced.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_len_owned_v_5_vec_across.rs	ok	0	"2 [1, 2, 3]\n"
+kept-mutations/vec_literal_of_refs_a_5_held_across.rs	E0506:6
+kept-mutations/vec_literal_of_refs_a_5_kept_across.rs	E0506:6
+kept-mutations/vec_literal_of_refs_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/vec_literal_of_refs_a_5_kept_ended.rs	E0506:7
+kept-mutations/vec_literal_of_refs_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/vec_literal_of_refs_a_5_option_across.rs	E0506:6
+kept-mutations/vec_literal_of_refs_a_5_option_replaced.rs	E0506:8
+kept-mutations/vec_literal_of_refs_a_5_vec_across.rs	E0506:6
+kept-mutations/vec_literal_of_refs_ended_a_6_held_across.rs	E0506:7
+kept-mutations/vec_literal_of_refs_ended_a_6_kept_across.rs	E0506:7
+kept-mutations/vec_literal_of_refs_ended_a_6_kept_back_edge.rs	E0506:9
+kept-mutations/vec_literal_of_refs_ended_a_6_kept_ended.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_6_kept_into_branch.rs	E0506:7
+kept-mutations/vec_literal_of_refs_ended_a_6_option_across.rs	E0506:7
+kept-mutations/vec_literal_of_refs_ended_a_6_option_replaced.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_6_vec_across.rs	E0506:7
+kept-mutations/vec_literal_of_refs_ended_a_7_held_across.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_kept_across.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_kept_back_edge.rs	ok	0	"[1, 2]\n5\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_kept_ended.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_kept_into_branch.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_option_across.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_option_replaced.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_literal_of_refs_ended_a_7_vec_across.rs	ok	0	"[1, 2]\n5\n"
+kept-mutations/vec_of_refs_element_read_a_5_held_across.rs	E0506:6
+kept-mutations/vec_of_refs_element_read_a_5_kept_across.rs	E0506:6
+kept-mutations/vec_of_refs_element_read_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/vec_of_refs_element_read_a_5_kept_ended.rs	E0506:7
+kept-mutations/vec_of_refs_element_read_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/vec_of_refs_element_read_a_5_option_across.rs	E0506:6
+kept-mutations/vec_of_refs_element_read_a_5_option_replaced.rs	E0506:8
+kept-mutations/vec_of_refs_element_read_a_5_vec_across.rs	E0506:6
+kept-mutations/vec_push_ref_ended_a_4_held_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_kept_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_kept_back_edge.rs	ok	0	"[1, 1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_kept_ended.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_kept_into_branch.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_option_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_option_replaced.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_4_vec_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_6_held_across.rs	E0506:7
+kept-mutations/vec_push_ref_ended_a_6_kept_across.rs	E0506:7
+kept-mutations/vec_push_ref_ended_a_6_kept_back_edge.rs	E0506:9
+kept-mutations/vec_push_ref_ended_a_6_kept_ended.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_6_kept_into_branch.rs	E0506:7
+kept-mutations/vec_push_ref_ended_a_6_option_across.rs	E0506:7
+kept-mutations/vec_push_ref_ended_a_6_option_replaced.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_a_6_vec_across.rs	E0506:7
+kept-mutations/vec_push_ref_ended_refs_4_held_across.rs	E0502:5
+kept-mutations/vec_push_ref_ended_refs_4_kept_across.rs	E0502:5
+kept-mutations/vec_push_ref_ended_refs_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_push_ref_ended_refs_4_kept_ended.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_push_ref_ended_refs_4_option_across.rs	E0502:5
+kept-mutations/vec_push_ref_ended_refs_4_option_replaced.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_4_vec_across.rs	E0502:5
+kept-mutations/vec_push_ref_ended_refs_5_held_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_kept_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_kept_back_edge.rs	ok	0	"[1]\n[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_kept_ended.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_kept_into_branch.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_option_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_option_replaced.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_ended_refs_5_vec_across.rs	ok	0	"[1]\n2\n"
+kept-mutations/vec_push_ref_then_mutate_a_4_held_across.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_4_kept_across.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_4_kept_back_edge.rs	E0506:9
+kept-mutations/vec_push_ref_then_mutate_a_4_kept_ended.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_4_kept_into_branch.rs	E0506:9
+kept-mutations/vec_push_ref_then_mutate_a_4_option_across.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_4_option_replaced.rs	E0506:9
+kept-mutations/vec_push_ref_then_mutate_a_4_vec_across.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_5_held_across.rs	E0506:6
+kept-mutations/vec_push_ref_then_mutate_a_5_kept_across.rs	E0506:6
+kept-mutations/vec_push_ref_then_mutate_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/vec_push_ref_then_mutate_a_5_kept_ended.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/vec_push_ref_then_mutate_a_5_option_across.rs	E0506:6
+kept-mutations/vec_push_ref_then_mutate_a_5_option_replaced.rs	E0506:8
+kept-mutations/vec_push_ref_then_mutate_a_5_vec_across.rs	E0506:6
+kept-mutations/vec_push_ref_then_mutate_refs_4_held_across.rs	E0502:5 E0506:7
+kept-mutations/vec_push_ref_then_mutate_refs_4_kept_across.rs	E0502:5 E0506:7
+kept-mutations/vec_push_ref_then_mutate_refs_4_kept_back_edge.rs	E0502:7 E0506:9
+kept-mutations/vec_push_ref_then_mutate_refs_4_kept_ended.rs	E0506:7
+kept-mutations/vec_push_ref_then_mutate_refs_4_kept_into_branch.rs	E0502:5 E0506:9
+kept-mutations/vec_push_ref_then_mutate_refs_4_option_across.rs	E0502:5 E0506:7
+kept-mutations/vec_push_ref_then_mutate_refs_4_option_replaced.rs	E0506:9
+kept-mutations/vec_push_ref_then_mutate_refs_4_vec_across.rs	E0502:5 E0506:7
+kept-mutations/vec_push_ref_then_mutate_refs_6_held_across.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_kept_across.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_kept_back_edge.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_kept_ended.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_kept_into_branch.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_option_across.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_option_replaced.rs	E0506:5
+kept-mutations/vec_push_ref_then_mutate_refs_6_vec_across.rs	E0506:5
+kept-mutations/vec_ref_first_through_two_a_5_held_across.rs	E0506:6
+kept-mutations/vec_ref_first_through_two_a_5_kept_across.rs	E0506:6
+kept-mutations/vec_ref_first_through_two_a_5_kept_back_edge.rs	E0506:8
+kept-mutations/vec_ref_first_through_two_a_5_kept_ended.rs	E0506:7
+kept-mutations/vec_ref_first_through_two_a_5_kept_into_branch.rs	E0506:6
+kept-mutations/vec_ref_first_through_two_a_5_option_across.rs	E0506:6
+kept-mutations/vec_ref_first_through_two_a_5_option_replaced.rs	E0506:8
+kept-mutations/vec_ref_first_through_two_a_5_vec_across.rs	E0506:6
+kept-mutations/vec_to_vec_owns_v_4_held_across.rs	E0502:5
+kept-mutations/vec_to_vec_owns_v_4_kept_across.rs	E0502:5
+kept-mutations/vec_to_vec_owns_v_4_kept_back_edge.rs	E0502:7
+kept-mutations/vec_to_vec_owns_v_4_kept_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_4_kept_into_branch.rs	E0502:5
+kept-mutations/vec_to_vec_owns_v_4_option_across.rs	E0502:5
+kept-mutations/vec_to_vec_owns_v_4_option_replaced.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_4_vec_across.rs	E0502:5
+kept-mutations/vec_to_vec_owns_v_5_held_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_kept_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_kept_back_edge.rs	ok	0	"[1, 2] [1, 2, 3]\n[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_kept_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_kept_into_branch.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_option_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_option_replaced.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/vec_to_vec_owns_v_5_vec_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+kept-mutations/while_let_borrow_stack_8_held_across.rs	E0502:9
+kept-mutations/while_let_borrow_stack_8_kept_across.rs	E0502:9
+kept-mutations/while_let_borrow_stack_8_kept_back_edge.rs	E0502:11
+kept-mutations/while_let_borrow_stack_8_kept_ended.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_8_kept_into_branch.rs	E0502:9
+kept-mutations/while_let_borrow_stack_8_option_across.rs	E0502:9
+kept-mutations/while_let_borrow_stack_8_option_replaced.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_8_vec_across.rs	E0502:9
+kept-mutations/while_let_borrow_stack_9_held_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_kept_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_kept_back_edge.rs	ok	0	"[6]\n[6]\n"
+kept-mutations/while_let_borrow_stack_9_kept_ended.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_kept_into_branch.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_option_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_option_replaced.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_stack_9_vec_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_held_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_kept_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_kept_back_edge.rs	ok	0	"[6, 6]\n"
+kept-mutations/while_let_borrow_total_8_kept_ended.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_kept_into_branch.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_option_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_option_replaced.rs	ok	0	"[6]\n"
+kept-mutations/while_let_borrow_total_8_vec_across.rs	ok	0	"[6]\n"
+kept-mutations/while_let_conflict_total_11_held_across.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_kept_across.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_kept_back_edge.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_kept_ended.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_kept_into_branch.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_option_across.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_option_replaced.rs	E0499:8
+kept-mutations/while_let_conflict_total_11_vec_across.rs	E0499:8
+kept-mutations/word_count_top_12_held_across.rs	E0502:13
+kept-mutations/word_count_top_12_kept_across.rs	E0502:13
+kept-mutations/word_count_top_12_kept_back_edge.rs	E0502:15
+kept-mutations/word_count_top_12_kept_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_12_kept_into_branch.rs	E0502:13
+kept-mutations/word_count_top_12_option_across.rs	E0502:13
+kept-mutations/word_count_top_12_option_replaced.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_12_vec_across.rs	E0502:13
+kept-mutations/word_count_top_16_held_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_kept_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_kept_back_edge.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n8 distinct words\n"
+kept-mutations/word_count_top_16_kept_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_kept_into_branch.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_option_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_option_replaced.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+kept-mutations/word_count_top_16_vec_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"

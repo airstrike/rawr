@@ -2635,6 +2635,10 @@ struct Tables {
     traits: BTreeMap<ImmutableString, (crate::program::source::Id, item::Trait)>,
     /// `(trait, owner)` for each `impl Trait for Owner`.
     impls: BTreeSet<(ImmutableString, type_def::Id)>,
+    /// The crate types with an impl written for their `'static` instance
+    /// (`impl Copy for Foo<'static>`), whose borrows the checker leaves to
+    /// rustc.
+    static_impls: BTreeSet<type_def::Id>,
     /// The trait arguments of each `impl Trait<A> for Owner` of a generic
     /// trait, with the impl's own parameters.
     impl_arguments: BTreeMap<(ImmutableString, type_def::Id), ImplArguments>,
@@ -3098,6 +3102,22 @@ impl Models {
             trait_methods,
             traits,
             impls,
+            static_impls: program
+                .items
+                .iter()
+                .filter_map(|shell| match &shell.kind {
+                    item::Kind::Impl(implementation) if implementation.statics => {
+                        match &implementation.owner {
+                            type_ref::Type::Path(type_ref::Path {
+                                target: type_ref::Target::Script { definition, .. },
+                                ..
+                            }) => Some(*definition),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect(),
             impl_arguments,
             trait_instances,
             associated: Shared::new(associated),
@@ -35301,6 +35321,8 @@ impl<'a> Parser<'a> {
             self.coerce_expr(expected, value)?;
             self.move_local(value)?;
         }
+        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        self.compose(span(expression.start(), end), &struct_ty, &parts);
         let source = origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source));
         Ok(Some(self.operator_expr(
             source,
@@ -41885,6 +41907,8 @@ impl<'a> Parser<'a> {
             )?;
             self.move_local(value)?;
         }
+        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        self.compose(span(owner_span.start(), end), &enum_ty, &parts);
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
             item,

@@ -2027,11 +2027,16 @@ fn resolve_item(
                 });
             }
 
+            let statics = item::Lifetimes::of_type(&written)
+                .names
+                .values()
+                .any(|name| name == "static");
             item::Kind::Impl(item::Impl {
                 header: parsed.header,
                 generics,
                 trait_,
                 owner,
+                statics,
                 functions: functions.into_boxed_slice(),
                 associated: associated.into_boxed_slice(),
             })
