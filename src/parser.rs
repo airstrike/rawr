@@ -558,6 +558,19 @@ impl Engine {
     ) -> (Option<NonZeroUsize>, bool) {
         let (index, hit_barrier) = state.find_var(name);
 
+        // `__rawr_slot_of_b` takes where `b` is, which a `&mut` local then
+        // refers to: a later `let b` in the block is a new variable, as in
+        // Rust, not `b`'s entry given a new value.
+        if let Some(local) = name.strip_prefix(crate::engine::KEYWORD_SLOT_OF) {
+            let (found, barrier) = state.find_var(local);
+            if found > 0 && !barrier {
+                let at = state.stack.len() - found;
+                state
+                    .stack
+                    .add_alias_by_index(at, self.get_interned_string(name));
+            }
+        }
+
         let is_func_name = state.lib.values().any(|f| f.name == name);
 
         if state.allow_capture {

@@ -11,6 +11,7 @@ mod keyed;
 mod location;
 mod origin;
 mod places;
+mod reborrow;
 mod reverse;
 
 #[cfg(all(test, feature = "rust-import"))]
@@ -9691,6 +9692,9 @@ struct Parser<'a> {
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
     aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
+    /// The `&mut` locals given new borrows, by name: their declaration and
+    /// whether they were declared `let mut` (`reborrow.rs`).
+    reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
     /// The body's borrow facts, solved once it is read (D572, `borrows.rs`).
     flow: std::cell::RefCell<super::borrowck::record::Recorder>,
     /// The loop about to be read already entered its head (`while`'s
@@ -10008,6 +10012,7 @@ impl<'a> Parser<'a> {
             cell_guards: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
+            reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
             loop_entered: false,
             loop_iterator: None,
@@ -14322,8 +14327,30 @@ impl<'a> Parser<'a> {
             let Some(pattern) = &parameter.pattern else {
                 continue;
             };
-            let syntax = self.parameter_pattern_syntax(pattern)?;
             let ty = Ty::from_resolved(&parameter.ty);
+            // `mut r: &mut T` is the borrow the parameter is, as `let mut
+            // r = parameter;` keeps it: the caller's place, or one a new
+            // borrow gives it (`reborrow.rs`).
+            if let crate::item::ParameterPattern::Binding {
+                name,
+                mutable: true,
+            } = pattern
+                && matches!(ty, Ty::Reference { mutable: true, .. })
+            {
+                let at = name.span.start();
+                let identifier = |text: &str| (Token::Identifier(Box::new(text.into())), at);
+                self.splice_tokens(vec![
+                    (Token::Let, at),
+                    (Token::Mut, at),
+                    identifier(name.text.as_str()),
+                    (Token::Equals, at),
+                    identifier(parameter.name.text.as_str()),
+                    (Token::SemiColon, at),
+                ]);
+                self.parse_binding(true)?;
+                continue;
+            }
+            let syntax = self.parameter_pattern_syntax(pattern)?;
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
             self.write_output(statements, body);
             // The parameter's value keeps what the pattern does not move out.
@@ -20414,6 +20441,25 @@ impl<'a> Parser<'a> {
         } = self.inference.resolve(&value.ty)
             && (borrowing || moved_borrow)
         {
+            // `let mut r = &mut a;` given a new borrow later (`r = &mut b`),
+            // or `let s = r;` of such a local: a runtime local holding
+            // which local it refers to (`reborrow.rs`).
+            if let Some((source, selected)) = self.reborrow_source(&value)
+                && (selected || mutable && self.rebound_later(&name))
+            {
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let rendered = origin::Fragment::plain(format!("let {name} = {source};"));
+                let rendered = self.with_field_entries(pending, rendered);
+                self.write_output(rendered, span(start, value.span.end()));
+                self.entry_aliases.remove(&name);
+                self.bound_value(&name, name_span, &value, value_start);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self.consume_terminator(start).map(|_| ());
+            }
             // `let r = &mut s.cells[i];`: `r` is the place, reached again
             // from `s` at each use.
             if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
@@ -22220,9 +22266,15 @@ impl<'a> Parser<'a> {
                 },
             });
         }
+        // `r = &mut b;` of a `&mut` local given new borrows.
+        if compound_operator(&assignment).is_none()
+            && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
+        {
+            return self.rebind_selector(value.span, &value.ty, selector, mutable);
+        }
+        self.refuse_rebound_alias(value.span, &value.ty)?;
         let value_start = self.flow().value_start();
         let mut replacement = self.parse_expr()?;
-        self.refuse_rebound_alias(value.span, &value.ty, &lvalue, &replacement)?;
         let compound = compound_operator(&assignment).is_some();
         self.assigned_place(
             value.span,
@@ -27378,9 +27430,29 @@ impl<'a> Parser<'a> {
                 },
             });
         }
+        // `Some(n) => r = &mut b,` of a `&mut` local given new borrows.
+        if compound_operator(&assignment).is_none()
+            && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
+        {
+            let (rebind, end) = self.rebind_selector(value.span, &value.ty, selector, mutable)?;
+            let value = ParsedExpr {
+                prelude: origin::Fragment::default(),
+                source: rebind.surrounded("{ ", " }"),
+                ty: Ty::Unit,
+                span: span(start, end.end()),
+                lvalue: None,
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            }
+            .retain_origin();
+            return Ok(Branch {
+                syntax: value.span,
+                value,
+            });
+        }
+        self.refuse_rebound_alias(value.span, &value.ty)?;
         let value_start = self.flow().value_start();
         let mut replacement = self.parse_expr()?;
-        self.refuse_rebound_alias(value.span, &value.ty, &lvalue, &replacement)?;
         let compound = compound_operator(&assignment).is_some();
         self.assigned_place(
             value.span,
@@ -29434,9 +29506,18 @@ impl<'a> Parser<'a> {
                                     expression,
                                 );
                                 this.flow().shared(expression.start());
+                                // A `&mut` local is the place it borrows.
+                                let source = match this.aliases.get(name.as_str()) {
+                                    Some((aliased, Lvalue::Place { place, .. }))
+                                        if *aliased == binding.declaration =>
+                                    {
+                                        place.clone()
+                                    }
+                                    _ => origin::Fragment::plain(name.clone()),
+                                };
                                 let captured = ParsedExpr {
                                     prelude: origin::Fragment::default(),
-                                    source: origin::Fragment::plain(name.clone()),
+                                    source,
                                     ty: binding.ty.clone(),
                                     span: expression,
                                     lvalue: None,
