@@ -24,6 +24,8 @@ pub(crate) mod parts;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod retained;
 #[cfg(feature = "rustc-driver")]
+pub use retained::keep_graphs;
+#[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
 
 const CANONICALIZER_VERSION: u32 = 15;
@@ -356,7 +358,24 @@ pub(crate) struct Shared {
     range: std::ops::Range<usize>,
 }
 
+impl StoredGraph {
+    fn duplicate(&self) -> Self {
+        Self {
+            canonical: self.canonical.duplicate(),
+            selected: self.selected.duplicate(),
+            selected_usage: self.selected_usage,
+        }
+    }
+}
+
 impl Shared {
+    fn duplicate(&self) -> Self {
+        Self {
+            buffer: std::sync::Arc::clone(&self.buffer),
+            range: self.range.clone(),
+        }
+    }
+
     pub(crate) fn split<const N: usize>(
         buffer: Box<[u8]>,
         ranges: [std::ops::Range<usize>; N],
@@ -748,6 +767,29 @@ impl Fingerprint {
 }
 
 impl Graph<Captured> {
+    /// A copy of this captured graph, as a long-running owner keeps it (see
+    /// [`keep_graphs`]).
+    pub(crate) fn duplicate(&self) -> Self {
+        Self {
+            invocations: self.invocations.clone(),
+            definitions: self.definitions.clone(),
+            exports: self.exports.clone(),
+            implementations: self.implementations.clone(),
+            scalar_predicate_proofs: self.scalar_predicate_proofs.clone(),
+            support: self.support.clone(),
+            anonymous: self.anonymous.clone(),
+            index: self.index.clone(),
+            canonical: self.canonical.clone(),
+            fingerprint: self.fingerprint,
+            semantic_fingerprint: self.semantic_fingerprint,
+            stored: self.stored.as_ref().map(StoredGraph::duplicate),
+            universe: self.universe,
+            transaction: self.transaction,
+            retained: self.retained,
+            evidence: (),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn raw(canonical: Vec<u8>, universe: Option<[u8; 32]>) -> Raw {
         Raw {

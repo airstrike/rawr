@@ -177,6 +177,8 @@ fn session(
     program: Option<&rawr_import::process::Arguments>,
 ) -> Result<Ended, diagnostic::Report> {
     same_build(target)?;
+    // Each save that changes Rawr source rebuilds the same API graph.
+    rawr_import::api::keep_graphs();
     // What the program starts from, read before it is prepared: a save
     // restarts it only when this changed.
     let mut started_from = program.and_then(|_| contents(target));
