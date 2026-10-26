@@ -9247,6 +9247,84 @@ fn language_fx_hash_collections_are_rawr_maps() {
 }
 
 #[test]
+fn language_debug_builders_write_what_std_writes() {
+    let text = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::fmt;
+            struct Life { cells: Vec<i64> }
+            impl fmt::Debug for Life {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.debug_struct("Life").field("cells", &self.cells.len()).finish()
+                }
+            }
+            struct Pair(i64, String);
+            impl fmt::Debug for Pair {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_tuple("Pair").field(&self.0).field(&self.1).finish()
+                }
+            }
+            struct Hidden;
+            impl fmt::Debug for Hidden {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_struct("Hidden").finish_non_exhaustive()
+                }
+            }
+            struct Few(Vec<i64>);
+            impl fmt::Debug for Few {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_list().entry(&self.0[0]).entry(&self.0[1]).finish()
+                }
+            }
+            struct None_;
+            impl fmt::Debug for None_ {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_list().finish()
+                }
+            }
+            let life = Life { cells: vec![1, 2, 3] };
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}|{:#?}", life, Pair(1, "a".to_string()), Hidden,
+                Few(vec![4, 5]), None_, life)
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        text,
+        "Life { cells: 3 }|Pair(1, \"a\")|Hidden { .. }|[4, 5]|[]|Life {\n    cells: 3,\n}"
+    );
+}
+
+#[test]
+fn language_drain_and_clear_empty_a_map_or_set() {
+    let value = run(r#"
+        use std::collections::{HashMap, HashSet};
+        struct State { births: HashSet<i64>, ages: HashMap<i64, i64> }
+        impl State {
+            fn settle(&mut self, life: &mut Vec<i64>) {
+                self.births.drain().for_each(|cell| life.push(cell));
+                self.ages.clear();
+            }
+        }
+        pub fn run() -> i64 {
+            let mut state = State { births: HashSet::new(), ages: HashMap::new() };
+            state.births.insert(4);
+            state.births.insert(5);
+            state.ages.insert(1, 2);
+            let mut life = Vec::new();
+            state.settle(&mut life);
+            let mut local = HashMap::new();
+            local.insert(3, 30);
+            let total: i64 = local.drain().map(|(k, v)| k + v).sum();
+            life.sort();
+            life[0] * 1000 + life[1] * 100 + total
+                + (state.births.len() + state.ages.len() + local.len()) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 4000 + 500 + 33);
+}
+
+#[test]
 fn language_rc_and_arc_are_shared_pointers() {
     let value = run(r#"
         use std::rc::Rc;

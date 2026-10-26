@@ -30452,6 +30452,20 @@ impl<'a> Parser<'a> {
                 value = self.parse_value_fmt(value, formatter)?;
                 continue;
             }
+            // `f.debug_struct("Life").field("cells", &n).finish()` and its
+            // kin, in a `fmt` body.
+            if matches!(
+                member.as_str(),
+                "debug_struct" | "debug_tuple" | "debug_list"
+            ) && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && self
+                    .formatter
+                    .as_ref()
+                    .is_some_and(|formatter| value.source.as_str() == formatter.as_str())
+            {
+                value = self.parse_debug_builder(value, &member)?;
+                continue;
+            }
             // `f.write_str(text)` into a `fmt` body's formatter.
             if member == "write_str"
                 && matches!(self.peek(), Token::LeftParen)
@@ -32814,6 +32828,103 @@ impl<'a> Parser<'a> {
         let stderr = origin::Fragment::plain(if stderr { "true" } else { "false" });
         let source = self.prelude_op(PreludeOp::Print, [text, stderr]);
         Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)))
+    }
+
+    /// `f.debug_struct(name)`, `f.debug_tuple(name)` or `f.debug_list()`
+    /// after the formatter `f`, with its `.field(..)` or `.entry(..)` calls
+    /// and the `.finish()` or `.finish_non_exhaustive()` that ends it: the
+    /// text std's builders write (`Life { cells: 3 }`, `Pair(1, 2)`,
+    /// `[1, 2]`) into the formatter, and `Ok(())`. `{:#?}` lays it out as a
+    /// derived `Debug`'s.
+    fn parse_debug_builder(
+        &mut self,
+        formatter: ParsedExpr,
+        builder: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let (mut arguments, _) = self.parse_call_arguments("debug builder arguments")?;
+        let mut end;
+        let (open, close) = match builder {
+            "debug_struct" => (" { ", " }"),
+            "debug_tuple" => ("(", ")"),
+            _ => ("[", "]"),
+        };
+        let mut text = if builder == "debug_list" {
+            if !arguments.is_empty() {
+                return Err(self.unsupported("`debug_list` with arguments"));
+            }
+            origin::Fragment::plain("\"\"")
+        } else {
+            let [name] = arguments.as_mut_slice() else {
+                return Err(self.unsupported("a debug builder without its one name"));
+            };
+            self.strip_string_reference(name);
+            self.require_type(&Ty::String, &name.ty, name.span)?;
+            name.rendered_source().surrounded("(", ")")
+        };
+        let mut parts = Vec::new();
+        let mut non_exhaustive = false;
+        loop {
+            if !matches!(self.peek(), Token::Period) {
+                return Err(self.unsupported("a debug builder without `.finish()`"));
+            }
+            self.next();
+            let (method, method_span) = self.expect_name("a debug builder method")?;
+            let (mut arguments, call_end) =
+                self.parse_call_arguments("debug builder method arguments")?;
+            end = call_end;
+            match (builder, method.as_str(), arguments.as_mut_slice()) {
+                (_, "finish", []) => break,
+                ("debug_struct", "finish_non_exhaustive", []) => {
+                    non_exhaustive = true;
+                    break;
+                }
+                ("debug_struct", "field", [name, field]) => {
+                    self.strip_string_reference(name);
+                    self.require_type(&Ty::String, &name.ty, name.span)?;
+                    let debug =
+                        self.debug_source(&field.ty, field.rendered_source(), field.span)?;
+                    let mut part = name.rendered_source().surrounded("(", ")");
+                    part.push_text(" + \": \" + ");
+                    part.push(debug.surrounded("(", ")"));
+                    parts.push(part);
+                }
+                ("debug_tuple", "field", [field]) | ("debug_list", "entry", [field]) => {
+                    let debug =
+                        self.debug_source(&field.ty, field.rendered_source(), field.span)?;
+                    parts.push(debug.surrounded("(", ")"));
+                }
+                _ => {
+                    return Err(Error::UnknownMember {
+                        owner: "Formatter".into(),
+                        member: method,
+                        reference: method_span,
+                    });
+                }
+            }
+        }
+        if non_exhaustive {
+            parts.push(origin::Fragment::plain("\"..\""));
+        }
+        if !parts.is_empty() || builder == "debug_list" || non_exhaustive {
+            text.push_text(format!(" + {open:?} + "));
+            if parts.is_empty() {
+                text.push_text("\"\"");
+            }
+            text.push(origin::Fragment::join(parts, " + \", \" + "));
+            text.push_text(format!(" + {close:?}"));
+        }
+        let mut source = origin::Fragment::plain("{ ");
+        source.push(formatter.rendered_source());
+        source.push_text(" += (");
+        source.push(text);
+        source.push_text("); ");
+        source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
+        source.push_text(" }");
+        Ok(self.operator_expr(
+            source,
+            Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Unit)),
+            span(formatter.span.start(), end),
+        ))
     }
 
     /// `dbg!(value)`: `[file:line:column] value = {value:#?}` on stderr, as

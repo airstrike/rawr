@@ -592,6 +592,26 @@ impl Parser<'_> {
                 };
                 return Ok(self.keyed_iterator(&value, item, project, end));
             }
+            // `drain()` gives every entry, owned, and leaves the collection
+            // empty; `clear()` only empties it.
+            "drain" | "clear" => {
+                arity(0, &arguments)?;
+                let (taken, empty) = (self.temporary("drained"), self.temporary("empty"));
+                let mut source = origin::Fragment::plain(format!("{{ let {taken} = "));
+                source.push(receiver.clone());
+                source.push_text(format!("; let {empty} = []; "));
+                source.push(self.store_into(&value, &empty)?);
+                if member.as_str() == "clear" {
+                    source.push_text(" }");
+                    (source, Ty::Unit)
+                } else {
+                    source.push_text(format!(" {taken} }}"));
+                    let drained =
+                        self.operator_expr(source, Ty::Keyed(kind, types.clone()), expression);
+                    let item = keyed_item(kind, &types, None);
+                    return Ok(self.keyed_iterator(&drained, item, None, end));
+                }
+            }
             // Each item inserted in turn, as Rust's `Extend` does.
             "extend" => {
                 arity(1, &arguments)?;
