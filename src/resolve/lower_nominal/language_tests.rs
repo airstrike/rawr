@@ -9906,3 +9906,93 @@ pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, 
     // A capture renamed: its fingerprint differs.
     assert!(!recaptured.rebinds(&closure, first.as_ref()));
 }
+
+#[test]
+fn language_const_fn_is_a_function() {
+    let value = run(r#"
+        const fn double(x: i64) -> i64 { x * 2 }
+        const SIZE: i64 = double(21);
+        pub struct P { x: i64 }
+        impl P {
+            pub const fn new(x: i64) -> Self { P { x } }
+        }
+        pub const fn triple(x: i64) -> i64 { x * 3 }
+        pub fn run() -> i64 {
+            const fn local(x: i64) -> i64 { x - 1 }
+            SIZE + P::new(5).x + triple(2) + local(1)
+        }
+        run()
+    "#);
+    assert_eq!(value, 42 + 5 + 6);
+}
+
+#[test]
+fn language_use_imports_enum_variants() {
+    // One file: the single-unit resolver.
+    let value = run(r#"
+        #[derive(Clone, Copy, PartialEq)]
+        pub enum Op { Add, Sub, Scale(i64), Move { by: i64 } }
+        use Op::*;
+        use std::cmp::Ordering::{self, Greater};
+        use std::cmp::Ordering::*;
+        pub fn apply(op: Op, n: i64) -> i64 {
+            match op {
+                Add => n + 1,
+                Sub => n - 1,
+                Scale(k) => n * k,
+                Move { by } => n + by,
+            }
+        }
+        pub fn sign(o: Ordering) -> i64 {
+            match o { Less => -1, Equal => 0, Greater => 1 }
+        }
+        pub fn run() -> i64 {
+            let ops = vec![Add, Scale(10), Sub, Move { by: 100 }];
+            let mut n = 0;
+            for op in ops {
+                n = apply(op, n);
+            }
+            let scales: Vec<Op> = vec![2, 3].into_iter().map(Scale).collect();
+            n + sign(3.cmp(&1)) + sign(Less) + if scales[1] == Scale(3) { 1000 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 109 + 1 - 1 + 1000);
+    // A file with modules: the package resolver.
+    let source = r#"mod shapes {
+    #[derive(Debug, Clone, Copy)]
+    pub enum Shape { Dot, Square(f64) }
+    pub mod sides {
+        use super::Shape::*;
+        pub fn sides(s: super::Shape) -> i64 {
+            match s { Dot => 0, Square(_) => 4 }
+        }
+    }
+}
+
+use shapes::Shape::*;
+use self::shapes::sides::sides;
+
+fn main() {
+    println!("{:?} {} {}", Square(1.5), sides(Dot), sides(Square(2.0)));
+}
+"#;
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let evidence = crate::diagnostic::Source::new("play.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let ast = engine
+        .compile_unit(unit, evidence)
+        .unwrap_or_else(|error| panic!("{error}"));
+    engine
+        .call_fn::<()>(&mut crate::Scope::new(), &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "Square(1.5) 0 4\n");
+    // A name that is no variant stays unknown, as in rustc.
+    rejected(r#"pub enum K { A } use K::B; pub fn run() -> i64 { 0 } run()"#);
+    // A turbofish on a name that is no value is an error, not a crash.
+    let error = rejected(r#"pub fn run() -> i64 { let x = Nope::<i64>; 0 } run()"#);
+    assert!(error.contains("Nope"), "{error}");
+}

@@ -52,8 +52,7 @@ Error: "\"forty\": invalid digit found in string"
 <p>These are valid Rust that rawr rejects today. Each one fails the check with an error that names the construct. rawr reports one error per check.</p>
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
-  <li>A glob import of an enum&rsquo;s variants, as in <code>use Shape::*;</code>.</li>
-  <li><code>const fn</code>.</li>
+  <li>A <code>static mut</code>.</li>
   <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>

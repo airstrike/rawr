@@ -982,6 +982,70 @@ fn resolve_imports(
             }
         }
     }
+    // This file's enums, whose variants `use Shape::Circle;` and
+    // `use Shape::*;` import.
+    let enums = parsed_items
+        .iter()
+        .filter_map(|parsed| match parsed {
+            crate::item::Parsed::Enum(declared) => match types.get(&declared.name.text) {
+                Some(type_ref::Target::Script {
+                    definition,
+                    identity,
+                }) => Some((
+                    declared.name.text.clone(),
+                    (
+                        *definition,
+                        identity.clone(),
+                        declared
+                            .variants
+                            .iter()
+                            .map(|variant| variant.name.text.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                )),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    // The variants an enum path names, as `Shape`, `self::Shape` or
+    // `std::cmp::Ordering`.
+    let enum_variants = |prefix: &[ImmutableString]| -> Option<Vec<ImmutableString>> {
+        let prefix = match prefix {
+            [this, rest @ ..] if this == "self" => rest,
+            _ => prefix,
+        };
+        if let [name] = prefix
+            && let Some((_, _, variants)) = enums.get(name)
+        {
+            return Some(variants.clone());
+        }
+        std_ordering(&prefix.join("::")).then(|| {
+            package::ORDERING_VARIANTS
+                .iter()
+                .map(|name| ImmutableString::from(*name))
+                .collect()
+        })
+    };
+    let variant_import = |path: &[ImmutableString]| -> Option<item::Import> {
+        let (last, prefix) = path.split_last()?;
+        if !enum_variants(prefix)?.contains(last) {
+            return None;
+        }
+        let prefix = match prefix {
+            [this, rest @ ..] if this == "self" => rest,
+            _ => prefix,
+        };
+        Some(match prefix {
+            [name] if let Some((definition, identity, _)) = enums.get(name) => {
+                item::Import::Variant {
+                    definition: *definition,
+                    identity: identity.clone(),
+                }
+            }
+            _ => item::Import::OrderingVariant,
+        })
+    };
     let through_module = |path: ImmutableString| -> ImmutableString {
         if host.entry(&std_reexport(&path, host)).is_some() {
             return path;
@@ -1004,7 +1068,13 @@ fn resolve_imports(
         let mut globbed = Vec::new();
         if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree {
             let module = parsed_path(prefix);
-            for name in std_glob(&module) {
+            let segments = prefix
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect::<Vec<_>>();
+            let names = enum_variants(&segments).unwrap_or_else(|| std_glob(&module));
+            for name in names {
                 if !occupied.contains_key(&name) {
                     globbed.push((
                         crate::item::Name {
@@ -1068,6 +1138,14 @@ fn resolve_imports(
             }
         }
         for (name, path) in parsed.bindings() {
+            if let Some(target) = variant_import(&path) {
+                bindings.push(item::Binding {
+                    name,
+                    qualified: path.join("::").into(),
+                    target,
+                });
+                continue;
+            }
             let qualified = through_module(path.join("::").into());
             let module_only = parsed.binds_module_only(&name);
             let mut binding = resolve_import_binding(name, qualified, host)?;
@@ -1077,6 +1155,18 @@ fn resolve_imports(
             bindings.push(binding);
         }
         for (name, qualified) in globbed {
+            let path = qualified
+                .split("::")
+                .map(ImmutableString::from)
+                .collect::<Vec<_>>();
+            if let Some(target) = variant_import(&path) {
+                bindings.push(item::Binding {
+                    name,
+                    qualified: qualified.into(),
+                    target,
+                });
+                continue;
+            }
             bindings.push(resolve_import_binding(name, qualified.into(), host)?);
         }
 

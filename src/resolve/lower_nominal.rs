@@ -2480,6 +2480,9 @@ struct Tables {
     host: crate::host::Registry,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
+    /// The enum variants each source imports by name (`use Shape::*;`), with
+    /// the name of their enum in that source.
+    variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
     by_definition: BTreeMap<type_def::Id, Nominal>,
     by_identity: BTreeMap<type_def::Identity, Nominal>,
     qualified_functions: BTreeMap<(crate::program::source::Id, Span), crate::item::Key>,
@@ -2728,6 +2731,8 @@ impl Models {
             }
         }
 
+        let mut imported_variants = Vec::new();
+        let mut ordering_variants = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
@@ -2749,6 +2754,16 @@ impl Models {
                             .clone();
                         functions.insert((shell.source, binding.name.text.clone()), function);
                     }
+                    item::Import::Variant { identity, .. } => {
+                        imported_variants.push((
+                            shell.source,
+                            binding.name.text.clone(),
+                            identity.clone(),
+                        ));
+                    }
+                    item::Import::OrderingVariant => {
+                        ordering_variants.push((shell.source, binding.name.text.clone()));
+                    }
                     item::Import::Module
                     | item::Import::ModuleItem { .. }
                     | item::Import::Endpoint { .. }
@@ -2757,6 +2772,36 @@ impl Models {
                     | item::Import::Alias => {}
                 }
             }
+        }
+        // An imported variant reads as its enum's path, `Shape::Circle`. The
+        // enum is named by its own name in that source, which a different
+        // type of that name there leaves to a name no source can write.
+        let mut variants = BTreeMap::new();
+        for (source, name, identity) in imported_variants {
+            let nominal = by_identity
+                .get(&identity)
+                .expect("resolved variant imports retain nominal identity")
+                .clone();
+            let own: ImmutableString = nominal.name().into();
+            let owner = match by_name.get(&(source, own.clone())) {
+                Some(named) if named.identity() == nominal.identity() => own,
+                Some(_) => {
+                    let hidden: ImmutableString = format!("{own}\u{2}").into();
+                    by_name.insert((source, hidden.clone()), nominal);
+                    hidden
+                }
+                None => {
+                    by_name.insert((source, own.clone()), nominal);
+                    own
+                }
+            };
+            variants.insert((source, name), Box::from([owner]));
+        }
+        for key in ordering_variants {
+            variants.insert(
+                key,
+                Box::from(["std".into(), "cmp".into(), "Ordering".into()]),
+            );
         }
 
         let mut associated = AssociatedTypes::default();
@@ -2903,6 +2948,7 @@ impl Models {
             host,
             imports,
             by_name,
+            variants,
             by_definition,
             by_identity,
             qualified_functions: program.qualified_functions.clone(),
@@ -2967,6 +3013,20 @@ impl Models {
 
     fn get(&self, name: &str) -> Option<&Nominal> {
         self.by_name.get(&(self.context, name.into()))
+    }
+
+    /// The enum an imported variant's name stands for in this source.
+    fn imported_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+        self.variants
+            .get(&(self.context, name.into()))
+            .map(AsRef::as_ref)
+    }
+
+    fn imports_variants(&self) -> bool {
+        self.variants
+            .range((self.context, ImmutableString::new())..)
+            .next()
+            .is_some_and(|((source, _), _)| *source == self.context)
     }
 
     fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
@@ -9234,6 +9294,9 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        if models.imports_variants() {
+            tokens = expand_imported_variants(&models, tokens);
+        }
         let associated = Shared::clone(&models.associated);
 
         Self {
@@ -9770,6 +9833,11 @@ impl<'a> Parser<'a> {
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
+                // `const fn f()` is a nested `fn` item.
+                Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                    self.next();
+                    self.skip_nested_fn()?;
+                }
                 Token::Const => self.parse_binding(false)?,
                 Token::LeftParen if self.startup && is_tuple(definition.output()) => {
                     self.parse_startup_tail(definition.output())?;
@@ -9967,6 +10035,11 @@ impl<'a> Parser<'a> {
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
+                // `const fn f()` is a nested `fn` item.
+                Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                    self.next();
+                    self.skip_nested_fn()?;
+                }
                 Token::Const => self.parse_binding(false)?,
                 Token::LeftParen
                     if self.startup && definition.output.as_ref().is_some_and(is_tuple) =>
@@ -24694,6 +24767,11 @@ impl<'a> Parser<'a> {
             while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
                 match self.peek() {
                     Token::Let => self.parse_binding(true)?,
+                    // `const fn f()` is a nested `fn` item.
+                    Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                        self.next();
+                        self.skip_nested_fn()?;
+                    }
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
@@ -36901,6 +36979,13 @@ impl<'a> Parser<'a> {
         let (member, member_span) = segments
             .pop()
             .expect("qualified paths retain a member after their owner");
+        // `Nope::<i32>`: a turbofish on a name that is no value.
+        if segments.is_empty() {
+            return Err(Error::UnknownVariable {
+                name: member,
+                reference: member_span,
+            });
+        }
         let owner: ImmutableString = segments
             .iter()
             .map(|(name, _)| name.as_str())
@@ -41229,6 +41314,47 @@ impl<'a> Parser<'a> {
             .next()
             .expect("token streams always end with EOF")
     }
+}
+
+/// Each name of an imported enum variant (`use Shape::*;`) as its path,
+/// `Shape::Circle`, where a path may start: not after `.` or `::`, and not
+/// before a `:` that names a field or a `::` that goes on to a name. A
+/// turbofish (`Empty::<i32>`) stays on the variant.
+fn expand_imported_variants(
+    models: &Models,
+    tokens: Vec<(Token, Position)>,
+) -> Vec<(Token, Position)> {
+    let mut expanded = Vec::with_capacity(tokens.len());
+    for index in 0..tokens.len() {
+        let (token, position) = &tokens[index];
+        let owner = match token {
+            Token::Identifier(name)
+                if !matches!(
+                    expanded.last(),
+                    Some((Token::Period | Token::DoubleColon, _))
+                ) && !matches!(
+                    (tokens.get(index + 1), tokens.get(index + 2)),
+                    (Some((Token::Colon, _)), _)
+                        | (
+                            Some((Token::DoubleColon, _)),
+                            Some((Token::Identifier(_), _))
+                        )
+                ) =>
+            {
+                models.imported_variant(name)
+            }
+            _ => None,
+        };
+        for segment in owner.into_iter().flatten() {
+            expanded.push((
+                Token::Identifier(Box::new(segment.as_str().into())),
+                *position,
+            ));
+            expanded.push((Token::DoubleColon, *position));
+        }
+        expanded.push((token.clone(), *position));
+    }
+    expanded
 }
 
 /// A closure body being parsed: the bindings declared outside it, and the

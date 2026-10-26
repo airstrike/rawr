@@ -112,8 +112,13 @@ println!("handle {}", h.0);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-unsafe-impl" data-out="out-unsafe-impl" aria-label="Run unsafe-impl.rs" hidden></button><b>rawr run unsafe-impl.rs</b><span id="out-unsafe-impl" aria-live="polite">handle 7</span></div>
 </div>
 <h2 id="const"><code>const</code> and <code>static</code></h2>
+<p>A <code>const fn</code> is a function. A constant may call one. A <code>static mut</code> isn&rsquo;t supported yet.</p>
 <div class="block">
-  <pre><code data-lang="rust" data-run="consts.rs" id="src-consts">const LIMIT: usize = 10;
+  <pre><code data-lang="rust" data-run="consts.rs" id="src-consts">const fn double(x: usize) -&gt; usize {
+    x * 2
+}
+
+const LIMIT: usize = double(5);
 static GREETING: &amp;str = "hello";
 
 println!("{GREETING} {LIMIT}");</code></pre>
@@ -147,10 +152,38 @@ fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-geometry" data-out="out-geometry" aria-label="Run geometry.rs" hidden></button><b>rawr run geometry.rs</b><span id="out-geometry" aria-live="polite">6</span></div>
 </div>
 <h2 id="use"><code>use</code></h2>
-<p>Paths, groups, and globs of a standard library module. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A glob of an enum&rsquo;s variants, as in <code>use Shape::*;</code>, isn&rsquo;t supported yet.</p>
+<p>Paths, groups, and globs of a standard library module work. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A path may start with <code>self::</code>.</p>
 <div class="block"><pre><code data-lang="rust">use std::collections::{HashMap, HashSet};
 use std::fmt::*;
 use ::image::ColorType;</code></pre></div>
+<p>An enum&rsquo;s variants can be imported by name or with a glob, in patterns and in expressions. That includes the variants of <code>std::cmp::Ordering</code>.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="variants.rs" id="src-variants">#[derive(Debug)]
+enum Shape {
+    Dot,
+    Square(f64),
+}
+
+use Shape::*;
+use std::cmp::Ordering::*;
+
+fn area(s: &amp;Shape) -&gt; f64 {
+    match s {
+        Dot =&gt; 0.0,
+        Square(w) =&gt; w * w,
+    }
+}
+
+fn main() {
+    let order = match 2.cmp(&amp;3) {
+        Less =&gt; "less",
+        Equal =&gt; "equal",
+        Greater =&gt; "greater",
+    };
+    println!("{} {:?} {order}", area(&amp;Square(3.0)), Dot);
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-variants" data-out="out-variants" aria-label="Run variants.rs" hidden></button><b>rawr run variants.rs</b><span id="out-variants" aria-live="polite">9 Dot less</span></div>
+</div>
 <h2 id="derive"><code>#[derive]</code></h2>
 <p><code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. rawr checks a derive as rustc does, so deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</p>
 <div class="block">

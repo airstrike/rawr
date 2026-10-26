@@ -280,6 +280,18 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 // `const NAME: T = value;` is an item; untyped `const` stays
                 // a legacy script statement.
                 let start = expect(input, Token::Const, "to start a constant")?;
+                // `const fn f()` is a function rawr may also call at run time.
+                if matches!(input.peek(), Some((Token::Fn, _))) {
+                    items.push(crate::item::Parsed::Function(parse_function(
+                        input,
+                        &tokenizer_control,
+                        Box::default(),
+                        None,
+                        start,
+                        false,
+                    )?));
+                    continue;
+                }
                 if input.peek().is_some_and(|(token, _)| is_name(token)) {
                     let name = parse_name(input, "after 'const'")?;
                     if matches!(input.peek(), Some((Token::Colon, _))) {
@@ -804,6 +816,18 @@ fn parse_enabled_item(
         }
         (Token::Const, _) => {
             input.next();
+            // `pub const fn f()` is a function rawr may also call at run time.
+            if matches!(input.peek(), Some((Token::Fn, _))) {
+                return parse_function(
+                    input,
+                    tokenizer_control,
+                    attributes,
+                    visibility,
+                    start,
+                    false,
+                )
+                .map(crate::item::Parsed::Function);
+            }
             let name = parse_name(input, "after 'const'")?;
             parse_const_rest(
                 input,
@@ -1536,7 +1560,18 @@ fn parse_use(
     if global {
         input.next();
     }
-    let first = parse_use_segment(input, "as the first import path segment")?;
+    // `use self::m::Item;` starts at this module.
+    let first = match input.peek() {
+        Some((Token::SelfValue, position)) if !global => {
+            let span = token_span(*position, "self");
+            input.next();
+            crate::item::Name {
+                span,
+                text: "self".into(),
+            }
+        }
+        _ => parse_use_segment(input, "as the first import path segment")?,
+    };
     let mut segments = vec![type_ref::Segment {
         span: first.span,
         name: first,
@@ -2912,6 +2947,17 @@ fn parse_associated_const(
     declaration: bool,
 ) -> ParseResult<crate::item::Function> {
     input.next();
+    // `const fn new() -> Self` is an associated function.
+    if matches!(input.peek(), Some((Token::Fn, _))) {
+        return parse_function(
+            input,
+            tokenizer_control,
+            attributes,
+            visibility,
+            start,
+            declaration,
+        );
+    }
     let name = parse_name(input, "after 'const'")?;
     let header = crate::item::Header {
         attributes,
@@ -4032,6 +4078,9 @@ fn parse_body_syntax(
     // Each open parenthesis: the callback roles of an `iced::run(..)` or
     // `iced::application(..)` call it opens, and the argument it is at.
     let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
+    // Where a `const` that starts a statement is: `const fn f()` is a
+    // nested `fn` item.
+    let mut const_start: Option<Position> = None;
 
     loop {
         if let Some((Token::Pipe, _)) = input.peek()
@@ -4052,8 +4101,16 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
         }
-        if boundary && let Some((Token::Fn, position)) = input.peek() {
-            let position = *position;
+        if (boundary || const_start.is_some())
+            && let Some((Token::Fn, position)) = input.peek()
+        {
+            let position = match const_start.take() {
+                Some(start) => {
+                    tokens.pop();
+                    start
+                }
+                None => *position,
+            };
             let function = parse_function(
                 input,
                 tokenizer_control,
@@ -4143,6 +4200,10 @@ fn parse_body_syntax(
             )
             .into_err(*position));
         }
+        const_start = match input.peek() {
+            Some((Token::Const, position)) if boundary => Some(*position),
+            _ => None,
+        };
         if let Some((token, _)) = input.peek() {
             boundary = matches!(
                 token,
