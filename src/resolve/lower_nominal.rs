@@ -19024,9 +19024,11 @@ impl<'a> Parser<'a> {
         )?;
         // `animation.go_mut(..)` of a facade value in a place: the call
         // changes a copy, which is stored back, as a script `&mut self`
-        // method's receiver is.
+        // method's receiver is. A method that lends what it gives, as the
+        // playground's `panes.get_mut(pane)`, gives a place instead.
         if mutable
             && (definition.identity().imported().is_none() || through_guard)
+            && guard.is_none()
             && !scoped
             && self.host_witnesses.is_empty()
             && let Some(lvalue) = receiver.lvalue.clone()
@@ -34769,7 +34771,8 @@ impl<'a> Parser<'a> {
                     let actual = self.inference.resolve(&argument.ty);
                     // `&state` of a value the call borrows, as
                     // `PaneGrid::new(&self.panes, ..)`, settles what the
-                    // reference's target does.
+                    // reference's target does, whether the parameter is
+                    // the reference or, as a facade's is, its target.
                     let unified = self.unify_type(parameter, &actual)
                         || match (self.inference.resolve(parameter), &actual) {
                             (Ty::Reference { target, .. }, Ty::Reference { target: inner, .. }) => {
@@ -34778,6 +34781,7 @@ impl<'a> Parser<'a> {
                             (Ty::Reference { target, .. }, actual) => {
                                 self.unify_type(&target, actual)
                             }
+                            (_, Ty::Reference { target, .. }) => self.unify_type(parameter, target),
                             _ => false,
                         };
                     if !unified && exact {

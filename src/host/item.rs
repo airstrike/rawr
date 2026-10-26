@@ -422,9 +422,11 @@ impl Definition {
         self.imported.as_ref()
     }
 
-    /// The item's output is a borrow guard reached as `guard` says.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn guarded(mut self, guard: Option<Guard>) -> Self {
+    /// The item's output is a borrow guard reached as `guard` says: an
+    /// imported method's, or a facade method's whose receiver lends what it
+    /// gives, as the playground's `pane_grid::State::get_mut` does.
+    #[must_use]
+    pub fn guarded(mut self, guard: Option<Guard>) -> Self {
         self.guard = guard;
         self
     }

@@ -416,6 +416,10 @@ pub fn record_application(
             .find(|theme| theme.to_string() == name)
             .cloned()
     });
+    // The view's style functions read the theme the image is drawn with.
+    if let Some(theme) = &named {
+        adapter.use_theme(theme.clone());
+    }
     let declared = iced::Size::new(bound.0 as f32, bound.1 as f32);
     let mut surface = Application(adapter);
     let mut trees = headless::Trees::default();

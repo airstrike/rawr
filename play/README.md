@@ -285,6 +285,15 @@ frozen the same, so a snippet's frames repeat. `tracing_subscriber::fmt::init()`
 installs tracing-subscriber's `fmt` subscriber, whose lines go nowhere in a
 render and to the console in the browser.
 
+iced's `pane_grid` reaches `rawr run` through the importer, which a snippet
+never runs. The renderer and rawr-web call `rawr_iced::features::playground()`
+first, and rawr-iced's facade then declares `pane_grid` itself
+(`iced/src/widget/pane_grid.rs`): iced's real `State<T>` of the snippet's
+values in the app's native home, and a `PaneGrid` whose pane closure runs
+for each pane when the grid lowers. So iced's `pane_grid` example
+(`tests/fixtures/iced/pane_grid.rs`, byte for byte iced's) runs in the
+Examples menu. `rawr run` never declares these.
+
 ## Run locally
 
 With the token in `~/.config/rawr-play/token` (or `DISCORD_TOKEN`), and
