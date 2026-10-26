@@ -72,11 +72,11 @@ Error: "\"forty\": invalid digit found in string"
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Cell</code>, <code>Weak</code> and <code>Mutex</code>.</li>
+  <li><code>Weak</code> and <code>Mutex</code>.</li>
+  <li>Cloning a struct, enum or <code>Vec</code> that holds a <code>Cell</code> or <code>RefCell</code> outside an <code>Rc</code>.</li>
   <li><code>std::fs</code>, and <code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>.</li>
-  <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
-  <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
-  <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
+  <li><code>BinaryHeap</code>.</li>
+  <li><code>std::process::exit</code>.</li>
   <li><code>Formatter::pad</code>.</li>
   <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
   <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
@@ -107,6 +107,8 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
   <li><code>Send</code> and <code>Sync</code> bounds are not checked. An <code>Rc</code> passes <code>T: Send</code>.</li>
+  <li><code>VecDeque&lt;T&gt;</code> and <code>Vec&lt;T&gt;</code> are one type to the checker. A <code>Vec</code> takes <code>push_front</code>, and a <code>VecDeque</code> takes <code>sort</code>.</li>
+  <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>

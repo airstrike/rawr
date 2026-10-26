@@ -3279,6 +3279,15 @@ fn parse_type_split(
             let path = parse_fn_signature(input, start)?;
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
+        // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
+        // Iterator<Item = T>` is: a chain or the array of its items.
+        if let Some((Token::Identifier(name), _)) = input.peek()
+            && name.as_str() != "IntoIterator"
+            && let Some(name) = iterator_trait(name)
+        {
+            input.next();
+            return parse_iterator_type(input, split, name, start);
+        }
         // `dyn Shape<Output = i64>`: each binding is the argument
         // `=Output<i64>` of the trait's segment.
         let mut bindings = Vec::new();

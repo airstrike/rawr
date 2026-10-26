@@ -1435,6 +1435,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "collections::HashSet"
                 | "collections::BTreeMap"
                 | "collections::BTreeSet"
+                | "collections::VecDeque"
                 | "hash"
                 | "hash::Hash"
                 | "convert"
@@ -1457,6 +1458,9 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "marker::PhantomData"
                 | "cell"
                 | "cell::RefCell"
+                | "cell::Cell"
+                | "error"
+                | "error::Error"
                 | "rc"
                 | "rc::Rc"
                 | "sync::Arc"
@@ -1486,6 +1490,7 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
         "HashSet",
         "BTreeMap",
         "BTreeSet",
+        "VecDeque",
         "Debug",
         "Display",
         "Formatter",
@@ -1651,6 +1656,19 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     ["Duration", "Instant"]
         .into_iter()
         .find(|time| *time == name)
+}
+
+/// `std::collections::VecDeque` as a path is written with its module.
+pub(crate) fn std_vec_deque(path: &str) -> bool {
+    matches!(
+        path,
+        "collections::VecDeque" | "std::collections::VecDeque" | "alloc::collections::VecDeque"
+    )
+}
+
+/// `std::cell::Cell` as a path is written with its module.
+pub(crate) fn std_plain_cell(path: &str) -> bool {
+    matches!(path, "cell::Cell" | "std::cell::Cell" | "core::cell::Cell")
 }
 
 /// `std::cell::RefCell` as a path is written.
@@ -3158,7 +3176,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
     "Clone",
     "Hash",
     "Copy",
@@ -3198,6 +3216,7 @@ pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
     "Index",
     "IndexMut",
     "FromIterator",
+    "Error",
 ];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
@@ -3249,6 +3268,7 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
                         | "iter"
                         | "ops"
                         | "hash"
+                        | "error"
                 )
         }))
     .then(|| last.name.clone())
@@ -3359,7 +3379,8 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
                 Some(output),
             )]
         }
-        "Copy" | "Eq" | "Hash" | "IntoFragment" => Vec::new(),
+        // `std::error::Error`'s methods all have defaults.
+        "Copy" | "Eq" | "Hash" | "IntoFragment" | "Error" => Vec::new(),
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.

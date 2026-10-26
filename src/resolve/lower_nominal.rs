@@ -1,6 +1,8 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
 pub(crate) mod cell;
+mod error_object;
+mod fmt_write;
 mod iterator;
 mod keyed;
 mod location;
@@ -807,7 +809,7 @@ fn erased(ty: &Ty) -> bool {
             | Ty::Keyed(..)
             | Ty::Boxed(..)
             | Ty::Reverse(_)
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Ordering
             | Ty::Time(Time::Instant)
     )
@@ -2657,6 +2659,8 @@ impl Models {
         if used.contains("Ord") {
             used.insert("PartialOrd".into());
         }
+        // std's `Error`, which `Box<dyn Error>` names without an impl.
+        used.insert("Error".into());
         for trait_name in &used {
             if !traits.contains_key(trait_name)
                 && let Some(declared) = crate::resolve::builtin_trait(trait_name)
@@ -3105,7 +3109,7 @@ impl Models {
             Ty::Boxed(_, inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
             // A cell is made where its default is used, so copies share
             // no cell.
-            Ty::Cell(_) => false,
+            Ty::Cell(..) => false,
             Ty::Array {
                 element,
                 length: Some(_),
@@ -3133,6 +3137,50 @@ impl Models {
                 folds
             }
             _ => true,
+        }
+    }
+
+    /// Whether a value of `ty` holds a `Cell` or `RefCell` of its own, not
+    /// behind an `Rc` or `Arc`. Its runtime copy would share the cell,
+    /// while Rust's `clone` makes a new one.
+    fn holds_cell(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
+        match ty {
+            Ty::Cell(..) => true,
+            Ty::Boxed(Pointer::Box, inner)
+            | Ty::Reverse(inner)
+            | Ty::Option(inner)
+            | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
+            Ty::Result(ok, err) => self.holds_cell(ok, visiting) || self.holds_cell(err, visiting),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => members
+                .iter()
+                .any(|member| self.holds_cell(member, visiting)),
+            Ty::Script(id, arguments) => {
+                if visiting.contains(id) || self.std_impl(*id, "Clone", "clone").is_some() {
+                    return false;
+                }
+                if arguments
+                    .iter()
+                    .any(|argument| self.holds_cell(argument, visiting))
+                {
+                    return true;
+                }
+                visiting.push(*id);
+                let holds = match self.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .any(|field| self.holds_cell(&Ty::from_resolved(&field.ty), visiting)),
+                    Nominal::Enum { item, .. } => item.variants.iter().any(|variant| {
+                        variant
+                            .payload
+                            .iter()
+                            .any(|ty| self.holds_cell(&Ty::from_resolved(ty), visiting))
+                    }),
+                };
+                visiting.pop();
+                holds
+            }
+            _ => false,
         }
     }
 
@@ -3247,7 +3295,7 @@ impl Models {
             | Ty::Time(_)
             | Ty::ParseError(_)
             | Ty::Reference { .. }
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Boxed(..)
             | Ty::Iter(_)
             | Ty::Keyed(..)
@@ -3546,6 +3594,15 @@ enum PreludeOp {
     /// An imported value's Rust `Display` text, kept by the bridge.
     DisplayText,
     CellNew,
+    /// `Cell::new(value)`.
+    PlainCellNew,
+    /// A `Box<dyn Error>` of its `Display` and `Debug` text, and one of
+    /// those texts (`error_object.rs`).
+    ErrorNew,
+    ErrorText,
+    /// A `parse` error, whose kind its target's kind code gives, boxed as
+    /// `dyn Error` by `?`.
+    ErrorParse,
     CellBorrow,
     CellGet,
     CellSet,
@@ -3668,6 +3725,10 @@ impl PreludeOp {
             Self::ReverseWrap => "reverse.new",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
+            Self::PlainCellNew => "cell.new_plain",
+            Self::ErrorNew => "error.new",
+            Self::ErrorText => "error.text",
+            Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
             Self::CellSet => "cell.set",
@@ -3742,10 +3803,15 @@ impl PreludeOp {
             | Self::ReverseWrap
             | Self::DisplayText
             | Self::CellNew
+            | Self::PlainCellNew
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
-            Self::CellBorrow | Self::CellSet | Self::CellReplace => {
+            Self::CellBorrow
+            | Self::CellSet
+            | Self::CellReplace
+            | Self::ErrorNew
+            | Self::ErrorText => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
@@ -3788,7 +3854,7 @@ impl PreludeOp {
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::RoundF32 | Self::Unsigned => vec![TypeId::of::<Dynamic>()],
             Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
-            Self::Parse => vec![TypeId::of::<ImmutableString>()],
+            Self::Parse | Self::ErrorParse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
                 TypeId::of::<ImmutableString>(),
@@ -4139,12 +4205,20 @@ impl PreludeOp {
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
             Self::DisplayText => return Ok(args[0].to_string().into()),
             Self::CellNew
+            | Self::PlainCellNew
             | Self::CellBorrow
             | Self::CellGet
             | Self::CellSet
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
+            Self::ErrorNew | Self::ErrorText => return error_object::invoke(self, args),
+            Self::ErrorParse => {
+                return Ok(error_object::parsed(
+                    &args[0].clone_cast::<ImmutableString>(),
+                    3,
+                ));
+            }
             Self::Join => {
                 let array = args[0]
                     .as_array_ref()
@@ -5977,6 +6051,13 @@ impl ExecutableOp {
                 &args[0].clone_cast::<ImmutableString>(),
                 kinds[0],
             )),
+            Self::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds,
+            } => Ok(error_object::parsed(
+                &args[0].clone_cast::<ImmutableString>(),
+                kinds[0],
+            )),
             Self::Kinded { kinds, .. } => int_method(*kinds, args),
         }
     }
@@ -6378,6 +6459,40 @@ impl Time {
     }
 }
 
+/// Which of std's cells a `Ty::Cell` is: `RefCell`, whose value is
+/// borrowed, or `Cell`, whose value is copied in and out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CellKind {
+    RefCell,
+    Cell,
+}
+
+impl CellKind {
+    /// The cell `name` is, as `type_ref::Type::cell_element` names it.
+    fn named(name: &str) -> Self {
+        if name == "Cell" {
+            Self::Cell
+        } else {
+            Self::RefCell
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::RefCell => "RefCell",
+            Self::Cell => "Cell",
+        }
+    }
+
+    /// The op that makes a new cell of this kind.
+    const fn new_op(self) -> PreludeOp {
+        match self {
+            Self::RefCell => PreludeOp::CellNew,
+            Self::Cell => PreludeOp::PlainCellNew,
+        }
+    }
+}
+
 /// The pointer a `Ty::Boxed` is: `Box`, `std::rc::Rc` or `std::sync::Arc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Pointer {
@@ -6522,9 +6637,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
-    /// `std::cell::RefCell<T>`: a `cell::Cell` at runtime, which every
-    /// copy of it shares (`cell.rs`).
-    Cell(Box<Ty>),
+    /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
+    /// runtime, which every copy of it shares (`cell.rs`).
+    Cell(CellKind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
     /// items at runtime.
@@ -6587,7 +6702,7 @@ impl Ty {
             | Self::Iter(target)
             | Self::Reverse(target)
             | Self::Range(target)
-            | Self::Cell(target)
+            | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -6706,8 +6821,8 @@ impl Ty {
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
         }
-        if let Some(inner) = ty.cell_element() {
-            return Self::Cell(Box::new(Self::from_resolved(inner)));
+        if let Some((kind, inner)) = ty.cell_element() {
+            return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -6874,7 +6989,7 @@ impl Ty {
             }
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
-            Self::Cell(inner) => format!("RefCell<{}>", inner.name(models)).into(),
+            Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -6958,7 +7073,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
-            Self::Cell(_) => Some(TypeId::of::<cell::Cell>()),
+            Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -6989,6 +7104,12 @@ impl Ty {
                 Nominal::Struct { .. } => TypeId::of::<nominal::Struct>(),
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
             }),
+            // std's `dyn Error` is the error object `?` and `Box::new` make.
+            Self::Dyn(name, bindings)
+                if name.as_str() == "Error" && bindings.is_empty() && models.std_error_trait() =>
+            {
+                Some(TypeId::of::<error_object::ErrorObject>())
+            }
             Self::Param(_)
             | Self::Projection(..)
             | Self::Dyn(..)
@@ -7113,7 +7234,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
-            | Self::Cell(_)
+            | Self::Cell(..)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -7292,8 +7413,10 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
-            | (Ty::Range(left), Ty::Range(right))
-            | (Ty::Cell(left), Ty::Cell(right)) => compare(left, right, forward, reverse),
+            | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
+            (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
+                left_kind == right_kind && compare(left, right, forward, reverse)
+            }
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
                     && left.len() == right.len()
@@ -7531,7 +7654,7 @@ impl Inference {
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
-            Ty::Cell(inner) => Ty::Cell(Box::new(self.resolve(inner))),
+            Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -8526,7 +8649,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
-        Ty::Cell(inner) => Ty::Cell(Box::new(instantiate(inner, substitution))),
+        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -9135,6 +9258,9 @@ struct Parser<'a> {
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span)>,
+    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
+    /// Error` (`error_object.rs`).
+    text_into: Vec<Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -9297,6 +9423,12 @@ impl<'a> Parser<'a> {
         if models.imports_variants() {
             tokens = expand_imported_variants(&models, tokens);
         }
+        if models.get("VecDeque").is_none() {
+            let imported = models
+                .import("VecDeque")
+                .is_some_and(|binding| crate::resolve::std_vec_deque(&binding.qualified));
+            vec_deque_as_vec(&mut tokens, imported);
+        }
         let associated = Shared::clone(&models.associated);
 
         Self {
@@ -9373,6 +9505,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
             host_turbofish: None,
@@ -11155,6 +11288,9 @@ impl<'a> Parser<'a> {
     }
 
     fn display_text(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+        if self.std_error(ty, true) {
+            return Some(self.error_text(value, false));
+        }
         match ty {
             Ty::Script(id, _) => self
                 .models
@@ -14070,10 +14206,20 @@ impl<'a> Parser<'a> {
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
             // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
-            // `Eq` when `T` is, and never `Copy`.
-            Ty::Cell(inner) => {
+            // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
+            // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
+            // need `T: Copy`.
+            Ty::Cell(kind, inner) => {
                 capability != capability::Kind::Copy
                     && capability != capability::Kind::Hash
+                    && (kind == CellKind::RefCell
+                        || matches!(
+                            capability,
+                            capability::Kind::Default
+                                | capability::Kind::Send
+                                | capability::Kind::Static
+                        )
+                        || self.type_provides(&inner, capability::Kind::Copy))
                     && self.type_provides(&inner, capability)
             }
             // Rawr's iterators are `Clone` when their items are.
@@ -14088,8 +14234,11 @@ impl<'a> Parser<'a> {
                 (Pointer::Rc | Pointer::Arc, capability::Kind::Clone) => true,
                 _ => self.type_provides(&target, capability),
             },
-            // A trait object has only its trait's methods.
-            Ty::Dyn(..) => false,
+            // A trait object has only its trait's methods; std's `dyn Error`
+            // is `Debug`, its supertrait.
+            dynamic @ Ty::Dyn(..) => {
+                capability == capability::Kind::Debug && self.std_error(&dynamic, false)
+            }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
             Ty::Support(_) => false,
             Ty::Endpoint(_) => false,
@@ -14174,7 +14323,7 @@ impl<'a> Parser<'a> {
             }
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
-            Ty::Cell(_) => intrinsic::Type::builtin("RefCell", TypeId::of::<cell::Cell>()),
+            Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -23334,7 +23483,13 @@ impl<'a> Parser<'a> {
         )? {
             return Ok(looped);
         }
-        let lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // A `Box<dyn Iterator>` is its iterator at runtime.
+        if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
+            && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
+        {
+            lhs.ty = iterator;
+        }
         let operator = match self.peek() {
             Token::ExclusiveRange => "..",
             Token::InclusiveRange => "..=",
@@ -26982,6 +27137,7 @@ impl<'a> Parser<'a> {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Reverse(_)
+            | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
             | Ty::Param(_)
@@ -28674,6 +28830,13 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
+            // std's `dyn Error`: its text and its `source`.
+            if self.std_error(&builtin, true)
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                value = self.parse_error_member(value, member, member_span)?;
+                continue;
+            }
             // A trait object has only its trait's methods, dispatched by
             // the value's runtime type.
             let object = match &builtin {
@@ -28901,14 +29064,18 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let cell = match &builtin {
-                Ty::Cell(inner) => Some((**inner).clone()),
+                Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                 Ty::Reference { target, .. } => match &**target {
-                    Ty::Cell(inner) => Some((**inner).clone()),
+                    Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                     _ => None,
                 },
                 _ => None,
             };
-            if let Some(inner) = cell {
+            if let Some((CellKind::Cell, inner)) = cell {
+                value = self.parse_plain_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            if let Some((_, inner)) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
@@ -29188,6 +29355,9 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.require_capability(&model, capability, member_span)?;
+                if capability == capability::Kind::Clone {
+                    self.refuse_cell_clone(&value.ty, member_span)?;
+                }
                 let (op, ty) = if capability == capability::Kind::Debug {
                     (
                         Op::Debug {
@@ -30038,6 +30208,15 @@ impl<'a> Parser<'a> {
         {
             return self.parse_print(stream, name_span);
         }
+        // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
+        // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
+        if matches!(self.peek(), Token::Bang)
+            && matches!(name.as_str(), "write" | "writeln")
+            && self.models.import(&name).is_none()
+            && !self.writes_into_formatter()
+        {
+            return self.parse_write_string(&name, name_span);
+        }
         // `write!(f, ..)` and `writeln!(f, ..)` into a `fmt` body's formatter.
         if matches!(self.peek(), Token::Bang)
             && matches!(name.as_str(), "write" | "writeln")
@@ -30142,12 +30321,12 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_matches(name_span);
         }
-        // `RefCell::new(value)` and `RefCell::default()`.
-        if let Some(skip) = self.cell_path(&name) {
+        // `RefCell::new(value)` and `RefCell::default()`, and `Cell`'s.
+        if let Some((skip, kind)) = self.cell_path(&name) {
             for _ in 0..skip {
                 self.next();
             }
-            return self.parse_cell_constructor(name_span);
+            return self.parse_cell_constructor(name_span, kind);
         }
         // `PhantomData`, also `PhantomData::<T>` or in full: a value that is
         // nothing at run time.
@@ -32447,6 +32626,7 @@ impl<'a> Parser<'a> {
         start: Span,
     ) -> Result<ParsedExpr, Error> {
         let turbofish = self.parse_prelude_turbofish(variant)?;
+        let inferred = turbofish.is_none();
         let (ok, err) = match turbofish {
             Some(types) => {
                 let mut types = types.into_iter();
@@ -32487,6 +32667,9 @@ impl<'a> Parser<'a> {
             Prelude::Err => err.clone(),
             _ => ok.clone(),
         };
+        if variant == Prelude::Err && inferred {
+            self.box_returned_error(value)?;
+        }
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
@@ -32530,6 +32713,77 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
+        // `?` in a body returning `Result<_, Box<dyn Error>>` boxes an
+        // error, a `&str` or a `String` as `dyn Error`, as its `From` impls do.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && !matches!(*error, Ty::Infer(_))
+            && self.boxed_std_error(&returned)
+            && !self.boxed_std_error(&error)
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let Some(converted) = self.error_object(&error, unwrapped_error, true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `s.parse()?` there, whose error is known once the parse's target
+        // is: boxed by the target's kind.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && matches!(*error, Ty::Infer(_))
+            && self.boxed_std_error(&returned)
+            && let Some(target) = self
+                .pending_parses
+                .iter()
+                .find(|(_, pending, _)| self.inference.resolve(pending) == *error)
+                .map(|(target, ..)| target.clone())
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let helper = self.push_op(Op::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds: [target.clone(), target],
+            });
+            let converted = origin::Fragment::call(&helper, [unwrapped_error]);
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
         // `?` converts the error through `From`, as in Rust: `Err(e)?` in a
         // body returning `Result<_, F>` returns `Err(F::from(e))`.
         if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
@@ -33436,9 +33690,9 @@ impl<'a> Parser<'a> {
                 let value = self.default_source(inner, span)?;
                 self.prelude_op(PreludeOp::ReverseWrap, [value])
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let value = self.default_source(inner, span)?;
-                self.prelude_op(PreludeOp::CellNew, [value])
+                self.prelude_op(kind.new_op(), [value])
             }
             Ty::Tuple(members) => {
                 let members = members
@@ -33604,9 +33858,9 @@ impl<'a> Parser<'a> {
                 });
                 origin::Fragment::call(&helper, [lhs, rhs])
             }
-            // Maps and sets compare their sorted entries; `Reverse` its value;
-            // a host value by its type's own `PartialEq`.
-            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Time(_) | Ty::Host { .. } => {
+            // Maps and sets compare their sorted entries; `Reverse` and a
+            // cell their value; a host value by its type's own `PartialEq`.
+            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Cell(..) | Ty::Time(_) | Ty::Host { .. } => {
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),
@@ -33662,6 +33916,9 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
+        if self.std_error(&ty, false) {
+            return Ok(self.error_text(value, true));
+        }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
                 self.debug_source(target, value, span)?
@@ -33802,10 +34059,11 @@ impl<'a> Parser<'a> {
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                let open = format!("(\"{} {{ value: \" + ", kind.name());
                 self.debug_source(inner, unwrapped, span)?
-                    .surrounded("(\"RefCell { value: \" + ", " + \" }\")")
+                    .surrounded(&open, " + \" }\")")
             }
             // `{1: "a", 2: "b"}` and `{1, 2}`, in key order.
             Ty::Keyed(kind, arguments) => {
@@ -33870,6 +34128,15 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A `VecDeque` is a `Vec` (`vec_deque_as_vec`): its back is the
+        // `Vec`'s end.
+        let member: ImmutableString = match member.as_str() {
+            "push_back" => "push".into(),
+            "pop_back" => "pop".into(),
+            "front" => "first".into(),
+            "back" => "last".into(),
+            _ => member,
+        };
         // `v.as_mut_slice()` is the place `v`, which a pattern writes back.
         let whole = (member.as_str() == "as_mut_slice")
             .then(|| value.lvalue.clone())
@@ -34047,10 +34314,13 @@ impl<'a> Parser<'a> {
                 };
                 return Ok(self.array_iterator(&value, item, end));
             }
-            ("clone", []) => match self.inference.resolve(&value.ty) {
-                Ty::Reference { target, .. } => (receiver, *target),
-                ty => (receiver, ty),
-            },
+            ("clone", []) => {
+                self.refuse_cell_clone(&value.ty, member_span)?;
+                match self.inference.resolve(&value.ty) {
+                    Ty::Reference { target, .. } => (receiver, *target),
+                    ty => (receiver, ty),
+                }
+            }
             ("to_vec", []) => (
                 receiver,
                 Ty::Array {
@@ -34183,14 +34453,18 @@ impl<'a> Parser<'a> {
             ("insert", [_, _])
             | ("remove" | "swap_remove", [_])
             | ("swap", [_, _])
-            | ("dedup" | "pop", []) => {
-                let code = VEC_METHODS
-                    .iter()
-                    .position(|name| *name == member.as_str())
-                    .expect("listed `Vec` method");
+            | ("push_front", [_])
+            | ("dedup" | "pop" | "pop_front", []) => {
+                // A deque's `push_front(x)` is `insert(0, x)`.
+                let front = member.as_str() == "push_front";
+                let name = if front { "insert" } else { member.as_str() };
+                let code = vec_method_code(name);
                 let mut operands = vec![origin::Fragment::from(code.to_string())];
+                if front {
+                    operands.push("0".into());
+                }
                 for (index, argument) in arguments.iter_mut().enumerate() {
-                    let expected = if member.as_str() == "insert" && index == 1 {
+                    let expected = if name == "insert" && (front || index == 1) {
                         element.clone()
                     } else {
                         Ty::Int(Int::Usize)
@@ -34201,9 +34475,9 @@ impl<'a> Parser<'a> {
                 operands.resize(4, "()".into());
                 let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
                 let source = self.mutation_call(&value, &helper, operands)?;
-                let ty = match member.as_str() {
+                let ty = match name {
                     "remove" | "swap_remove" => element,
-                    "pop" => Ty::Option(Box::new(element)),
+                    "pop" | "pop_front" => Ty::Option(Box::new(element)),
                     _ => Ty::Unit,
                 };
                 (source, ty)
@@ -38186,7 +38460,13 @@ impl<'a> Parser<'a> {
                 self.next();
                 return self.parse_local_fn_type();
             }
-            let (trait_name, trait_span) = self.expect_name("trait object type")?;
+            // `dyn std::error::Error`: traits are crate-wide by name, as in
+            // item headers.
+            let (mut trait_name, mut trait_span) = self.expect_name("trait object type")?;
+            while matches!(self.peek(), Token::DoubleColon) {
+                self.next();
+                (trait_name, trait_span) = self.expect_name("trait object type")?;
+            }
             let ty = self.dyn_type(&trait_name, trait_span)?;
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
@@ -38296,8 +38576,8 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
                 return self.parse_phantom_type();
             }
-            if crate::resolve::std_cell(&name) && self.models.get("RefCell").is_none() {
-                return self.parse_cell_type();
+            if let Some(kind) = self.cell_named(&name) {
+                return self.parse_cell_type(kind);
             }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
@@ -38380,12 +38660,11 @@ impl<'a> Parser<'a> {
         {
             return self.parse_phantom_type();
         }
-        if name.as_str() == "RefCell"
-            && matches!(self.peek(), Token::LessThan)
+        if matches!(self.peek(), Token::LessThan)
             && qualified.is_none()
-            && self.models.get(&name).is_none()
+            && let Some(kind) = self.cell_named(&name)
         {
-            return self.parse_cell_type();
+            return self.parse_cell_type(kind);
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
@@ -38707,6 +38986,23 @@ impl<'a> Parser<'a> {
             }
             self.expect_close_angle("'>' after associated type bindings")?;
         }
+        // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
+        // Iterator<Item = T>` is.
+        if matches!(
+            trait_name,
+            "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+        ) && !self.models.traits.contains_key(trait_name)
+        {
+            return match (&positional[..], &mut bindings[..]) {
+                ([], [(name, item)]) if name.as_str() == "Item" => {
+                    Ok(Ty::Iter(Box::new(std::mem::replace(item, Ty::Unknown))))
+                }
+                _ => Err(Error::UnsupportedNominalSyntax {
+                    construct: format!("`dyn {trait_name}` without its `<Item = T>`").into(),
+                    source: span,
+                }),
+            };
+        }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {
                 name: trait_name.into(),
@@ -39014,6 +39310,52 @@ impl<'a> Parser<'a> {
                 target: from.clone(),
             };
             value.ty = source.clone();
+        }
+        // `Err(Box::new(e))` or `Err("text".into())` where a `Result<T,
+        // Box<dyn Error>>` is expected: its error boxed as below.
+        if let (Ty::Result(to_ok, to_error), Ty::Result(from_ok, from_error)) = (&target, &source)
+            && self.boxed_std_error(to_error)
+            && !self.boxed_std_error(from_error)
+            && !matches!(self.inference.resolve(from_error), Ty::Infer(_) | Ty::Never)
+        {
+            self.require_type(to_ok, from_ok, value.span)?;
+            let result = self.temporary("result");
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [result.as_str().into()]);
+            let Some(object) = self.error_object(from_error, error, true, value.span)? else {
+                return Err(Error::MissingCapability {
+                    owner: from_error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
+            boxed.push(value.rendered_source());
+            boxed.push_text("; if ");
+            boxed.push(self.prelude_op(PreludeOp::IsOk, [result.as_str().into()]));
+            boxed.push_text(format!(" {{ {result} }} else {{ "));
+            boxed.push(self.prelude_op(PreludeOp::Err, [object]));
+            boxed.push_text(" } }");
+            *value = self.operator_expr(boxed, target, value.span);
+            return Ok(None);
+        }
+        // An error, a box of one, a `&str` or a `String` where a `Box<dyn
+        // Error>` is expected: boxed as std's `dyn Error`, as its `From`
+        // impls and `Box`'s unsizing make one (`error_object.rs`).
+        if self.boxed_std_error(&target)
+            && !self.boxed_std_error(&source)
+            && !matches!(source, Ty::Infer(_) | Ty::Never)
+        {
+            let Some(object) =
+                self.error_object(&source, value.rendered_source(), true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: source.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            *value = self.operator_expr(object, target, value.span);
+            return Ok(None);
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
@@ -39602,6 +39944,9 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        if source.is_text() {
+            self.text_into.push(value.span);
+        }
         Ok(value.retain_origin())
     }
 
@@ -40380,9 +40725,11 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
-            | (Ty::Range(expected_element), Ty::Range(actual_element))
-            | (Ty::Cell(expected_element), Ty::Cell(actual_element)) => {
+            | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
+            }
+            (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
+                expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
                 self.unify_type(expected_ok, actual_ok) && self.unify_type(expected_err, actual_err)
@@ -41378,7 +41725,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Iter(target)
         | Ty::Reverse(target)
         | Ty::Range(target)
-        | Ty::Cell(target) => contains_inference(target),
+        | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
         Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(contains_inference),
@@ -41810,8 +42157,8 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
 }
 
 fn debug_text(value: &Dynamic, models: &Models) -> String {
-    if let Some(inner) = cell::value(value) {
-        return format!("RefCell {{ value: {} }}", debug_value(&inner, models));
+    if let Some((name, inner)) = cell::named_value(value) {
+        return format!("{name} {{ value: {} }}", debug_value(&inner, models));
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value(&reverse.0, models));
@@ -42020,6 +42367,9 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return Some(lhs.cmp(&rhs));
     }
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // `Reverse(a) < Reverse(b)` when `b < a`.
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
@@ -42129,6 +42479,9 @@ pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
 }
 
 fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return value_matches(&lhs, &rhs, same);
+    }
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::time::Duration>(),
         rhs.read_lock::<std::time::Duration>(),
@@ -42873,7 +43226,51 @@ const VEC_METHODS: &[&str] = &[
     "copy_from_slice",
     "split_off",
     "swap_remove",
+    "pop_front",
 ];
+
+/// `std::collections::VecDeque` in a body, by its path or as imported
+/// (`imported`), is `Vec`: Rawr's `Vec` is an array, which takes a
+/// deque's `push_front` and `pop_front` too (`parse_array_method`), and
+/// prints as a deque does.
+fn vec_deque_as_vec(tokens: &mut Vec<(Token, Position)>, imported: bool) {
+    let named = |token: &Token, name: &str| matches!(token, Token::Identifier(text) if text.as_str() == name);
+    let mut index = 0;
+    while index < tokens.len() {
+        if !named(&tokens[index].0, "VecDeque") {
+            index += 1;
+            continue;
+        }
+        // `std::collections::VecDeque` or `collections::VecDeque`.
+        let mut start = index;
+        if start >= 2
+            && named(&tokens[start - 2].0, "collections")
+            && tokens[start - 1].0 == Token::DoubleColon
+        {
+            start -= 2;
+            if start >= 2
+                && (named(&tokens[start - 2].0, "std")
+                    || named(&tokens[start - 2].0, "alloc")
+                    || named(&tokens[start - 2].0, "core"))
+                && tokens[start - 1].0 == Token::DoubleColon
+            {
+                start -= 2;
+            }
+        }
+        let qualified = start < index;
+        let after_path = index > 0 && !qualified && tokens[index - 1].0 == Token::DoubleColon;
+        if (qualified || imported) && !after_path {
+            let position = tokens[start].1;
+            tokens.splice(
+                start..=index,
+                [(Token::Identifier(Box::new("Vec".into())), position)],
+            );
+            index = start + 1;
+        } else {
+            index += 1;
+        }
+    }
+}
 
 /// A `VEC_METHODS` code by name.
 fn vec_method_code(name: &str) -> usize {
@@ -43142,6 +43539,8 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             Some(last) => crate::option::some(last),
             None => crate::option::none(),
         }),
+        Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
+        Some("pop_front") => Ok(crate::option::some(array.remove(0))),
         // A changed copy of `array[a..]` stored back over it.
         Some("store") => {
             let copy = value.into_array().unwrap_or_default();

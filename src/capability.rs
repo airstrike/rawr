@@ -663,6 +663,19 @@ pub(crate) fn type_supports(
                     .all(|argument| type_supports(argument, capability, resolved)),
             }
         }
+        // `RefCell<T>` and `Cell<T>` are never `Copy` or `Hash`, and
+        // otherwise derive from `T`. A `Cell`'s value is copied out, so its
+        // traits other than `Default`, `Send` and `Static` also need
+        // `T: Copy`.
+        type_ref::Type::Path(_) if let Some((cell, element)) = ty.cell_element() => {
+            !matches!(capability, Kind::Copy | Kind::Hash)
+                && (cell == "RefCell"
+                    || matches!(capability, Kind::Default | Kind::Send | Kind::Static)
+                    || type_supports(element, Kind::Copy, resolved))
+                && type_supports(element, capability, resolved)
+        }
+        // std's `dyn Error` is `Debug`, its supertrait.
+        type_ref::Type::Path(_) if ty.dyn_trait() == Some("Error") => capability == Kind::Debug,
         // `Reverse<T>` derives everything from `T`.
         type_ref::Type::Path(_) if let Some(element) = ty.reverse_element() => {
             type_supports(element, capability, resolved)

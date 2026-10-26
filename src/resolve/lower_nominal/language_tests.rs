@@ -9996,3 +9996,218 @@ fn main() {
     let error = rejected(r#"pub fn run() -> i64 { let x = Nope::<i64>; 0 } run()"#);
     assert!(error.contains("Nope"), "{error}");
 }
+
+/// `write!` and `writeln!` into a `String` through `std::fmt::Write`: a
+/// local, `&mut s`, a field, an element and a `&mut String` parameter, each
+/// returning a `fmt::Result`.
+#[test]
+fn language_write_into_a_string() {
+    assert_eq!(
+        printed(
+            r#"
+use std::fmt::{self, Write};
+struct Log { buf: String }
+impl Log {
+    fn add(&mut self, n: i32) { writeln!(self.buf, "n={n}").unwrap(); }
+}
+fn fill(out: &mut String, k: u8) -> fmt::Result {
+    write!(out, "[{k:02}]")?;
+    writeln!(out)?;
+    Ok(())
+}
+fn main() {
+    let mut s = String::new();
+    write!(s, "{}-{}", 1, 2).unwrap();
+    writeln!(s, " end").unwrap();
+    write!(&mut s, "{:>4}", 7).unwrap();
+    let _ = write!(s, ".");
+    println!("{s:?}");
+    let mut l = Log { buf: String::new() };
+    l.add(1);
+    print!("{}", l.buf);
+    let mut t = String::from("x");
+    println!("{} {t:?}", fill(&mut t, 3).is_ok());
+    let mut v = vec![String::new()];
+    write!(v[0], "{}", 9).unwrap();
+    println!("{v:?}");
+}
+main();
+"#
+        ),
+        "\"1-2 end\\n   7.\"\nn=1\ntrue \"x[03]\\n\"\n[\"9\"]\n"
+    );
+}
+
+/// `std::cell::Cell`: a value copied in and out through `&self`, as a field
+/// too, with `Debug` naming it `Cell`. Cloning a struct that holds a cell
+/// is refused, since the copy would share the cell.
+#[test]
+fn language_cell_changes_through_a_shared_reference() {
+    assert_eq!(
+        printed(
+            r#"
+use std::cell::Cell;
+#[derive(Debug, Default)]
+struct Counter { hits: Cell<u32>, name: String }
+impl Counter {
+    fn hit(&self) { self.hits.set(self.hits.get() + 1); }
+}
+fn bump(c: &Cell<i32>) { c.set(c.get() * 2); }
+fn main() {
+    let c = Counter { hits: Cell::new(0), name: "x".to_string() };
+    c.hit();
+    c.hit();
+    println!("{} {:?}", c.hits.get(), c);
+    let t: Cell<i32> = Cell::new(4);
+    bump(&t);
+    println!("{} {}", t.take(), t.get());
+    let a = Cell::new(1);
+    let b = Cell::new(2);
+    a.swap(&b);
+    let d = a.clone();
+    d.set(5);
+    println!("{} {} {} {}", a.get(), b.get(), d.get(), a == Cell::new(2));
+    let s = std::cell::Cell::new(String::from("hi"));
+    let old = s.replace(String::from("yo"));
+    println!("{} {}", old, s.into_inner());
+}
+main();
+"#
+        ),
+        "2 Counter { hits: Cell { value: 2 }, name: \"x\" }\n8 0\n2 1 5 true\nhi yo\n"
+    );
+    let error = rejected(
+        r#"
+use std::cell::Cell;
+#[derive(Clone)]
+struct Pair { a: Cell<i32> }
+fn main() { let p = Pair { a: Cell::new(1) }; let q = p.clone(); }
+main();
+0
+"#,
+    );
+    assert!(error.contains("holds a `Cell` or `RefCell`"), "{error}");
+}
+
+/// `Box<dyn Iterator<Item = T>>` is Rawr's iterator of `T`, as `impl
+/// Iterator` is: a value, a return type and a struct field, with adapters,
+/// `next` on a local and on a field, and `for`.
+#[test]
+fn language_a_boxed_dyn_iterator_is_an_iterator() {
+    assert_eq!(
+        printed(
+            r#"
+fn evens(n: i32) -> Box<dyn Iterator<Item = i32>> {
+    Box::new((0..n).filter(|x| x % 2 == 0))
+}
+struct Wrap { inner: Box<dyn Iterator<Item = i32>> }
+impl Wrap {
+    fn pull(&mut self) -> Option<i32> { self.inner.next() }
+}
+fn main() {
+    let total: i32 = evens(10).map(|x| x * 10).sum();
+    println!("{:?} {total}", evens(7).collect::<Vec<_>>());
+    let mut it: Box<dyn Iterator<Item = i32>> = Box::new(vec![5, 6, 7].into_iter());
+    println!("{:?}", it.next());
+    for x in it { println!("rest {x}"); }
+    let mut w = Wrap { inner: Box::new(vec![1, 2].into_iter().map(|x| x + 1)) };
+    println!("{:?} {:?} {:?}", w.pull(), w.pull(), w.pull());
+}
+main();
+"#
+        ),
+        "[0, 2, 4, 6] 200\nSome(5)\nrest 6\nrest 7\nSome(2) Some(3) None\n"
+    );
+}
+
+/// `Box<dyn std::error::Error>`: `?` boxes a crate error, a std parse error
+/// and a `String`, as do `Err(Box::new(e))` and `Err("text".into())` in
+/// either arm of an `if`; `{e}`, `{e:?}`, `to_string` and `source` print
+/// and answer as Rust's.
+#[test]
+fn language_box_dyn_error_holds_any_error() {
+    assert_eq!(
+        printed(
+            r#"
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+enum AppErr { Bad(u8), Worse { code: i32 } }
+impl fmt::Display for AppErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AppErr::Bad(n) => write!(f, "bad {n}"),
+            AppErr::Worse { code } => write!(f, "worse {code}"),
+        }
+    }
+}
+impl Error for AppErr {}
+fn check(n: i32) -> Result<i32, AppErr> {
+    if n > 10 { Err(AppErr::Worse { code: n }) } else if n < 0 { Err(AppErr::Bad(1)) } else { Ok(n) }
+}
+fn run(s: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    let x: f64 = s.parse()?;
+    let n = check(x as i32)?;
+    let words: Result<i32, String> = if n == 4 { Err("four".to_string()) } else { Ok(n) };
+    Ok(words? * 2)
+}
+fn boxed(n: i32) -> Result<(), Box<dyn std::error::Error>> {
+    if n == 0 { Err(Box::new(AppErr::Bad(0))) } else { Err("plain".into()) }
+}
+fn main() {
+    for s in ["2", "x", "11", "4"] {
+        match run(s) {
+            Ok(v) => println!("ok {v}"),
+            Err(e) => println!("{e} | {e:?} | {} | {}", e.to_string(), e.source().is_none()),
+        }
+    }
+    let e = boxed(0).unwrap_err();
+    println!("{e} {e:?} {:?}", boxed(1).map_err(|e| e.to_string()));
+}
+main();
+"#
+        ),
+        "ok 4\n\
+         invalid float literal | ParseFloatError { kind: Invalid } | invalid float literal | true\n\
+         worse 11 | Worse { code: 11 } | worse 11 | true\n\
+         four | \"four\" | four | true\n\
+         bad 0 Bad(0) Err(\"plain\")\n"
+    );
+}
+
+/// `std::collections::VecDeque` is Rawr's `Vec` with a deque's
+/// `push_front`, `pop_front`, `push_back`, `pop_back`, `front` and `back`,
+/// as a local, a field, a parameter and a collect target.
+#[test]
+fn language_vec_deque_is_a_vec_with_a_front() {
+    assert_eq!(
+        printed(
+            r#"
+use std::collections::VecDeque;
+struct Queue { items: VecDeque<String> }
+fn fill(q: &mut VecDeque<i32>, n: i32) { for i in 0..n { q.push_back(i); } }
+fn main() {
+    let mut q = Queue { items: VecDeque::new() };
+    q.items.push_back("a".to_string());
+    q.items.push_front("z".to_string());
+    let first = q.items.pop_front();
+    println!("{:?} {:?}", first, q.items);
+    let mut d = VecDeque::with_capacity(4);
+    fill(&mut d, 4);
+    d[0] = 100;
+    let back = d.pop_back();
+    println!("{d:?} {:?} {:?} {:?}", d.front(), d.back(), back);
+    let e: std::collections::VecDeque<char> = "abc".chars().collect();
+    println!("{:?} {}", e.iter().rev().collect::<String>(), e.contains(&'b'));
+    let mut f: VecDeque<u8> = VecDeque::new();
+    println!("{:?}", f.pop_front());
+    f.extend(vec![1, 2]);
+    let all: Vec<u8> = f.drain(..).collect();
+    println!("{all:?} {}", f.is_empty());
+}
+main();
+"#
+        ),
+        "Some(\"z\") [\"a\"]\n[100, 1, 2] Some(100) Some(2) Some(3)\n\"cba\" true\nNone\n[1, 2] true\n"
+    );
+}
