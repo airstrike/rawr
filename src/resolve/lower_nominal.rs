@@ -20285,10 +20285,7 @@ impl<'a> Parser<'a> {
         pending: usize,
     ) -> Result<(), Error> {
         let written_ty = self.inference.resolve(&subject.ty);
-        let subject_ty = match written_ty.clone() {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&written_ty);
         let resolved = self.resolve_root_pattern(syntax, &written_ty)?;
         if otherwise.is_none() {
             let rows = resolved
@@ -22022,10 +22019,21 @@ impl<'a> Parser<'a> {
                             | PatternSyntax::Or { .. }
                     ) =>
             {
+                // `&&T` matches the `T` below both, as rustc does.
+                let mut mutable = *mutable;
+                let mut target = self.inference.resolve(target);
+                while let Ty::Reference {
+                    target: inner,
+                    mutable: inner_mutable,
+                } = target
+                {
+                    mutable = mutable && inner_mutable;
+                    target = self.inference.resolve(&inner);
+                }
                 let mode = self.binding_mode.get();
                 self.binding_mode
-                    .set(Some(mode.map_or(*mutable, |outer| outer && *mutable)));
-                (self.inference.resolve(target), Some(mode))
+                    .set(Some(mode.map_or(mutable, |outer| outer && mutable)));
+                (target, Some(mode))
             }
             _ => (expected, None),
         };
@@ -23155,6 +23163,17 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// The value below every `&` of a pattern's subject, which its
+    /// patterns match: `&&T` matches as `T` does, as rustc's default binding
+    /// mode reads it.
+    fn referenced(&self, ty: &Ty) -> Ty {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        ty
+    }
+
     /// The subject of a pattern switch: a nominal enum is validated first.
     fn pattern_subject(
         &mut self,
@@ -23201,10 +23220,7 @@ impl<'a> Parser<'a> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
         let subject = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
-        let subject_ty = match self.inference.resolve(&subject.ty) {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&subject.ty);
         if matches!(
             subject_ty,
             Ty::Int(_) | Ty::Char | Ty::String | Ty::Str | Ty::Bool | Ty::Float(_)
@@ -23648,10 +23664,7 @@ impl<'a> Parser<'a> {
         let subject = self.parse_subject()?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
-        let subject_ty = match written_ty.clone() {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&written_ty);
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
         let write_back =
             self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
@@ -25766,9 +25779,22 @@ impl<'a> Parser<'a> {
         let leading_let = matches!(self.peek(), Token::Let);
         let mut depth = 0usize;
         let mut previous = Token::EOF;
+        // Between a `let` and its `=`, a brace is a struct pattern's
+        // (`let Preview::Ready { thumbnail, .. } = &preview`), not the block.
+        let mut pattern = false;
         for (token, _) in self.input.clone() {
             match token {
+                Token::Let if depth == 0 && previous == Token::And => return true,
+                Token::Let if depth == 0 => pattern = true,
+                Token::Equals if depth == 0 => pattern = false,
+                Token::LeftBrace if pattern => depth += 1,
                 Token::LeftParen | Token::LeftBracket => depth += 1,
+                Token::RightBrace if pattern => {
+                    let Some(next) = depth.checked_sub(1) else {
+                        return false;
+                    };
+                    depth = next;
+                }
                 Token::RightParen | Token::RightBracket => {
                     let Some(next) = depth.checked_sub(1) else {
                         return false;
@@ -25776,7 +25802,6 @@ impl<'a> Parser<'a> {
                     depth = next;
                 }
                 Token::LeftBrace | Token::SemiColon | Token::EOF if depth == 0 => return false,
-                Token::Let if depth == 0 && previous == Token::And => return true,
                 Token::And if depth == 0 && leading_let => return true,
                 _ => {}
             }

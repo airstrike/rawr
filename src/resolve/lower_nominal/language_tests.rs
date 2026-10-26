@@ -7767,6 +7767,27 @@ fn language_let_chains() {
         value,
         (2 * 1000000 + 10 * 10000) + 300 + 7 * 10 + 4 * 1000 + 7 * 100000
     );
+    // A struct pattern's braces in a link are the pattern's, not the block.
+    let value = run(r#"
+        enum Preview { Loading, Ready { thumbnail: Option<i64>, size: i64 } }
+        fn card(preview: &Preview) -> i64 {
+            let shown = if let Preview::Ready { thumbnail, .. } = &preview
+                && let Some(t) = thumbnail
+            {
+                *t
+            } else {
+                -1
+            };
+            shown
+        }
+        pub fn run() -> i64 {
+            card(&Preview::Ready { thumbnail: Some(7), size: 2 }) * 100
+                + card(&Preview::Ready { thumbnail: None, size: 2 }) * 10
+                + card(&Preview::Loading)
+        }
+        run()
+    "#);
+    assert_eq!(value, 700 - 10 - 1);
     let error = rejected("pub fn run() -> i64 { let a = Some(1); if let Some(x) = a && x > 0 || true { 1 } else { 0 } } run()");
     assert!(error.contains("||"), "{error}");
 }
