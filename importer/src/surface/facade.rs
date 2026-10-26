@@ -496,6 +496,16 @@ impl Plan {
                 .implementations()
                 .flat_map(crate::classify::ImplementationOutcome::associated)
             {
+                // An impl that fixes some of its type's arguments is
+                // relevant to each type it names: iced's `impl TextEditor<
+                // 'a, PlainText, ..>` is `TextEditor`'s, not `PlainText`'s.
+                if let Representability::Invocation(plan) = associated.representability()
+                    && let Some(representability::convert::Type::Nominal { definition, .. }) =
+                        plan.signature().instance()
+                    && outcome.identity().definition() != Some(*definition)
+                {
+                    continue;
+                }
                 let associated_path = format!("{relative}::{}", associated.name());
                 if let Some(item) = item(&associated_path, associated)? {
                     let mut items = std::mem::take(&mut facade.items).into_vec();
