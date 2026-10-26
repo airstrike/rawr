@@ -24,6 +24,7 @@ pub mod mouse;
 pub mod operation;
 pub mod overlay;
 mod protocol;
+pub mod recipe;
 pub(crate) mod reported;
 mod rich;
 pub(crate) mod script;
