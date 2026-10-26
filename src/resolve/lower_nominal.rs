@@ -1,5 +1,6 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
+mod cargo_env;
 pub(crate) mod cell;
 mod iterator;
 mod keyed;
@@ -2514,6 +2515,8 @@ struct Tables {
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
     sources: crate::program::source::Table,
+    /// The program's root file: the crate root Cargo built the target from.
+    entry: crate::program::source::Id,
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
     boot: Option<crate::item::Key>,
@@ -2947,6 +2950,7 @@ impl Models {
             functions_by_key,
             widgets,
             sources: program.source.table().clone(),
+            entry: program.source.entry(),
             application_runtime,
             boot: program
                 .application
@@ -30198,7 +30202,16 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Bang)
             && matches!(
                 name.as_str(),
-                "concat" | "env" | "include_str" | "include_bytes" | "stringify"
+                "concat"
+                    | "env"
+                    | "option_env"
+                    | "include_str"
+                    | "include_bytes"
+                    | "stringify"
+                    | "line"
+                    | "column"
+                    | "file"
+                    | "module_path"
             )
             && self.models.import(&name).is_none()
         {
@@ -36596,6 +36609,23 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
+        if matches!(name, "line" | "column") {
+            return Ok(self.literal(text, Ty::Int(Int::U32), at));
+        }
+        // `option_env!("NAME")`: `Some` of its value at compile time, or
+        // `None`; ?play's snippets have no environment.
+        if name == "option_env" {
+            let value = crate::resolve::files_denied()
+                .is_none()
+                .then(|| self.environment_variable(&text))
+                .flatten();
+            let ty = Ty::Option(Box::new(Ty::Str));
+            let source = match value {
+                Some(value) => self.prelude_op(PreludeOp::Some, [format!("{value:?}").into()]),
+                None => self.prelude_op(PreludeOp::None, []),
+            };
+            return Ok(self.operator_expr(source, ty, at));
+        }
         if name == "include_bytes" {
             // A file the host ships is read from its bundle's module, as the
             // constant the host built once: its bytes are the program's, as
@@ -36643,6 +36673,36 @@ impl<'a> Parser<'a> {
         name: &str,
         name_span: Span,
     ) -> Result<(String, Position), Error> {
+        // `line!()`, `column!()`, `file!()` and `module_path!()`: where the
+        // macro is written.
+        if matches!(name, "line" | "column" | "file" | "module_path") {
+            let end = match self.next() {
+                (Token::Unit, position) => position,
+                (Token::LeftParen, _) => self.expect(Token::RightParen, "`)` after `(`")?,
+                (_, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!("`{name}!` without `()`").into(),
+                        source: point_span(position),
+                    })
+                }
+            };
+            let at = name_span.start();
+            let text = match name {
+                "line" => at.line().unwrap_or_default().to_string(),
+                "column" => at.position().unwrap_or_default().to_string(),
+                "file" => match self.source_file() {
+                    Some(file) => cargo_env::file_path(&file),
+                    None => self.source_identity(),
+                },
+                _ => self.module_path(),
+            };
+            return Ok((text, end));
+        }
+        // `stringify!()` and `concat!()`: an empty string.
+        if matches!(name, "stringify" | "concat") && matches!(self.peek(), Token::Unit) {
+            let (_, position) = self.next();
+            return Ok((String::new(), position));
+        }
         let open = match self.next() {
             (Token::LeftParen | Token::LeftBracket | Token::LeftBrace, position) => position,
             (_, position) => {
@@ -36655,21 +36715,21 @@ impl<'a> Parser<'a> {
         if name == "stringify" {
             // The tokens as written, between the delimiters.
             let mut depth = 0usize;
-            let mut pieces = Vec::new();
+            let mut tokens = Vec::new();
             let end = loop {
                 match self.next() {
-                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), _) => {
+                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), at) => {
                         depth += 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::RightParen | Token::RightBracket | Token::RightBrace, position)
                         if depth == 0 =>
                     {
                         break position;
                     }
-                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), _) => {
+                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), at) => {
                         depth -= 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::EOF, position) => {
                         return Err(Error::UnsupportedNominalSyntax {
@@ -36677,10 +36737,22 @@ impl<'a> Parser<'a> {
                             source: span(open, position),
                         })
                     }
-                    (token, _) => pieces.push(token.to_string()),
+                    (token, at) => tokens.push((token, at)),
                 }
             };
-            return Ok((pieces.join(" "), end));
+            let key = self.models.sources.key(self.models.context.index());
+            let text = self
+                .models
+                .sources
+                .resolve(key)
+                .ok()
+                .and_then(|source| stringify_tokens(source.text(), &tokens, end));
+            let text = text.unwrap_or_else(|| {
+                let pieces: Vec<String> =
+                    tokens.iter().map(|(token, _)| token.to_string()).collect();
+                pieces.join(" ")
+            });
+            return Ok((text, end));
         }
         let mut arguments = Vec::new();
         let end = loop {
@@ -36774,7 +36846,15 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let sign = if negative { "-" } else { "" };
-        Ok(match self.next() {
+        let text = self.next();
+        // `1u8`: `concat!` writes the number without its suffix.
+        if matches!(text.0, Token::IntegerConstant(_) | Token::FloatConstant(_))
+            && let Token::Identifier(suffix) = self.peek()
+            && numeric_type(suffix.as_str()).is_some()
+        {
+            self.next();
+        }
+        Ok(match text {
             (Token::StringConstant(text), _) if !negative => text.to_string(),
             (Token::IntegerConstant(value), _) => format!("{sign}{value}"),
             (Token::FloatConstant(value), _) => format!("{sign}{}", value.1),
@@ -36785,7 +36865,14 @@ impl<'a> Parser<'a> {
                 if !negative
                     && matches!(
                         name.as_str(),
-                        "concat" | "env" | "include_str" | "stringify"
+                        "concat"
+                            | "env"
+                            | "include_str"
+                            | "stringify"
+                            | "line"
+                            | "column"
+                            | "file"
+                            | "module_path"
                     )
                     && matches!(self.peek(), Token::Bang) =>
             {
@@ -36802,6 +36889,46 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The name of the file this code is in, as its source names it.
+    fn source_identity(&self) -> String {
+        let key = self.models.sources.key(self.models.context.index());
+        self.models
+            .sources
+            .resolve(key)
+            .map(|source| source.identity().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The program's root file, when it is a file on disk.
+    fn entry_file(&self) -> Option<std::path::PathBuf> {
+        let key = self.models.sources.key(self.models.entry.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let path = std::path::PathBuf::from(source.identity());
+        path.is_file().then_some(path)
+    }
+
+    /// `module_path!()`: the crate's name and the modules of the item
+    /// being read, as `app::geometry`.
+    fn module_path(&self) -> String {
+        let root = match self.entry_file() {
+            Some(entry) => cargo_env::crate_name(&entry),
+            None => std::path::Path::new(&self.source_identity())
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .replace('-', "_"),
+        };
+        let modules = self
+            .callable
+            .as_ref()
+            .map(|key| key.modules())
+            .unwrap_or_default();
+        std::iter::once(root.as_str())
+            .chain(modules.iter().map(ImmutableString::as_str))
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
     /// The file this code is in, when it is a file on disk.
     fn source_file(&self) -> Option<std::path::PathBuf> {
         let key = self.models.sources.key(self.models.context.index());
@@ -36815,6 +36942,13 @@ impl<'a> Parser<'a> {
     /// environment's.
     fn environment_variable(&self, name: &str) -> Option<String> {
         {
+            // What Cargo sets for the crate this file is in.
+            if name.starts_with("CARGO_")
+                && let (Some(file), Some(entry)) = (self.source_file(), self.entry_file())
+                && let Some(value) = cargo_env::variable(&file, &entry, name)
+            {
+                return value;
+            }
             if name == "CARGO_MANIFEST_DIR" {
                 let file = self.source_file()?;
                 let manifest = file
@@ -43401,6 +43535,120 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult 
         Some("is_superset") => Ok(only_right.is_empty().into()),
         _ => Ok(both.is_empty().into()),
     }
+}
+
+/// `stringify!`'s text of `tokens` (each with where it starts in `text`),
+/// which end where `end` closes the macro, as rustc's `print_tts` prints
+/// them: each token as written, and a space after one that the source
+/// spaces from the next unless `space_between` says no. `None` when a
+/// position is not in `text`.
+fn stringify_tokens(text: &str, tokens: &[(Token, Position)], end: Position) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut lines = vec![0usize];
+    for (index, c) in chars.iter().enumerate() {
+        if *c == '\n' {
+            lines.push(index + 1);
+        }
+    }
+    let offset = |at: Position| -> Option<usize> {
+        let line = *lines.get(at.line()?.checked_sub(1)?)?;
+        let index = line + at.position()?.checked_sub(1)?;
+        (index <= chars.len()).then_some(index)
+    };
+    let starts = tokens
+        .iter()
+        .map(|(_, at)| offset(*at))
+        .chain(std::iter::once(offset(end)))
+        .collect::<Option<Vec<usize>>>()?;
+    let pieces: Vec<String> = starts
+        .windows(2)
+        .map(|pair| {
+            chars[pair[0]..pair[1].max(pair[0])]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    // Rust's keywords, which an `(` after them is spaced from.
+    const KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "for",
+        "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "ref", "return", "self",
+        "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+        "async", "await", "dyn",
+    ];
+    let word = |piece: &str| {
+        piece
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '"' | '\''))
+    };
+    let opens = |token: &Token| {
+        matches!(
+            token,
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+        )
+    };
+    let closes = |token: &Token| {
+        matches!(
+            token,
+            Token::RightParen | Token::RightBracket | Token::RightBrace
+        )
+    };
+    let mut out = String::new();
+    for (index, (token, _)) in tokens.iter().enumerate() {
+        let piece = if matches!(token, Token::Unit) {
+            "()"
+        } else {
+            pieces[index].as_str()
+        };
+        out.push_str(piece);
+        let Some((next, _)) = tokens.get(index + 1) else {
+            break;
+        };
+        let next_piece = pieces[index + 1].as_str();
+        // Joint in the source: no space.
+        let spaced = chars
+            .get(starts[index + 1].wrapping_sub(1))
+            .is_some_and(|c| c.is_whitespace());
+        if !spaced {
+            continue;
+        }
+        // `{ b }` keeps its spaces inside; `(x)` and `[0]` have none.
+        if matches!(token, Token::LeftBrace) || matches!(next, Token::RightBrace) {
+            out.push(' ');
+            continue;
+        }
+        if opens(token) || closes(next) {
+            continue;
+        }
+        // A group, a word or a literal is not punctuation.
+        let punct = |token: &Token, piece: &str| {
+            !word(piece) && !opens(token) && !closes(token) && !matches!(token, Token::Unit)
+        };
+        let (left, right) = (punct(token, piece), punct(next, next_piece));
+        let space = match () {
+            // `x.y`, `tup.0`
+            () if piece == "." && !right => false,
+            // `foo,`, `x = 3;`, `x.y`
+            () if !left && matches!(next_piece, "," | ";" | ".") => false,
+            // `f(3)`, `fn(x: u8)`, `Self()`, `pub(crate)`
+            () if word(piece)
+                && !piece.starts_with(['"', '\''])
+                && (!KEYWORDS.contains(&piece) || matches!(piece, "fn" | "Self" | "pub"))
+                && matches!(next, Token::LeftParen | Token::Unit) =>
+            {
+                false
+            }
+            // `#[attr]`
+            () if piece == "#" && matches!(next, Token::LeftBracket) => false,
+            () => true,
+        };
+        if space {
+            out.push(' ');
+        }
+    }
+    Some(out)
 }
 
 /// rustc's size in bytes of a value of `ty`, for a type whose layout Rust

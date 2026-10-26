@@ -15,9 +15,10 @@
   <tr><td><code>unreachable!</code> <code>todo!</code> <code>unimplemented!</code></td><td>Panic when reached.</td></tr>
   <tr><td><code>vec!</code></td><td><code>vec![1, 2]</code> and <code>vec![0; n]</code>, where <code>n</code> is any <code>usize</code>. An array&rsquo;s <code>[0; N]</code> takes a literal or a <code>const</code>.</td></tr>
   <tr><td><code>matches!</code></td><td>Takes a guard, as in <code>matches!(x, Some(n) if n &gt; 2)</code>.</td></tr>
-  <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal.</td></tr>
+  <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal. <code>stringify!</code> spaces its tokens as rustc prints them, so <code>stringify!(Vec&lt;i32&gt;)</code> is <code>"Vec&lt;i32&gt;"</code>.</td></tr>
   <tr><td><code>cfg!</code></td><td>Tests the machine rawr runs on: <code>target_os</code>, <code>target_arch</code>, <code>target_family</code>, <code>unix</code> and <code>windows</code>, with <code>not</code>, <code>all</code> and <code>any</code>. No feature is on. <code>#[cfg(..)]</code> on a statement works the same way.</td></tr>
-  <tr><td><code>env!</code></td><td>Reads an environment variable when the program is checked.</td></tr>
+  <tr><td><code>env!</code> <code>option_env!</code></td><td>Read an environment variable when the program is checked. In a crate, the <code>CARGO_PKG_*</code>, <code>CARGO_MANIFEST_DIR</code>, <code>CARGO_CRATE_NAME</code> and <code>CARGO_BIN_NAME</code> variables are the ones Cargo sets, read from its <code>Cargo.toml</code>. <code>option_env!</code> gives <code>None</code> for an unset variable.</td></tr>
+  <tr><td><code>line!</code> <code>column!</code> <code>file!</code> <code>module_path!</code></td><td>Where the macro is written. In a crate, <code>file!()</code> is the path from the package or workspace root, as in <code>src/bin/tool.rs</code>, as Cargo gives it to rustc. A lone file&rsquo;s path is relative to the current directory. <code>module_path!()</code> starts with the crate name.</td></tr>
   <tr><td><code>include_str!</code> <code>include_bytes!</code></td><td>Read a file relative to the source file.</td></tr>
 </table>
 <div class="block">

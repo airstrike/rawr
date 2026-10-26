@@ -10051,3 +10051,22 @@ fn language_circle_std_nul_escapes() {
     );
     assert_eq!(value, r#""a\0b" 3 '\0' "\0" 0"#);
 }
+
+#[test]
+fn language_circle_std_source_macros() {
+    let value = run_string(
+        r#"pub fn run() -> String {
+    let at = (line!(), column!());
+    format!(
+        "{:?} {:?} {} {} {}",
+        at,
+        option_env!("RAWR_SURELY_UNSET_VAR"),
+        stringify!(Vec<i32>, x  .  len(), a + b),
+        concat!("x", 1u8, -2, stringify!()),
+        line!()
+    )
+}
+run()"#,
+    );
+    assert_eq!(value, "(2, 24) None Vec<i32>, x.len(), a + b x1-2 9");
+}
