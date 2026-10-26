@@ -216,6 +216,11 @@ impl Proof {
         if self.place && result.is::<crate::island::place::Place>() {
             return Ok(result);
         }
+        // A scope frame the call made (D558 tier 1): what it makes is
+        // checked by the adapter that makes it, in the frame.
+        if crate::scope::is_opening(&result) {
+            return Ok(result);
+        }
         if let Err(error) = self.output.validate(&result, model, runtime) {
             return Err(EvalAltResult::ErrorRuntime(
                 format!(

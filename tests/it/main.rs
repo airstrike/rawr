@@ -61,6 +61,7 @@ mod power_of;
 mod print;
 mod program_authority;
 mod project_discovery;
+mod scope_frames;
 mod script;
 mod serde;
 mod side_effects;

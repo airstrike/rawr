@@ -1497,7 +1497,13 @@ impl Registry {
         // A value native code lends the call (D558.3) has no witness: it is
         // reached only through the accessor its trampoline made, whose exact
         // type each access checks.
-        if value.is::<crate::scope::Lent>() {
+        // So has a value in a scope frame's region (D558 tier 1), reached
+        // through its region by its family, which each access checks, and
+        // a frame a call made and no `let` has opened yet.
+        if value.is::<crate::scope::Lent>()
+            || value.is::<crate::scope::Scoped>()
+            || crate::scope::is_opening(value)
+        {
             return Ok(());
         }
         let attestor = self

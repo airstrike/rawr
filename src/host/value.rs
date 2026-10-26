@@ -107,10 +107,18 @@ pub(crate) fn register_carry<T: Carry>() {
 /// one type that declared it.
 pub(crate) fn host_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
     {
-        let ty = lhs.type_id();
-        if ty != rhs.type_id() {
-            return None;
-        }
+        let scoped = |value: &Dynamic| value.is::<crate::scope::Scoped>();
+        // A value in a scope frame's region compares with one of its type
+        // in a runner's arena (D558 tier 1).
+        let ty = if scoped(lhs) || scoped(rhs) {
+            TypeId::of::<crate::scope::Scoped>()
+        } else {
+            let ty = lhs.type_id();
+            if ty != rhs.type_id() {
+                return None;
+            }
+            ty
+        };
         let equal = *EQUALITIES.read().ok()?.get(&ty)?;
         equal(lhs, rhs)
     }

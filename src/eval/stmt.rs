@@ -470,7 +470,7 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: &mut Scope,
-        mut this_ptr: Option<&mut Dynamic>,
+        this_ptr: Option<&mut Dynamic>,
         statements: &[Stmt],
         restore_orig_state: bool,
     ) -> RawrResult {
@@ -506,13 +506,77 @@ impl Engine {
         }
 
         // Run the statements
-        statements.iter().try_fold(Dynamic::UNIT, |_, stmt| {
-            let this_ptr = this_ptr.as_deref_mut();
+        self.eval_stmts_from(
+            global,
+            caches,
+            scope,
+            this_ptr,
+            statements,
+            restore_orig_state,
+            orig_fn_resolution_caches_len,
+        )
+    }
 
+    /// Evaluate a block's statements from some point on, inside the block's
+    /// state. A `let` that binds a scope frame a call made (D558 tier 1, a
+    /// [`crate::scope::Opening`]) opens it, and the statements after it
+    /// run inside the frame, as the rest of the Rust scope the value is
+    /// bound in. A statement whose value is dropped opens its frame with
+    /// nothing after.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_stmts_from(
+        &self,
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+        scope: &mut Scope,
+        mut this_ptr: Option<&mut Dynamic>,
+        statements: &[Stmt],
+        restore_orig_state: bool,
+        orig_fn_resolution_caches_len: usize,
+    ) -> RawrResult {
+        let mut result = Dynamic::UNIT;
+        for (k, stmt) in statements.iter().enumerate() {
             let orig_imports_len = global.num_imports();
 
-            let result =
-                self.eval_stmt(global, caches, scope, this_ptr, stmt, restore_orig_state)?;
+            result = self.eval_stmt(
+                global,
+                caches,
+                scope,
+                this_ptr.as_deref_mut(),
+                stmt,
+                restore_orig_state,
+            )?;
+
+            // `let p = Parser::new(&text);`: the rest of the block runs in
+            // the frame the call made, with `p` bound to its value.
+            if let Stmt::Var(x, ..) = stmt {
+                let at = match x.2 {
+                    Some(index) => scope.len() - index.get(),
+                    None => scope.len() - 1,
+                };
+                if crate::scope::is_opening(scope.get_mut_by_index(at)) {
+                    let bound = std::mem::take(scope.get_mut_by_index(at));
+                    let access = bound.access_mode();
+                    let opening = bound.cast::<crate::scope::Opening>();
+                    let rest = &statements[k + 1..];
+                    let mut continuation = |mut value: Dynamic| -> RawrResult {
+                        value.set_access_mode(access);
+                        *scope.get_mut_by_index(at) = value;
+                        self.eval_stmts_from(
+                            global,
+                            caches,
+                            scope,
+                            this_ptr.as_deref_mut(),
+                            rest,
+                            restore_orig_state,
+                            orig_fn_resolution_caches_len,
+                        )
+                    };
+                    return opening.open(&mut continuation);
+                }
+            } else if k + 1 < statements.len() {
+                result = crate::scope::settle(result)?;
+            }
 
             if matches!(stmt, Stmt::Import(..)) {
                 // Get the extra modules - see if any functions are marked global.
@@ -537,9 +601,8 @@ impl Engine {
                     }
                 }
             }
-
-            Ok(result)
-        })
+        }
+        Ok(result)
     }
 
     /// Evaluate an op-assignment statement.
@@ -1174,7 +1237,10 @@ impl Engine {
                     let this_ptr = this_ptr.as_deref_mut();
                     let statements = body.statements();
 
-                    match self.eval_stmt_block(global, caches, scope, this_ptr, statements, true) {
+                    match self
+                        .eval_stmt_block(global, caches, scope, this_ptr, statements, true)
+                        .and_then(crate::scope::settle)
+                    {
                         Ok(..) => (),
                         Err(err) => match *err {
                             ERR::LoopBreak(false, ..) => (),
@@ -1206,7 +1272,10 @@ impl Engine {
                     let this_ptr = this_ptr.as_deref_mut();
                     let statements = body.statements();
 
-                    match self.eval_stmt_block(global, caches, scope, this_ptr, statements, true) {
+                    match self
+                        .eval_stmt_block(global, caches, scope, this_ptr, statements, true)
+                        .and_then(crate::scope::settle)
+                    {
                         Ok(..) => (),
                         Err(err) => match *err {
                             ERR::LoopBreak(false, ..) => (),
@@ -1229,6 +1298,7 @@ impl Engine {
 
                         match self
                             .eval_stmt_block(global, caches, scope, this_ptr, statements, true)
+                            .and_then(crate::scope::settle)
                         {
                             Ok(..) => (),
                             Err(err) => match *err {
@@ -1337,6 +1407,7 @@ impl Engine {
 
                         match self
                             .eval_stmt_block(global, caches, scope, this_ptr, statements, true)
+                            .and_then(crate::scope::settle)
                         {
                             Ok(_) => (),
                             Err(err) => match *err {
@@ -1607,9 +1678,12 @@ impl Engine {
         statements: &[Stmt],
         map_exit_to_return_value: bool,
     ) -> RawrResult {
+        // A scope frame never outlives the function body or script that
+        // made it (D558 tier 1).
         self.eval_stmt_block(global, caches, scope, None, statements, false)
+            .and_then(crate::scope::settle)
             .or_else(|err| match *err {
-                ERR::Return(out, ..) => Ok(out),
+                ERR::Return(out, ..) => crate::scope::settle(out),
                 ERR::Exit(out, ..) if map_exit_to_return_value => Ok(out),
                 ERR::LoopBreak(..) => {
                     unreachable!("no outer loop scope to break out of")
