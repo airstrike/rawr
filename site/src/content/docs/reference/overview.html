@@ -6,7 +6,7 @@
 <p>Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
 <ul>
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
-  <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
+  <li><code>i128</code> and <code>u128</code> aren&rsquo;t supported.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
   <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value. It <a href="#lenient">accepts some code rustc rejects</a>, so <code>rawr check</code> also runs <code>cargo check</code>.</li>
@@ -65,8 +65,9 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><code>i128</code> and <code>u128</code>.</li>
   <li>A range of floats that excludes its end, as in <code>0.5..1.0</code>. <code>0.5..=1.0</code> works.</li>
-  <li>Returning <code>&amp;mut</code> from a function or method.</li>
-  <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
+  <li>Returning a <code>&amp;mut</code> to a map&rsquo;s entry, as in <code>self.counts.entry(k).or_insert(0)</code>.</li>
+  <li>Returning a <code>&amp;mut</code> borrowed from a parameter other than <code>&amp;mut self</code> or a free function&rsquo;s first <code>&amp;mut</code> parameter.</li>
+  <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li><code>impl Drop</code>.</li>

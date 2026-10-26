@@ -9906,3 +9906,105 @@ pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, 
     // A capture renamed: its fingerprint differs.
     assert!(!recaptured.rebinds(&closure, first.as_ref()));
 }
+
+#[test]
+fn language_mut_ref_outputs_borrow_their_receiver() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct Inner { v: Vec<i64>, x: i64 }
+        impl Inner {
+            fn add(&mut self, n: i64) { self.v.push(n); }
+        }
+        struct Counter { counts: Vec<i64>, name: String, inner: Inner, calls: i64 }
+        impl Counter {
+            fn slot(&mut self, i: usize) -> &mut i64 { &mut self.counts[i] }
+            fn name_mut(&mut self) -> &mut String { &mut self.name }
+            fn inner_mut(&mut self) -> &mut Inner { &mut self.inner }
+            fn last(&mut self) -> Option<&mut i64> { self.counts.last_mut() }
+            fn find(&mut self, n: i64) -> Option<&mut i64> {
+                self.counts.iter_mut().find(|x| **x == n)
+            }
+            fn pick(&mut self, first: bool) -> &mut i64 {
+                if first { &mut self.counts[0] } else { self.slot(1) }
+            }
+            fn next(&mut self) -> &mut i64 {
+                self.calls += 1;
+                match self.calls % 2 { 0 => &mut self.counts[0], _ => &mut self.inner.x }
+            }
+            fn push(&mut self, n: i64) -> &mut Self { self.counts.push(n); self }
+        }
+        fn biggest(v: &mut Vec<i64>) -> &mut i64 {
+            let mut idx = 0;
+            for i in 0..v.len() { if v[i] > v[idx] { idx = i; } }
+            &mut v[idx]
+        }
+        fn bump(x: &mut i64) { *x += 100; }
+        pub fn run() -> String {
+            let mut c = Counter {
+                counts: vec![0, 0, 0],
+                name: String::from("c"),
+                inner: Inner { v: Vec::new(), x: 0 },
+                calls: 0,
+            };
+            *c.slot(1) += 5;
+            c.name_mut().push_str("ount");
+            c.inner_mut().add(3);
+            c.inner_mut().x = 4;
+            if let Some(l) = c.last() { *l = 9; }
+            if let Some(f) = c.find(5) { *f += 1; }
+            let r = c.slot(0);
+            *r = 7;
+            *r += 1;
+            *c.pick(false) *= 2;
+            bump(c.slot(2));
+            *c.next() += 10;
+            *c.next() += 20;
+            c.push(1).push(2);
+            let mut v = vec![3, 8, 2];
+            *biggest(&mut v) = 0;
+            format!("{:?} {} {:?} {} {:?}", c.counts, c.name, c.inner, c.calls, v)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "[28, 12, 109, 1, 2] count Inner { v: [3], x: 14 } 2 [3, 0, 2]"
+    );
+    let error = rejected(
+        r#"
+        struct S { v: Vec<i64> }
+        impl S { fn all(&mut self) -> Vec<&mut i64> { Vec::new() } }
+        pub fn run() -> i64 { 0 } run()
+    "#,
+    );
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+}
+
+#[test]
+fn language_mut_borrows_of_a_tuples_members_are_apart() {
+    let value = run(r#"
+        struct S { pair: (i64, i64) }
+        fn two(a: &mut i64, b: &mut i64) { *a += 1; *b += 10; }
+        pub fn run() -> i64 {
+            let mut pair = (1, 2);
+            std::mem::swap(&mut pair.0, &mut pair.1);
+            let mut s = S { pair: (3, 4) };
+            std::mem::swap(&mut s.pair.0, &mut s.pair.1);
+            two(&mut s.pair.0, &mut s.pair.1);
+            pair.0 * 10000 + pair.1 * 1000 + s.pair.0 * 10 + s.pair.1
+        }
+        run()
+    "#);
+    assert_eq!(value, 20000 + 1000 + 50 + 13);
+    let error = rejected(
+        "pub fn run() -> i64 { let mut a = [1, 2]; std::mem::swap(&mut a[0], &mut a[1]); a[0] } \
+         run()",
+    );
+    assert!(error.contains("E0499"), "{error}");
+    let error = rejected(
+        "pub fn run() -> i64 { let mut p = (1, 2); std::mem::swap(&mut p.0, &mut p.0); p.0 } run()",
+    );
+    assert!(error.contains("E0499"), "{error}");
+}

@@ -3560,6 +3560,11 @@ enum PreludeOp {
     StrPieces,
     /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
     SliceChunks,
+    /// The value at a path below a place, and the value stored there,
+    /// called as methods on the place (`places::path_invoke`): how a
+    /// script function's `&mut` output is read and written.
+    PathGet,
+    PathSet,
 }
 
 impl PreludeOp {
@@ -3640,6 +3645,8 @@ impl PreludeOp {
             Self::StrChange => "string.change",
             Self::StrPieces => "str.pieces",
             Self::SliceChunks => "slice.chunks",
+            Self::PathGet => "place.get",
+            Self::PathSet => "place.set",
         }
     }
 
@@ -3653,14 +3660,16 @@ impl PreludeOp {
             | Self::SetInsert
             | Self::SetRemove
             | Self::VecMethod
-            | Self::StrChange => Some(true),
+            | Self::StrChange
+            | Self::PathSet => Some(true),
             Self::MapGet
             | Self::MapContainsKey
             | Self::MapIndex
             | Self::MapSlot
             | Self::SetContains
             | Self::SetAlgebra
-            | Self::KeyedRange => Some(false),
+            | Self::KeyedRange
+            | Self::PathGet => Some(false),
             _ => None,
         }
     }
@@ -3746,6 +3755,12 @@ impl PreludeOp {
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<bool>(),
+            ],
+            Self::PathGet => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
+            Self::PathSet => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
@@ -4000,6 +4015,7 @@ impl PreludeOp {
             }
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
             Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
             Self::StrPieces => return str_pieces(args),
@@ -7723,6 +7739,23 @@ enum PlaceStep {
     Cell {
         release: bool,
     },
+    /// The place a script function's `&mut` output names below the place
+    /// before it (`*c.slot(1) += 5`, `s.name_mut().push('!')`): `path`
+    /// is the runtime path `places::path_invoke` reads and stores through.
+    /// With `call`, the place is reached by calling the function on the
+    /// place before it, `before` + place + `after`, which gives the path
+    /// into the local `path` names; without it, `path` was given earlier
+    /// (`let r = c.slot(0);`, or an `Option<&mut T>` output's `Some`).
+    Path {
+        path: origin::Fragment,
+        call: Option<(origin::Fragment, origin::Fragment)>,
+    },
+    /// Statements the place's read runs first: the `Option` whose `Some`
+    /// place `unwrap()` keeps, evaluated so its place is located.
+    Setup(origin::Fragment),
+    /// A tuple's member, `t.0`: its index, which two borrows of a place's
+    /// members keep apart, as two of its fields are (E0499).
+    Member(usize),
 }
 
 #[derive(Clone)]
@@ -9055,7 +9088,7 @@ struct Parser<'a> {
     pending_member: Option<(ImmutableString, Span)>,
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
-    aliases: BTreeMap<ImmutableString, (Span, origin::Fragment, ImmutableString)>,
+    aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
     /// The locals a `&mut` local (`let r = &mut v;`, `ref mut`) borrows,
     /// with the borrowing alias's declaration; a direct use of the local
     /// ends the borrow (`ended`), and a later use of the alias is Rust's
@@ -9153,6 +9186,10 @@ struct Parser<'a> {
     split_angle: Option<Position>,
     /// The declared output of the body being parsed, for `?` and `return`.
     return_ty: Option<Ty>,
+    /// A function whose `&mut` output borrows its receiver: each value it
+    /// returns is the path to the place below the receiver
+    /// (`places::returned_place`).
+    place_output: bool,
     /// Explicit `return`s parsed so far; a closure that returns early has
     /// its declared or inferred output, not its body's type.
     returns: usize,
@@ -9337,6 +9374,7 @@ impl<'a> Parser<'a> {
             no_struct: false,
             split_angle: None,
             return_ty: None,
+            place_output: false,
             returns: 0,
             return_blocked: None,
             #[cfg(feature = "rust-import")]
@@ -9378,6 +9416,11 @@ impl<'a> Parser<'a> {
             .and_then(|_| definition.parameters().first())
             .map(|parameter| parameter.name.text.clone());
         parser.return_ty = Some(Ty::from_resolved(definition.output()));
+        parser.place_output = definition.name() != "index_mut"
+            && matches!(definition.receiver(), Some(receiver::Mode::Mutable))
+            && parser
+                .place_output(&Ty::from_resolved(definition.output()))
+                .is_some();
         parser.generics = definition
             .generics()
             .iter()
@@ -9502,6 +9545,12 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map_or(Ty::Unit, Ty::from_resolved),
         );
+        parser.place_output = !definition.body.constant
+            && this_parameter(definition).is_some()
+            && definition
+                .output
+                .as_ref()
+                .is_some_and(|output| parser.place_output(&Ty::from_resolved(output)).is_some());
         parser.generics = definition
             .generics
             .iter()
@@ -12936,10 +12985,20 @@ impl<'a> Parser<'a> {
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
             &substitution,
         );
+        // `t.slot(0)` of a trait's `fn slot(&mut self, i: usize) -> &mut
+        // i32`: the place below `t` the output borrows.
+        let borrowed = (matches!(receiver, crate::item::Receiver::Mutable(_))
+            && function.name.text != "index_mut")
+            .then(|| self.place_output(&output))
+            .flatten();
+        let borrowed_receiver = match &borrowed {
+            Some(_) => Some(self.borrowed_receiver(&value, call)?),
+            None => None,
+        };
         // `&mut self` through a generic or a trait object: the receiver's
         // place is changed (a local, an element, a place below a field).
         let mut place = None;
-        if matches!(receiver, crate::item::Receiver::Mutable(_)) {
+        if borrowed.is_none() && matches!(receiver, crate::item::Receiver::Mutable(_)) {
             let root = value.lvalue.as_ref().map(|lvalue| lvalue.binding().clone());
             let mutable = root.as_ref().is_some_and(|root| {
                 self.bindings.get(root.as_str()).is_some_and(|binding| {
@@ -13012,6 +13071,14 @@ impl<'a> Parser<'a> {
         };
         let arguments =
             origin::Fragment::join(arguments.iter().map(ParsedExpr::rendered_source), ", ");
+        if let (Some(borrowed), Some(receiver)) = (borrowed, borrowed_receiver) {
+            let mut source =
+                origin::Fragment::plain(format!("{}.{dispatcher}(", places::RECEIVER_PLACE));
+            source.push(arguments);
+            source.push_text(")");
+            let source = self.copied_call(source, &places)?;
+            return Ok(self.borrowed_call(&receiver, source, borrowed, call));
+        }
         let source = if matches!(
             receiver,
             crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_)
@@ -18900,6 +18967,7 @@ impl<'a> Parser<'a> {
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
         let moved_borrow = matches!(self.peek(), Token::Identifier(ref alias) if self.aliases.contains_key(alias.as_str()))
             && matches!(self.peek_second(), Token::SemiColon);
+        let block_like = self.peek_block_like();
         let outer = self.mutable_borrow;
         if borrowing {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
@@ -18921,6 +18989,58 @@ impl<'a> Parser<'a> {
             self.last_expression = None;
             return self.consume_terminator(start).map(|_| ());
         }
+        // `let r = c.slot(0);`, `let x = v.get_mut(0).unwrap();`: the call
+        // is made here, once, and each use of `r` is the place it gave.
+        if let Ty::Reference { mutable: true, .. } = self.inference.resolve(&value.ty)
+            && let Some(Lvalue::Nested(nested)) = &value.lvalue
+            && Self::reached_once(nested)
+        {
+            let nested = (**nested).clone();
+            if let Some(annotation) = &annotation {
+                self.coerce_expr(annotation, &mut value)?;
+            }
+            let (statement, held) = self.hold_place(nested);
+            let rendered = self.with_field_entries(pending, statement);
+            self.write_output(rendered, span(start, value.span.end()));
+            self.entry_aliases.remove(&name);
+            self.borrow_lvalue(name, name_span, value.ty, Lvalue::Nested(Box::new(held)));
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
+        // `let r = if c { &mut self.a } else { &mut self.b };` in a function
+        // returning `&mut`: each branch gave its path below `self`
+        // (`returned_place`), and `r` is the place it names.
+        if self.place_output
+            && self.closures.is_empty()
+            && block_like
+            && value.lvalue.is_none()
+            && matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { mutable: true, .. }
+            )
+        {
+            let path = self.temporary("path");
+            let mut rendered = origin::Fragment::plain(format!("let {path} = "));
+            rendered.push(value.rendered_source());
+            rendered.push_text(";");
+            let rendered = self.with_field_entries(pending, rendered);
+            self.write_output(rendered, span(start, value.span.end()));
+            let receiver = Lvalue::Binding {
+                binding: "this".into(),
+                ty: Ty::Unknown,
+            };
+            let step = PlaceStep::Path {
+                path: origin::Fragment::plain(path),
+                call: None,
+            };
+            let held = places::place_step(&receiver, step, value.ty.clone());
+            self.entry_aliases.remove(&name);
+            self.borrow_lvalue(name, name_span, value.ty, held);
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         // A closure that changes `self` writes it back after its statement,
         // so it cannot outlive that statement in a local.
         if self.lend_self
@@ -18937,6 +19057,22 @@ impl<'a> Parser<'a> {
         } = self.inference.resolve(&value.ty)
             && (borrowing || moved_borrow)
         {
+            // `let r = &mut s.cells[i];`: `r` is the place, reached again
+            // from `s` at each use.
+            if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let rendered = self.with_field_entries(pending, origin::Fragment::default());
+                if !rendered.is_empty() {
+                    self.write_output(rendered, value.span);
+                }
+                self.entry_aliases.remove(&name);
+                self.borrow_lvalue(name, name_span, value.ty, lvalue);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self.consume_terminator(start).map(|_| ());
+            }
             // `let s = r;` moves the borrow `r` into `s`.
             let Some(Lvalue::Binding { binding: root, .. } | Lvalue::Place { binding: root, .. }) =
                 value.lvalue.clone()
@@ -20363,6 +20499,12 @@ impl<'a> Parser<'a> {
             } else {
                 self.consume_terminator(start)?
             };
+            // A tail returning a `&mut` place gives its path.
+            let value = if terminated {
+                value
+            } else {
+                self.returned_place(value, block_like)?
+            };
             if terminated {
                 if endpoint_tail {
                     self.reject_signature_support(
@@ -20474,11 +20616,14 @@ impl<'a> Parser<'a> {
         let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
             let target = match &lvalue {
+                // A place a call returns (`*c.slot(1) += 5`) calls it once.
                 Lvalue::Nested(nested)
-                    if nested
-                        .steps
-                        .iter()
-                        .any(|step| matches!(step, PlaceStep::Cell { .. })) =>
+                    if nested.steps.iter().any(|step| {
+                        matches!(
+                            step,
+                            PlaceStep::Cell { .. } | PlaceStep::Path { .. } | PlaceStep::Setup(_)
+                        )
+                    }) =>
                 {
                     let (read, place, store) = self.nested_parts(nested);
                     opened = Some((read, place.clone(), store));
@@ -23051,7 +23196,9 @@ impl<'a> Parser<'a> {
                 source.push(returned);
             }
         } else {
-            let mut value = self.parse_expr_expecting(Some(&output))?;
+            let block_like = self.peek_block_like();
+            let value = self.parse_expr_expecting(Some(&output))?;
+            let mut value = self.returned_place(value, block_like)?;
             end = value.span;
             self.reject_signature_support(
                 &value.ty,
@@ -23132,6 +23279,16 @@ impl<'a> Parser<'a> {
             source.push_text(format!(", {value}, ());"));
             return Ok(source);
         }
+        // A nested place is read and stored back where it is, so two
+        // stores below one field (`swap(&mut s.pair.0, &mut s.pair.1)`)
+        // each keep the other's.
+        if let Some(Lvalue::Nested(nested)) = &place.lvalue {
+            self.require_mutable_binding(&nested.binding, place.span)?;
+            let nested = (**nested).clone();
+            let mut store = self.store_nested(&nested, value.into());
+            store.push_text(";");
+            return Ok(store);
+        }
         Ok(match self.keyed_place(place)? {
             Some(mut target) => {
                 target.push_text(format!(" = {value};"));
@@ -23155,7 +23312,7 @@ impl<'a> Parser<'a> {
     /// borrowed once, as Rust's borrow rules have them (E0499): two
     /// borrows of one local are apart only as two of its fields.
     fn mutable_arguments(
-        &self,
+        &mut self,
         arguments: &[ParsedExpr],
         indexes: impl IntoIterator<Item = usize>,
     ) -> Result<Vec<ParsedExpr>, Error> {
@@ -23191,19 +23348,11 @@ impl<'a> Parser<'a> {
                     expression: place.span,
                 });
             }
-            let root = |place: &ParsedExpr| match &place.lvalue {
-                Some(Lvalue::Binding { binding, .. } | Lvalue::Place { binding, .. }) => {
-                    (binding.clone(), None)
-                }
-                Some(Lvalue::Field(field)) => (field.binding.clone(), Some(field.slot)),
-                Some(Lvalue::Nested(nested)) => (nested.binding.clone(), None),
-                Some(Lvalue::Slice(slice)) => (slice.binding.clone(), None),
-                None => (ImmutableString::new(), None),
-            };
-            let (name, slot) = root(place);
+            let (name, parts) = self.borrowed_parts(place);
             if let Some(other) = places.iter().find(|other| {
-                let (other_name, other_slot) = root(other);
-                other_name == name && (slot.is_none() || other_slot.is_none() || slot == other_slot)
+                let (other_name, other_parts) = self.borrowed_parts(other);
+                let shared = parts.len().min(other_parts.len());
+                other_name == name && parts[..shared] == other_parts[..shared]
             }) {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
@@ -23213,9 +23362,86 @@ impl<'a> Parser<'a> {
                     source: Span::new(other.span.start(), place.span.end()),
                 });
             }
-            places.push(place.clone());
+            // `bump(c.slot(0))`: the call is made once, before the
+            // statement, and its place is read and stored through its path.
+            let mut place = place.clone();
+            if let Some(Lvalue::Nested(nested)) = &place.lvalue
+                && Self::reached_once(nested)
+            {
+                let (statement, held) = self.hold_place((**nested).clone());
+                self.field_entries
+                    .push((statement, origin::Fragment::default()));
+                let (read, at, store) = self.nested_parts(&held);
+                let value = self.temporary("value");
+                let mut source = origin::Fragment::plain("({ ");
+                source.push(read);
+                source.push_text(format!("let {value} = "));
+                source.push(at);
+                source.push_text("; ");
+                source.push(store);
+                source.push_text(format!("{value} }})"));
+                place.source = source;
+                place.prelude = origin::Fragment::default();
+                place.lvalue = Some(Lvalue::Nested(Box::new(held)));
+            }
+            places.push(place);
         }
         Ok(places)
+    }
+
+    /// The local a `&mut` place borrows, and the fields (`Ok(slot)`) and
+    /// tuple members (`Err(index)`) below it that it borrows: two borrows
+    /// of one local are apart only when these differ, as Rust's borrow
+    /// rules have them (E0499). An element `v[i]` borrows all of `v`.
+    fn borrowed_parts(&self, place: &ParsedExpr) -> (ImmutableString, Vec<Result<usize, usize>>) {
+        let mut parts = Vec::new();
+        let (binding, base, steps) = match &place.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => return (binding.clone(), parts),
+            Some(Lvalue::Place { binding, place, .. }) => (binding, place.as_str(), &[][..]),
+            Some(Lvalue::Field(field)) => {
+                return (field.binding.clone(), vec![Ok(field.slot)]);
+            }
+            Some(Lvalue::Nested(nested)) => {
+                (&nested.binding, nested.base.as_str(), &nested.steps[..])
+            }
+            Some(Lvalue::Slice(slice)) => return (slice.binding.clone(), parts),
+            None => return (ImmutableString::new(), parts),
+        };
+        // `t.0.1` of a tuple local is written `t[0][1]`.
+        let mut rest = base.strip_prefix(binding.as_str()).unwrap_or("?");
+        let mut ty = self
+            .bindings
+            .get(binding)
+            .map_or(Ty::Unknown, |binding| self.inference.resolve(&binding.ty));
+        while let Some(after) = rest.strip_prefix('[') {
+            let Ty::Tuple(members) = ty else {
+                return (binding.clone(), parts);
+            };
+            let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let (Ok(index), Some(after)) = (
+                after[..digits].parse::<usize>(),
+                after[digits..].strip_prefix(']'),
+            ) else {
+                return (binding.clone(), parts);
+            };
+            let Some(member) = members.get(index) else {
+                return (binding.clone(), parts);
+            };
+            parts.push(Err(index));
+            ty = self.inference.resolve(member);
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return (binding.clone(), parts);
+        }
+        for step in steps {
+            match step {
+                PlaceStep::Field { slot, .. } => parts.push(Ok(*slot)),
+                PlaceStep::Member(index) => parts.push(Err(*index)),
+                _ => break,
+            }
+        }
+        (binding.clone(), parts)
     }
 
     /// `for x in a..b` and `for x in a..=b` over `i64`.
@@ -24733,8 +24959,11 @@ impl<'a> Parser<'a> {
 
         let start = self.position();
         let pending = self.field_entries.len();
+        let block_like = self.peek_block_like();
         let mut value = self.parse_expr()?;
         if !assignment_token(&self.peek()) {
+            // An arm returning a `&mut` place gives its path.
+            value = self.returned_place(value, block_like)?;
             self.consume_imported_value(&value, "branch result", value.span)?;
             // A bare arm such as `Key::Char(c) => app.input.push(c)` reads
             // and stores its place itself, as a block arm's statements do.
@@ -25654,6 +25883,38 @@ impl<'a> Parser<'a> {
                     stores.push(cell_store);
                     place = origin::Fragment::plain(local);
                 }
+                PlaceStep::Path { path, call } => {
+                    if let Some((before, after)) = call {
+                        read.push_text(format!("let {} = ", path.as_str()));
+                        read.push(before.clone());
+                        read.push(place.clone());
+                        read.push(after.clone());
+                        read.push_text("; ");
+                    }
+                    let local = self.temporary("part");
+                    if overwrite && index == leaf {
+                        read.push_text(format!("let {local} = (); "));
+                    } else {
+                        let getter = self.push_op(Op::Prelude(PreludeOp::PathGet));
+                        read.push_text(format!("let {local} = "));
+                        read.push(place.clone());
+                        read.push_text(format!(".{getter}("));
+                        read.push(path.clone());
+                        read.push_text("); ");
+                    }
+                    let setter = self.push_op(Op::Prelude(PreludeOp::PathSet));
+                    let mut store = place.clone();
+                    store.push_text(format!(".{setter}("));
+                    store.push(path.clone());
+                    store.push_text(format!(", {local}); "));
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
+                PlaceStep::Setup(setup) => {
+                    read.push(setup.clone());
+                    read.push_text(" ");
+                }
+                PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
                 PlaceStep::Accessor {
                     place: bound,
                     stored,
@@ -28123,8 +28384,8 @@ impl<'a> Parser<'a> {
                 // in a local.
                 // `index_mut`'s `&mut place` is its value; writes reach the
                 // place where it is inlined (`indexed_place`).
-                let index_mut =
-                    matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
+                let index_mut = self.place_output
+                    || matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
                 if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
                     return Err(self.unsupported(
                         "`&mut` borrow expressions other than a function's `&mut` argument",
@@ -28872,7 +29133,7 @@ impl<'a> Parser<'a> {
                 let mut source = value.rendered_source();
                 source.push_text(format!("[{index}]"));
                 let end = text_end(member_span.start(), &member);
-                // `t.0` of a local's place is a place.
+                // `t.0` of a local's place is a place, and so is `s.pair.0`.
                 let lvalue = match &value.lvalue {
                     Some(Lvalue::Binding { binding, .. } | Lvalue::Place { binding, .. })
                         if value.prelude.is_empty() =>
@@ -28883,6 +29144,11 @@ impl<'a> Parser<'a> {
                             place: source.clone(),
                         })
                     }
+                    Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) => Some(nested_step(
+                        lvalue,
+                        PlaceStep::Member(index),
+                        members[index].clone(),
+                    )),
                     _ => None,
                 };
                 value = self.operator_expr(
@@ -29279,6 +29545,36 @@ impl<'a> Parser<'a> {
                 span(member_span.start(), end),
                 &substitution,
             )?;
+            // `c.slot(1)` of `fn slot(&mut self, i: usize) -> &mut i32`:
+            // the place the output borrows.
+            let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+            if matches!(mode, receiver::Mode::Mutable)
+                && definition.name() != "index_mut"
+                && let Some(borrowed) = self.place_output(&output)
+            {
+                let call = span(value.span.start(), end);
+                let receiver = self.borrowed_receiver(&value, call)?;
+                let witnesses = self.witness_arguments(definition.generics(), &substitution, call);
+                let arguments = origin::Fragment::join(
+                    args.iter()
+                        .map(ParsedExpr::rendered_source)
+                        .chain(witnesses),
+                    ", ",
+                );
+                let method = method_name(definition.id());
+                let places =
+                    self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
+                let mut source =
+                    origin::Fragment::plain(format!("{}.{method}(", places::RECEIVER_PLACE));
+                source.push(arguments);
+                source.push_text(")");
+                let source = self.copied_call(source, &places)?;
+                return Ok(Ok(self.borrowed_call(&receiver, source, borrowed, call)));
+            }
+            // A nested receiver of a method that also copies `&mut`
+            // arguments back is read and stored around the call, so the
+            // copies' stores (`p.take(&mut s.t.0)`) come after its own.
+            let mut inline = None;
             let writeback = match mode {
                 receiver::Mode::Shared => None,
                 // An element (`v[0]`) or a place below a field
@@ -29292,7 +29588,13 @@ impl<'a> Parser<'a> {
                 receiver::Mode::Mutable if let Some(Lvalue::Nested(nested)) = &value.lvalue => {
                     let nested = (**nested).clone();
                     self.require_mutable_binding(&nested.binding, member_span)?;
-                    Some(Writeback::Place(self.nested_place(&nested)))
+                    if method_copied(&definition, &self.models).is_empty() {
+                        Some(Writeback::Place(self.nested_place(&nested)))
+                    } else {
+                        let (read, place, store) = self.nested_parts(&nested);
+                        inline = Some((read, store));
+                        Some(Writeback::Place(place))
+                    }
                 }
                 receiver::Mode::Mutable => {
                     Some(self.require_mutable_receiver(&value, &definition, member_span)?)
@@ -29364,7 +29666,20 @@ impl<'a> Parser<'a> {
                     place.push_text(format!(".{method}("));
                     place.push(arguments);
                     place.push_text(")");
-                    place
+                    match inline {
+                        Some((read, store)) => {
+                            let result = self.temporary("result");
+                            let mut source = origin::Fragment::plain("({ ");
+                            source.push(read);
+                            source.push_text(format!("let {result} = "));
+                            source.push(place);
+                            source.push_text("; ");
+                            source.push(store);
+                            source.push_text(format!("{result} }})"));
+                            source
+                        }
+                        None => place,
+                    }
                 }
             };
             let source = self.copied_call(source, &places)?;
@@ -32418,8 +32733,28 @@ impl<'a> Parser<'a> {
             Prelude::Err => (PreludeOp::Err, Ty::Result(Box::new(ok), payload)),
             Prelude::None => unreachable!("`None` returned above"),
         };
+        // `Some(&mut self.a)` returned as an `Option<&mut T>` output keeps
+        // its place (`places::returned_place`).
+        let place = match (&variant, self.place_output && self.closures.is_empty()) {
+            (Prelude::Some, true)
+                if matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Reference { mutable: true, .. }
+                ) =>
+            {
+                value.lvalue.clone().or_else(|| {
+                    (value.source.as_str() == "this").then(|| Lvalue::Binding {
+                        binding: "this".into(),
+                        ty: value.ty.clone(),
+                    })
+                })
+            }
+            _ => None,
+        };
         let source = self.prelude_op(op, [value.rendered_source()]);
-        Ok(self.operator_expr(source, ty, expression))
+        let mut value = self.operator_expr(source, ty, expression);
+        value.lvalue = place;
+        Ok(value)
     }
 
     /// `value?` in a body returning `Option`: the `Some` value, or an early
@@ -32510,7 +32845,27 @@ impl<'a> Parser<'a> {
         source.push_text(" } else { return ");
         source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         source.push_text("; } }");
-        Ok(self.operator_expr(source.surrounded("(", ")"), element, expression))
+        let source = source.surrounded("(", ")");
+        // `v.get_mut(i)?` is the element's place, as `unwrap()` keeps it.
+        let place = match &value.lvalue {
+            Some(lvalue)
+                if !matches!(lvalue, Lvalue::Slice(_))
+                    && matches!(
+                        self.inference.resolve(&element),
+                        Ty::Reference { mutable: true, .. }
+                    ) =>
+            {
+                let mut nested = places::as_nested(lvalue);
+                let mut setup = source.clone();
+                setup.push_text(";");
+                nested.steps.insert(0, PlaceStep::Setup(setup));
+                Some(Lvalue::Nested(Box::new(nested)))
+            }
+            _ => None,
+        };
+        let mut value = self.operator_expr(source, element, expression);
+        value.lvalue = place;
+        Ok(value)
     }
 
     /// The `Option` methods Rust code reaches for, as Rust names them. Each
@@ -32911,14 +33266,22 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        // `v.get_mut(i).unwrap()` is the element's place.
-        let place = if keeps_place {
-            value.lvalue.clone()
-        } else {
-            None
-        };
         // A block is not an `if` condition in the legacy parser.
-        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, expression);
+        let source = source.surrounded("(", ")");
+        // `v.get_mut(i).unwrap()` is the element's place, which the
+        // `Option` locates: it is evaluated, panicking on `None`, each time
+        // the place is reached.
+        let place = match &value.lvalue {
+            Some(lvalue) if keeps_place && !matches!(lvalue, Lvalue::Slice(_)) => {
+                let mut nested = places::as_nested(lvalue);
+                let mut setup = source.clone();
+                setup.push_text(";");
+                nested.steps.insert(0, PlaceStep::Setup(setup));
+                Some(Lvalue::Nested(Box::new(nested)))
+            }
+            _ => None,
+        };
+        let mut parsed = self.operator_expr(source, ty, expression);
         if place.is_some() {
             parsed.lvalue = place;
         }
@@ -33945,6 +34308,23 @@ impl<'a> Parser<'a> {
             locate.push_text(format!("; if {slot} >= "));
             locate.push(receiver.clone());
             locate.push_text(format!(".len() {{ {slot} = -1; }} "));
+            return self.optional_element(&value, &element, &slot, locate, expression);
+        }
+        // `v.first_mut()`, `v.last_mut()`: as `get_mut` of the end's index.
+        if matches!(member.as_str(), "first_mut" | "last_mut") && arguments.is_empty() {
+            let slot = self.temporary("index");
+            let mut locate = origin::Fragment::plain(format!("{slot} = "));
+            locate.push(receiver.clone());
+            locate.push_text(if member.as_str() == "last_mut" {
+                ".len() - 1; "
+            } else {
+                ".len(); "
+            });
+            if member.as_str() == "first_mut" {
+                locate.push_text(format!(
+                    "if {slot} > 0 {{ {slot} = 0; }} else {{ {slot} = -1; }} "
+                ));
+            }
             return self.optional_element(&value, &element, &slot, locate, expression);
         }
         let (source, ty) = match (member.as_str(), arguments.as_mut_slice()) {
@@ -35177,12 +35557,44 @@ impl<'a> Parser<'a> {
                 // `&mut self` method is the receiver's.
                 arguments.remove(index);
                 let place = places[0].clone();
-                let operands = arguments
+                let operands: Vec<_> = arguments
                     .iter()
                     .map(ParsedExpr::rendered_source)
                     .chain(witnesses)
                     .collect();
-                let source = self.mutation_call(&place, &name, operands)?;
+                // `biggest(&mut v)` of `fn biggest(v: &mut Vec<i32>) ->
+                // &mut i32`: the place below `v` the output borrows.
+                if !opens_startup && let Some(borrowed) = self.place_output(&output) {
+                    let receiver = self.borrowed_receiver(&place, call)?;
+                    let mut source =
+                        origin::Fragment::plain(format!("{}.{name}(", places::RECEIVER_PLACE));
+                    source.push(origin::Fragment::join(operands, ", "));
+                    source.push_text(")");
+                    let source = self.copied_call(source, &places[1..])?;
+                    return Ok(self.borrowed_call(&receiver, source, borrowed, call));
+                }
+                // A nested place copied in and back beside it is stored
+                // after it, so the receiver is read and stored around the
+                // call (`two(&mut s.p.x, &mut s.p.y)`).
+                let source = match &place.lvalue {
+                    Some(Lvalue::Nested(nested)) if places.len() > 1 => {
+                        let nested = (**nested).clone();
+                        self.require_mutable_binding(&nested.binding, place.span)?;
+                        let (read, at, store) = self.nested_parts(&nested);
+                        let result = self.temporary("result");
+                        let mut source = origin::Fragment::plain("({ ");
+                        source.push(read);
+                        source.push_text(format!("let {result} = "));
+                        source.push(at);
+                        source.push_text(format!(".{name}("));
+                        source.push(origin::Fragment::join(operands, ", "));
+                        source.push_text("); ");
+                        source.push(store);
+                        source.push_text(format!("{result} }})"));
+                        source
+                    }
+                    _ => self.mutation_call(&place, &name, operands)?,
+                };
                 let source = self.copied_call(source, &places[1..])?;
                 let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));

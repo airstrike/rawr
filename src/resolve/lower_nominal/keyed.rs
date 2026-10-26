@@ -390,11 +390,11 @@ impl Parser<'_> {
             return self.parse_keyed_entry(value, kind, &types, member_span);
         }
         let owner = |this: &Self| Ty::Keyed(kind, types.clone()).name(&this.models);
-        if map && matches!(member.as_str(), "get_mut" | "iter_mut" | "values_mut") {
+        if map && matches!(member.as_str(), "iter_mut" | "values_mut") {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "`{}::{member}` other than `if let Some(v) = map.get_mut(&k)` or \
-                     `for (k, v) in map.iter_mut()` (and `values_mut`)",
+                    "`{}::{member}` other than `for (k, v) in map.iter_mut()` (and \
+                     `values_mut`)",
                     kind.name()
                 )
                 .into(),
@@ -531,6 +531,18 @@ impl Parser<'_> {
                     let source = self.keyed_mutation(&value, PreludeOp::SetRemove, rendered)?;
                     (source, Ty::Bool)
                 }
+            }
+            // `map.get_mut(&k)`: `Some` of the value's place in its entry,
+            // or `None` (`optional_place`).
+            "get_mut" if map => {
+                arity(1, &arguments)?;
+                self.coerce_key(&key, &mut arguments[0])?;
+                let value_ty = entry.clone().expect("a map has a value type");
+                let slot = self.temporary("index");
+                let mut locate = origin::Fragment::plain(format!("{slot} = "));
+                locate.push(read(self, PreludeOp::MapSlot, &arguments));
+                locate.push_text("; ");
+                return self.optional_place(&value, &value_ty, &slot, locate, expression, "[1]");
             }
             "get" if map => {
                 arity(1, &arguments)?;

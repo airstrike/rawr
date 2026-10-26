@@ -12,7 +12,7 @@ println!("{fields:?} {id}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
-<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
+<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code>, <code>first_mut</code>, <code>last_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="find-retain.rs" id="src-find-retain">struct Item {
     id: u32,
@@ -79,7 +79,7 @@ async fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-futures" data-out="out-futures" aria-label="Run futures.rs" hidden></button><b>rawr run futures.rs</b><span id="out-futures" aria-live="polite">(2, 4)</span></div>
 </div>
 <h2 id="collections">Collections</h2>
-<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
+<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A map&rsquo;s <code>get_mut</code> lends a value to change. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="hashmap.rs" id="src-hashmap">use std::collections::HashMap;
 
@@ -103,7 +103,7 @@ println!("{len}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite">2</span></div>
 </div>
 <h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
-<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>.</p>
+<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>. Two fields or two tuple members of one value can be borrowed <code>&amp;mut</code> at once, as in <code>swap(&amp;mut pair.0, &amp;mut pair.1)</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="mem.rs" id="src-mem">let mut a = vec![1];
 let mut b = vec![2, 3];
