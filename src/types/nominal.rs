@@ -218,6 +218,8 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "char" => value.is_char(),
                 // `std::cmp::Ordering` is its discriminant at runtime.
                 "i64" | "Ordering" => value.is_int(),
+                // An `i128` or a `u128` past `i64` is boxed.
+                "i128" => value.is_int() || value.is::<i128>() || value.is::<u128>(),
                 // `std::time`'s types are Rust's at runtime.
                 "Duration" => value.is::<std::time::Duration>(),
                 "Instant" => value.is::<std::time::Instant>(),

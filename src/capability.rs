@@ -711,7 +711,7 @@ pub(crate) fn builtin_supports(name: &str, capability: Kind) -> bool {
     match crate::host::runtime_builtin(name) {
         "String" => capability != Kind::Copy,
         "f64" => !matches!(capability, Kind::Eq | Kind::Ord | Kind::Hash),
-        "bool" | "char" | "i64" => true,
+        "bool" | "char" | "i64" | "i128" => true,
         // `std::cmp::Ordering` derives all but `Default`.
         "Ordering" => capability != Kind::Default,
         // `std::time::Duration` has them all; `Instant` all but `Default`.

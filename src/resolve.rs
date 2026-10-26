@@ -2558,9 +2558,8 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
             match path.name.as_str() {
                 // Every integer is the runtime's one integer, and every
                 // float its one float.
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
-                    -2
-                }
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+                | "i128" | "u128" => -2,
                 "f32" | "f64" => -3,
                 "String" => -4,
                 "bool" => -5,

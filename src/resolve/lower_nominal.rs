@@ -720,6 +720,13 @@ fn imported_surface_type(
             Int::U32 => Builtin::U32,
             Int::U64 => Builtin::U64,
             Int::Usize => Builtin::Usize,
+            Int::I128 | Int::U128 => {
+                return Err(Error::InvalidHostOperation {
+                    item: "<imported generic instance>".into(),
+                    reason: "an `i128` or a `u128` does not cross to Rust code in Rawr yet".into(),
+                    operation,
+                });
+            }
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
         Ty::Range(element) => {
@@ -838,6 +845,7 @@ fn instance_surface_type(
             Int::U32 => Builtin::U32,
             Int::U64 => Builtin::U64,
             Int::Usize => Builtin::Usize,
+            Int::I128 | Int::U128 => return None,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
         Ty::Range(element) => Type::Range(Box::new(instance_surface_type(inference, element)?)),
@@ -3505,6 +3513,9 @@ enum PreludeOp {
     Narrow,
     /// `value as T` for the kind of `kind_code`: `cast(value, kind)`.
     Cast,
+    /// An integer literal past `i64` as the kind of `kind_code` keeps it:
+    /// `wide(digits, kind)`, an `i128` or a `u128` boxed, a `u64`'s bits.
+    WideLiteral,
     /// An arithmetic result of a `{float}` that inference made an `f32`,
     /// rounded to it: `round(value)`.
     RoundF32,
@@ -3515,6 +3526,9 @@ enum PreludeOp {
     /// items it yields: `step_by(low, high, step, flags)`, `flags` bit 0
     /// for `..=` and bit 1 for an unsigned range.
     StepBy,
+    /// `StepBy` of an `i128` or a `u128` range (bit 1 of `flags` for a
+    /// `u128` one): std's own `StepBy`.
+    WideStepBy,
     /// `v[low..high]` of an array or a string (by bytes, on `char`
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
@@ -3623,7 +3637,9 @@ impl PreludeOp {
             Self::RoundF32 => "number.round-f32",
             Self::Unsigned => "number.unsigned",
             Self::StepBy => "range.step-by",
+            Self::WideStepBy => "range.wide-step-by",
             Self::Cast => "number.cast",
+            Self::WideLiteral => "number.wide-literal",
             Self::Slice => "slice.range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
@@ -3698,7 +3714,7 @@ impl PreludeOp {
             ],
             Self::FormatRadix => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
             Self::FormatBits => vec![
-                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
             ],
@@ -3726,8 +3742,15 @@ impl PreludeOp {
                 TypeId::of::<ImmutableString>(),
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
+            Self::WideLiteral => vec![TypeId::of::<ImmutableString>(), TypeId::of::<crate::INT>()],
             Self::RoundF32 | Self::Unsigned => vec![TypeId::of::<Dynamic>()],
             Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
+            Self::WideStepBy => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<crate::INT>(),
+            ],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
@@ -3892,8 +3915,13 @@ impl PreludeOp {
                 return Ok(Dynamic::from(ImmutableString::from(text)));
             }
             Self::FormatBits => {
-                let value = args[0].as_int().unwrap_or_default() as u64;
                 let bits = args[2].as_int().unwrap_or(64);
+                // An `i128`'s or a `u128`'s 128 bits; others' bits in the
+                // runtime's `i64`.
+                let value = match wide_value(args[0]) {
+                    Some(value) if bits == 128 => value.unsigned(),
+                    _ => u128::from(args[0].as_int().unwrap_or_default() as u64),
+                };
                 let value = if bits >= 64 {
                     value
                 } else {
@@ -3922,7 +3950,16 @@ impl PreludeOp {
                         }
                     };
                 }
-                let text = if mode & 4 == 4 {
+                let text = if mode & 4 == 4
+                    && let Some(Wide::Signed(value)) =
+                        wide_value(args[0]).filter(|_| args[0].as_int().is_err())
+                {
+                    exp!(value)
+                } else if mode & 4 == 4
+                    && let Some(Wide::Unsigned(value)) = wide_value(args[0])
+                {
+                    exp!(value)
+                } else if mode & 4 == 4 {
                     let value = args[0].as_int().unwrap_or_default();
                     if mode & 8 == 8 {
                         exp!(value as u64)
@@ -3971,7 +4008,7 @@ impl PreludeOp {
             Self::Narrow => {
                 let code = args[1].as_int().unwrap_or(3);
                 if let Ok(value) = args[0].as_int()
-                    && let Some((_, kind)) = Int::KINDS.get(code as usize)
+                    && let Some(kind) = Int::from_code(code)
                 {
                     let (low, high) = kind.range();
                     if !(low..=high).contains(&value) {
@@ -3982,8 +4019,33 @@ impl PreludeOp {
                 return cast_value(args[0], code);
             }
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
+            Self::WideLiteral => {
+                let text = args[0].clone_cast::<ImmutableString>();
+                let kind = Int::from_code(args[1].as_int().unwrap_or(3)).unwrap_or(Int::I64);
+                return match integer_text(&text) {
+                    Some(value) => Ok(value.store(kind)),
+                    None => Err(invariant("a wide literal is not a number")),
+                };
+            }
             Self::RoundF32 => return cast_value(args[0], 10),
             Self::Unsigned => return Ok(compare::tag_unsigned(args[0].take(), shape)),
+            Self::WideStepBy => {
+                let [step, flags] = [2, 3].map(|index| args[index].as_int().unwrap_or_default());
+                if step == 0 {
+                    return panic("assertion failed: step != 0".into());
+                }
+                let step = usize::try_from(step).unwrap_or(usize::MAX);
+                let (low, high) = (
+                    wide_value(args[0]).unwrap_or(Wide::Signed(0)),
+                    wide_value(args[1]).unwrap_or(Wide::Signed(0)),
+                );
+                return Ok(match (flags & 2 == 2, flags & 1 == 1) {
+                    (true, true) => Dynamic::from((low.unsigned()..=high.unsigned()).step_by(step)),
+                    (true, false) => Dynamic::from((low.unsigned()..high.unsigned()).step_by(step)),
+                    (false, true) => Dynamic::from((low.signed()..=high.signed()).step_by(step)),
+                    (false, false) => Dynamic::from((low.signed()..high.signed()).step_by(step)),
+                });
+            }
             Self::StepBy => {
                 let [low, high, step, flags] =
                     [0, 1, 2, 3].map(|index| args[index].as_int().unwrap_or_default());
@@ -4724,6 +4786,7 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
 fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
     Some(match &value.0 {
         Union::Int(..) => -2,
+        Union::Variant(..) if wide_value(value).is_some() => -2,
         Union::Float(..) => -3,
         Union::Str(..) => -4,
         Union::Bool(..) => -5,
@@ -5496,6 +5559,20 @@ impl ExecutableOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::Array>(),
             ],
+            // An `i128` or a `u128` past `i64` is boxed.
+            Self::Kinded {
+                op: PreludeOp::IntMethod,
+                kinds,
+            } if kinds
+                .iter()
+                .any(|&code| Int::from_code(code).is_some_and(Int::wide)) =>
+            {
+                vec![
+                    TypeId::of::<Dynamic>(),
+                    TypeId::of::<crate::INT>(),
+                    TypeId::of::<Dynamic>(),
+                ]
+            }
             Self::Prelude(op) | Self::Kinded { op, .. } | Self::Shaped { op, .. } => {
                 op.argument_types()
             }
@@ -6137,11 +6214,13 @@ impl Keyed {
     }
 }
 
-/// Rust's integer types. All are an `i64` at runtime: the kind decides the
-/// range arithmetic is checked against and what `as` truncates to.
-/// `u64` and `usize` stop at `i64::MAX`. `Var` is a literal's
-/// `{integer}`, bound by inference (`Inference::resolve`) and `i32` when
-/// nothing binds it.
+/// Rust's integer types. All but `i128` and `u128` are an `i64` at
+/// runtime: the kind decides the range arithmetic is checked against and
+/// what `as` truncates to, and a `u64` or a `usize` is its bits. An `i128`
+/// or a `u128` is an `i64` while its value fits one and a boxed Rust `i128`
+/// or `u128` past that (`wide_value`), so each value has one runtime form.
+/// `Var` is a literal's `{integer}`, bound by inference
+/// (`Inference::resolve`) and `i32` when nothing binds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Int {
     I8,
@@ -6154,11 +6233,24 @@ enum Int {
     U32,
     U64,
     Usize,
+    I128,
+    U128,
     Var(usize),
 }
 
+/// The `kind_code`s of `i128` and `u128`, past the other kinds' and the
+/// floats' and casts' codes.
+const WIDE_I128: INT = 17;
+const WIDE_U128: INT = 18;
+
+/// Added to a `Cast`'s `i128` or `u128` code: the operand is a `u64`'s or a
+/// `usize`'s bits.
+const UNSIGNED_SOURCE: INT = 32;
+
 impl Int {
-    const KINDS: [(&'static str, Self); 10] = [
+    /// Each kind by name. A kind's index is its `kind_code`, but for
+    /// `i128` and `u128` (`WIDE_I128`, `WIDE_U128`).
+    const KINDS: [(&'static str, Self); 12] = [
         ("i8", Self::I8),
         ("i16", Self::I16),
         ("i32", Self::I32),
@@ -6169,7 +6261,24 @@ impl Int {
         ("u32", Self::U32),
         ("u64", Self::U64),
         ("usize", Self::Usize),
+        ("i128", Self::I128),
+        ("u128", Self::U128),
     ];
+
+    /// The kind a `kind_code` names.
+    fn from_code(code: INT) -> Option<Self> {
+        match code {
+            WIDE_I128 => Some(Self::I128),
+            WIDE_U128 => Some(Self::U128),
+            0..10 => Some(Self::KINDS[code as usize].1),
+            _ => None,
+        }
+    }
+
+    /// `i128` or `u128`, boxed at runtime past `i64` (`wide_value`).
+    const fn wide(self) -> bool {
+        matches!(self, Self::I128 | Self::U128)
+    }
 
     fn named(name: &str) -> Option<Self> {
         Self::KINDS
@@ -6194,8 +6303,8 @@ impl Int {
             Self::U8 => (0, u8::MAX as INT),
             Self::U16 => (0, u16::MAX as INT),
             Self::U32 => (0, u32::MAX as INT),
-            Self::U64 | Self::Usize => (0, INT::MAX),
-            Self::I64 | Self::Isize | Self::Var(_) => (INT::MIN, INT::MAX),
+            Self::U64 | Self::Usize | Self::U128 => (0, INT::MAX),
+            Self::I64 | Self::Isize | Self::I128 | Self::Var(_) => (INT::MIN, INT::MAX),
         }
     }
 
@@ -6208,7 +6317,7 @@ impl Int {
     const fn signed(self) -> bool {
         matches!(
             self,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize | Self::Var(_)
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize | Self::I128 | Self::Var(_)
         )
     }
 
@@ -6217,14 +6326,17 @@ impl Int {
             Self::I8 | Self::U8 => 8,
             Self::I16 | Self::U16 => 16,
             Self::I32 | Self::U32 => 32,
+            Self::I128 | Self::U128 => 128,
             _ => 64,
         }
     }
 
-    /// Rust's bounds of the kind.
+    /// Rust's bounds of the kind; a `u128`'s stop at `i128::MAX`.
     const fn full_range(self) -> (i128, i128) {
         match self {
             Self::U64 | Self::Usize => (0, u64::MAX as i128),
+            Self::I128 => (i128::MIN, i128::MAX),
+            Self::U128 => (0, i128::MAX),
             _ => {
                 let (low, high) = self.range();
                 (low as i128, high as i128)
@@ -6909,6 +7021,8 @@ impl Ty {
             Self::ProfileMessage { payload, .. } => payload.native_type_id(models),
             Self::Bool => Some(TypeId::of::<bool>()),
             Self::Char => Some(TypeId::of::<char>()),
+            // An `i128` or a `u128` is an `i64` or, past it, boxed: any value.
+            Self::Int(kind) if kind.wide() => None,
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
@@ -9139,6 +9253,9 @@ struct Parser<'a> {
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
     pending_int_kinds: Vec<(String, Ty)>,
+    /// Integer literals past `i64` whose kind inference had not settled:
+    /// each must fit the kind it settles on.
+    pending_wide_literals: Vec<PendingWide>,
     /// Float literals and arithmetic of a `{float}` whose kind inference
     /// had not settled: each placeholder, written over once it has. A
     /// literal becomes its text, rounded to `f32` when that is its kind;
@@ -9332,6 +9449,7 @@ impl<'a> Parser<'a> {
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
+            pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
@@ -10312,6 +10430,30 @@ impl<'a> Parser<'a> {
             };
             if self.inference.resolve(&kind) == kind {
                 self.inference.bind(id, default);
+            }
+        }
+        for pending in std::mem::take(&mut self.pending_wide_literals) {
+            let kind = match self.inference.resolve(&pending.ty) {
+                Ty::Int(Int::Var(_)) => Int::I32,
+                Ty::Int(kind) => kind,
+                _ => continue,
+            };
+            if pending.value.fits(kind).is_err() {
+                return Err(literal_range(kind, pending.value, pending.at));
+            }
+            let [signed, unsigned, bits] = &pending.texts;
+            let text = match kind {
+                Int::I128 => signed,
+                Int::U128 => unsigned,
+                _ => bits,
+            };
+            let replacement = format!("{text:<width$}", width = pending.placeholder.len());
+            self.output
+                .replace_same_length(&pending.placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure
+                    .body
+                    .replace_same_length(&pending.placeholder, &replacement);
             }
         }
         for (placeholder, ty) in std::mem::take(&mut self.pending_int_kinds) {
@@ -25237,7 +25379,12 @@ impl<'a> Parser<'a> {
             source = Ty::Int(Int::I64);
             value.ty = source.clone();
         }
-        let literal = value.source.as_str().parse::<crate::FLOAT>().is_ok();
+        // A literal past `i64` (`wide_literal`) takes the cast's kind too.
+        let literal = value.source.as_str().parse::<crate::FLOAT>().is_ok()
+            || self
+                .pending_wide_literals
+                .iter()
+                .any(|pending| pending.ty == source);
         match (&source, &target) {
             (Ty::Int(Int::Var(_)), Ty::Int(_)) | (Ty::Float(Float::Var(_)), Ty::Float(_))
                 if literal => {}
@@ -25273,6 +25420,15 @@ impl<'a> Parser<'a> {
                 self.inference.bind(*id, target.clone());
                 true
             }
+            // An `i128` or a `u128` keeps a narrower kind's value as it is
+            // (`Int`), but for a `u64`'s or `usize`'s bits and a negative
+            // number into a `u128`.
+            (Ty::Int(from), Ty::Int(to)) if from.wide() || to.wide() => {
+                from == to
+                    || !from.wide()
+                        && !matches!(from, Int::U64 | Int::Usize)
+                        && (*to == Int::I128 || !from.signed())
+            }
             // Every kind keeps a value as Rust's 64-bit `as` leaves it.
             (Ty::Int(from), Ty::Int(to)) => {
                 let ((low, high), (to_low, to_high)) = (from.full_range(), to.full_range());
@@ -25294,6 +25450,9 @@ impl<'a> Parser<'a> {
             let code = match (&source, &target) {
                 (Ty::Int(Int::U64 | Int::Usize), Ty::Float(Float::F32)) => 13,
                 (Ty::Int(Int::U64 | Int::Usize), Ty::Float(_)) => 14,
+                (Ty::Int(Int::U64 | Int::Usize), Ty::Int(to)) if to.wide() => {
+                    kind_code(target.clone()) + UNSIGNED_SOURCE
+                }
                 _ => kind_code(target.clone()),
             };
             value.source = self.prelude_op(PreludeOp::Cast, [operand, code.to_string().into()]);
@@ -25347,6 +25506,11 @@ impl<'a> Parser<'a> {
             };
             if matches!(symbol, "&" | "|" | "^") {
                 let ty = self.operand_type(&lhs, &mut rhs, &[Ty::Int(Int::I64), Ty::Bool])?;
+                if let Ty::Int(kind) = ty
+                    && kind.wide()
+                {
+                    return Ok(self.wide_binary(symbol, lhs, rhs, ty.clone(), ty));
+                }
                 return Ok(self.binary(lhs, symbol, rhs, ty));
             }
             let ty = self.integer_operand(&lhs)?;
@@ -25456,6 +25620,14 @@ impl<'a> Parser<'a> {
             }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
+        // An `i128` or a `u128` past `i64` is boxed: its operators are
+        // `INT_METHODS`'.
+        if let Ty::Int(kind) = ty
+            && kind.wide()
+        {
+            let output = output.unwrap_or_else(|| ty.clone());
+            return Ok(self.wide_binary(symbol, lhs, rhs, ty, output));
+        }
         // A `u64` or a `usize` is its bits in the runtime's `i64`: its
         // arithmetic is unsigned, and it orders with the sign bit flipped.
         if let Ty::Int(Int::U64 | Int::Usize) = ty {
@@ -25484,6 +25656,27 @@ impl<'a> Parser<'a> {
             return Ok(self.checked_arithmetic(value, symbol));
         };
         Ok(self.binary(lhs, symbol, rhs, output))
+    }
+
+    /// `lhs symbol rhs` of the `i128` or `u128` type `ty` through
+    /// `INT_METHODS`, of the type `output`.
+    fn wide_binary(
+        &mut self,
+        symbol: &str,
+        lhs: ParsedExpr,
+        rhs: ParsedExpr,
+        ty: Ty,
+        output: Ty,
+    ) -> ParsedExpr {
+        let expression = span(lhs.span.start(), rhs.span.end());
+        let source = self.int_op(
+            symbol,
+            lhs.rendered_source(),
+            rhs.rendered_source(),
+            &ty,
+            &ty,
+        );
+        self.operator_expr(source, output, expression)
     }
 
     /// The integer type of an operand, an unknown one taking `{integer}`.
@@ -26908,6 +27101,8 @@ impl<'a> Parser<'a> {
             | Ty::Boxed(..)
             | Ty::Param(_)
             | Ty::Projection(..) => false,
+            // An `i128` or a `u128` past `i64` is boxed.
+            Ty::Int(kind) => !kind.wide(),
             _ => true,
         }
     }
@@ -27511,7 +27706,9 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         // Rust's sign and rounding methods, through the runtime's math.
         let unary = match (&number, member.as_str()) {
-            (Ty::Int(kind), "abs") if kind.signed() => Some(("abs", number.clone())),
+            (Ty::Int(kind), "abs") if kind.signed() && !kind.wide() => {
+                Some(("abs", number.clone()))
+            }
             (Ty::Float(_), member)
                 if let Some((_, function)) =
                     FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
@@ -27523,7 +27720,9 @@ impl<'a> Parser<'a> {
                 };
                 Some((*function, ty))
             }
-            (Ty::Int(kind), "signum") if kind.signed() => Some(("sign", number.clone())),
+            (Ty::Int(kind), "signum") if kind.signed() && !kind.wide() => {
+                Some(("sign", number.clone()))
+            }
             _ => None,
         };
         if let Some((function, ty)) = unary {
@@ -27597,7 +27796,8 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("a power method without exactly one argument"));
         };
         self.require_type(&exponent, &argument.ty, argument.span)?;
-        if let Ty::Int(Int::U64 | Int::Usize) = number {
+        // A `u64`'s bits and an `i128` or a `u128` past `i64`: `INT_METHODS`.
+        if let Ty::Int(Int::U64 | Int::Usize | Int::I128 | Int::U128) = number {
             let expression = span(value.span.start(), end);
             let source = self.int_op(
                 "**",
@@ -27646,7 +27846,9 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        if name == "is_power_of_two" && kind.signed() {
+        if name == "is_power_of_two" && kind.signed()
+            || SIGNED_INT_METHODS.contains(&name) && !kind.signed()
+        {
             return Err(Error::UnknownMember {
                 owner: kind.name().into(),
                 member: name.into(),
@@ -28243,6 +28445,13 @@ impl<'a> Parser<'a> {
                 actual: ty.name(&self.models),
                 expression: operand.span,
             });
+        }
+        if let Ty::Int(kind) = ty
+            && kind.wide()
+        {
+            let expression = span(start, operand.span.end());
+            let source = self.int_op("neg", operand.rendered_source(), "0".into(), &ty, &ty);
+            return Ok(self.operator_expr(source, ty, expression));
         }
         let source = operand
             .rendered_source()
@@ -29663,6 +29872,11 @@ impl<'a> Parser<'a> {
             Token::ByteStringConstant(bytes) => Ok(self.byte_literal(&bytes, token_span)),
             Token::ByteConstant(byte) => {
                 Ok(self.literal(byte.to_string(), Ty::Int(Int::U8), token_span))
+            }
+            Token::FloatConstant(value)
+                if let Some(literal) = self.wide_literal(&value.1, token_span)? =>
+            {
+                Ok(literal)
             }
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
@@ -36490,6 +36704,21 @@ impl<'a> Parser<'a> {
         // `u8::MAX`, `i64::MIN`, `f64::MAX`: the kind's bounds (`u64::MAX`
         // and `usize::MAX` are all 64 bits set).
         if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let at = span(name_span.start(), member_span.end());
+            if let Ty::Int(kind) = builtin {
+                let bound = match (kind, member.as_str()) {
+                    (Int::I128, "MAX") => Some(Wide::Signed(i128::MAX)),
+                    (Int::I128, "MIN") => Some(Wide::Signed(i128::MIN)),
+                    (Int::U128, "MAX") => Some(Wide::Unsigned(u128::MAX)),
+                    _ => None,
+                };
+                if let Some(bound) = bound {
+                    return self.wide_constant(bound, builtin, at);
+                }
+                if member.as_str() == "BITS" {
+                    return Ok(self.literal(kind.bits().to_string(), Ty::Int(Int::U32), at));
+                }
+            }
             let text = match (&builtin, member.as_str()) {
                 (Ty::Int(kind), "MAX") => kind.store(kind.full_range().1).to_string(),
                 (Ty::Int(kind), "MIN") => kind.range().0.to_string(),
@@ -36667,6 +36896,14 @@ impl<'a> Parser<'a> {
             // Rust's lossless `From` impls among numbers: a wider integer,
             // an `f64` from an `f32` or an integer of at most 32 bits.
             let lossless = match (&builtin, &source) {
+                // Into an `i128` or a `u128` from a narrower kind of fixed
+                // width; a `u64`'s bits are read unsigned.
+                (Ty::Int(to), Ty::Int(from)) if to.wide() || from.wide() => {
+                    let fits = !from.wide()
+                        && !matches!(from, Int::Isize | Int::Usize)
+                        && (*to == Int::I128 || !from.signed());
+                    fits.then_some(*from == Int::U64)
+                }
                 (Ty::Int(to), Ty::Int(from)) => {
                     let ((low, high), (to_low, to_high)) = (from.full_range(), to.full_range());
                     (to_low <= low && high <= to_high).then_some(false)
@@ -36680,7 +36917,11 @@ impl<'a> Parser<'a> {
             if let Some(cast) = lossless {
                 let mut value = argument.rendered_source();
                 if cast {
-                    value = self.prelude_op(PreludeOp::Cast, [value, "11".into()]);
+                    let code = match builtin {
+                        Ty::Int(_) => kind_code(builtin.clone()) + UNSIGNED_SOURCE,
+                        _ => 11,
+                    };
+                    value = self.prelude_op(PreludeOp::Cast, [value, code.to_string().into()]);
                 }
                 return Ok(self.operator_expr(value, builtin, expression));
             }
@@ -37944,6 +38185,75 @@ impl<'a> Parser<'a> {
             },
             false,
         ))
+    }
+
+    /// An integer literal past `i64` (the tokenizer's float of its text
+    /// `text`): of its suffix's kind or the one inference settles on, which
+    /// must hold it. `None` for a float literal.
+    fn wide_literal(&mut self, text: &str, at: Span) -> Result<Option<ParsedExpr>, Error> {
+        let Some(value) = integer_text(text) else {
+            return Ok(None);
+        };
+        let ty = match self.peek() {
+            Token::Identifier(name) if Float::named(name.as_str()).is_some() => return Ok(None),
+            Token::Identifier(name) if let Some(kind) = Int::named(name.as_str()) => {
+                self.next();
+                Ty::Int(kind)
+            }
+            _ => {
+                let id = self.inference.fresh_id();
+                self.literal_kinds.push((id, true));
+                Ty::Int(Int::Var(id))
+            }
+        };
+        self.wide_constant(value, ty, at).map(Some)
+    }
+
+    /// The integer `value` of the integer type `ty` as the runtime keeps
+    /// it (`PreludeOp::WideLiteral`); a kind inference has not settled is
+    /// checked once it has.
+    fn wide_constant(&mut self, value: Wide, ty: Ty, at: Span) -> Result<ParsedExpr, Error> {
+        let digits = format!("{:?}", value.to_string());
+        let mut boxed = |kind: Int| {
+            let code = kind_code(Ty::Int(kind)).to_string();
+            let call = self.prelude_op(
+                PreludeOp::WideLiteral,
+                [digits.as_str().into(), code.into()],
+            );
+            call.as_str().to_string()
+        };
+        // A `u64`'s or a `usize`'s bits are an `i64` literal.
+        let bits = format!("({})", value.unsigned() as u64 as INT);
+        let source = match ty {
+            Ty::Int(Int::Var(_)) => {
+                let texts = [boxed(Int::I128), boxed(Int::U128), bits];
+                let width = texts.iter().map(String::len).max().unwrap_or_default();
+                let placeholder = format!(
+                    "{:<width$}",
+                    format!(
+                        "__rawr_wide_literal_{:08}",
+                        self.pending_wide_literals.len()
+                    )
+                );
+                self.pending_wide_literals.push(PendingWide {
+                    ty: ty.clone(),
+                    value,
+                    at,
+                    placeholder: placeholder.clone(),
+                    texts,
+                });
+                placeholder
+            }
+            Ty::Int(kind) if value.fits(kind).is_err() => {
+                return Err(literal_range(kind, value, at));
+            }
+            Ty::Int(Int::U64 | Int::Usize) => bits,
+            Ty::Int(kind) => boxed(kind),
+            _ => {
+                return Err(self.unsupported("an integer literal of a type that is not an integer"))
+            }
+        };
+        Ok(self.operator_expr(origin::Fragment::plain(source), ty, at))
     }
 
     fn literal(&self, source: impl Into<String>, ty: Ty, span: Span) -> ParsedExpr {
@@ -41901,6 +42211,12 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return compare_value(&rhs.0, &lhs.0, models);
     }
+    // An `i128` or a `u128` past `i64`, boxed.
+    if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
+        && let Some(ordering) = wide_order(lhs, rhs)
+    {
+        return Some(ordering);
+    }
     match (&lhs.0, &rhs.0) {
         (Union::Unit(..), Union::Unit(..)) => Some(std::cmp::Ordering::Equal),
         (Union::Bool(lhs, ..), Union::Bool(rhs, ..)) => Some(lhs.cmp(rhs)),
@@ -42069,6 +42385,13 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .iter()
                     .zip(rhs.iter())
                     .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
+        }
+        // An `i128` or a `u128` past `i64`, boxed.
+        (Union::Variant(..), Union::Variant(..) | Union::Int(..))
+        | (Union::Int(..), Union::Variant(..))
+            if let Some(ordering) = wide_order(lhs, rhs) =>
+        {
+            ordering == std::cmp::Ordering::Equal
         }
         (Union::Variant(..), Union::Variant(..)) => {
             match crate::host::value::host_equal(lhs, rhs) {
@@ -42598,10 +42921,9 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
         12 => result(text.parse::<char>(), Dynamic::from),
         15 => result(text.parse::<bool>(), Dynamic::from),
         16 => crate::result::ok(ImmutableString::from(text).into()),
-        code => match Int::KINDS
-            .get(code as usize)
-            .map_or("i64", |(name, _)| *name)
-        {
+        code => match Int::from_code(code).map_or("i64", Int::name) {
+            "i128" => result(text.parse::<i128>(), wide_i128),
+            "u128" => result(text.parse::<u128>(), wide_u128),
             "i8" => result(text.parse::<i8>(), |value| int(value.into())),
             "i16" => result(text.parse::<i16>(), |value| int(value.into())),
             "i32" => result(text.parse::<i32>(), |value| int(value.into())),
@@ -42617,6 +42939,8 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
 
 fn kind_code(ty: Ty) -> INT {
     match ty {
+        Ty::Int(Int::I128) => WIDE_I128,
+        Ty::Int(Int::U128) => WIDE_U128,
         Ty::Int(kind) => Int::KINDS
             .iter()
             .position(|(_, candidate)| *candidate == kind)
@@ -43532,6 +43856,34 @@ const INT_METHODS: &[(&str, char, char)] = &[
     ("/", 'x', 't'),
     ("%", 'x', 't'),
     ("**", 'x', 't'),
+    // An `i128`'s and a `u128`'s operators, which the runtime's `i64` ones
+    // do not compute past `i64`.
+    ("neg", 'x', 't'),
+    ("&", 'x', 't'),
+    ("|", 'x', 't'),
+    ("^", 'x', 't'),
+    ("<", 'x', 'b'),
+    (">", 'x', 'b'),
+    ("<=", 'x', 'b'),
+    (">=", 'x', 'b'),
+    ("==", 'x', 'b'),
+    ("!=", 'x', 'b'),
+    // Methods of the signed kinds; `abs` and `signum` of the narrower ones
+    // are the runtime's.
+    ("abs", 'n', 't'),
+    ("signum", 'n', 't'),
+    ("unsigned_abs", 'n', 'a'),
+    ("is_negative", 'n', 'b'),
+    ("is_positive", 'n', 'b'),
+];
+
+/// The `INT_METHODS` only a signed kind has.
+const SIGNED_INT_METHODS: &[&str] = &[
+    "abs",
+    "signum",
+    "unsigned_abs",
+    "is_negative",
+    "is_positive",
 ];
 
 /// An `INT_METHODS` entry by name, for a method call.
@@ -43549,19 +43901,25 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     let panic = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
-    let kind = |code: INT| {
-        Int::KINDS
-            .get(code as usize)
-            .map_or(Int::I64, |(_, kind)| *kind)
+    let kind = |code: INT| Int::from_code(code).unwrap_or(Int::I64);
+    let (kind, mut operand_kind) = (kind(kinds[0]), kind(kinds[1]));
+    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
+    let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if kind.wide() || operand_kind.wide() && name == "try_from" {
+        return wide_method(kind, operand_kind, args);
+    }
+    // A shift by an `i128` or a `u128`: an amount past `i64` overflows.
+    let operand = if operand_kind.wide() {
+        operand_kind = Int::I64;
+        let amount = wide_value(args[2]).map_or(0, Wide::signed);
+        INT::try_from(amount.max(-1)).unwrap_or(INT::MAX)
+    } else {
+        args[2].as_int().unwrap_or_default()
     };
-    let (kind, operand_kind) = (kind(kinds[0]), kind(kinds[1]));
     let bits = kind.bits();
     let mask = u128::MAX >> (128 - bits);
     let (low, high) = kind.full_range();
     let value = args[0].as_int().unwrap_or_default();
-    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
-    let operand = args[2].as_int().unwrap_or_default();
-    let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
     if name == "try_from" {
         let source = operand_kind.widen(value);
         // `TryFromIntError`'s `Debug`, its runtime value.
@@ -43679,6 +44037,9 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
                 "rem_euclid" => kind.store(a.rem_euclid(b)),
                 "div_euclid" => kind.store(a.div_euclid(b)),
                 "abs_diff" => kind.unsigned().store((a - b).abs()),
+                "unsigned_abs" => kind.unsigned().store(a.abs()),
+                "is_negative" => return Ok((a < 0).into()),
+                "is_positive" => return Ok((a > 0).into()),
                 "is_power_of_two" => return Ok((a > 0 && a & (a - 1) == 0).into()),
                 "ilog2" | "ilog10" if a <= 0 => {
                     return panic("argument of integer logarithm must be positive")
@@ -43703,6 +44064,345 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     Ok(result)
 }
 
+/// A runtime integer as the number it is: an `i64`, or the boxed `i128`
+/// or `u128` an `i128` or a `u128` past `i64` is (`Int`).
+#[derive(Clone, Copy, Debug)]
+enum Wide {
+    Signed(i128),
+    Unsigned(u128),
+}
+
+impl Wide {
+    /// The number's place in one order of every `i128` and `u128`.
+    const fn key(self) -> (bool, u128) {
+        match self {
+            Self::Signed(value) => (value >= 0, value as u128),
+            Self::Unsigned(value) => (true, value),
+        }
+    }
+
+    /// The number as an `i128`, a `u128` past `i128::MAX` wrapped, as `as`
+    /// wraps it.
+    const fn signed(self) -> i128 {
+        match self {
+            Self::Signed(value) => value,
+            Self::Unsigned(value) => value as i128,
+        }
+    }
+
+    /// The number as a `u128`, a negative one wrapped.
+    const fn unsigned(self) -> u128 {
+        match self {
+            Self::Signed(value) => value as u128,
+            Self::Unsigned(value) => value,
+        }
+    }
+
+    /// The number in `kind`'s bounds, as `TryFrom` asks: `Err(true)` when
+    /// it is below them, `Err(false)` above.
+    fn fits(self, kind: Int) -> Result<(), bool> {
+        let (negative, magnitude) = match self {
+            Self::Signed(value) => (value < 0, value.unsigned_abs()),
+            Self::Unsigned(value) => (false, value),
+        };
+        let (low, high): (u128, u128) = match kind {
+            Int::U128 => (0, u128::MAX),
+            Int::I128 => (1 << 127, i128::MAX as u128),
+            kind => {
+                let (low, high) = kind.full_range();
+                (low.unsigned_abs(), high as u128)
+            }
+        };
+        match (negative, magnitude) {
+            (true, magnitude) if magnitude > low => Err(true),
+            (false, magnitude) if magnitude > high => Err(false),
+            _ => Ok(()),
+        }
+    }
+
+    /// The number as the runtime keeps a value of `kind`, wrapped to it:
+    /// an `i128` or a `u128` an `i64` when it fits one, else boxed.
+    fn store(self, kind: Int) -> Dynamic {
+        match kind {
+            Int::I128 => wide_i128(self.signed()),
+            Int::U128 => wide_u128(self.unsigned()),
+            kind => {
+                let bits = kind.bits();
+                let pattern = self.unsigned() & (u128::MAX >> (128 - bits));
+                Dynamic::from_int(kind.store(kind.sign(pattern as i128)))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Wide {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Signed(value) => value.fmt(formatter),
+            Self::Unsigned(value) => value.fmt(formatter),
+        }
+    }
+}
+
+/// The number an integer literal's text is (decimal, or `0x`, `0o`, `0b`
+/// digits, with an optional `-`); `None` for a float literal's or one past
+/// the `i128` and `u128` bounds.
+fn integer_text(text: &str) -> Option<Wide> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, text),
+    };
+    let magnitude = match digits.get(..2) {
+        Some("0x") => u128::from_str_radix(&digits[2..], 16).ok()?,
+        Some("0o") => u128::from_str_radix(&digits[2..], 8).ok()?,
+        Some("0b") => u128::from_str_radix(&digits[2..], 2).ok()?,
+        _ if digits.bytes().all(|byte| byte.is_ascii_digit()) => digits.parse().ok()?,
+        _ => return None,
+    };
+    if !negative {
+        return Some(i128::try_from(magnitude).map_or(Wide::Unsigned(magnitude), Wide::Signed));
+    }
+    (magnitude <= 1 << 127).then(|| Wide::Signed(0i128.wrapping_sub_unsigned(magnitude)))
+}
+
+/// Rust's error for an integer literal `value` out of `kind`'s range.
+fn literal_range(kind: Int, value: Wide, at: Span) -> Error {
+    Error::TypeMismatch {
+        expected: format!("a literal in the range of `{}`", kind.name()).into(),
+        actual: value.to_string().into(),
+        expression: at,
+    }
+}
+
+/// A runtime integer as the number it is, or `None` for another value.
+fn wide_value(value: &Dynamic) -> Option<Wide> {
+    if let Ok(value) = value.as_int() {
+        return Some(Wide::Signed(value.into()));
+    }
+    if let Some(value) = value.read_lock::<i128>() {
+        return Some(Wide::Signed(*value));
+    }
+    value
+        .read_lock::<u128>()
+        .map(|value| Wide::Unsigned(*value))
+}
+
+/// A runtime value of `kind` as the number it is: a `u64`'s or a `usize`'s
+/// bits read unsigned.
+fn kind_value(value: &Dynamic, kind: Int) -> Wide {
+    match (kind, value.as_int()) {
+        (Int::U64 | Int::Usize, Ok(bits)) => Wide::Unsigned(u128::from(bits as u64)),
+        _ => wide_value(value).unwrap_or(Wide::Signed(0)),
+    }
+}
+
+/// An `i128` as the runtime keeps it: an `i64` while it fits one.
+fn wide_i128(value: i128) -> Dynamic {
+    INT::try_from(value).map_or_else(|_| Dynamic::from(value), Dynamic::from_int)
+}
+
+/// A `u128` as the runtime keeps it: an `i64` while it fits one.
+fn wide_u128(value: u128) -> Dynamic {
+    INT::try_from(value).map_or_else(|_| Dynamic::from(value), Dynamic::from_int)
+}
+
+/// The order of two runtime integers where one is a boxed `i128` or
+/// `u128`; `None` when either is not an integer.
+fn wide_order(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+    Some(wide_value(lhs)?.key().cmp(&wide_value(rhs)?.key()))
+}
+
+/// `low..high` or `low..=high` where a bound is a boxed `i128` or `u128`:
+/// Rust's range of the kind, whose items the runtime's iterator boxes.
+pub(crate) fn wide_range(args: &mut FnCallArgs, inclusive: bool) -> RawrResult {
+    let (Some(low), Some(high)) = (wide_value(args[0]), wide_value(args[1])) else {
+        return Err(invariant("a 128-bit range bound is not an integer"));
+    };
+    Ok(match (low, high, inclusive) {
+        (Wide::Unsigned(_), ..) | (_, Wide::Unsigned(_), _) if inclusive => {
+            Dynamic::from(low.unsigned()..=high.unsigned())
+        }
+        (Wide::Unsigned(_), ..) | (_, Wide::Unsigned(_), _) => {
+            Dynamic::from(low.unsigned()..high.unsigned())
+        }
+        _ if inclusive => Dynamic::from(low.signed()..=high.signed()),
+        _ => Dynamic::from(low.signed()..high.signed()),
+    })
+}
+
+/// The runtime's operator `symbol` (`INT_METHODS`) where a value is a boxed
+/// `i128` or `u128` and no static type says which: a generic body's `+` or
+/// `<`, a literal pattern. Computed in `u128` when either is one.
+pub(crate) fn wide_operator(symbol: &str, args: &mut FnCallArgs) -> RawrResult {
+    let (Some(lhs), Some(rhs)) = (wide_value(args[0]), wide_value(args[1])) else {
+        return Err(invariant(
+            "a 128-bit operator on a value that is not an integer",
+        ));
+    };
+    match (lhs, rhs) {
+        (Wide::Unsigned(_), _) | (_, Wide::Unsigned(_)) => {
+            wide_u128_method(symbol, lhs.unsigned(), rhs.unsigned(), 0)
+        }
+        _ => wide_i128_method(symbol, lhs.signed(), rhs.signed(), 0),
+    }
+}
+
+/// `INT_METHODS`' entry of `args[1]` on an `i128` or a `u128` (`kind`), or
+/// `try_from` between such a kind and another, as debug Rust computes it.
+fn wide_method(kind: Int, operand_kind: Int, args: &mut FnCallArgs) -> RawrResult {
+    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
+    let (name, operand_type, _) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if name == "try_from" {
+        let source = kind_value(args[0], operand_kind);
+        // `TryFromIntError`'s `Debug`, its runtime value.
+        return Ok(match source.fits(kind) {
+            Ok(()) => crate::result::ok(source.store(kind)),
+            Err(below) => crate::result::err(
+                ImmutableString::from(if below {
+                    "TryFromIntError(NegOverflow)"
+                } else {
+                    "TryFromIntError(PosOverflow)"
+                })
+                .into(),
+            ),
+        });
+    }
+    let value = kind_value(args[0], kind);
+    let operand = match operand_type {
+        's' => kind_value(args[2], kind),
+        'u' => kind_value(args[2], Int::U32),
+        _ if matches!(name, "<<" | ">>" | "**") => kind_value(args[2], operand_kind),
+        _ => kind_value(args[2], kind),
+    };
+    // A shift amount or an exponent; one past `i128::MAX` overflows anyway.
+    let amount = match operand {
+        Wide::Signed(amount) => amount,
+        Wide::Unsigned(amount) => i128::try_from(amount).unwrap_or(i128::MAX),
+    };
+    if kind == Int::U128 {
+        wide_u128_method(name, value.unsigned(), operand.unsigned(), amount)
+    } else {
+        wide_i128_method(name, value.signed(), operand.signed(), amount)
+    }
+}
+
+/// `wide_method` of one of the 128-bit kinds: `$t`, kept by `$store`.
+macro_rules! wide_methods {
+    ($function:ident, $t:ty, $store:ident) => {
+        fn $function(name: &str, a: $t, b: $t, amount: i128) -> RawrResult {
+            let panic = |message: &str| -> RawrResult {
+                Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+            };
+            let zero: $t = 0;
+            let exponent = u32::try_from(amount).unwrap_or(u32::MAX);
+            let some = |value: Option<$t>| match value {
+                Some(value) => crate::option::some($store(value)),
+                None => crate::option::none(),
+            };
+            let pair = |(value, overflowed): ($t, bool)| {
+                Dynamic::from_array(vec![$store(value), overflowed.into()])
+            };
+            let exact = |value: Option<$t>, verb: &str| match value {
+                Some(value) => Ok($store(value)),
+                None => panic(&format!("attempt to {verb} with overflow")),
+            };
+            const DIVIDE: &str = "attempt to divide by zero";
+            const REMAINDER: &str = "attempt to calculate the remainder with a divisor of zero";
+            let divisor = matches!(
+                name,
+                "/" | "wrapping_div" | "saturating_div" | "overflowing_div" | "div_euclid"
+            );
+            let remainder = matches!(
+                name,
+                "%" | "wrapping_rem" | "overflowing_rem" | "rem_euclid"
+            );
+            if b == zero && (divisor || remainder) {
+                return panic(if divisor { DIVIDE } else { REMAINDER });
+            }
+            Ok(match name {
+                "+" => return exact(a.checked_add(b), "add"),
+                "-" => return exact(a.checked_sub(b), "subtract"),
+                "*" => return exact(a.checked_mul(b), "multiply"),
+                "/" => return exact(a.checked_div(b), "divide"),
+                "%" => return exact(a.checked_rem(b), "calculate the remainder"),
+                "**" => return exact(a.checked_pow(exponent), "multiply"),
+                "neg" => return exact(a.checked_neg(), "negate"),
+                "abs" if a < zero => return exact(a.checked_neg(), "negate"),
+                "abs" => $store(a),
+                "checked_add" => some(a.checked_add(b)),
+                "checked_sub" => some(a.checked_sub(b)),
+                "checked_mul" => some(a.checked_mul(b)),
+                "checked_div" => some(a.checked_div(b)),
+                "checked_rem" => some(a.checked_rem(b)),
+                "checked_neg" => some(a.checked_neg()),
+                "checked_pow" => some(a.checked_pow(exponent)),
+                "wrapping_add" => $store(a.wrapping_add(b)),
+                "wrapping_sub" => $store(a.wrapping_sub(b)),
+                "wrapping_mul" => $store(a.wrapping_mul(b)),
+                "wrapping_div" => $store(a.wrapping_div(b)),
+                "wrapping_rem" => $store(a.wrapping_rem(b)),
+                "wrapping_neg" => $store(a.wrapping_neg()),
+                "wrapping_pow" => $store(a.wrapping_pow(exponent)),
+                "saturating_add" => $store(a.saturating_add(b)),
+                "saturating_sub" => $store(a.saturating_sub(b)),
+                "saturating_mul" => $store(a.saturating_mul(b)),
+                "saturating_div" => $store(a.saturating_div(b)),
+                "saturating_pow" => $store(a.saturating_pow(exponent)),
+                "overflowing_add" => pair(a.overflowing_add(b)),
+                "overflowing_sub" => pair(a.overflowing_sub(b)),
+                "overflowing_mul" => pair(a.overflowing_mul(b)),
+                "overflowing_div" => pair(a.overflowing_div(b)),
+                "overflowing_rem" => pair(a.overflowing_rem(b)),
+                "overflowing_neg" => pair(a.overflowing_neg()),
+                "overflowing_pow" => pair(a.overflowing_pow(exponent)),
+                "count_ones" => INT::from(a.count_ones()).into(),
+                "count_zeros" => INT::from(a.count_zeros()).into(),
+                "leading_zeros" => INT::from(a.leading_zeros()).into(),
+                "trailing_zeros" => INT::from(a.trailing_zeros()).into(),
+                "rotate_left" => $store(a.rotate_left(exponent)),
+                "rotate_right" => $store(a.rotate_right(exponent)),
+                "rem_euclid" => return exact(a.checked_rem_euclid(b), "calculate the remainder"),
+                "div_euclid" => return exact(a.checked_div_euclid(b), "divide"),
+                "abs_diff" => wide_u128(a.abs_diff(b)),
+                "unsigned_abs" if a < zero => wide_u128((a as u128).wrapping_neg()),
+                "unsigned_abs" => wide_u128(a as u128),
+                "is_power_of_two" => (a > zero && a & (a - 1) == zero).into(),
+                "is_negative" => (a < zero).into(),
+                "is_positive" => (a > zero).into(),
+                "signum" => INT::from(a > zero).wrapping_sub(INT::from(a < zero)).into(),
+                "ilog2" | "ilog10" if a <= zero => {
+                    return panic("argument of integer logarithm must be positive")
+                }
+                "ilog2" => INT::from(a.ilog2()).into(),
+                "ilog10" => INT::from(a.ilog10()).into(),
+                "<<" | ">>" if !(0..128).contains(&amount) => {
+                    return panic(if name == "<<" {
+                        "attempt to shift left with overflow"
+                    } else {
+                        "attempt to shift right with overflow"
+                    })
+                }
+                "<<" => $store(a << exponent),
+                ">>" => $store(a >> exponent),
+                "!" => $store(!a),
+                "&" => $store(a & b),
+                "|" => $store(a | b),
+                "^" => $store(a ^ b),
+                "<" => (a < b).into(),
+                ">" => (a > b).into(),
+                "<=" => (a <= b).into(),
+                ">=" => (a >= b).into(),
+                "==" => (a == b).into(),
+                "!=" => (a != b).into(),
+                _ => return Err(invariant("an unknown integer method at runtime")),
+            })
+        }
+    };
+}
+
+wide_methods!(wide_i128_method, i128, wide_i128);
+wide_methods!(wide_u128_method, u128, wide_u128);
+
 /// `value as` the kind of `code` (`kind_code`), Rust's `as`: integers wrap
 /// to the width, floats saturate (`NaN` is `0`), `char` and `bool` are their
 /// numbers, a `u8` is a `char`, an `f32` is rounded.
@@ -43710,6 +44410,37 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
     let fail = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
+    // Into an `i128` or a `u128` (from a `u64`'s or a `usize`'s bits when
+    // `UNSIGNED_SOURCE` is added), or out of a boxed one.
+    let (code, source) = match code {
+        code if code >= UNSIGNED_SOURCE => (code - UNSIGNED_SOURCE, Int::U64),
+        code => (code, Int::I64),
+    };
+    let target = Int::from_code(code).filter(|kind| kind.wide());
+    if let (Some(target), Ok(float)) = (target, value.as_float()) {
+        // Rust's `as` saturates, and `NaN` is `0`.
+        return Ok(if target == Int::I128 {
+            wide_i128(float as i128)
+        } else {
+            wide_u128(float as u128)
+        });
+    }
+    if (target.is_some() || matches!(value.0, Union::Variant(..)))
+        && let Some(number) = wide_value(value).map(|_| kind_value(value, source))
+    {
+        return Ok(match (code, Int::from_code(code)) {
+            (_, Some(kind)) => number.store(kind),
+            (10, _) => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as f32 as crate::FLOAT,
+                Wide::Unsigned(value) => value as f32 as crate::FLOAT,
+            }),
+            (12, _) => Dynamic::from(char::from(number.unsigned() as u8)),
+            _ => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as crate::FLOAT,
+                Wide::Unsigned(value) => value as crate::FLOAT,
+            }),
+        });
+    }
     if let Ok(float) = value.as_float() {
         return Ok(match code {
             10 => Dynamic::from_float(float as f32 as crate::FLOAT),
@@ -43745,6 +44476,8 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
         // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
         13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
         14 => Dynamic::from_float(integer as u64 as crate::FLOAT),
+        // A `char` or a `bool` into an `i128` or a `u128`.
+        _ if target.is_some() => integer.into(),
         _ => {
             let kind = Int::KINDS[code as usize].1;
             let wrapped = match kind {
@@ -43759,6 +44492,17 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
             wrapped.into()
         }
     })
+}
+
+/// An integer literal past `i64` whose kind inference settles later: its
+/// placeholder, written over with its text as an `i128`, a `u128` or a
+/// `u64`'s bits (`Parser::wide_constant`).
+struct PendingWide {
+    ty: Ty,
+    value: Wide,
+    at: Span,
+    placeholder: String,
+    texts: [String; 3],
 }
 
 /// A float literal or arithmetic result whose kind inference settles

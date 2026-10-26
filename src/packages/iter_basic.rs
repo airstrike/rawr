@@ -468,6 +468,11 @@ def_package! {
         lib.set_iterator::<CharsStream>();
         lib.set_iterator::<BitRange>();
         lib.set_iterator::<StepBy>();
+        // A checked Rust `i128` or `u128` range's `step_by`.
+        lib.set_iterator::<std::iter::StepBy<Range<i128>>>();
+        lib.set_iterator::<std::iter::StepBy<Range<u128>>>();
+        lib.set_iterator::<std::iter::StepBy<RangeInclusive<i128>>>();
+        lib.set_iterator::<std::iter::StepBy<RangeInclusive<u128>>>();
 
         // Register range functions.
         reg_range!(lib => INT);
