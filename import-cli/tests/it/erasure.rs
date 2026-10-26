@@ -276,6 +276,21 @@ fn main() {
 ",
         "-4 0.5 2\n",
     );
+    // A range of integers or chars is that `Range<T>` too, not an iterator
+    // over it: `T` is `usize` from a `len()`, `u8` from a typed bound and
+    // `char` from chars.
+    runs(
+        "
+fn main() {
+    let items = vec![1, 2, 3];
+    let index = natives::pick(1..items.len());
+    let small = natives::pick(7u8..9);
+    let letter = natives::pick('!'..'z');
+    println!(\"{} {small} {}\", items[index], letter.to_string());
+}
+",
+        "2 7 !\n",
+    );
     // A marked `main` runs on the process's main thread, where winit's
     // event loop must run, and a native panic it meets is reported with
     // Rust's status instead of aborting (D551.6 d, e).

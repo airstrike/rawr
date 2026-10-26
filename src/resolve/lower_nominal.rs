@@ -888,6 +888,16 @@ fn instance_surface_type(
     })
 }
 
+/// A `Range<T>` value's runtime type: a `Range<f64>` of floats, else a
+/// `Range<i64>` of integers or chars' code points.
+fn range_type_id(element: &Ty) -> TypeId {
+    if matches!(element, Ty::Float(_)) {
+        TypeId::of::<std::ops::Range<crate::FLOAT>>()
+    } else {
+        TypeId::of::<std::ops::Range<INT>>()
+    }
+}
+
 /// Whether an instance type holds a value Rust takes as `rawr::Value`.
 #[cfg(feature = "rust-import")]
 fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> bool {
@@ -7294,7 +7304,7 @@ impl Ty {
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
-            Self::Range(_) => Some(TypeId::of::<std::ops::Range<crate::FLOAT>>()),
+            Self::Range(element) => Some(range_type_id(element)),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
@@ -9460,6 +9470,10 @@ struct Parser<'a> {
     /// Iterator chains by the source of their iterator expression, fused by
     /// the consumer that runs them.
     pipelines: BTreeMap<String, iterator::Pipeline>,
+    /// `a..b` of integers or chars by the source of its iterator, with the
+    /// value it is as Rust's `Range<T>`: what an imported generic item such
+    /// as rand's `random_range` takes in its place.
+    range_values: BTreeMap<String, (origin::Fragment, Ty)>,
     /// The bounds of the range parsed last, with its span: what `v[a..b]`
     /// slices by.
     last_range: Option<(ParsedExpr, Option<ParsedExpr>, bool, Span)>,
@@ -9774,6 +9788,7 @@ impl<'a> Parser<'a> {
             array_hint: None,
             collect_hint: None,
             pipelines: BTreeMap::new(),
+            range_values: BTreeMap::new(),
             last_range: None,
             field_entries: Vec::new(),
             native_modules: engine.global_modules.clone(),
@@ -14770,9 +14785,13 @@ impl<'a> Parser<'a> {
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
-            Ty::Range(_) => intrinsic::Type::builtin(
-                "Range<f64>",
-                TypeId::of::<std::ops::Range<crate::FLOAT>>(),
+            Ty::Range(element) => intrinsic::Type::builtin(
+                if matches!(*element, Ty::Float(_)) {
+                    "Range<f64>"
+                } else {
+                    "Range<i64>"
+                },
+                range_type_id(&element),
             ),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
@@ -15058,6 +15077,28 @@ impl<'a> Parser<'a> {
         fits
     }
 
+    /// Whether an item's parameter at `index` is a type parameter that a
+    /// bound fills with a `Range<T>`, as rand's `random_range` has
+    /// `R: SampleRange<T>` implemented for `Range<T>`.
+    fn takes_range(&self, items: &[crate::host::item::Definition], index: usize) -> bool {
+        items.iter().any(|item| {
+            let signature = item.signature();
+            let Some(crate::host::type_ref::Shape::Parameter(name)) = signature
+                .parameters()
+                .get(index)
+                .map(crate::host::type_ref::Type::shape)
+            else {
+                return false;
+            };
+            signature.relations().iter().any(|relation| {
+                relation.parameter() == name.to_string()
+                    && relation.cases().iter().any(|case| {
+                        matches!(case.this(), crate::host::signature::Pattern::Range(_))
+                    })
+            })
+        })
+    }
+
     fn select_host_signature_form(
         &mut self,
         items: &[crate::host::item::Definition],
@@ -15100,6 +15141,17 @@ impl<'a> Parser<'a> {
             })
         };
         for (index, argument) in arguments.iter_mut().enumerate() {
+            // `0..n` or `'a'..'z'` where an imported item's type parameter
+            // takes a `Range<T>` (rand's `R: SampleRange<T>`): the range
+            // itself, not an iterator over it.
+            if !facade
+                && self.takes_range(items, index)
+                && let Some((value, ty)) = self.range_values.get(argument.source.as_str()).cloned()
+            {
+                argument.source = value;
+                argument.prelude = origin::Fragment::default();
+                argument.ty = ty;
+            }
             // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
             // as the closure that calls it.
             if facade
@@ -26558,12 +26610,46 @@ impl<'a> Parser<'a> {
             if let Some(rhs) = &rhs {
                 self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
             }
-            return Ok(self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive));
+            let range = self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive);
+            self.record_range_value(&lhs, rhs.as_ref(), Ty::Char, inclusive, &range);
+            return Ok(range);
         }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
-        let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
+        let range = self.range_iterator(&lhs, rhs.as_ref(), item.clone(), inclusive);
+        self.record_range_value(&lhs, rhs.as_ref(), item, inclusive, &range);
         self.last_range = Some((lhs, rhs, inclusive, range.span));
         Ok(range)
+    }
+
+    /// Keep `low..high` of integers or chars as the value Rust's
+    /// `Range<T>` is, a Rawr `Range<i64>` of the bounds (a char's code
+    /// point), for an imported generic item that takes the range itself.
+    fn record_range_value(
+        &mut self,
+        low: &ParsedExpr,
+        high: Option<&ParsedExpr>,
+        item: Ty,
+        inclusive: bool,
+        range: &ParsedExpr,
+    ) {
+        let Some(high) = high.filter(|_| !inclusive) else {
+            return;
+        };
+        let bound = |this: &mut Self, value: &ParsedExpr| {
+            let value = value.rendered_source().surrounded("(", ")");
+            if item == Ty::Char {
+                this.prelude_op(PreludeOp::Cast, [value, "7".into()])
+            } else {
+                value
+            }
+        };
+        let mut value = bound(self, low);
+        value.push_text(" .. ");
+        value.push(bound(self, high));
+        self.range_values.insert(
+            range.source.as_str().to_string(),
+            (value.surrounded("(", ")"), Ty::Range(Box::new(item))),
+        );
     }
 
     /// A range's bounds: integers of one kind, which its items have.

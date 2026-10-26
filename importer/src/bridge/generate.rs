@@ -7138,12 +7138,24 @@ fn render_from_dynamic(
                 "{{ let mut {value} = {value}; match __rawr_internal::option::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ None => Ok(None), Some({inner}) => ({converted}).map(Some) }} }}"
             )
         }
-        // Rawr's `Range<f64>`, as Rust's `Range<f32>` or `Range<f64>`.
+        // Rawr's `Range<f64>`, as Rust's `Range<f32>` or `Range<f64>`, and
+        // its `Range<i64>`, as a range of an integer or of chars by their
+        // code points.
         convert::Type::Range(element) => match element.as_ref() {
             convert::Type::Builtin(convert::Builtin::F64) => cast(output, "std::ops::Range<f64>"),
             convert::Type::Builtin(convert::Builtin::F32) => write!(
                 output,
                 "{value}.try_cast_result::<std::ops::Range<f64>>().map(|range| (range.start as f32)..(range.end as f32)).map_err(|_| Error::TypeMismatch)"
+            ),
+            convert::Type::Builtin(convert::Builtin::I64) => cast(output, "std::ops::Range<i64>"),
+            convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::Range<i64>>().map_err(|_| Error::TypeMismatch).and_then(|range| Ok::<_, Error>(int_from::<{rust}>(range.start)?..int_from::<{rust}>(range.end)?))",
+                rust = builtin.rust_name().unwrap_or_default()
+            ),
+            convert::Type::Builtin(convert::Builtin::Char) => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::Range<i64>>().map_err(|_| Error::TypeMismatch).and_then(|range| {{ let bound = |code: i64| u32::try_from(code).ok().and_then(char::from_u32).ok_or(Error::TypeMismatch); Ok::<_, Error>(bound(range.start)?..bound(range.end)?) }})"
             ),
             _ => {
                 return Err(request::Error::Drift {
@@ -7244,6 +7256,17 @@ fn render_to_dynamic(
             convert::Type::Builtin(convert::Builtin::F32) => write!(
                 output,
                 "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(f64::from(range.start)..f64::from(range.end))) }}"
+            ),
+            convert::Type::Builtin(convert::Builtin::I64) => {
+                write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
+            }
+            convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => write!(
+                output,
+                "{{ let range = {value}; int_into(range.start).and_then(|start| int_into(range.end).map(|end| Dynamic::from(start..end))) }}"
+            ),
+            convert::Type::Builtin(convert::Builtin::Char) => write!(
+                output,
+                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(i64::from(u32::from(range.start))..i64::from(u32::from(range.end)))) }}"
             ),
             _ => {
                 return Err(request::Error::Drift {
@@ -8198,7 +8221,15 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
             convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
         ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
-        convert::Type::Range(_) => "Dynamic::from(0.0_f64..0.0_f64)",
+        convert::Type::Range(element)
+            if matches!(
+                element.as_ref(),
+                convert::Type::Builtin(convert::Builtin::F32 | convert::Builtin::F64)
+            ) =>
+        {
+            "Dynamic::from(0.0_f64..0.0_f64)"
+        }
+        convert::Type::Range(_) => "Dynamic::from(0_i64..0_i64)",
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
         | convert::Type::Nominal { .. }
