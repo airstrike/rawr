@@ -1,0 +1,5 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+writeback/if_let_mut_local_field.rs	ok	0	"Some([1, 4]) 8\n"
+writeback/match_mut_local_field.rs	ok	0	"[1, 4, 5] 112 1\n"
+writeback/match_ref_mut_member.rs	ok	0	"(Some([1, 4]), 3)\n"
+writeback/tuple_ref_mut_member.rs	ok	0	"(Some([1, 4, 5]), 4, \"ab\")\n"
