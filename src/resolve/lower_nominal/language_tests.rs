@@ -418,6 +418,11 @@ fn language_break_values_and_labels() {
     assert_eq!(value, 6 * 1000 + 3 * 2 * 10 + found);
     rejected("pub fn run() -> i64 { let mut i = 0; while i < 3 { i += 1; break 5; } i } run()");
     rejected("pub fn run() -> i64 { loop { break 'nowhere; } 1 } run()");
+    // rustc's E0590: an unlabeled jump in a `while` condition.
+    rejected(
+        "pub fn run() -> i64 { let mut n = 0; loop { while { n += 1; if n > 2 { break; } true } {} \
+         break; } n } run()",
+    );
     rejected("pub fn run() -> i64 { loop { if true { break 1; } break true; } } run()");
 }
 

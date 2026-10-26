@@ -3,3 +3,10 @@ loops/while_condition_break_reassigned.rs	ok	0	"2 [1, 3]\n"
 loops/while_condition_break_rest_of_condition.rs	E0502:10
 loops/while_condition_continue_inner_head.rs	ok	0	"1\n1\n1\n[1, 0, 2, 4]\n"
 loops/while_condition_continue_next_iteration.rs	E0502:8
+loops/while_condition_labeled_break.rs	ok	0	"body 1\nbody 2\nafter 3\n"
+loops/while_condition_labeled_break_keeps_borrow.rs	E0502:18
+loops/while_condition_labeled_continue.rs	ok	0	"[1, 3, 5] 7\n"
+loops/while_condition_labeled_continue_conflict.rs	E0502:7
+loops/while_condition_labeled_continue_head.rs	ok	0	"1 [1, 1, 2, 3, 4, 5, 6]\n"
+loops/while_condition_unlabeled_break.rs	E0590:7
+loops/while_let_condition_labeled_break.rs	ok	0	"[4, 3] [1]\n"
