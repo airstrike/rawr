@@ -71,6 +71,15 @@ pub(crate) enum Import {
     },
     /// A type alias, which the importing module's types name.
     Alias,
+    /// A variant of a crate enum, as `use Shape::Circle;` or one name of
+    /// `use Shape::*;` binds it: the name is the variant in patterns and
+    /// expressions.
+    Variant {
+        definition: type_def::Id,
+        identity: type_def::Identity,
+    },
+    /// A variant of `std::cmp::Ordering`: `use std::cmp::Ordering::*;`.
+    OrderingVariant,
 }
 
 /// A generic type parameter and its bounds: built-in derivable traits as

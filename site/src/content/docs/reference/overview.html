@@ -6,7 +6,6 @@
 <p>Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
 <ul>
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
-  <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
   <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value. It <a href="#lenient">accepts some code rustc rejects</a>, so <code>rawr check</code> also runs <code>cargo check</code>.</li>
@@ -33,7 +32,11 @@ fn main() -&gt; Result&lt;(), String&gt; {
 Error: "\"forty\": invalid digit found in string"
 <span class="exit">exit status 1</span></span></div>
 </div>
-<p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101.</p>
+<p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101. It prints what a program built by Cargo prints on stderr:</p>
+<pre><code>thread 'main' panicked at src/main.rs:5:5:
+boom 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</code></pre>
+<p>The path is the file&rsquo;s path from the workspace root, as Cargo gives it. In <code>?play</code> and in the browser the file is <code>play.rs</code>.</p>
 
 <h2 id="supported">Supported Rust</h2>
 <p>Each page lists one area of the language, with an example for each construct.</p>
@@ -42,7 +45,7 @@ Error: "\"forty\": invalid digit found in string"
   <a href="/docs/reference/types">Types<span>Numbers, strings, collections, smart pointers and casts.</span></a>
   <a href="/docs/reference/generics">Generics<span>Bounds, trait objects and operator traits.</span></a>
   <a href="/docs/reference/patterns">Patterns<span><code>match</code>, <code>if let</code>, <code>let else</code> and loops.</span></a>
-  <a href="/docs/reference/moves">Moves<span>Moves, partial moves and clones.</span></a>
+  <a href="/docs/reference/moves">Moves<span>Moves, partial moves, drops and clones.</span></a>
   <a href="/docs/reference/closures">Closures<span>Captures, <code>Fn</code> traits and async code.</span></a>
   <a href="/docs/reference/macros">Macros<span>The built-in macros and format strings.</span></a>
   <a href="/docs/reference/std">std<span>The parts of the standard library that work.</span></a>
@@ -52,9 +55,7 @@ Error: "\"forty\": invalid digit found in string"
 <p>These are valid Rust that rawr rejects today. Each one fails the check with an error that names the construct. rawr reports one error per check.</p>
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
-  <li>A glob import of an enum&rsquo;s variants, as in <code>use Shape::*;</code>.</li>
-  <li><code>const fn</code>.</li>
-  <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
+  <li>A <code>static mut</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
   <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code> or under a runtime&rsquo;s attribute in a crate.</li>
@@ -63,26 +64,26 @@ Error: "\"forty\": invalid digit found in string"
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
-  <li><code>i128</code> and <code>u128</code>.</li>
   <li>A range of floats that excludes its end, as in <code>0.5..1.0</code>. <code>0.5..=1.0</code> works.</li>
-  <li>Returning <code>&amp;mut</code> from a function or method.</li>
-  <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
+  <li>Returning a <code>&amp;mut</code> to a map&rsquo;s entry, as in <code>self.counts.entry(k).or_insert(0)</code>.</li>
+  <li>Returning a <code>&amp;mut</code> borrowed from a parameter other than <code>&amp;mut self</code> or a free function&rsquo;s first <code>&amp;mut</code> parameter.</li>
+  <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
-  <li><code>impl Drop</code>.</li>
+  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Cell</code>, <code>Weak</code> and <code>Mutex</code>.</li>
+  <li><code>Weak</code> and <code>Mutex</code>.</li>
+  <li>Cloning a struct, enum or <code>Vec</code> that holds a <code>Cell</code> or <code>RefCell</code> outside an <code>Rc</code>.</li>
+  <li><code>Rc::strong_count</code>, <code>Rc::weak_count</code> and <code>Rc::ptr_eq</code>, and the same for <code>Arc</code>. An <code>Rc</code> is its value in rawr, so it has no count.</li>
   <li><code>std::fs</code>, and <code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>.</li>
-  <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
-  <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
-  <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
+  <li><code>BinaryHeap</code>.</li>
+  <li><code>std::process::exit</code>.</li>
   <li><code>Formatter::pad</code>.</li>
-  <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
   <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
   <li><code>Vec::binary_search</code>.</li>
-  <li><code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code>.</li>
+  <li><code>dbg!</code>.</li>
 </ul>
 
 <h2 id="differences">Differences from <code>cargo run</code></h2>
@@ -90,12 +91,15 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
-  <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
-  <li><strong>A large <code>u64</code> in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
+  <li><strong>The column of an index panic.</strong> rawr places a panic from indexing at the <code>[</code>, as Rust does for a <code>Vec</code>. For an array or a slice Rust places it at the start of the expression.</li>
+  <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
+  <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. With <code>i128</code> or <code>u128</code> values it panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
+  <li><strong>Arithmetic on literals alone.</strong> An operation whose operands are all unsuffixed literals is computed as an <code>i64</code>. So <code>let x: i128 = 10_000_000_000 * 10_000_000_000;</code> panics where Rust gives the result. A suffix, as in <code>10_000_000_000i128</code>, gives Rust&rsquo;s result.</li>
 </ul>
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
 <ul>
   <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
+  <li><code>capacity()</code> of a <code>Vec</code> in a field, in an element or behind a reference. It works on a local or a temporary <code>Vec</code>. It is also refused for a <code>Vec</code> of <code>u8</code>, <code>i8</code>, <code>bool</code> or <code>()</code>, whose growth rawr doesn&rsquo;t follow.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
@@ -108,6 +112,8 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
   <li><code>Send</code> and <code>Sync</code> bounds are not checked. An <code>Rc</code> passes <code>T: Send</code>.</li>
+  <li><code>VecDeque&lt;T&gt;</code> and <code>Vec&lt;T&gt;</code> are one type to the checker. A <code>Vec</code> takes <code>push_front</code>, and a <code>VecDeque</code> takes <code>sort</code>.</li>
+  <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>

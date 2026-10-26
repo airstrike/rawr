@@ -5378,6 +5378,77 @@ fn language_full_unsigned_range() {
 }
 
 #[test]
+fn language_i128_and_u128() {
+    // An `i128` or a `u128` is an `i64` while it fits one and a boxed Rust
+    // value past it: literals, casts, operators, methods, text, parsing,
+    // ordering, keys and generic code all see the number.
+    let value = run_string(
+        r#"
+        use std::collections::BTreeMap;
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+        struct Big { id: u128, delta: i128 }
+        fn twice<T: std::ops::Add<Output = T> + Copy>(t: T) -> T { t + t }
+        pub fn run() -> String {
+            let a: i128 = 170141183460469231731687303715884105727;
+            let b = u128::MAX;
+            let c = 1u128 << 100;
+            let d: i128 = -(1 << 90);
+            let m = u64::MAX;
+            let mut keys: BTreeMap<u128, i32> = BTreeMap::new();
+            keys.insert(c, 1);
+            keys.insert(5, 2);
+            let mut bigs = vec![Big { id: c, delta: d }, Big { id: 1, delta: 2 }];
+            bigs.sort();
+            let parsed: u128 = "340282366920938463463374607431768211455".parse().unwrap();
+            let v: Vec<u128> = vec![c, 5];
+            let s: u128 = v.iter().sum();
+            format!(
+                "{} {} {} {} {} {:?} {:x} {} {} {} {:?} {:?} {:?} {} {} {} {} {} {} {}",
+                a, b, b / 3, d * 2, i128::MIN, 5i128.checked_mul(i128::MAX), c,
+                m as u128 + 1, -1i64 as u128, b as u8, keys, bigs[0], u8::try_from(c).is_err(),
+                parsed == b, s, twice(c), c > 5, d < 0, (b as f64) > 1e38, 0xFFFF_FFFF_FFFF_FFFFu128
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "170141183460469231731687303715884105727 340282366920938463463374607431768211455 \
+         113427455640312821154458202477256070485 -2475880078570760549798248448 \
+         -170141183460469231731687303715884105728 None 10000000000000000000000000 \
+         18446744073709551616 340282366920938463463374607431768211455 255 \
+         {5: 2, 1267650600228229401496703205376: 1} Big { id: 1, delta: 2 } true true \
+         1267650600228229401496703205381 2535301200456458802993406410752 true true true \
+         18446744073709551615"
+    );
+    for (source, panic) in [
+        (
+            "pub fn run() -> i64 { let a = i128::MAX; let b: i128 = \"1\".parse().unwrap(); (a + b) as i64 } run()",
+            "attempt to add with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a: u128 = 0; let b: u128 = \"1\".parse().unwrap(); (a - b) as i64 } run()",
+            "attempt to subtract with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a = i128::MIN; (-a) as i64 } run()",
+            "attempt to negate with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a: u128 = 1; let b: u32 = \"128\".parse().unwrap(); (a << b) as i64 } run()",
+            "attempt to shift left with overflow",
+        ),
+    ] {
+        let error = rejected(source);
+        assert!(error.contains(panic), "{error}");
+    }
+    // A literal must fit its kind; there is no `From<u128>` for `i128`.
+    rejected("pub fn run() -> i64 { let a: i64 = 18446744073709551616; a } run()");
+    rejected("pub fn run() -> i64 { let a: u128 = 1; let b = i128::from(a); 0 } run()");
+}
+
+#[test]
 fn language_references_in_locals_patterns_and_parameters() {
     // `ref`/`ref mut` bindings; `let r = &mut place;` used in straight-line
     // code; several `&mut` parameters on free functions, `&mut` parameters
@@ -9905,4 +9976,797 @@ pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, 
     assert!(!inserted.rebinds(&closure, first.as_ref()));
     // A capture renamed: its fingerprint differs.
     assert!(!recaptured.rebinds(&closure, first.as_ref()));
+}
+
+#[test]
+fn language_const_fn_is_a_function() {
+    let value = run(r#"
+        const fn double(x: i64) -> i64 { x * 2 }
+        const SIZE: i64 = double(21);
+        pub struct P { x: i64 }
+        impl P {
+            pub const fn new(x: i64) -> Self { P { x } }
+        }
+        pub const fn triple(x: i64) -> i64 { x * 3 }
+        pub fn run() -> i64 {
+            const fn local(x: i64) -> i64 { x - 1 }
+            SIZE + P::new(5).x + triple(2) + local(1)
+        }
+        run()
+    "#);
+    assert_eq!(value, 42 + 5 + 6);
+}
+
+#[test]
+fn language_use_imports_enum_variants() {
+    // One file: the single-unit resolver.
+    let value = run(r#"
+        #[derive(Clone, Copy, PartialEq)]
+        pub enum Op { Add, Sub, Scale(i64), Move { by: i64 } }
+        use Op::*;
+        use std::cmp::Ordering::{self, Greater};
+        use std::cmp::Ordering::*;
+        pub fn apply(op: Op, n: i64) -> i64 {
+            match op {
+                Add => n + 1,
+                Sub => n - 1,
+                Scale(k) => n * k,
+                Move { by } => n + by,
+            }
+        }
+        pub fn sign(o: Ordering) -> i64 {
+            match o { Less => -1, Equal => 0, Greater => 1 }
+        }
+        pub fn run() -> i64 {
+            let ops = vec![Add, Scale(10), Sub, Move { by: 100 }];
+            let mut n = 0;
+            for op in ops {
+                n = apply(op, n);
+            }
+            let scales: Vec<Op> = vec![2, 3].into_iter().map(Scale).collect();
+            n + sign(3.cmp(&1)) + sign(Less) + if scales[1] == Scale(3) { 1000 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 109 + 1 - 1 + 1000);
+    // A file with modules: the package resolver.
+    let source = r#"mod shapes {
+    #[derive(Debug, Clone, Copy)]
+    pub enum Shape { Dot, Square(f64) }
+    pub mod sides {
+        use super::Shape::*;
+        pub fn sides(s: super::Shape) -> i64 {
+            match s { Dot => 0, Square(_) => 4 }
+        }
+    }
+}
+
+use shapes::Shape::*;
+use self::shapes::sides::sides;
+
+fn main() {
+    println!("{:?} {} {}", Square(1.5), sides(Dot), sides(Square(2.0)));
+}
+"#;
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let evidence = crate::diagnostic::Source::new("play.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let ast = engine
+        .compile_unit(unit, evidence)
+        .unwrap_or_else(|error| panic!("{error}"));
+    engine
+        .call_fn::<()>(&mut crate::Scope::new(), &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "Square(1.5) 0 4\n");
+    // A name that is no variant stays unknown, as in rustc.
+    rejected(r#"pub enum K { A } use K::B; pub fn run() -> i64 { 0 } run()"#);
+    // A turbofish on a name that is no value is an error, not a crash.
+    let error = rejected(r#"pub fn run() -> i64 { let x = Nope::<i64>; 0 } run()"#);
+    assert!(error.contains("Nope"), "{error}");
+}
+
+/// `write!` and `writeln!` into a `String` through `std::fmt::Write`: a
+/// local, `&mut s`, a field, an element and a `&mut String` parameter, each
+/// returning a `fmt::Result`.
+#[test]
+fn language_write_into_a_string() {
+    assert_eq!(
+        printed(
+            r#"
+use std::fmt::{self, Write};
+struct Log { buf: String }
+impl Log {
+    fn add(&mut self, n: i32) { writeln!(self.buf, "n={n}").unwrap(); }
+}
+fn fill(out: &mut String, k: u8) -> fmt::Result {
+    write!(out, "[{k:02}]")?;
+    writeln!(out)?;
+    Ok(())
+}
+fn main() {
+    let mut s = String::new();
+    write!(s, "{}-{}", 1, 2).unwrap();
+    writeln!(s, " end").unwrap();
+    write!(&mut s, "{:>4}", 7).unwrap();
+    let _ = write!(s, ".");
+    println!("{s:?}");
+    let mut l = Log { buf: String::new() };
+    l.add(1);
+    print!("{}", l.buf);
+    let mut t = String::from("x");
+    println!("{} {t:?}", fill(&mut t, 3).is_ok());
+    let mut v = vec![String::new()];
+    write!(v[0], "{}", 9).unwrap();
+    println!("{v:?}");
+}
+main();
+"#
+        ),
+        "\"1-2 end\\n   7.\"\nn=1\ntrue \"x[03]\\n\"\n[\"9\"]\n"
+    );
+}
+
+/// `std::cell::Cell`: a value copied in and out through `&self`, as a field
+/// too, with `Debug` naming it `Cell`. Cloning a struct that holds a cell
+/// is refused, since the copy would share the cell.
+#[test]
+fn language_cell_changes_through_a_shared_reference() {
+    assert_eq!(
+        printed(
+            r#"
+use std::cell::Cell;
+#[derive(Debug, Default)]
+struct Counter { hits: Cell<u32>, name: String }
+impl Counter {
+    fn hit(&self) { self.hits.set(self.hits.get() + 1); }
+}
+fn bump(c: &Cell<i32>) { c.set(c.get() * 2); }
+fn main() {
+    let c = Counter { hits: Cell::new(0), name: "x".to_string() };
+    c.hit();
+    c.hit();
+    println!("{} {:?}", c.hits.get(), c);
+    let t: Cell<i32> = Cell::new(4);
+    bump(&t);
+    println!("{} {}", t.take(), t.get());
+    let a = Cell::new(1);
+    let b = Cell::new(2);
+    a.swap(&b);
+    let d = a.clone();
+    d.set(5);
+    println!("{} {} {} {}", a.get(), b.get(), d.get(), a == Cell::new(2));
+    let s = std::cell::Cell::new(String::from("hi"));
+    let old = s.replace(String::from("yo"));
+    println!("{} {}", old, s.into_inner());
+}
+main();
+"#
+        ),
+        "2 Counter { hits: Cell { value: 2 }, name: \"x\" }\n8 0\n2 1 5 true\nhi yo\n"
+    );
+    let error = rejected(
+        r#"
+use std::cell::Cell;
+#[derive(Clone)]
+struct Pair { a: Cell<i32> }
+fn main() { let p = Pair { a: Cell::new(1) }; let q = p.clone(); }
+main();
+0
+"#,
+    );
+    assert!(error.contains("holds a `Cell` or `RefCell`"), "{error}");
+}
+
+/// `Box<dyn Iterator<Item = T>>` is Rawr's iterator of `T`, as `impl
+/// Iterator` is: a value, a return type and a struct field, with adapters,
+/// `next` on a local and on a field, and `for`.
+#[test]
+fn language_a_boxed_dyn_iterator_is_an_iterator() {
+    assert_eq!(
+        printed(
+            r#"
+fn evens(n: i32) -> Box<dyn Iterator<Item = i32>> {
+    Box::new((0..n).filter(|x| x % 2 == 0))
+}
+struct Wrap { inner: Box<dyn Iterator<Item = i32>> }
+impl Wrap {
+    fn pull(&mut self) -> Option<i32> { self.inner.next() }
+}
+fn main() {
+    let total: i32 = evens(10).map(|x| x * 10).sum();
+    println!("{:?} {total}", evens(7).collect::<Vec<_>>());
+    let mut it: Box<dyn Iterator<Item = i32>> = Box::new(vec![5, 6, 7].into_iter());
+    println!("{:?}", it.next());
+    for x in it { println!("rest {x}"); }
+    let mut w = Wrap { inner: Box::new(vec![1, 2].into_iter().map(|x| x + 1)) };
+    println!("{:?} {:?} {:?}", w.pull(), w.pull(), w.pull());
+}
+main();
+"#
+        ),
+        "[0, 2, 4, 6] 200\nSome(5)\nrest 6\nrest 7\nSome(2) Some(3) None\n"
+    );
+}
+
+/// `Box<dyn std::error::Error>`: `?` boxes a crate error, a std parse error
+/// and a `String`, as do `Err(Box::new(e))` and `Err("text".into())` in
+/// either arm of an `if`; `{e}`, `{e:?}`, `to_string` and `source` print
+/// and answer as Rust's.
+#[test]
+fn language_box_dyn_error_holds_any_error() {
+    assert_eq!(
+        printed(
+            r#"
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+enum AppErr { Bad(u8), Worse { code: i32 } }
+impl fmt::Display for AppErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AppErr::Bad(n) => write!(f, "bad {n}"),
+            AppErr::Worse { code } => write!(f, "worse {code}"),
+        }
+    }
+}
+impl Error for AppErr {}
+fn check(n: i32) -> Result<i32, AppErr> {
+    if n > 10 { Err(AppErr::Worse { code: n }) } else if n < 0 { Err(AppErr::Bad(1)) } else { Ok(n) }
+}
+fn run(s: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    let x: f64 = s.parse()?;
+    let n = check(x as i32)?;
+    let words: Result<i32, String> = if n == 4 { Err("four".to_string()) } else { Ok(n) };
+    Ok(words? * 2)
+}
+fn boxed(n: i32) -> Result<(), Box<dyn std::error::Error>> {
+    if n == 0 { Err(Box::new(AppErr::Bad(0))) } else { Err("plain".into()) }
+}
+fn main() {
+    for s in ["2", "x", "11", "4"] {
+        match run(s) {
+            Ok(v) => println!("ok {v}"),
+            Err(e) => println!("{e} | {e:?} | {} | {}", e.to_string(), e.source().is_none()),
+        }
+    }
+    let e = boxed(0).unwrap_err();
+    println!("{e} {e:?} {:?}", boxed(1).map_err(|e| e.to_string()));
+}
+main();
+"#
+        ),
+        "ok 4\n\
+         invalid float literal | ParseFloatError { kind: Invalid } | invalid float literal | true\n\
+         worse 11 | Worse { code: 11 } | worse 11 | true\n\
+         four | \"four\" | four | true\n\
+         bad 0 Bad(0) Err(\"plain\")\n"
+    );
+}
+
+/// `std::collections::VecDeque` is Rawr's `Vec` with a deque's
+/// `push_front`, `pop_front`, `push_back`, `pop_back`, `front` and `back`,
+/// as a local, a field, a parameter and a collect target.
+#[test]
+fn language_vec_deque_is_a_vec_with_a_front() {
+    assert_eq!(
+        printed(
+            r#"
+use std::collections::VecDeque;
+struct Queue { items: VecDeque<String> }
+fn fill(q: &mut VecDeque<i32>, n: i32) { for i in 0..n { q.push_back(i); } }
+fn main() {
+    let mut q = Queue { items: VecDeque::new() };
+    q.items.push_back("a".to_string());
+    q.items.push_front("z".to_string());
+    let first = q.items.pop_front();
+    println!("{:?} {:?}", first, q.items);
+    let mut d = VecDeque::with_capacity(4);
+    fill(&mut d, 4);
+    d[0] = 100;
+    let back = d.pop_back();
+    println!("{d:?} {:?} {:?} {:?}", d.front(), d.back(), back);
+    let e: std::collections::VecDeque<char> = "abc".chars().collect();
+    println!("{:?} {}", e.iter().rev().collect::<String>(), e.contains(&'b'));
+    let mut f: VecDeque<u8> = VecDeque::new();
+    println!("{:?}", f.pop_front());
+    f.extend(vec![1, 2]);
+    let all: Vec<u8> = f.drain(..).collect();
+    println!("{all:?} {}", f.is_empty());
+}
+main();
+"#
+        ),
+        "Some(\"z\") [\"a\"]\n[100, 1, 2] Some(100) Some(2) Some(3)\n\"cba\" true\nNone\n[1, 2] true\n"
+    );
+}
+
+#[test]
+fn language_mut_ref_outputs_borrow_their_receiver() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct Inner { v: Vec<i64>, x: i64 }
+        impl Inner {
+            fn add(&mut self, n: i64) { self.v.push(n); }
+        }
+        struct Counter { counts: Vec<i64>, name: String, inner: Inner, calls: i64 }
+        impl Counter {
+            fn slot(&mut self, i: usize) -> &mut i64 { &mut self.counts[i] }
+            fn name_mut(&mut self) -> &mut String { &mut self.name }
+            fn inner_mut(&mut self) -> &mut Inner { &mut self.inner }
+            fn last(&mut self) -> Option<&mut i64> { self.counts.last_mut() }
+            fn find(&mut self, n: i64) -> Option<&mut i64> {
+                self.counts.iter_mut().find(|x| **x == n)
+            }
+            fn pick(&mut self, first: bool) -> &mut i64 {
+                if first { &mut self.counts[0] } else { self.slot(1) }
+            }
+            fn next(&mut self) -> &mut i64 {
+                self.calls += 1;
+                match self.calls % 2 { 0 => &mut self.counts[0], _ => &mut self.inner.x }
+            }
+            fn push(&mut self, n: i64) -> &mut Self { self.counts.push(n); self }
+        }
+        fn biggest(v: &mut Vec<i64>) -> &mut i64 {
+            let mut idx = 0;
+            for i in 0..v.len() { if v[i] > v[idx] { idx = i; } }
+            &mut v[idx]
+        }
+        fn bump(x: &mut i64) { *x += 100; }
+        pub fn run() -> String {
+            let mut c = Counter {
+                counts: vec![0, 0, 0],
+                name: String::from("c"),
+                inner: Inner { v: Vec::new(), x: 0 },
+                calls: 0,
+            };
+            *c.slot(1) += 5;
+            c.name_mut().push_str("ount");
+            c.inner_mut().add(3);
+            c.inner_mut().x = 4;
+            if let Some(l) = c.last() { *l = 9; }
+            if let Some(f) = c.find(5) { *f += 1; }
+            let r = c.slot(0);
+            *r = 7;
+            *r += 1;
+            *c.pick(false) *= 2;
+            bump(c.slot(2));
+            *c.next() += 10;
+            *c.next() += 20;
+            c.push(1).push(2);
+            let mut v = vec![3, 8, 2];
+            *biggest(&mut v) = 0;
+            format!("{:?} {} {:?} {} {:?}", c.counts, c.name, c.inner, c.calls, v)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "[28, 12, 109, 1, 2] count Inner { v: [3], x: 14 } 2 [3, 0, 2]"
+    );
+    let error = rejected(
+        r#"
+        struct S { v: Vec<i64> }
+        impl S { fn all(&mut self) -> Vec<&mut i64> { Vec::new() } }
+        pub fn run() -> i64 { 0 } run()
+    "#,
+    );
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+}
+
+#[test]
+fn language_mut_borrows_of_a_tuples_members_are_apart() {
+    let value = run(r#"
+        struct S { pair: (i64, i64) }
+        fn two(a: &mut i64, b: &mut i64) { *a += 1; *b += 10; }
+        pub fn run() -> i64 {
+            let mut pair = (1, 2);
+            std::mem::swap(&mut pair.0, &mut pair.1);
+            let mut s = S { pair: (3, 4) };
+            std::mem::swap(&mut s.pair.0, &mut s.pair.1);
+            two(&mut s.pair.0, &mut s.pair.1);
+            pair.0 * 10000 + pair.1 * 1000 + s.pair.0 * 10 + s.pair.1
+        }
+        run()
+    "#);
+    assert_eq!(value, 20000 + 1000 + 50 + 13);
+    let error = rejected(
+        "pub fn run() -> i64 { let mut a = [1, 2]; std::mem::swap(&mut a[0], &mut a[1]); a[0] } \
+         run()",
+    );
+    assert!(error.contains("E0499"), "{error}");
+    let error = rejected(
+        "pub fn run() -> i64 { let mut p = (1, 2); std::mem::swap(&mut p.0, &mut p.0); p.0 } run()",
+    );
+    assert!(error.contains("E0499"), "{error}");
+}
+
+#[test]
+fn language_circle_std_string_and_vec_methods() {
+    // `rsplitn`, `String::retain`, `Vec::capacity` and the chunk methods
+    // give rustc's results.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let parts: Vec<&str> = "a,b,c,d".rsplitn(2, ',').collect();
+            let mut s = String::from("héllo wörld");
+            s.retain(|c| c.is_ascii() && c != 'l');
+            let mut v: Vec<i32> = Vec::with_capacity(3);
+            let reserved = v.capacity();
+            for i in 0..4 { v.push(i); }
+            let exact: Vec<&[i32]> = v.chunks_exact(3).collect();
+            let back: Vec<&[i32]> = v.rchunks(3).collect();
+            format!("{:?} {s} {reserved} {} {:?} {:?}", parts, v.capacity(), exact, back)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        r#"["d", "a,b,c"] ho wrd 3 6 [[0, 1, 2]] [[1, 2, 3], [0]]"#
+    );
+    let refused =
+        rejected("fn cap(v: &Vec<i64>) -> usize { v.capacity() } pub fn run() -> i64 { 0 } run()");
+    assert!(refused.contains("`capacity()`"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_debug_specs_reach_each_leaf() {
+    // A `{:?}` width, precision, sign or `x?` applies to each number
+    // inside, as Rust's derives pass the formatter down; strings ignore it.
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct P { a: i32, b: &'static str, f: f32 }
+        pub fn run() -> String {
+            let p = P { a: -1, b: "q", f: 0.1 };
+            format!(
+                "[{:>8?}] [{:<5?}] [{:x?}] [{:X?}] [{:4?}] [{:.2?}] [{:#6?}] {:?}",
+                Some(1), (1, "ab"), vec![10, 255], p, p, Some(1.5), Some(1), vec![0.1f32]
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "[Some(       1)] [(1    , \"ab\")] [[a, ff]] [P { a: FFFFFFFF, b: \"q\", f: 0.1 }] \
+         [P { a:   -1, b: \"q\", f:  0.1 }] [Some(1.50)] [Some(\n         1,\n)] [0.1]"
+    );
+}
+
+#[test]
+fn language_circle_std_float_constants_and_rc_counts() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            format!(
+                "{} {} {:?} {} {} {} {}",
+                f64::MIN_POSITIVE, f32::EPSILON, f64::EPSILON, f64::INFINITY,
+                f32::NEG_INFINITY, f64::NAN.is_nan(), f32::MAX
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        format!(
+            "{} {} {:?} {} {} {} {}",
+            f64::MIN_POSITIVE,
+            f32::EPSILON,
+            f64::EPSILON,
+            f64::INFINITY,
+            f32::NEG_INFINITY,
+            f64::NAN.is_nan(),
+            f32::MAX
+        )
+    );
+    let refused = rejected(
+        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); Rc::strong_count(&a) as i64 } run()",
+    );
+    assert!(refused.contains("Rc::strong_count"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_size_of_and_sleep() {
+    let value = run(r#"
+        use std::thread;
+        use std::time::Duration;
+        pub fn run() -> i64 {
+            let x = 5;
+            let c = 'c';
+            thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::ZERO);
+            (std::mem::size_of_val(&x) * 1000 + size_of::<[u16; 3]>() * 100
+                + std::mem::size_of_val(&c) * 10 + std::mem::size_of::<()>()) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 4640);
+    let refused = rejected(
+        "pub fn run() -> i64 { let s = String::new(); std::mem::size_of_val(&s) as i64 } run()",
+    );
+    assert!(refused.contains("size_of_val"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_char_ranges_iterate() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let letters: String = ('a'..='e').collect();
+            let back: String = ('x'..'z').rev().collect();
+            let mut looped = String::new();
+            for c in 'p'..='r' { looped.push(c); }
+            let c = 'm';
+            format!(
+                "{letters} {back} {looped} {} {} {} {}",
+                ('a'..='z').contains(&c), ('a'..'m').contains(&c),
+                ('a'..='z').count(), (0..10).contains(&10)
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "abcde yx pqr true false 26 false");
+}
+
+#[test]
+fn language_circle_std_nul_escapes() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let s = "a\0b";
+            format!("{:?} {} {:?} {:?} {}", s, s.len(), '\0', "\u{0}", '\0' as u32)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, r#""a\0b" 3 '\0' "\0" 0"#);
+}
+
+#[test]
+fn language_circle_std_source_macros() {
+    let value = run_string(
+        r#"pub fn run() -> String {
+    let at = (line!(), column!());
+    format!(
+        "{:?} {:?} {} {} {}",
+        at,
+        option_env!("RAWR_SURELY_UNSET_VAR"),
+        stringify!(Vec<i32>, x  .  len(), a + b),
+        concat!("x", 1u8, -2, stringify!()),
+        line!()
+    )
+}
+run()"#,
+    );
+    assert_eq!(value, "(2, 24) None Vec<i32>, x.len(), a + b x1-2 9");
+}
+
+/// The `Noisy` type the drop tests share: its `drop` prints its name.
+const NOISY: &str = r#"
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+"#;
+
+/// What `body`, after `NOISY` and with `main()` called, prints.
+fn dropped(body: &str) -> String {
+    printed(&format!("{NOISY}{body}\nmain();"))
+}
+
+/// The error `body`, after `NOISY`, gives.
+fn drop_refused(body: &str) -> String {
+    match Engine::new().run(&format!("{NOISY}{body}\nmain();")) {
+        Ok(()) => panic!("Rawr runs this program, which it should refuse: {body}"),
+        Err(error) => error.to_string(),
+    }
+}
+
+#[test]
+fn language_drop_runs_where_rustc_drops() {
+    // Each expected text is what the program built by rustc prints.
+    let printed = dropped(
+        r#"
+fn main() {
+    let _a = Noisy("a");
+    {
+        let _b = Noisy("b");
+        println!("inner");
+    }
+    let c = Noisy("c");
+    drop(c);
+    let v = vec![Noisy("v1"), Noisy("v2")];
+    println!("len {}", v.len());
+    drop(v);
+    std::mem::drop(Noisy("w"));
+    let _x = Noisy("x");
+    let _y = Noisy("y");
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "inner\ndrop b\ndrop c\nlen 2\ndrop v1\ndrop v2\ndrop w\nend\ndrop y\ndrop x\ndrop a\n"
+    );
+}
+
+#[test]
+fn language_drop_temporaries_and_assignments() {
+    let printed = dropped(
+        r#"
+struct Holder {
+    n: Noisy,
+}
+fn make(s: &'static str) -> Noisy {
+    Noisy(s)
+}
+fn main() {
+    Noisy("t");
+    let _ = Noisy("u");
+    let _x = Noisy("x");
+    let n = make("n").0;
+    println!("{} {}", n, make("p").0);
+    let mut a = Noisy("a1");
+    a = Noisy("a2");
+    let mut h = Holder { n: Noisy("h1") };
+    h.n = Noisy("h2");
+    let mut c = Noisy("c1");
+    let d = c;
+    c = Noisy("c2");
+    println!("{} {} {}", a.0, c.0, d.0);
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "drop t\ndrop u\ndrop n\nn p\ndrop p\ndrop a1\ndrop h1\na2 c2 c1\n\
+         drop c1\ndrop c2\ndrop h2\ndrop a2\ndrop x\n"
+    );
+}
+
+#[test]
+fn language_drop_fields_and_holders_in_order() {
+    let printed = dropped(
+        r#"
+struct Outer {
+    name: &'static str,
+    first: Noisy,
+    second: Noisy,
+}
+impl Drop for Outer {
+    fn drop(&mut self) {
+        println!("drop outer {}", self.name);
+    }
+}
+enum E {
+    A(Noisy),
+    B { x: Noisy, y: Noisy },
+}
+fn main() {
+    let _o = Outer { name: "o", first: Noisy("f1"), second: Noisy("f2") };
+    let _e = E::B { x: Noisy("ex"), y: Noisy("ey") };
+    let _f = E::A(Noisy("ea"));
+    let _t = (Noisy("t1"), 5, Noisy("t2"));
+    let _b = Box::new(Noisy("box"));
+    let _s = Some(Noisy("some"));
+    let _r: Result<Noisy, i32> = Ok(Noisy("ok"));
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "end\ndrop ok\ndrop some\ndrop box\ndrop t1\ndrop t2\ndrop ea\ndrop ex\ndrop ey\n\
+         drop outer o\ndrop f1\ndrop f2\n"
+    );
+}
+
+#[test]
+fn language_drop_moves_and_jumps() {
+    let printed = dropped(
+        r#"
+fn take(n: Noisy) {
+    println!("took {}", n.0);
+}
+fn early(flag: bool) -> i32 {
+    let _a = Noisy("ea");
+    if flag {
+        let _b = Noisy("eb");
+        return 1;
+    }
+    2
+}
+fn tried(fail: bool) -> Result<i32, String> {
+    let _q = Noisy("q");
+    let r: Result<i32, String> = if fail { Err("bad".to_string()) } else { Ok(3) };
+    let v = r?;
+    Ok(v)
+}
+fn main() {
+    let a = Noisy("a");
+    take(a);
+    println!("r {}", early(true));
+    for i in 0..3 {
+        let _l = Noisy("loop");
+        if i == 1 {
+            break;
+        }
+    }
+    println!("q {:?}", tried(true));
+    let o = Some(Noisy("o"));
+    if let Some(n) = o {
+        println!("got {}", n.0);
+    }
+    let v = vec![Noisy("v1"), Noisy("v2"), Noisy("v3")];
+    for n in v {
+        if n.0 == "v2" {
+            break;
+        }
+    }
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "took a\ndrop a\ndrop eb\ndrop ea\nr 1\ndrop loop\ndrop loop\ndrop q\n\
+         q Err(\"bad\")\ngot o\ndrop o\ndrop v1\ndrop v2\ndrop v3\nend\n"
+    );
+}
+
+#[test]
+fn language_drop_refuses_what_it_cannot_drop_exactly() {
+    let error = drop_refused(
+        "use std::rc::Rc;\nfn main() { let a = Rc::new(Noisy(\"rc\")); let _b = a.clone(); }",
+    );
+    assert!(error.contains("inside an `Rc`"), "{error}");
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+    let error = drop_refused(
+        "fn main() { let n = Noisy(\"n\"); let f = move || println!(\"{}\", n.0); f(); }",
+    );
+    assert!(error.contains("by move"), "{error}");
+    // rustc's E0040 and E0509.
+    let error = drop_refused("fn main() { let mut n = Noisy(\"n\"); n.drop(); }");
+    assert!(error.contains("E0040"), "{error}");
+    let error = drop_refused(
+        "struct W { n: Noisy }\nimpl Drop for W { fn drop(&mut self) {} }\n\
+         fn main() { let w = W { n: Noisy(\"n\") }; let n = w.n; println!(\"{}\", n.0); }",
+    );
+    assert!(error.contains("E0509"), "{error}");
+}
+
+#[test]
+fn language_drop_leaves_a_crate_without_drop_as_it_was() {
+    // Without `impl Drop`, nothing calls the drop glue: values drop with
+    // their last copy, as before.
+    let printed = printed(
+        r#"
+struct Quiet(&'static str);
+fn main() {
+    let q = Quiet("q");
+    let v = vec![q];
+    println!("{}", v.len());
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "1\n");
+    let source = "struct Quiet(i64);\nfn main() { let q = Quiet(1); let _ = q.0; }";
+    let ast = Engine::new()
+        .compile(source)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(ast
+        .iter_functions()
+        .all(|function| function.name != super::drops::GLUE));
 }

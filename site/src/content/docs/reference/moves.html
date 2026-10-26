@@ -1,4 +1,4 @@
-<meta name="description" content="How rawr moves values: moves and drops, partial moves, moving out of an index or a reference, and clones of Rc and Arc.">
+<meta name="description" content="How rawr moves values: moves and drops, partial moves, impl Drop, moving out of an index or a reference, and clones of Rc and Arc.">
 <article>
 <h1>Moves</h1>
 <p class="lede">A value that is not <code>Copy</code> moves when it is passed, assigned or stored by value, as in Rust. It drops with its last owner.</p>
@@ -29,6 +29,38 @@ println!("{}", pair.1); // fine: only pair.0 moved</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-partial-move" data-out="out-partial-move" aria-label="Run partial-move.rs" hidden></button><b>rawr run partial-move.rs</b><span id="out-partial-move" aria-live="polite">Rio
 b</span></div>
 </div>
+<h2 id="drop">Drop</h2>
+<p>A type with <code>impl Drop</code> runs its <code>drop</code> where Rust drops the value. A local drops at the end of its block, in reverse order of declaration. <code>drop(x)</code> drops <code>x</code> at once. A value moved into a function drops at the end of that function. <code>let _ = value;</code> and a statement such as <code>Noisy("t");</code> drop their value at the end of the statement. An assignment drops the value it replaces. <code>return</code>, <code>break</code>, <code>continue</code> and <code>?</code> drop the locals of each block they leave. A moved value drops only with its new owner.</p>
+<p>A struct&rsquo;s fields drop after its own <code>drop</code>, in declaration order. The elements of a <code>Vec</code>, an array, a tuple, an <code>Option</code>, a <code>Result</code> and a <code>Box</code> drop in order too.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="drop-order.rs" id="src-drop-order">struct Noisy(&amp;'static str);
+
+impl Drop for Noisy {
+    fn drop(&amp;mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+let _a = Noisy("a");
+{
+    let _b = Noisy("b");
+    println!("inner");
+}
+let c = Noisy("c");
+drop(c);
+let _ = Noisy("d");
+let v = vec![Noisy("e"), Noisy("f")];
+println!("end {}", v.len());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-drop-order" data-out="out-drop-order" aria-label="Run drop-order.rs" hidden></button><b>rawr run drop-order.rs</b><span id="out-drop-order" aria-live="polite">inner
+drop b
+drop c
+drop d
+end 2
+drop e
+drop f
+drop a</span></div>
+</div>
+<p>Some places cannot drop such a value where Rust does yet, and the check says so. They are an <code>Rc</code>, an <code>Arc</code>, a <code>RefCell</code>, a map or a set holding it, a <code>move</code> closure or <code>async</code> block that takes it, an <code>async fn</code> parameter, and an iterator over it. <code>Vec</code> methods that drop elements other than <code>truncate</code> and <code>clear</code> are refused too. A panic does not run <code>drop</code>.</p>
 <h2 id="out-of">Moving out of an index or a reference</h2>
 <p>Moving a value out of an index, or out of a field behind a reference, fails the check as rustc&rsquo;s E0507 does. Borrow it or clone it instead.</p>
 <div class="block">

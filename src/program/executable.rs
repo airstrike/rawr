@@ -108,6 +108,9 @@ struct Location {
 pub struct Positions {
     callables: Box<[Location]>,
     helpers: Box<[Location]>,
+    /// The program's other sources, each with its own evidence: where
+    /// [`Self::locate`] looks when the entry source holds no position.
+    others: Box<[(crate::diagnostic::Source, Positions)]>,
 }
 
 impl Positions {
@@ -120,6 +123,29 @@ impl Positions {
             return None;
         }
         self.original(position)
+    }
+
+    /// The source and span of `error`'s deepest position: in the entry
+    /// source, `entry`, or in another source of the program, such as a
+    /// module's file. It is `None` when the compiler kept no evidence for
+    /// that position.
+    #[must_use]
+    pub fn locate<'a>(
+        &'a self,
+        entry: &'a crate::diagnostic::Source,
+        error: &crate::EvalAltResult,
+    ) -> Option<(&'a crate::diagnostic::Source, crate::Span)> {
+        let position = deepest_position(error);
+        if position.is_none() {
+            return None;
+        }
+        self.original(position)
+            .map(|span| (entry, span))
+            .or_else(|| {
+                self.others.iter().find_map(|(source, positions)| {
+                    positions.original(position).map(|span| (source, span))
+                })
+            })
     }
 
     /// `position` in the lowered program as a position in the source's own
@@ -543,26 +569,54 @@ impl Executable {
                 .values()
                 .flat_map(|locations| locations.iter().copied())
                 .collect(),
+            others: Box::default(),
         };
         (self.into_hosted_ast(), positions)
     }
 
-    /// The [`Positions`] of this program's entry source.
+    /// The [`Positions`] of this program's entry source, with each other
+    /// source's own.
     pub(crate) fn positions(&self) -> Positions {
         let entry = self.sources.key(self.source.index());
+        let mut keys: Vec<_> = self
+            .callables
+            .values()
+            .filter_map(|callable| callable.locations.as_ref())
+            .map(|locations| locations.source)
+            .chain(self.helper_locations.keys().copied())
+            .filter(|key| *key != entry)
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let others = keys
+            .into_iter()
+            .filter_map(|key| {
+                let source = self.sources.resolve(key).ok()?.clone();
+                Some((source, self.source_positions(key, Box::default())))
+            })
+            .collect();
+        self.source_positions(entry, others)
+    }
+
+    /// The [`Positions`] of the source `key`.
+    fn source_positions(
+        &self,
+        key: super::source::Key,
+        others: Box<[(crate::diagnostic::Source, Positions)]>,
+    ) -> Positions {
         let callables = self
             .callables
             .values()
             .filter_map(|callable| callable.locations.as_ref())
-            .filter(|locations| locations.source == entry)
+            .filter(|locations| locations.source == key)
             .flat_map(|locations| locations.entries.iter().copied())
             .collect();
-        let helpers = self
-            .helper_locations
-            .get(&entry)
-            .cloned()
-            .unwrap_or_default();
-        Positions { callables, helpers }
+        let helpers = self.helper_locations.get(&key).cloned().unwrap_or_default();
+        Positions {
+            callables,
+            helpers,
+            others,
+        }
     }
 
     #[cfg(feature = "rust-import")]

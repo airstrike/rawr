@@ -1563,6 +1563,11 @@ pub fn parse_string_literal(
                 escape.clear();
                 result.push_str("\t");
             }
+            // \0, Rust's NUL
+            '0' if !escape.is_empty() => {
+                escape.clear();
+                result.push('\0');
+            }
             // \x??, \u????, \U????????
             ch @ ('x' | 'u' | 'U') if !escape.is_empty() => {
                 let mut seq = escape.clone();
@@ -1973,7 +1978,27 @@ fn get_next_token_inner(
 
                 // Parse number
                 let token = if let Some(radix) = radix_base {
-                    let result = &result[2..];
+                    let digits = &result[2..];
+
+                    // Checked Rust reads a literal past `i64::MAX` by its
+                    // text, as a decimal one past it is (an `i128` or a
+                    // `u128`, or a `u64`'s bits).
+                    if state.tokenizer_control.borrow().rust
+                        && let Ok(value) = u128::from_str_radix(digits, radix)
+                        && INT::try_from(value).is_err()
+                    {
+                        return (
+                            Token::FloatConstant(
+                                (
+                                    crate::types::FloatWrapper::new(value as crate::FLOAT),
+                                    result,
+                                )
+                                    .into(),
+                            ),
+                            num_pos,
+                        );
+                    }
+                    let result = digits;
 
                     // Deliberately allow signed integers to be created from unsigned parsing
                     #[allow(clippy::cast_possible_wrap)]

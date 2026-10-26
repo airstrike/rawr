@@ -113,7 +113,13 @@ struct Resolver<'a> {
     /// Private `use` bindings, so a path may start with an imported module.
     aliases: BTreeMap<Address, Export>,
     type_declarations: Vec<type_def::Declaration>,
+    /// Each crate enum's variant names, for `use Shape::Circle;` and
+    /// `use Shape::*;`.
+    enum_variants: BTreeMap<type_def::Id, Box<[ImmutableString]>>,
 }
+
+/// The variants of `std::cmp::Ordering`, which `use` may import by name.
+pub(crate) const ORDERING_VARIANTS: [&str; 3] = ["Less", "Equal", "Greater"];
 
 pub(crate) fn resolve(graph: Graph, host: &host::Registry) -> Result<Program, Failure> {
     Resolver::new(graph, host)?.resolve()
@@ -177,6 +183,7 @@ impl<'a> Resolver<'a> {
             exports: BTreeMap::new(),
             aliases: BTreeMap::new(),
             type_declarations: Vec::new(),
+            enum_variants: BTreeMap::new(),
         };
         resolver.predeclare()?;
         Ok(resolver)
@@ -258,6 +265,16 @@ impl<'a> Resolver<'a> {
                     let target = match type_kind {
                         Some(kind) => {
                             let definition = type_def::Id::from_index(self.type_declarations.len());
+                            if let crate::item::Parsed::Enum(declared) = parsed {
+                                self.enum_variants.insert(
+                                    definition,
+                                    declared
+                                        .variants
+                                        .iter()
+                                        .map(|variant| variant.name.text.clone())
+                                        .collect(),
+                                );
+                            }
                             let type_key = context.namespace.type_key(&name.text);
                             self.type_declarations.push(type_def::Declaration::new(
                                 definition,
@@ -857,6 +874,35 @@ impl<'a> Resolver<'a> {
         };
         let segments = path_segments(prefix);
         let module: ImmutableString = segments.join("::").into();
+        // `use Shape::*;`: every variant of a crate enum, and
+        // `use std::cmp::Ordering::*;` std's three.
+        let variants = match self.script_enum(context, &segments) {
+            Some((definition, _)) => Some(self.enum_variants[&definition].clone()),
+            None if super::std_ordering(&module) => Some(
+                ORDERING_VARIANTS
+                    .iter()
+                    .map(|name| ImmutableString::from(*name))
+                    .collect(),
+            ),
+            None => None,
+        };
+        if let Some(variants) = variants {
+            return Ok(variants
+                .iter()
+                .filter(|name| !occupied.contains_key(*name))
+                .map(|name| {
+                    let mut path = segments.to_vec();
+                    path.push(name.clone());
+                    (
+                        crate::item::Name {
+                            span: *span,
+                            text: name.clone(),
+                        },
+                        path.into_boxed_slice(),
+                    )
+                })
+                .collect());
+        }
         // `use super::*;`, `use crate::shapes::*;`: every item that module
         // of this crate declares.
         if let Some(modules) = self.local_glob_module(context, &segments) {
@@ -932,6 +978,45 @@ impl<'a> Resolver<'a> {
                 )
             })
             .collect())
+    }
+
+    /// The crate enum a `use` prefix names, as `Shape`, `shapes::Shape` or
+    /// `super::Shape`, or a name another `use` of this module imported.
+    fn script_enum(
+        &self,
+        context: &Context,
+        prefix: &[ImmutableString],
+    ) -> Option<(type_def::Id, type_def::Identity)> {
+        let target = match prefix {
+            [] => return None,
+            [name] => match self.declarations.get(&context.address(name)) {
+                Some(declaration) => declaration.target.clone(),
+                None => {
+                    let alias = self.aliases.get(&context.address(name))?;
+                    if alias.path.len() < 2 {
+                        return None;
+                    }
+                    let mut active = BTreeSet::new();
+                    self.resolve_any_path(&alias.context, &alias.path, alias.span, &mut active)
+                        .ok()?
+                }
+            },
+            _ => {
+                if !self.is_script_path(context, prefix) {
+                    return None;
+                }
+                let mut active = BTreeSet::new();
+                self.resolve_any_path(context, prefix, Span::NONE, &mut active)
+                    .ok()?
+            }
+        };
+        match target {
+            Target::Type(type_ref::Target::Script {
+                definition,
+                identity,
+            }) if self.enum_variants.contains_key(&definition) => Some((definition, identity)),
+            _ => None,
+        }
     }
 
     /// The modules of this crate a glob import's prefix names: `super`,
@@ -1043,8 +1128,27 @@ impl<'a> Resolver<'a> {
                         }),
                     _ => path,
                 };
-                let mut active = BTreeSet::new();
-                let target = self.resolve_any_path(context, &path, name.span, &mut active)?;
+                // `use Shape::Circle;`: a variant of a crate enum.
+                let variant = path.split_last().and_then(|(last, prefix)| {
+                    let Some((definition, identity)) = self.script_enum(context, prefix) else {
+                        return (super::std_ordering(&prefix.join("::"))
+                            && ORDERING_VARIANTS.contains(&last.as_str()))
+                        .then_some(item::Import::OrderingVariant);
+                    };
+                    self.enum_variants[&definition].contains(last).then_some(
+                        item::Import::Variant {
+                            definition,
+                            identity,
+                        },
+                    )
+                });
+                let target = match variant {
+                    Some(_) => Target::Module,
+                    None => {
+                        let mut active = BTreeSet::new();
+                        self.resolve_any_path(context, &path, name.span, &mut active)?
+                    }
+                };
                 // An item of a `.rs` module keeps its crate spelling.
                 let qualified = super::std_reexport(
                     &self
@@ -1054,6 +1158,7 @@ impl<'a> Resolver<'a> {
                     self.host,
                 );
                 let import = match target {
+                    _ if let Some(variant) = variant.clone() => variant,
                     Target::Module | Target::Trait => item::Import::Module,
                     // `use a::m::{self}` imports the module `m` only.
                     Target::HostModuleItem { .. } if module_only => item::Import::Module,
@@ -1119,6 +1224,8 @@ impl<'a> Resolver<'a> {
                     item::Import::ScriptItem { .. }
                         | item::Import::Item { .. }
                         | item::Import::Endpoint { .. }
+                        | item::Import::Variant { .. }
+                        | item::Import::OrderingVariant
                 );
                 let previous = if value {
                     occupied.insert(name.text.clone(), (context.source, name.span))
@@ -1203,7 +1310,10 @@ impl<'a> Resolver<'a> {
 
     fn is_direct_script_path(&self, context: &Context, path: &[ImmutableString]) -> bool {
         path.first().is_some_and(|first| {
-            first == "crate" || first == "super" || self.is_child_module(context, first)
+            first == "crate"
+                || first == "super"
+                || first == "self" && path.len() > 1
+                || self.is_child_module(context, first)
         })
     }
 
@@ -1366,6 +1476,8 @@ impl<'a> Resolver<'a> {
             (context.package, &modules[..parent], &path[supers..])
         } else if first == "crate" {
             (context.package, &[][..], &path[1..])
+        } else if first == "self" && path.len() > 1 {
+            (context.package, modules, &path[1..])
         } else if self.is_child_module(context, first) {
             (context.package, context.namespace.modules.as_ref(), path)
         } else if let Some(alias) = self.module_alias(context, first).filter(|_| path.len() > 1) {

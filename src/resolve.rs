@@ -982,6 +982,70 @@ fn resolve_imports(
             }
         }
     }
+    // This file's enums, whose variants `use Shape::Circle;` and
+    // `use Shape::*;` import.
+    let enums = parsed_items
+        .iter()
+        .filter_map(|parsed| match parsed {
+            crate::item::Parsed::Enum(declared) => match types.get(&declared.name.text) {
+                Some(type_ref::Target::Script {
+                    definition,
+                    identity,
+                }) => Some((
+                    declared.name.text.clone(),
+                    (
+                        *definition,
+                        identity.clone(),
+                        declared
+                            .variants
+                            .iter()
+                            .map(|variant| variant.name.text.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                )),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    // The variants an enum path names, as `Shape`, `self::Shape` or
+    // `std::cmp::Ordering`.
+    let enum_variants = |prefix: &[ImmutableString]| -> Option<Vec<ImmutableString>> {
+        let prefix = match prefix {
+            [this, rest @ ..] if this == "self" => rest,
+            _ => prefix,
+        };
+        if let [name] = prefix
+            && let Some((_, _, variants)) = enums.get(name)
+        {
+            return Some(variants.clone());
+        }
+        std_ordering(&prefix.join("::")).then(|| {
+            package::ORDERING_VARIANTS
+                .iter()
+                .map(|name| ImmutableString::from(*name))
+                .collect()
+        })
+    };
+    let variant_import = |path: &[ImmutableString]| -> Option<item::Import> {
+        let (last, prefix) = path.split_last()?;
+        if !enum_variants(prefix)?.contains(last) {
+            return None;
+        }
+        let prefix = match prefix {
+            [this, rest @ ..] if this == "self" => rest,
+            _ => prefix,
+        };
+        Some(match prefix {
+            [name] if let Some((definition, identity, _)) = enums.get(name) => {
+                item::Import::Variant {
+                    definition: *definition,
+                    identity: identity.clone(),
+                }
+            }
+            _ => item::Import::OrderingVariant,
+        })
+    };
     let through_module = |path: ImmutableString| -> ImmutableString {
         if host.entry(&std_reexport(&path, host)).is_some() {
             return path;
@@ -1004,7 +1068,13 @@ fn resolve_imports(
         let mut globbed = Vec::new();
         if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree {
             let module = parsed_path(prefix);
-            for name in std_glob(&module) {
+            let segments = prefix
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect::<Vec<_>>();
+            let names = enum_variants(&segments).unwrap_or_else(|| std_glob(&module));
+            for name in names {
                 if !occupied.contains_key(&name) {
                     globbed.push((
                         crate::item::Name {
@@ -1068,6 +1138,14 @@ fn resolve_imports(
             }
         }
         for (name, path) in parsed.bindings() {
+            if let Some(target) = variant_import(&path) {
+                bindings.push(item::Binding {
+                    name,
+                    qualified: path.join("::").into(),
+                    target,
+                });
+                continue;
+            }
             let qualified = through_module(path.join("::").into());
             let module_only = parsed.binds_module_only(&name);
             let mut binding = resolve_import_binding(name, qualified, host)?;
@@ -1077,6 +1155,18 @@ fn resolve_imports(
             bindings.push(binding);
         }
         for (name, qualified) in globbed {
+            let path = qualified
+                .split("::")
+                .map(ImmutableString::from)
+                .collect::<Vec<_>>();
+            if let Some(target) = variant_import(&path) {
+                bindings.push(item::Binding {
+                    name,
+                    qualified: qualified.into(),
+                    target,
+                });
+                continue;
+            }
             bindings.push(resolve_import_binding(name, qualified.into(), host)?);
         }
 
@@ -1345,6 +1435,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "collections::HashSet"
                 | "collections::BTreeMap"
                 | "collections::BTreeSet"
+                | "collections::VecDeque"
                 | "hash"
                 | "hash::Hash"
                 | "convert"
@@ -1356,6 +1447,10 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "mem::swap"
                 | "mem::replace"
                 | "mem::take"
+                | "mem::size_of"
+                | "mem::size_of_val"
+                | "thread"
+                | "thread::sleep"
                 | "iter"
                 | "iter::once"
                 | "iter::empty"
@@ -1367,6 +1462,9 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "marker::PhantomData"
                 | "cell"
                 | "cell::RefCell"
+                | "cell::Cell"
+                | "error"
+                | "error::Error"
                 | "rc"
                 | "rc::Rc"
                 | "sync::Arc"
@@ -1396,6 +1494,7 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
         "HashSet",
         "BTreeMap",
         "BTreeSet",
+        "VecDeque",
         "Debug",
         "Display",
         "Formatter",
@@ -1413,6 +1512,8 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
         "swap",
         "replace",
         "take",
+        "size_of",
+        "size_of_val",
         "Duration",
         "Instant",
     ];
@@ -1561,6 +1662,19 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     ["Duration", "Instant"]
         .into_iter()
         .find(|time| *time == name)
+}
+
+/// `std::collections::VecDeque` as a path is written with its module.
+pub(crate) fn std_vec_deque(path: &str) -> bool {
+    matches!(
+        path,
+        "collections::VecDeque" | "std::collections::VecDeque" | "alloc::collections::VecDeque"
+    )
+}
+
+/// `std::cell::Cell` as a path is written with its module.
+pub(crate) fn std_plain_cell(path: &str) -> bool {
+    matches!(path, "cell::Cell" | "std::cell::Cell" | "core::cell::Cell")
 }
 
 /// `std::cell::RefCell` as a path is written.
@@ -2558,9 +2672,8 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
             match path.name.as_str() {
                 // Every integer is the runtime's one integer, and every
                 // float its one float.
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
-                    -2
-                }
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+                | "i128" | "u128" => -2,
                 "f32" | "f64" => -3,
                 "String" => -4,
                 "bool" => -5,
@@ -3068,7 +3181,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 41] = [
     "Clone",
     "Hash",
     "Copy",
@@ -3108,6 +3221,8 @@ pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
     "Index",
     "IndexMut",
     "FromIterator",
+    "Error",
+    "Drop",
 ];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
@@ -3159,6 +3274,7 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
                         | "iter"
                         | "ops"
                         | "hash"
+                        | "error"
                 )
         }))
     .then(|| last.name.clone())
@@ -3269,7 +3385,15 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
                 Some(output),
             )]
         }
-        "Copy" | "Eq" | "Hash" | "IntoFragment" => Vec::new(),
+        // `std::error::Error`'s methods all have defaults.
+        "Copy" | "Eq" | "Hash" | "IntoFragment" | "Error" => Vec::new(),
+        // `trait Drop { fn drop(&mut self); }`: the destructor, which Rawr
+        // runs where Rust drops a value (`lower_nominal::drops`).
+        "Drop" => {
+            let mut drop = function("drop", true, Vec::new(), None);
+            drop.receiver = Some(crate::item::Receiver::Mutable(Span::NONE));
+            vec![drop]
+        }
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.
@@ -4826,24 +4950,83 @@ fn validate_method_signature(
     // A `const` of a reference type (`const ALL: &[T] = &[..]`) is its
     // value, as references are at runtime; so is a shared reference a
     // function returns (`fn name(&self) -> &String`, `Index::index`). A
-    // returned `&mut` would be a copy, which Rust's aliasing would not be.
-    if !function.body.constant
-        && function
-            .output
-            .as_ref()
-            .is_some_and(|output| matches!(output, type_ref::Type::Reference { mutable: true, .. }))
-        // `IndexMut::index_mut` is declared; changing through it is not.
-        && function.name.text != "index_mut"
-    {
-        let output = function.output.as_ref().expect("checked output exists");
+    // returned `&mut T` or `Option<&mut T>` borrows the `&mut self`
+    // receiver, or a free function's first `&mut` parameter: the function
+    // gives the path to the place below it (`lower_nominal::places`).
+    // Another `&mut` in an output would be a copy, which Rust's aliasing
+    // would not be.
+    // `IndexMut::index_mut` is declared; changing through it is inlined.
+    if function.body.constant || function.name.text == "index_mut" {
+        return Ok(());
+    }
+    let Some(output) = function.output.as_ref() else {
+        return Ok(());
+    };
+    let borrowed = match output {
+        type_ref::Type::Reference { mutable: true, .. } => true,
+        type_ref::Type::Path(path) if path.name == "Option" => matches!(
+            path.arguments.as_ref(),
+            [type_ref::Argument::Type(type_ref::Type::Reference {
+                mutable: true,
+                ..
+            })]
+        ),
+        _ => false,
+    };
+    let receiver = if owner == "<module>" {
+        function.parameters.iter().any(|parameter| {
+            matches!(
+                parameter.ty,
+                type_ref::Type::Reference { mutable: true, .. }
+            ) && !direct_mutable_invocation(&parameter.ty)
+        })
+    } else {
+        matches!(function.receiver, Some(crate::item::Receiver::Mutable(_)))
+    };
+    if borrowed && receiver {
+        return Ok(());
+    }
+    if borrowed || borrows_mutably(output) {
         return Err(Error::InvalidMethodSignature {
             owner: owner.into(),
             method: function.name.text.clone(),
-            reason: "method outputs cannot borrow values in this phase".into(),
+            reason: if borrowed {
+                "a `&mut` output borrows a `&mut self` receiver or a free function's `&mut` \
+                 parameter in Rawr; other borrowed outputs are not supported in Rawr yet"
+                    .into()
+            } else {
+                "outputs holding `&mut` other than `&mut T` and `Option<&mut T>` are not \
+                 supported in Rawr yet"
+                    .into()
+            },
             signature: type_span(output),
         });
     }
     Ok(())
+}
+
+/// Whether a value of type `ty` holds a `&mut` (a callable's inputs are
+/// its own).
+fn borrows_mutably(ty: &type_ref::Type) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Reference {
+            mutable, target, ..
+        } => *mutable || borrows_mutably(target),
+        type_ref::Type::Tuple { members, .. } => members.iter().any(borrows_mutably),
+        type_ref::Type::Path(path)
+            if matches!(
+                path.name.as_str(),
+                "Fn" | "FnMut" | "FnOnce" | crate::item::type_ref::FN_TYPE
+            ) =>
+        {
+            false
+        }
+        type_ref::Type::Path(path) => path.arguments.iter().any(|argument| match argument {
+            type_ref::Argument::Type(ty) => borrows_mutably(ty),
+            type_ref::Argument::Lifetime(_) => false,
+        }),
+    }
 }
 
 /// A type as Rust spells it, generic arguments included.

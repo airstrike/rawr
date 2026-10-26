@@ -91,13 +91,20 @@ enum Source {
         values: origin::Fragment,
         array: bool,
     },
-    /// `low..high`, `low..=high`, `low..`.
+    /// `low..high`, `low..=high`, `low..`: of integers, or of chars
+    /// (`char`), whose bounds are their code points and whose items the
+    /// chain turns back into chars (`CHAR_OF_CODE`).
     Range {
         low: origin::Fragment,
         high: Option<origin::Fragment>,
         inclusive: bool,
+        char: bool,
     },
 }
+
+/// The `Cast` code of a code point to its `char`, which a char range's
+/// items are made by; one between the surrogates fails.
+pub(super) const CHAR_OF_CODE: &str = "15";
 
 /// The iterator methods Rawr provides on an iterator value.
 const ITERATOR_METHODS: &[&str] = &[
@@ -150,6 +157,17 @@ const ITERATOR_METHODS: &[&str] = &[
 ];
 
 impl Parser<'_> {
+    /// The item of a range's source at `at`: its integer, or for a char
+    /// range its char.
+    fn range_item(&mut self, char: bool, at: &str) -> String {
+        if char {
+            let helper = self.push_op(super::Op::Prelude(super::PreludeOp::Cast));
+            format!("{helper}({at}, {CHAR_OF_CODE})")
+        } else {
+            at.to_string()
+        }
+    }
+
     /// Whether `member` is an iterator method on a value of type `ty`:
     /// an iterator, or a range (`(0..=n).map(f)`).
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
@@ -285,10 +303,23 @@ impl Parser<'_> {
         item: Ty,
         inclusive: bool,
     ) -> ParsedExpr {
+        // A char range walks its bounds' code points.
+        let char = item == Ty::Char;
+        let bound = |this: &mut Self, value: &ParsedExpr| {
+            if char {
+                this.prelude_op(
+                    super::PreludeOp::Cast,
+                    [value.rendered_source(), "7".into()],
+                )
+            } else {
+                value.rendered_source()
+            }
+        };
         let source = Source::Range {
-            low: low.rendered_source(),
-            high: high.map(ParsedExpr::rendered_source),
+            low: bound(self, low),
+            high: high.map(|high| bound(self, high)),
             inclusive,
+            char,
         };
         let pipeline = self.source_pipeline(source);
         let end = high.map_or(low.span.end(), |high| high.span.end());
@@ -345,24 +376,46 @@ impl Parser<'_> {
                 low,
                 high: Some(high),
                 inclusive,
-            } => (
-                vec![
-                    Part::Text(format!("for {item} in (")),
-                    Part::Value(low.clone()),
-                    Part::Text(if *inclusive { ")..=(" } else { ")..(" }.into()),
-                    Part::Value(high.clone()),
-                    Part::Text(")".into()),
-                ],
-                origin::Fragment::default(),
-            ),
+                char,
+            } => {
+                let code = if *char {
+                    self.temporary("code")
+                } else {
+                    item.clone()
+                };
+                let entry = if *char {
+                    origin::Fragment::plain(format!(
+                        "let {item} = {}; ",
+                        self.range_item(true, &code)
+                    ))
+                } else {
+                    origin::Fragment::default()
+                };
+                (
+                    vec![
+                        Part::Text(format!("for {code} in (")),
+                        Part::Value(low.clone()),
+                        Part::Text(if *inclusive { ")..=(" } else { ")..(" }.into()),
+                        Part::Value(high.clone()),
+                        Part::Text(")".into()),
+                    ],
+                    entry,
+                )
+            }
             Source::Range {
-                low, high: None, ..
+                low,
+                high: None,
+                char,
+                ..
             } => {
                 let start = self.bind(&mut pipeline, "start", low.clone());
                 let next = self.bind_state(&mut pipeline, "next", start.into());
                 (
                     vec![Part::Text("loop".into())],
-                    origin::Fragment::plain(format!("let {item} = {next}; {next} += 1; ")),
+                    origin::Fragment::plain(format!(
+                        "let {item} = {}; {next} += 1; ",
+                        self.range_item(*char, &next)
+                    )),
                 )
             }
         };
@@ -706,6 +759,20 @@ impl Parser<'_> {
         let (mut pipeline, item) = self
             .pipeline_of(&value)
             .expect("iterator receivers have a chain");
+        // Items with drop glue may only go on to an owner: a container, or
+        // a closure's parameter.
+        if !matches!(member.as_str(), "collect" | "for_each" | "map" | "fold")
+            && self.needs_drop(&item, member_span)?
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`{member}` on an iterator of values whose type implements `Drop`: dropping \
+                     them where Rust does is not supported in Rawr yet"
+                )
+                .into(),
+                source: member_span,
+            });
+        }
         let reference = |ty: &Ty| Ty::Reference {
             mutable: false,
             target: Box::new(ty.clone()),
@@ -876,15 +943,21 @@ impl Parser<'_> {
                     low,
                     high: Some(high),
                     inclusive,
+                    char: false,
                 }) = pipeline.source.clone()
                     && let Ty::Int(kind) = self.inference.resolve(&item) =>
             {
                 arity(1, &arguments)?;
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
                 let flags =
-                    i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() == 64) << 1;
+                    i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() >= 64) << 1;
+                let op = if kind.wide() {
+                    PreludeOp::WideStepBy
+                } else {
+                    PreludeOp::StepBy
+                };
                 let step = self.prelude_op(
-                    PreludeOp::StepBy,
+                    op,
                     [
                         low,
                         high,
@@ -1017,6 +1090,7 @@ impl Parser<'_> {
                         low,
                         high,
                         inclusive,
+                        char,
                     }) => {
                         let start = self.bind(&mut pipeline, "start", low);
                         let at = self.bind_state(&mut pipeline, "at", start.into());
@@ -1026,7 +1100,8 @@ impl Parser<'_> {
                             let operator = if inclusive { ">" } else { ">=" };
                             open += &format!("if {at} {operator} {high} {stop} ");
                         }
-                        open + &*format!("let {next} = [{x}, {at}]; {at} += 1; ")
+                        let other = self.range_item(char, &at);
+                        open + &*format!("let {next} = [{x}, {other}]; {at} += 1; ")
                     }
                     _ => {
                         let values = self.materialized(&other);
@@ -1262,6 +1337,41 @@ impl Parser<'_> {
                         )
                     }
                 }
+            }
+            // `(a..b).contains(&x)` of a bare range: its bounds compared,
+            // a char by its code point.
+            "contains"
+                if let Some(Source::Range {
+                    low,
+                    high,
+                    inclusive,
+                    char,
+                }) = pipeline.source.clone() =>
+            {
+                arity(1, &arguments)?;
+                self.coerce_expr(&reference(&item), &mut arguments[0])?;
+                let value = self.temporary("value");
+                let mut source = origin::Fragment::plain(format!("{{ let {value} = "));
+                if char {
+                    let code = self.prelude_op(
+                        super::PreludeOp::Cast,
+                        [arguments[0].rendered_source(), "7".into()],
+                    );
+                    source.push(code);
+                } else {
+                    source.push(arguments[0].rendered_source());
+                }
+                source.push_text("; (");
+                source.push(low);
+                source.push_text(format!(") <= {value}"));
+                if let Some(high) = high {
+                    let operator = if inclusive { "<=" } else { "<" };
+                    source.push_text(format!(" && {value} {operator} ("));
+                    source.push(high);
+                    source.push_text(")");
+                }
+                source.push_text(" }");
+                (source, Ty::Bool)
             }
             "count" => {
                 arity(0, &arguments)?;
@@ -1522,6 +1632,31 @@ impl Parser<'_> {
                                 expression,
                             ));
                         }
+                        // `self.items.next()` on a field, an element or a
+                        // nested place holding a `Box<dyn Iterator>`: its
+                        // first item, taken from the array the place holds.
+                        if matches!(
+                            &value.lvalue,
+                            Some(Lvalue::Field(_) | Lvalue::Nested(_) | Lvalue::Place { .. })
+                        ) && matches!(self.inference.resolve(&value.ty), Ty::Iter(_))
+                        {
+                            let shifted = self.mutation_call(&value, "shift", Vec::new())?;
+                            let mut source = origin::Fragment::plain("if ");
+                            source.push(value.rendered_source().surrounded("(", ")"));
+                            source.push_text(".len() == 0 { ");
+                            let empty = none(self);
+                            source.push(empty);
+                            source.push_text(" } else { ");
+                            let first = self.prelude_op(PreludeOp::Some, [shifted]);
+                            source.push(first);
+                            source.push_text(" }");
+                            let ty = Ty::Option(Box::new(item));
+                            return Ok(self.operator_expr(
+                                source.surrounded("(", ")"),
+                                ty,
+                                expression,
+                            ));
+                        }
                         sink.push_text(format!("{found} = "));
                         let value = some(self, &x);
                         sink.push(value);
@@ -1642,6 +1777,7 @@ impl Parser<'_> {
                 low,
                 high: Some(high),
                 inclusive,
+                ..
             } => {
                 let mut length = origin::Fragment::plain("{ let __rawr_length = (");
                 length.push(high.clone());
@@ -1736,6 +1872,7 @@ impl Parser<'_> {
                 low,
                 high: Some(high),
                 inclusive,
+                char,
             }) => {
                 let floor = self.bind(&mut reversed, "low", low);
                 let mut top = high.surrounded("(", ")");
@@ -1746,7 +1883,7 @@ impl Parser<'_> {
                 let at = self.bind_state(&mut reversed, "at", top.into());
                 (
                     format!("while {at} > {floor}"),
-                    format!("{at} -= 1; let {item} = {at}; "),
+                    format!("{at} -= 1; let {item} = {}; ", self.range_item(char, &at)),
                 )
             }
             source => {

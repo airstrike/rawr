@@ -32,14 +32,16 @@ pub(crate) const EXPORTED_FIELD: &str = "__rawr_field_";
 
 const BUILTIN_TYPES: &[&str] = &[
     "bool", "char", "f64", "i64", "String", "i8", "i16", "i32", "isize", "u8", "u16", "u32", "u64",
-    "usize", "f32",
+    "usize", "f32", "i128", "u128",
 ];
 
-/// The runtime builtin a Rust numeric type is: every integer kind an
-/// `i64`, `f32` an `f64` (the checker keeps the kinds apart).
+/// The runtime builtin a Rust numeric type is: every integer kind up to 64
+/// bits an `i64`, `f32` an `f64` (the checker keeps the kinds apart), and
+/// `i128` and `u128` an `i64` or, past its range, a boxed `i128` or `u128`.
 pub(crate) fn runtime_builtin(name: &str) -> &str {
     match name {
         "i8" | "i16" | "i32" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => "i64",
+        "u128" => "i128",
         "f32" => "f64",
         name => name,
     }

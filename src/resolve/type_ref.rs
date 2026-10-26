@@ -515,6 +515,20 @@ fn resolve_path(
         Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
         None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
         None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
+        // `std::collections::VecDeque` is Rawr's `Vec` (`vec_deque_as_vec`).
+        None if !types.contains_key("VecDeque")
+            && (super::std_vec_deque(&name) || name.as_str() == "VecDeque") =>
+        {
+            "Vec".into()
+        }
+        // `std::cell::Cell`, or a bare `Cell` that names no crate or host
+        // type.
+        None if !types.contains_key("Cell")
+            && (super::std_plain_cell(&name)
+                || name.as_str() == "Cell" && host.source_type("Cell").is_none()) =>
+        {
+            "Cell".into()
+        }
         None if let Some(pointer) = super::std_pointer(&name)
             && !types.contains_key(pointer) =>
         {
@@ -534,6 +548,8 @@ fn resolve_path(
         || super::std_collection(&name).is_some()
         || name.as_str() == "Reverse"
         || name.as_str() == "RefCell"
+        || name.as_str() == "Cell" && host.source_type("Cell").is_none()
+        || name.as_str() == "Vec"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
         || name.as_str() == "RangeInclusive"
@@ -580,7 +596,8 @@ fn resolve_path(
     let prelude = match name.as_str() {
         "Option" | "Vec" | "Box" => Some(1),
         "Result" | "HashMap" | "BTreeMap" => Some(2),
-        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Rc" | "Arc" | "RangeInclusive" => Some(1),
+        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Cell" | "Rc" | "Arc"
+        | "RangeInclusive" => Some(1),
         item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
         name if item::type_ref::array_length(name).is_some() => Some(1),
         _ => None,
@@ -1254,16 +1271,17 @@ impl Type {
         })
     }
 
-    /// `T` of `std::cell::RefCell<T>`.
-    pub(crate) fn cell_element(&self) -> Option<&Type> {
+    /// The cell's name and `T` of `std::cell::RefCell<T>` or
+    /// `std::cell::Cell<T>`.
+    pub(crate) fn cell_element(&self) -> Option<(&str, &Type)> {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || path.name.as_str() != "RefCell" {
+        if path.target != Target::Builtin || !matches!(path.name.as_str(), "RefCell" | "Cell") {
             return None;
         }
         path.arguments.iter().find_map(|argument| match argument {
-            Argument::Type(ty) => Some(ty),
+            Argument::Type(ty) => Some((path.name.as_str(), ty)),
             Argument::Lifetime(_) => None,
         })
     }

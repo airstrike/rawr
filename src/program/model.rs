@@ -455,7 +455,7 @@ impl Model {
                     }
                     "bool" => Ok(false.into()),
                     "char" => Ok('\0'.into()),
-                    "i64" => Ok(0_i64.into()),
+                    "i64" | "i128" => Ok(0_i64.into()),
                     "f64" => Ok(0.0_f64.into()),
                     "String" => Ok(ImmutableString::new().into()),
                     "Duration" => Ok(Dynamic::from(std::time::Duration::ZERO)),
@@ -563,6 +563,11 @@ impl Model {
         expected: &type_ref::Type,
         shared: &mut BTreeSet<usize>,
     ) -> Result<(), construction::Error> {
+        // A part a move took out of its local, which Rust leaves
+        // inaccessible, is `()` (`__rawr_clear`).
+        if value.is_unit() {
+            return Ok(());
+        }
         if let Some(element) = expected.option_element() {
             return match crate::option::read(value) {
                 Some(Some(inner)) => self.validate_type(&inner, element, shared),

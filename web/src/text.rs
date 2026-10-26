@@ -229,23 +229,29 @@ pub fn run(source: &str) -> String {
                             rawr_snippet::in_source(&program, source, line, column)
                         })
                 });
-                let message =
-                    rawr::diagnostic::Report::from_evaluation_located(evidence, original, &error)
-                        .map_or_else(
-                            |_| rawr_snippet::without_positions(&text),
-                            |report| {
-                                rawr_snippet::report(
-                                    &rawr::diagnostic::render(&report),
-                                    &program,
-                                    source,
-                                )
-                            },
-                        );
+                let message = rawr::diagnostic::Report::from_evaluation_located(
+                    evidence.clone(),
+                    original,
+                    &error,
+                )
+                .or_else(|_| {
+                    rawr::diagnostic::Report::from_evaluation_located(evidence, None, &error)
+                })
+                .map_or_else(
+                    |_| rawr_snippet::without_positions(&text),
+                    |report| panic(&report, &program, source),
+                );
                 output.push(true, &format!("{}\n", message.trim_end()));
             }
         }
     }
     output.finish()
+}
+
+/// `report`, a run-time failure, as a Cargo-built program prints its panic,
+/// at the snippet's own line and column.
+pub(crate) fn panic(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
+    rawr_snippet::panic(&rawr::diagnostic::panic(report), program, source)
 }
 
 type Compiled = (

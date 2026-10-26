@@ -10,20 +10,7 @@ use crate::{without_tests, SOURCE_NAME};
 pub fn report(text: &str, program: &str, source: &str) -> String {
     let source = without_tests(source);
     let own: Vec<&str> = source.split('\n').collect();
-    // The last line with text: a source ending in a newline ends on it.
-    let last = own
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map_or(1, |at| at + 1);
-    let end = own[last - 1].chars().count();
-    let added = program
-        .split('\n')
-        .zip(source.split('\n'))
-        .enumerate()
-        .filter_map(|(index, (wrapped, own))| {
-            added_span(wrapped, own).map(|span| (index + 1, span))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let Wrapping { added, last, end } = wrapping(program, &source);
     let mut out = String::with_capacity(text.len());
     // The quoted line's added span, and whether it was moved to `last`.
     let mut quoted = None;
@@ -78,6 +65,53 @@ pub fn report(text: &str, program: &str, source: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// A panic's text, as `rawr::diagnostic::panic` writes it for the wrapped
+/// program, as the user's own source shows it: the location on its
+/// `thread 'main' panicked at play.rs:<line>:<column>:` line counts in the
+/// snippet as written, as in [`report`].
+pub fn panic(text: &str, program: &str, source: &str) -> String {
+    let prefix = format!("thread 'main' panicked at {SOURCE_NAME}:");
+    let Some((first, rest)) = text.split_once('\n') else {
+        return text.to_owned();
+    };
+    let Some(location) = first
+        .strip_prefix(&prefix)
+        .and_then(|location| location.strip_suffix(':'))
+    else {
+        return text.to_owned();
+    };
+    let Wrapping { added, last, end } = wrapping(program, &without_tests(source));
+    let location = shift_location(location, &added, last, end);
+    format!("{prefix}{location}:\n{rest}")
+}
+
+/// What the wrapping added to a source: the span it added to each line, the
+/// source's last line with text and that line's length in chars.
+struct Wrapping {
+    added: std::collections::BTreeMap<usize, (usize, usize)>,
+    last: usize,
+    end: usize,
+}
+
+fn wrapping(program: &str, source: &str) -> Wrapping {
+    let own: Vec<&str> = source.split('\n').collect();
+    // The last line with text: a source ending in a newline ends on it.
+    let last = own
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map_or(1, |at| at + 1);
+    let end = own[last - 1].chars().count();
+    let added = program
+        .split('\n')
+        .zip(source.split('\n'))
+        .enumerate()
+        .filter_map(|(index, (wrapped, own))| {
+            added_span(wrapped, own).map(|span| (index + 1, span))
+        })
+        .collect();
+    Wrapping { added, last, end }
 }
 
 /// `line` without a runtime error's ` (line 2, position 1)`: it counts in

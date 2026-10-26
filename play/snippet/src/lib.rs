@@ -8,7 +8,7 @@ pub mod plain;
 mod report;
 mod wrap;
 
-pub use report::{in_source, report, without_positions};
+pub use report::{in_source, panic, report, without_positions};
 pub use wrap::{
     app_theme, has_top_level_mod, live, shape, without_tests, wrap, Options, Shape, MESSAGE,
     NEEDS_APP,

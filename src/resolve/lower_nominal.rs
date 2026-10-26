@@ -1,6 +1,10 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
+mod cargo_env;
 pub(crate) mod cell;
+mod drops;
+mod error_object;
+mod fmt_write;
 mod iterator;
 mod keyed;
 mod location;
@@ -720,6 +724,13 @@ fn imported_surface_type(
             Int::U32 => Builtin::U32,
             Int::U64 => Builtin::U64,
             Int::Usize => Builtin::Usize,
+            Int::I128 | Int::U128 => {
+                return Err(Error::InvalidHostOperation {
+                    item: "<imported generic instance>".into(),
+                    reason: "an `i128` or a `u128` does not cross to Rust code in Rawr yet".into(),
+                    operation,
+                });
+            }
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
         Ty::Range(element) => {
@@ -820,7 +831,7 @@ fn erased(ty: &Ty) -> bool {
             | Ty::Keyed(..)
             | Ty::Boxed(..)
             | Ty::Reverse(_)
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Ordering
             | Ty::Time(Time::Instant)
     )
@@ -851,6 +862,7 @@ fn instance_surface_type(
             Int::U32 => Builtin::U32,
             Int::U64 => Builtin::U64,
             Int::Usize => Builtin::Usize,
+            Int::I128 | Int::U128 => return None,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
         Ty::Range(element) => Type::Range(Box::new(instance_surface_type(inference, element)?)),
@@ -1401,6 +1413,18 @@ fn write_trait_dispatchers(
     let type_index = format!("{SENTINEL}{}", ops.len());
     ops.push(ExecutableOp::Prelude(PreludeOp::TypeIndex));
     for (trait_name, (source, declared)) in &models.traits {
+        // `Drop` is run by the drop glue where Rust drops a value.
+        if trait_name == "Drop" && models.std_traits.contains(trait_name) {
+            drops::write_glue(
+                output,
+                models,
+                ops,
+                *source,
+                declared.name.span,
+                &type_index,
+            );
+            continue;
+        }
         for function in &declared.functions {
             if function.receiver.is_none() {
                 if !models.std_traits.contains(trait_name) {
@@ -2503,6 +2527,9 @@ struct Tables {
     host: crate::host::Registry,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
+    /// The enum variants each source imports by name (`use Shape::*;`), with
+    /// the name of their enum in that source.
+    variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
     by_definition: BTreeMap<type_def::Id, Nominal>,
     by_identity: BTreeMap<type_def::Identity, Nominal>,
     qualified_functions: BTreeMap<(crate::program::source::Id, Span), crate::item::Key>,
@@ -2537,6 +2564,8 @@ struct Tables {
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
     sources: crate::program::source::Table,
+    /// The program's root file: the crate root Cargo built the target from.
+    entry: crate::program::source::Id,
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
     boot: Option<crate::item::Key>,
@@ -2677,6 +2706,8 @@ impl Models {
         if used.contains("Ord") {
             used.insert("PartialOrd".into());
         }
+        // std's `Error`, which `Box<dyn Error>` names without an impl.
+        used.insert("Error".into());
         for trait_name in &used {
             if !traits.contains_key(trait_name)
                 && let Some(declared) = crate::resolve::builtin_trait(trait_name)
@@ -2751,6 +2782,8 @@ impl Models {
             }
         }
 
+        let mut imported_variants = Vec::new();
+        let mut ordering_variants = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
@@ -2772,6 +2805,16 @@ impl Models {
                             .clone();
                         functions.insert((shell.source, binding.name.text.clone()), function);
                     }
+                    item::Import::Variant { identity, .. } => {
+                        imported_variants.push((
+                            shell.source,
+                            binding.name.text.clone(),
+                            identity.clone(),
+                        ));
+                    }
+                    item::Import::OrderingVariant => {
+                        ordering_variants.push((shell.source, binding.name.text.clone()));
+                    }
                     item::Import::Module
                     | item::Import::ModuleItem { .. }
                     | item::Import::Endpoint { .. }
@@ -2780,6 +2823,36 @@ impl Models {
                     | item::Import::Alias => {}
                 }
             }
+        }
+        // An imported variant reads as its enum's path, `Shape::Circle`. The
+        // enum is named by its own name in that source, which a different
+        // type of that name there leaves to a name no source can write.
+        let mut variants = BTreeMap::new();
+        for (source, name, identity) in imported_variants {
+            let nominal = by_identity
+                .get(&identity)
+                .expect("resolved variant imports retain nominal identity")
+                .clone();
+            let own: ImmutableString = nominal.name().into();
+            let owner = match by_name.get(&(source, own.clone())) {
+                Some(named) if named.identity() == nominal.identity() => own,
+                Some(_) => {
+                    let hidden: ImmutableString = format!("{own}\u{2}").into();
+                    by_name.insert((source, hidden.clone()), nominal);
+                    hidden
+                }
+                None => {
+                    by_name.insert((source, own.clone()), nominal);
+                    own
+                }
+            };
+            variants.insert((source, name), Box::from([owner]));
+        }
+        for key in ordering_variants {
+            variants.insert(
+                key,
+                Box::from(["std".into(), "cmp".into(), "Ordering".into()]),
+            );
         }
 
         let mut associated = AssociatedTypes::default();
@@ -2926,6 +2999,7 @@ impl Models {
             host,
             imports,
             by_name,
+            variants,
             by_definition,
             by_identity,
             qualified_functions: program.qualified_functions.clone(),
@@ -2970,6 +3044,7 @@ impl Models {
             functions_by_key,
             widgets,
             sources: program.source.table().clone(),
+            entry: program.source.entry(),
             application_runtime,
             boot: program
                 .application
@@ -2990,6 +3065,20 @@ impl Models {
 
     fn get(&self, name: &str) -> Option<&Nominal> {
         self.by_name.get(&(self.context, name.into()))
+    }
+
+    /// The enum an imported variant's name stands for in this source.
+    fn imported_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+        self.variants
+            .get(&(self.context, name.into()))
+            .map(AsRef::as_ref)
+    }
+
+    fn imports_variants(&self) -> bool {
+        self.variants
+            .range((self.context, ImmutableString::new())..)
+            .next()
+            .is_some_and(|((source, _), _)| *source == self.context)
     }
 
     fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
@@ -3068,7 +3157,7 @@ impl Models {
             Ty::Boxed(_, inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
             // A cell is made where its default is used, so copies share
             // no cell.
-            Ty::Cell(_) => false,
+            Ty::Cell(..) => false,
             Ty::Array {
                 element,
                 length: Some(_),
@@ -3096,6 +3185,50 @@ impl Models {
                 folds
             }
             _ => true,
+        }
+    }
+
+    /// Whether a value of `ty` holds a `Cell` or `RefCell` of its own, not
+    /// behind an `Rc` or `Arc`. Its runtime copy would share the cell,
+    /// while Rust's `clone` makes a new one.
+    fn holds_cell(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
+        match ty {
+            Ty::Cell(..) => true,
+            Ty::Boxed(Pointer::Box, inner)
+            | Ty::Reverse(inner)
+            | Ty::Option(inner)
+            | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
+            Ty::Result(ok, err) => self.holds_cell(ok, visiting) || self.holds_cell(err, visiting),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => members
+                .iter()
+                .any(|member| self.holds_cell(member, visiting)),
+            Ty::Script(id, arguments) => {
+                if visiting.contains(id) || self.std_impl(*id, "Clone", "clone").is_some() {
+                    return false;
+                }
+                if arguments
+                    .iter()
+                    .any(|argument| self.holds_cell(argument, visiting))
+                {
+                    return true;
+                }
+                visiting.push(*id);
+                let holds = match self.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .any(|field| self.holds_cell(&Ty::from_resolved(&field.ty), visiting)),
+                    Nominal::Enum { item, .. } => item.variants.iter().any(|variant| {
+                        variant
+                            .payload
+                            .iter()
+                            .any(|ty| self.holds_cell(&Ty::from_resolved(ty), visiting))
+                    }),
+                };
+                visiting.pop();
+                holds
+            }
+            _ => false,
         }
     }
 
@@ -3210,7 +3343,7 @@ impl Models {
             | Ty::Time(_)
             | Ty::ParseError(_)
             | Ty::Reference { .. }
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Boxed(..)
             | Ty::Iter(_)
             | Ty::Keyed(..)
@@ -3443,6 +3576,12 @@ enum PreludeOp {
     GenericEqual,
     /// `{:?}` of a value of a generic type, by its runtime value.
     GenericDebug,
+    /// A number's, `bool`'s or `()`'s `Debug` under a `{:?}` spec
+    /// (`DebugSpec`): `leaf(value, spec, code)` (`DebugLeaf::from_code`).
+    FormatDebugLeaf,
+    /// A derived `Debug` under a `{:?}` spec, which it passes to each
+    /// field: `debug(value, spec)`.
+    FormatSpecDebug,
     /// `a.partial_cmp(&b)` by the runtime values (`compare_value`): an
     /// `Option` of `Ordering`'s discriminant.
     Compare,
@@ -3509,6 +3648,15 @@ enum PreludeOp {
     /// An imported value's Rust `Display` text, kept by the bridge.
     DisplayText,
     CellNew,
+    /// `Cell::new(value)`.
+    PlainCellNew,
+    /// A `Box<dyn Error>` of its `Display` and `Debug` text, and one of
+    /// those texts (`error_object.rs`).
+    ErrorNew,
+    ErrorText,
+    /// A `parse` error, whose kind its target's kind code gives, boxed as
+    /// `dyn Error` by `?`.
+    ErrorParse,
     CellBorrow,
     CellGet,
     CellSet,
@@ -3532,6 +3680,9 @@ enum PreludeOp {
     Narrow,
     /// `value as T` for the kind of `kind_code`: `cast(value, kind)`.
     Cast,
+    /// An integer literal past `i64` as the kind of `kind_code` keeps it:
+    /// `wide(digits, kind)`, an `i128` or a `u128` boxed, a `u64`'s bits.
+    WideLiteral,
     /// An arithmetic result of a `{float}` that inference made an `f32`,
     /// rounded to it: `round(value)`.
     RoundF32,
@@ -3542,6 +3693,9 @@ enum PreludeOp {
     /// items it yields: `step_by(low, high, step, flags)`, `flags` bit 0
     /// for `..=` and bit 1 for an unsigned range.
     StepBy,
+    /// `StepBy` of an `i128` or a `u128` range (bit 1 of `flags` for a
+    /// `u128` one): std's own `StepBy`.
+    WideStepBy,
     /// `v[low..high]` of an array or a string (by bytes, on `char`
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
@@ -3558,6 +3712,8 @@ enum PreludeOp {
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
+    /// `v.capacity()`: the runtime `Vec`'s own capacity, read by reference.
+    VecCapacity,
     /// A set's `union`, `intersection`, `difference`,
     /// `symmetric_difference` (the keys, in order), `is_subset`,
     /// `is_superset` or `is_disjoint` with another, by code
@@ -3585,8 +3741,19 @@ enum PreludeOp {
     StrChange,
     /// A string's pieces or bytes (`STR_PIECES`): `pieces(text, code, a, b)`.
     StrPieces,
-    /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
+    /// `v.chunks(n)`, `windows(n)`, `chunks_exact(n)`, `rchunks(n)` or
+    /// `rchunks_exact(n)`, by its code in `SLICE_CHUNKS`: the array of its
+    /// slices.
     SliceChunks,
+    /// The value at a path below a place, and the value stored there,
+    /// called as methods on the place (`places::path_invoke`): how a
+    /// script function's `&mut` output is read and written.
+    PathGet,
+    PathSet,
+    /// The parts of a value the drop glue goes on to after the value's own
+    /// `Drop` (`drops.rs`): its fields, payload or elements in Rust's drop
+    /// order, each that holds a value of a type with `impl Drop`.
+    DropParts,
 }
 
 impl PreludeOp {
@@ -3606,6 +3773,8 @@ impl PreludeOp {
             Self::ExpectErr => "result.expect-err",
             Self::GenericEqual => "generic.eq",
             Self::GenericDebug => "generic.debug",
+            Self::FormatDebugLeaf => "format.debug-leaf",
+            Self::FormatSpecDebug => "format.spec-debug",
             Self::Compare => "generic.partial-cmp",
             Self::TypeIndex => "generic.type-index",
             Self::Discriminant => "enum.discriminant",
@@ -3635,6 +3804,10 @@ impl PreludeOp {
             Self::ReverseWrap => "reverse.new",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
+            Self::PlainCellNew => "cell.new_plain",
+            Self::ErrorNew => "error.new",
+            Self::ErrorText => "error.text",
+            Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
             Self::CellSet => "cell.set",
@@ -3651,13 +3824,16 @@ impl PreludeOp {
             Self::RoundF32 => "number.round-f32",
             Self::Unsigned => "number.unsigned",
             Self::StepBy => "range.step-by",
+            Self::WideStepBy => "range.wide-step-by",
             Self::Cast => "number.cast",
+            Self::WideLiteral => "number.wide-literal",
             Self::Slice => "slice.range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
             Self::VecMethod => "vec.method",
+            Self::VecCapacity => "vec.capacity",
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
@@ -3668,6 +3844,9 @@ impl PreludeOp {
             Self::StrChange => "string.change",
             Self::StrPieces => "str.pieces",
             Self::SliceChunks => "slice.chunks",
+            Self::PathGet => "place.get",
+            Self::PathSet => "place.set",
+            Self::DropParts => "drop.parts",
         }
     }
 
@@ -3681,14 +3860,17 @@ impl PreludeOp {
             | Self::SetInsert
             | Self::SetRemove
             | Self::VecMethod
-            | Self::StrChange => Some(true),
+            | Self::StrChange
+            | Self::PathSet => Some(true),
             Self::MapGet
             | Self::MapContainsKey
             | Self::MapIndex
             | Self::MapSlot
             | Self::SetContains
             | Self::SetAlgebra
-            | Self::KeyedRange => Some(false),
+            | Self::VecCapacity
+            | Self::KeyedRange
+            | Self::PathGet => Some(false),
             _ => None,
         }
     }
@@ -3706,14 +3888,20 @@ impl PreludeOp {
             | Self::UnwrapErr
             | Self::GenericDebug
             | Self::TypeIndex
+            | Self::DropParts
             | Self::Discriminant
             | Self::ReverseWrap
             | Self::DisplayText
             | Self::CellNew
+            | Self::PlainCellNew
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
-            Self::CellBorrow | Self::CellSet | Self::CellReplace => {
+            Self::CellBorrow
+            | Self::CellSet
+            | Self::CellReplace
+            | Self::ErrorNew
+            | Self::ErrorText => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
             Self::CellUpdate => vec![
@@ -3730,8 +3918,14 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
             ],
             Self::FormatRadix => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
-            Self::FormatBits => vec![
+            Self::FormatDebugLeaf => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
+            ],
+            Self::FormatSpecDebug => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
+            Self::FormatBits => vec![
+                TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
             ],
@@ -3759,9 +3953,16 @@ impl PreludeOp {
                 TypeId::of::<ImmutableString>(),
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
+            Self::WideLiteral => vec![TypeId::of::<ImmutableString>(), TypeId::of::<crate::INT>()],
             Self::RoundF32 | Self::Unsigned => vec![TypeId::of::<Dynamic>()],
             Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
-            Self::Parse => vec![TypeId::of::<ImmutableString>()],
+            Self::WideStepBy => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::Parse | Self::ErrorParse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
                 TypeId::of::<ImmutableString>(),
@@ -3778,7 +3979,13 @@ impl PreludeOp {
             Self::SliceChunks => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
-                TypeId::of::<bool>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::PathGet => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
+            Self::PathSet => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
@@ -3817,6 +4024,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::VecCapacity => vec![TypeId::of::<crate::Array>()],
             Self::VecMethod => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
@@ -3877,6 +4085,18 @@ impl PreludeOp {
             Self::Err => return Ok(crate::result::err(args[0].take())),
             Self::GenericEqual => return Ok(comparison.equal(args[0], args[1])?.into()),
             Self::GenericDebug => return Ok(debug_value(args[0], models).into()),
+            Self::FormatDebugLeaf => {
+                let spec = DebugSpec::read(args[1]);
+                let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
+                return Ok(ImmutableString::from(spec.leaf(args[0], leaf)).into());
+            }
+            Self::FormatSpecDebug => {
+                let spec = DebugSpec::read(args[1]);
+                return Ok(
+                    ImmutableString::from(debug_value_spec(args[0], models, Some(&spec))).into(),
+                );
+            }
+            Self::DropParts => return Ok(drops::parts(args[0], models)),
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -3925,8 +4145,13 @@ impl PreludeOp {
                 return Ok(Dynamic::from(ImmutableString::from(text)));
             }
             Self::FormatBits => {
-                let value = args[0].as_int().unwrap_or_default() as u64;
                 let bits = args[2].as_int().unwrap_or(64);
+                // An `i128`'s or a `u128`'s 128 bits; others' bits in the
+                // runtime's `i64`.
+                let value = match wide_value(args[0]) {
+                    Some(value) if bits == 128 => value.unsigned(),
+                    _ => u128::from(args[0].as_int().unwrap_or_default() as u64),
+                };
                 let value = if bits >= 64 {
                     value
                 } else {
@@ -3955,7 +4180,16 @@ impl PreludeOp {
                         }
                     };
                 }
-                let text = if mode & 4 == 4 {
+                let text = if mode & 4 == 4
+                    && let Some(Wide::Signed(value)) =
+                        wide_value(args[0]).filter(|_| args[0].as_int().is_err())
+                {
+                    exp!(value)
+                } else if mode & 4 == 4
+                    && let Some(Wide::Unsigned(value)) = wide_value(args[0])
+                {
+                    exp!(value)
+                } else if mode & 4 == 4 {
                     let value = args[0].as_int().unwrap_or_default();
                     if mode & 8 == 8 {
                         exp!(value as u64)
@@ -4004,7 +4238,7 @@ impl PreludeOp {
             Self::Narrow => {
                 let code = args[1].as_int().unwrap_or(3);
                 if let Ok(value) = args[0].as_int()
-                    && let Some((_, kind)) = Int::KINDS.get(code as usize)
+                    && let Some(kind) = Int::from_code(code)
                 {
                     let (low, high) = kind.range();
                     if !(low..=high).contains(&value) {
@@ -4015,8 +4249,33 @@ impl PreludeOp {
                 return cast_value(args[0], code);
             }
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
+            Self::WideLiteral => {
+                let text = args[0].clone_cast::<ImmutableString>();
+                let kind = Int::from_code(args[1].as_int().unwrap_or(3)).unwrap_or(Int::I64);
+                return match integer_text(&text) {
+                    Some(value) => Ok(value.store(kind)),
+                    None => Err(invariant("a wide literal is not a number")),
+                };
+            }
             Self::RoundF32 => return cast_value(args[0], 10),
             Self::Unsigned => return Ok(compare::tag_unsigned(args[0].take(), shape)),
+            Self::WideStepBy => {
+                let [step, flags] = [2, 3].map(|index| args[index].as_int().unwrap_or_default());
+                if step == 0 {
+                    return panic("assertion failed: step != 0".into());
+                }
+                let step = usize::try_from(step).unwrap_or(usize::MAX);
+                let (low, high) = (
+                    wide_value(args[0]).unwrap_or(Wide::Signed(0)),
+                    wide_value(args[1]).unwrap_or(Wide::Signed(0)),
+                );
+                return Ok(match (flags & 2 == 2, flags & 1 == 1) {
+                    (true, true) => Dynamic::from((low.unsigned()..=high.unsigned()).step_by(step)),
+                    (true, false) => Dynamic::from((low.unsigned()..high.unsigned()).step_by(step)),
+                    (false, true) => Dynamic::from((low.signed()..=high.signed()).step_by(step)),
+                    (false, false) => Dynamic::from((low.signed()..high.signed()).step_by(step)),
+                });
+            }
             Self::StepBy => {
                 let [low, high, step, flags] =
                     [0, 1, 2, 3].map(|index| args[index].as_int().unwrap_or_default());
@@ -4033,14 +4292,20 @@ impl PreludeOp {
             }
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
+            Self::VecCapacity => {
+                let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
+                return Ok(Dynamic::from(capacity as crate::INT));
+            }
             Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
                 let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
-                let windows = args[2].as_bool().unwrap_or(false);
+                let code = usize::try_from(args[2].as_int().unwrap_or(0)).unwrap_or(0);
+                let name = SLICE_CHUNKS.get(code).copied().unwrap_or_default();
                 if size == 0 {
-                    return panic(if windows {
+                    return panic(if name == "windows" {
                         "window size must be non-zero".into()
                     } else {
                         "chunk size must be non-zero".into()
@@ -4049,16 +4314,13 @@ impl PreludeOp {
                 let array = args[0]
                     .as_array_ref()
                     .map_err(|_| invariant("a slice is not an array at runtime"))?;
-                let slices: crate::Array = if windows {
-                    array
-                        .windows(size)
-                        .map(|window| Dynamic::from_array(window.to_vec()))
-                        .collect()
-                } else {
-                    array
-                        .chunks(size)
-                        .map(|chunk| Dynamic::from_array(chunk.to_vec()))
-                        .collect()
+                let slice = |items: &[Dynamic]| Dynamic::from_array(items.to_vec());
+                let slices: crate::Array = match name {
+                    "windows" => array.windows(size).map(slice).collect(),
+                    "chunks_exact" => array.chunks_exact(size).map(slice).collect(),
+                    "rchunks" => array.rchunks(size).map(slice).collect(),
+                    "rchunks_exact" => array.rchunks_exact(size).map(slice).collect(),
+                    _ => array.chunks(size).map(slice).collect(),
                 };
                 return Ok(Dynamic::from_array(slices));
             }
@@ -4112,12 +4374,20 @@ impl PreludeOp {
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
             Self::DisplayText => return Ok(args[0].to_string().into()),
             Self::CellNew
+            | Self::PlainCellNew
             | Self::CellBorrow
             | Self::CellGet
             | Self::CellSet
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
+            Self::ErrorNew | Self::ErrorText => return error_object::invoke(self, args),
+            Self::ErrorParse => {
+                return Ok(error_object::parsed(
+                    &args[0].clone_cast::<ImmutableString>(),
+                    3,
+                ));
+            }
             Self::CellUpdate => return cell::update(context, args),
             Self::Join => {
                 let array = args[0]
@@ -4555,11 +4825,14 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "into_bytes"
                 | "char_indices"
                 | "splitn"
+                | "rsplitn"
+                | "retain"
         ),
         Ty::Array { .. } => matches!(
             member,
             "len"
                 | "is_empty"
+                | "capacity"
                 | "iter"
                 | "clone"
                 | "to_vec"
@@ -4676,7 +4949,7 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         Ty::Float(_) => 0,
         Ty::String | Ty::Str | Ty::Array { .. } => match member {
             "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
-            | "truncate" | "split_off" => 2,
+            | "truncate" | "split_off" | "retain" => 2,
             _ => 1,
         },
         Ty::Option(_) => match member {
@@ -4758,6 +5031,7 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
 fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
     Some(match &value.0 {
         Union::Int(..) => -2,
+        Union::Variant(..) if wide_value(value).is_some() => -2,
         Union::Float(..) => -3,
         Union::Str(..) => -4,
         Union::Bool(..) => -5,
@@ -5530,6 +5804,20 @@ impl ExecutableOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::Array>(),
             ],
+            // An `i128` or a `u128` past `i64` is boxed.
+            Self::Kinded {
+                op: PreludeOp::IntMethod,
+                kinds,
+            } if kinds
+                .iter()
+                .any(|&code| Int::from_code(code).is_some_and(Int::wide)) =>
+            {
+                vec![
+                    TypeId::of::<Dynamic>(),
+                    TypeId::of::<crate::INT>(),
+                    TypeId::of::<Dynamic>(),
+                ]
+            }
             Self::Prelude(op) | Self::Kinded { op, .. } | Self::Shaped { op, .. } => {
                 op.argument_types()
             }
@@ -5951,6 +6239,13 @@ impl ExecutableOp {
                 &args[0].clone_cast::<ImmutableString>(),
                 kinds[0],
             )),
+            Self::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds,
+            } => Ok(error_object::parsed(
+                &args[0].clone_cast::<ImmutableString>(),
+                kinds[0],
+            )),
             Self::Kinded { kinds, .. } => int_method(*kinds, args),
         }
     }
@@ -5971,7 +6266,10 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
-    let op_is_print = matches!(op, ExecutableOp::Prelude(PreludeOp::Print));
+    let op_is_print = matches!(
+        op,
+        ExecutableOp::Prelude(PreludeOp::Print | PreludeOp::Time)
+    );
     let func: Shared<crate::func::native::FnAny> =
         Shared::new(move |context, args| op.invoke(context, args, &models, requirement.as_ref()));
     let func = match by_reference {
@@ -6171,11 +6469,13 @@ impl Keyed {
     }
 }
 
-/// Rust's integer types. All are an `i64` at runtime: the kind decides the
-/// range arithmetic is checked against and what `as` truncates to.
-/// `u64` and `usize` stop at `i64::MAX`. `Var` is a literal's
-/// `{integer}`, bound by inference (`Inference::resolve`) and `i32` when
-/// nothing binds it.
+/// Rust's integer types. All but `i128` and `u128` are an `i64` at
+/// runtime: the kind decides the range arithmetic is checked against and
+/// what `as` truncates to, and a `u64` or a `usize` is its bits. An `i128`
+/// or a `u128` is an `i64` while its value fits one and a boxed Rust `i128`
+/// or `u128` past that (`wide_value`), so each value has one runtime form.
+/// `Var` is a literal's `{integer}`, bound by inference
+/// (`Inference::resolve`) and `i32` when nothing binds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Int {
     I8,
@@ -6188,11 +6488,24 @@ enum Int {
     U32,
     U64,
     Usize,
+    I128,
+    U128,
     Var(usize),
 }
 
+/// The `kind_code`s of `i128` and `u128`, past the other kinds' and the
+/// floats' and casts' codes.
+const WIDE_I128: INT = 17;
+const WIDE_U128: INT = 18;
+
+/// Added to a `Cast`'s `i128` or `u128` code: the operand is a `u64`'s or a
+/// `usize`'s bits.
+const UNSIGNED_SOURCE: INT = 32;
+
 impl Int {
-    const KINDS: [(&'static str, Self); 10] = [
+    /// Each kind by name. A kind's index is its `kind_code`, but for
+    /// `i128` and `u128` (`WIDE_I128`, `WIDE_U128`).
+    const KINDS: [(&'static str, Self); 12] = [
         ("i8", Self::I8),
         ("i16", Self::I16),
         ("i32", Self::I32),
@@ -6203,7 +6516,24 @@ impl Int {
         ("u32", Self::U32),
         ("u64", Self::U64),
         ("usize", Self::Usize),
+        ("i128", Self::I128),
+        ("u128", Self::U128),
     ];
+
+    /// The kind a `kind_code` names.
+    fn from_code(code: INT) -> Option<Self> {
+        match code {
+            WIDE_I128 => Some(Self::I128),
+            WIDE_U128 => Some(Self::U128),
+            0..10 => Some(Self::KINDS[code as usize].1),
+            _ => None,
+        }
+    }
+
+    /// `i128` or `u128`, boxed at runtime past `i64` (`wide_value`).
+    const fn wide(self) -> bool {
+        matches!(self, Self::I128 | Self::U128)
+    }
 
     fn named(name: &str) -> Option<Self> {
         Self::KINDS
@@ -6228,8 +6558,8 @@ impl Int {
             Self::U8 => (0, u8::MAX as INT),
             Self::U16 => (0, u16::MAX as INT),
             Self::U32 => (0, u32::MAX as INT),
-            Self::U64 | Self::Usize => (0, INT::MAX),
-            Self::I64 | Self::Isize | Self::Var(_) => (INT::MIN, INT::MAX),
+            Self::U64 | Self::Usize | Self::U128 => (0, INT::MAX),
+            Self::I64 | Self::Isize | Self::I128 | Self::Var(_) => (INT::MIN, INT::MAX),
         }
     }
 
@@ -6242,7 +6572,7 @@ impl Int {
     const fn signed(self) -> bool {
         matches!(
             self,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize | Self::Var(_)
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize | Self::I128 | Self::Var(_)
         )
     }
 
@@ -6251,14 +6581,17 @@ impl Int {
             Self::I8 | Self::U8 => 8,
             Self::I16 | Self::U16 => 16,
             Self::I32 | Self::U32 => 32,
+            Self::I128 | Self::U128 => 128,
             _ => 64,
         }
     }
 
-    /// Rust's bounds of the kind.
+    /// Rust's bounds of the kind; a `u128`'s stop at `i128::MAX`.
     const fn full_range(self) -> (i128, i128) {
         match self {
             Self::U64 | Self::Usize => (0, u64::MAX as i128),
+            Self::I128 => (i128::MIN, i128::MAX),
+            Self::U128 => (0, i128::MAX),
             _ => {
                 let (low, high) = self.range();
                 (low as i128, high as i128)
@@ -6348,6 +6681,40 @@ impl Time {
         match self {
             Self::Duration => "Duration",
             Self::Instant => "Instant",
+        }
+    }
+}
+
+/// Which of std's cells a `Ty::Cell` is: `RefCell`, whose value is
+/// borrowed, or `Cell`, whose value is copied in and out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CellKind {
+    RefCell,
+    Cell,
+}
+
+impl CellKind {
+    /// The cell `name` is, as `type_ref::Type::cell_element` names it.
+    fn named(name: &str) -> Self {
+        if name == "Cell" {
+            Self::Cell
+        } else {
+            Self::RefCell
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::RefCell => "RefCell",
+            Self::Cell => "Cell",
+        }
+    }
+
+    /// The op that makes a new cell of this kind.
+    const fn new_op(self) -> PreludeOp {
+        match self {
+            Self::RefCell => PreludeOp::CellNew,
+            Self::Cell => PreludeOp::PlainCellNew,
         }
     }
 }
@@ -6496,9 +6863,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
-    /// `std::cell::RefCell<T>`: a `cell::Cell` at runtime, which every
-    /// copy of it shares (`cell.rs`).
-    Cell(Box<Ty>),
+    /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
+    /// runtime, which every copy of it shares (`cell.rs`).
+    Cell(CellKind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
     /// items at runtime.
@@ -6561,7 +6928,7 @@ impl Ty {
             | Self::Iter(target)
             | Self::Reverse(target)
             | Self::Range(target)
-            | Self::Cell(target)
+            | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -6680,8 +7047,8 @@ impl Ty {
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
         }
-        if let Some(inner) = ty.cell_element() {
-            return Self::Cell(Box::new(Self::from_resolved(inner)));
+        if let Some((kind, inner)) = ty.cell_element() {
+            return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -6848,7 +7215,7 @@ impl Ty {
             }
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
-            Self::Cell(inner) => format!("RefCell<{}>", inner.name(models)).into(),
+            Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -6932,7 +7299,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
-            Self::Cell(_) => Some(TypeId::of::<cell::Cell>()),
+            Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -6943,6 +7310,8 @@ impl Ty {
             Self::ProfileMessage { payload, .. } => payload.native_type_id(models),
             Self::Bool => Some(TypeId::of::<bool>()),
             Self::Char => Some(TypeId::of::<char>()),
+            // An `i128` or a `u128` is an `i64` or, past it, boxed: any value.
+            Self::Int(kind) if kind.wide() => None,
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
@@ -6963,6 +7332,12 @@ impl Ty {
                 Nominal::Struct { .. } => TypeId::of::<nominal::Struct>(),
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
             }),
+            // std's `dyn Error` is the error object `?` and `Box::new` make.
+            Self::Dyn(name, bindings)
+                if name.as_str() == "Error" && bindings.is_empty() && models.std_error_trait() =>
+            {
+                Some(TypeId::of::<error_object::ErrorObject>())
+            }
             Self::Param(_)
             | Self::Projection(..)
             | Self::Dyn(..)
@@ -7087,7 +7462,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
-            | Self::Cell(_)
+            | Self::Cell(..)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -7266,8 +7641,10 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
-            | (Ty::Range(left), Ty::Range(right))
-            | (Ty::Cell(left), Ty::Cell(right)) => compare(left, right, forward, reverse),
+            | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
+            (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
+                left_kind == right_kind && compare(left, right, forward, reverse)
+            }
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
                     && left.len() == right.len()
@@ -7505,7 +7882,7 @@ impl Inference {
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
-            Ty::Cell(inner) => Ty::Cell(Box::new(self.resolve(inner))),
+            Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -7759,15 +8136,35 @@ enum PlaceStep {
         release: bool,
         native: bool,
     },
+    /// The place a script function's `&mut` output names below the place
+    /// before it (`*c.slot(1) += 5`, `s.name_mut().push('!')`): `path`
+    /// is the runtime path `places::path_invoke` reads and stores through.
+    /// With `call`, the place is reached by calling the function on the
+    /// place before it, `before` + place + `after`, which gives the path
+    /// into the local `path` names; without it, `path` was given earlier
+    /// (`let r = c.slot(0);`, or an `Option<&mut T>` output's `Some`).
+    Path {
+        path: origin::Fragment,
+        call: Option<(origin::Fragment, origin::Fragment)>,
+    },
+    /// Statements the place's read runs first: the `Option` whose `Some`
+    /// place `unwrap()` keeps, evaluated so its place is located.
+    Setup(origin::Fragment),
+    /// A tuple's member, `t.0`: its index, which two borrows of a place's
+    /// members keep apart, as two of its fields are (E0499).
+    Member(usize),
 }
 
 /// Whether `op=` on `nested` opens it ([`Parser::open_compound`]): it
 /// passes through a `RefCell` borrow or a borrow guard.
 fn opens_compound(nested: &NestedLvalue) -> bool {
-    nested
-        .steps
-        .iter()
-        .any(|step| matches!(step, PlaceStep::Cell { .. }))
+    // A place a call returns (`*c.slot(1) += 5`) calls it once too.
+    nested.steps.iter().any(|step| {
+        matches!(
+            step,
+            PlaceStep::Cell { .. } | PlaceStep::Path { .. } | PlaceStep::Setup(_)
+        )
+    })
 }
 
 /// A nested place `op=` opened: the statements before the leaf's change,
@@ -8534,7 +8931,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
-        Ty::Cell(inner) => Ty::Cell(Box::new(instantiate(inner, substitution))),
+        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -9062,6 +9459,9 @@ struct Parser<'a> {
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
     closure_hints: Vec<Option<Box<[Ty]>>>,
+    /// The local holding a `{:?}` spec (`DebugSpec`) that `debug_source`
+    /// passes down to each leaf, as Rust's `Formatter` does.
+    debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
@@ -9123,7 +9523,7 @@ struct Parser<'a> {
     pending_member: Option<(ImmutableString, Span)>,
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
-    aliases: BTreeMap<ImmutableString, (Span, origin::Fragment, ImmutableString)>,
+    aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
     /// The locals a `&mut` local (`let r = &mut v;`, `ref mut`) borrows,
     /// with the borrowing alias's declaration; a direct use of the local
     /// ends the borrow (`ended`), and a later use of the alias is Rust's
@@ -9143,6 +9543,9 @@ struct Parser<'a> {
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span)>,
+    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
+    /// Error` (`error_object.rs`).
+    text_into: Vec<Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -9207,6 +9610,9 @@ struct Parser<'a> {
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
     pending_int_kinds: Vec<(String, Ty)>,
+    /// Integer literals past `i64` whose kind inference had not settled:
+    /// each must fit the kind it settles on.
+    pending_wide_literals: Vec<PendingWide>,
     /// Float literals and arithmetic of a `{float}` whose kind inference
     /// had not settled: each placeholder, written over once it has. A
     /// literal becomes its text, rounded to `f32` when that is its kind;
@@ -9221,11 +9627,37 @@ struct Parser<'a> {
     split_angle: Option<Position>,
     /// The declared output of the body being parsed, for `?` and `return`.
     return_ty: Option<Ty>,
+    /// A function whose `&mut` output borrows its receiver: each value it
+    /// returns is the path to the place below the receiver
+    /// (`places::returned_place`).
+    place_output: bool,
     /// Explicit `return`s parsed so far; a closure that returns early has
     /// its declared or inferred output, not its body's type.
     returns: usize,
     /// Why an explicit `return` cannot leave this body, when it cannot.
     return_blocked: Option<&'static str>,
+    /// In a crate with `impl Drop`: the scopes whose locals drop where they
+    /// end (`drops.rs`), innermost last.
+    drop_scopes: Vec<drops::Scope>,
+    /// The first of `drop_scopes` the current body or closure opened: what
+    /// a `return` leaves.
+    drop_base: usize,
+    /// The depth of `drop_scopes` the next loop's `break` and `continue`
+    /// leave to, when its iteration opened a scope for its pattern.
+    loop_drop_depth: Option<usize>,
+    /// The subject of the pattern being read starts with `*`: a place
+    /// read through a reference, which a match does not own.
+    subject_deref: bool,
+    /// The temporary scopes being read (`drops.rs`), innermost last: the
+    /// hidden locals holding the values made in each that nothing moves.
+    temporary_scopes: Vec<Vec<String>>,
+    /// Expressions that read a place through a reference, which no
+    /// temporary holds (`materialize`).
+    borrowed: BTreeSet<Span>,
+    /// Moves an arm made out of a local its bindings shadow, deferred to
+    /// after the match (`drops::Clears::InArm`): each flag's declaration
+    /// and what runs once the match ends.
+    deferred_clears: Vec<(String, String)>,
     #[cfg(feature = "rust-import")]
     imported: Option<ImportedContext<'a>>,
 }
@@ -9302,6 +9734,15 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        if models.imports_variants() {
+            tokens = expand_imported_variants(&models, tokens);
+        }
+        if models.get("VecDeque").is_none() {
+            let imported = models
+                .import("VecDeque")
+                .is_some_and(|binding| crate::resolve::std_vec_deque(&binding.qualified));
+            vec_deque_as_vec(&mut tokens, imported);
+        }
         let associated = Shared::clone(&models.associated);
 
         Self {
@@ -9347,6 +9788,7 @@ impl<'a> Parser<'a> {
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
+            debug_spec: None,
             closure_hint: None,
             closure_outputs: Vec::new(),
             closure_output: None,
@@ -9378,6 +9820,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
             host_turbofish: None,
@@ -9400,13 +9843,22 @@ impl<'a> Parser<'a> {
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
+            pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
             split_angle: None,
             return_ty: None,
+            place_output: false,
             returns: 0,
             return_blocked: None,
+            drop_scopes: Vec::new(),
+            drop_base: 0,
+            loop_drop_depth: None,
+            subject_deref: false,
+            temporary_scopes: Vec::new(),
+            borrowed: BTreeSet::new(),
+            deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
             imported,
         }
@@ -9446,6 +9898,11 @@ impl<'a> Parser<'a> {
             .and_then(|_| definition.parameters().first())
             .map(|parameter| parameter.name.text.clone());
         parser.return_ty = Some(Ty::from_resolved(definition.output()));
+        parser.place_output = definition.name() != "index_mut"
+            && matches!(definition.receiver(), Some(receiver::Mode::Mutable))
+            && parser
+                .place_output(&Ty::from_resolved(definition.output()))
+                .is_some();
         parser.generics = definition
             .generics()
             .iter()
@@ -9570,6 +10027,12 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map_or(Ty::Unit, Ty::from_resolved),
         );
+        parser.place_output = !definition.body.constant
+            && this_parameter(definition).is_some()
+            && definition
+                .output
+                .as_ref()
+                .is_some_and(|output| parser.place_output(&Ty::from_resolved(output)).is_some());
         parser.generics = definition
             .generics
             .iter()
@@ -9789,6 +10252,19 @@ impl<'a> Parser<'a> {
                 });
                 self.write_output(format!("{helper}(this);"), definition.body());
             }
+            let receiver = self
+                .bindings
+                .get("this")
+                .filter(|binding| !matches!(binding.ty, Ty::Reference { .. }))
+                .map(|binding| (binding.ty.clone(), binding.declaration));
+            self.refuse_async_drops(
+                receiver.into_iter().chain(
+                    definition
+                        .parameters()
+                        .iter()
+                        .map(|parameter| (Ty::from_resolved(&parameter.ty), parameter.name.span)),
+                ),
+            )?;
             self.destructure_parameters(definition.parameters(), definition.body())?;
             let output = Ty::from_resolved(definition.output());
             self.parse_async_body(&output, definition.body())?;
@@ -9833,11 +10309,28 @@ impl<'a> Parser<'a> {
             });
             self.write_output(format!("{helper}(this);"), definition.body());
         }
+        let receiver = definition
+            .receiver_span()
+            .filter(|_| definition.receiver().is_some())
+            .map(|span| (ImmutableString::from("this"), span));
+        self.open_body_drops(
+            receiver.into_iter().chain(
+                definition
+                    .parameters()
+                    .iter()
+                    .map(|parameter| (parameter.name.text.clone(), parameter.name.span)),
+            ),
+        )?;
         self.destructure_parameters(definition.parameters(), definition.body())?;
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
+                // `const fn f()` is a nested `fn` item.
+                Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                    self.next();
+                    self.skip_nested_fn()?;
+                }
                 Token::Const => self.parse_binding(false)?,
                 Token::LeftParen if self.startup && is_tuple(definition.output()) => {
                     self.parse_startup_tail(definition.output())?;
@@ -9859,6 +10352,7 @@ impl<'a> Parser<'a> {
             let expected = self.tail_expected(Some(definition.output()));
             self.coerce_tail(&expected, definition.body())?;
         }
+        self.close_body_drops()?;
         self.wrap_widget_change(definition)?;
         self.wrap_formatter(definition);
 
@@ -9971,6 +10465,9 @@ impl<'a> Parser<'a> {
             let expected = self.tail_expected(definition.output.as_ref());
             self.coerce_tail(&expected, definition.body.span)?;
         }
+        if !definition.body.constant && !definition.body.asynchronous {
+            self.close_body_drops()?;
+        }
 
         self.finish_conversions()?;
         self.finish_bounds()?;
@@ -9997,6 +10494,12 @@ impl<'a> Parser<'a> {
                 .output
                 .as_ref()
                 .map_or(Ty::Unit, Ty::from_resolved);
+            self.refuse_async_drops(
+                definition
+                    .parameters
+                    .iter()
+                    .map(|parameter| (Ty::from_resolved(&parameter.ty), parameter.name.span)),
+            )?;
             self.destructure_parameters(&definition.parameters, definition.body.span)?;
             // `#[tokio::main] async fn main`: the attribute is the runtime's
             // entry, which the shadow crate carries as written (D513.4).
@@ -10030,11 +10533,22 @@ impl<'a> Parser<'a> {
         if self.startup {
             self.return_blocked = Some("from a startup boot; use its tail");
         }
+        self.open_body_drops(
+            definition
+                .parameters
+                .iter()
+                .map(|parameter| (parameter.name.text.clone(), parameter.name.span)),
+        )?;
         self.destructure_parameters(&definition.parameters, definition.body.span)?;
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
+                // `const fn f()` is a nested `fn` item.
+                Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                    self.next();
+                    self.skip_nested_fn()?;
+                }
                 Token::Const => self.parse_binding(false)?,
                 Token::LeftParen
                     if self.startup && definition.output.as_ref().is_some_and(is_tuple) =>
@@ -10380,6 +10894,30 @@ impl<'a> Parser<'a> {
             };
             if self.inference.resolve(&kind) == kind {
                 self.inference.bind(id, default);
+            }
+        }
+        for pending in std::mem::take(&mut self.pending_wide_literals) {
+            let kind = match self.inference.resolve(&pending.ty) {
+                Ty::Int(Int::Var(_)) => Int::I32,
+                Ty::Int(kind) => kind,
+                _ => continue,
+            };
+            if pending.value.fits(kind).is_err() {
+                return Err(literal_range(kind, pending.value, pending.at));
+            }
+            let [signed, unsigned, bits] = &pending.texts;
+            let text = match kind {
+                Int::I128 => signed,
+                Int::U128 => unsigned,
+                _ => bits,
+            };
+            let replacement = format!("{text:<width$}", width = pending.placeholder.len());
+            self.output
+                .replace_same_length(&pending.placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure
+                    .body
+                    .replace_same_length(&pending.placeholder, &replacement);
             }
         }
         for (placeholder, ty) in std::mem::take(&mut self.pending_int_kinds) {
@@ -11150,6 +11688,9 @@ impl<'a> Parser<'a> {
     }
 
     fn display_text(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+        if self.std_error(ty, true) {
+            return Some(self.error_text(value, false));
+        }
         match ty {
             Ty::Script(id, _) => self
                 .models
@@ -13004,10 +13545,20 @@ impl<'a> Parser<'a> {
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
             &substitution,
         );
+        // `t.slot(0)` of a trait's `fn slot(&mut self, i: usize) -> &mut
+        // i32`: the place below `t` the output borrows.
+        let borrowed = (matches!(receiver, crate::item::Receiver::Mutable(_))
+            && function.name.text != "index_mut")
+            .then(|| self.place_output(&output))
+            .flatten();
+        let borrowed_receiver = match &borrowed {
+            Some(_) => Some(self.borrowed_receiver(&value, call)?),
+            None => None,
+        };
         // `&mut self` through a generic or a trait object: the receiver's
         // place is changed (a local, an element, a place below a field).
         let mut place = None;
-        if matches!(receiver, crate::item::Receiver::Mutable(_)) {
+        if borrowed.is_none() && matches!(receiver, crate::item::Receiver::Mutable(_)) {
             let root = value.lvalue.as_ref().map(|lvalue| lvalue.binding().clone());
             let mutable = root.as_ref().is_some_and(|root| {
                 self.bindings.get(root.as_str()).is_some_and(|binding| {
@@ -13080,6 +13631,14 @@ impl<'a> Parser<'a> {
         };
         let arguments =
             origin::Fragment::join(arguments.iter().map(ParsedExpr::rendered_source), ", ");
+        if let (Some(borrowed), Some(receiver)) = (borrowed, borrowed_receiver) {
+            let mut source =
+                origin::Fragment::plain(format!("{}.{dispatcher}(", places::RECEIVER_PLACE));
+            source.push(arguments);
+            source.push_text(")");
+            let source = self.copied_call(source, &places)?;
+            return Ok(self.borrowed_call(&receiver, source, borrowed, call));
+        }
         let source = if matches!(
             receiver,
             crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_)
@@ -13546,6 +14105,14 @@ impl<'a> Parser<'a> {
             let ty = Ty::from_resolved(&parameter.ty);
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
             self.write_output(statements, body);
+            // The parameter's value keeps what the pattern does not move out.
+            if self.drops() {
+                let bound = self.pattern_bindings(&syntax);
+                let holder = drops::Holder::Local(parameter.name.text.to_string(), Vec::new());
+                let clears =
+                    self.pattern_drops(Some(&syntax), &ty, &holder, &bound, drops::Clears::InArm)?;
+                self.write_output(clears, body);
+            }
         }
         Ok(())
     }
@@ -14065,10 +14632,20 @@ impl<'a> Parser<'a> {
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
             // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
-            // `Eq` when `T` is, and never `Copy`.
-            Ty::Cell(inner) => {
+            // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
+            // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
+            // need `T: Copy`.
+            Ty::Cell(kind, inner) => {
                 capability != capability::Kind::Copy
                     && capability != capability::Kind::Hash
+                    && (kind == CellKind::RefCell
+                        || matches!(
+                            capability,
+                            capability::Kind::Default
+                                | capability::Kind::Send
+                                | capability::Kind::Static
+                        )
+                        || self.type_provides(&inner, capability::Kind::Copy))
                     && self.type_provides(&inner, capability)
             }
             // Rawr's iterators are `Clone` when their items are.
@@ -14083,8 +14660,11 @@ impl<'a> Parser<'a> {
                 (Pointer::Rc | Pointer::Arc, capability::Kind::Clone) => true,
                 _ => self.type_provides(&target, capability),
             },
-            // A trait object has only its trait's methods.
-            Ty::Dyn(..) => false,
+            // A trait object has only its trait's methods; std's `dyn Error`
+            // is `Debug`, its supertrait.
+            dynamic @ Ty::Dyn(..) => {
+                capability == capability::Kind::Debug && self.std_error(&dynamic, false)
+            }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
             Ty::Support(_) => false,
             Ty::Endpoint(_) => false,
@@ -14169,7 +14749,7 @@ impl<'a> Parser<'a> {
             }
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
-            Ty::Cell(_) => intrinsic::Type::builtin("RefCell", TypeId::of::<cell::Cell>()),
+            Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -18563,6 +19143,23 @@ impl<'a> Parser<'a> {
         {
             return Err(self.move_out_error(value, "of index of `{owner}`"));
         }
+        // An owned `self` moves out of the method's receiver, with drop
+        // glue in the crate: its drop is its new owner's.
+        if value.lvalue.is_none()
+            && value.prelude.is_empty()
+            && value.source.as_str() == "this"
+            && self.drops()
+            && self.closures.is_empty()
+            && self.bindings.get("this").is_some_and(|binding| {
+                matches!(binding.kind, BindingKind::Receiver { .. })
+                    && !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
+            })
+            && self.needs_drop(&value.ty, value.span)?
+        {
+            value.source =
+                origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+            return Ok(());
+        }
         let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
             return Ok(());
         };
@@ -18682,7 +19279,7 @@ impl<'a> Parser<'a> {
     /// local is partially moved. A later use of the field, or of the
     /// whole local, is rustc's E0382. The other fields stay usable, and
     /// assigning the field makes it usable again.
-    fn move_field(&mut self, value: &ParsedExpr, field: &FieldLvalue) -> Result<(), Error> {
+    fn move_field(&mut self, value: &mut ParsedExpr, field: &FieldLvalue) -> Result<(), Error> {
         let Some(binding) = self.bindings.get(field.binding.as_str()) else {
             return Ok(());
         };
@@ -18701,14 +19298,27 @@ impl<'a> Parser<'a> {
                 ),
             ));
         }
-        if !matches!(binding.kind, BindingKind::Local)
+        // An owned `self` is a local here, with drop glue in the crate.
+        let owned_self = self.drops()
+            && matches!(binding.kind, BindingKind::Receiver { .. })
+            && self.closures.is_empty();
+        let captured = self
+            .closures
+            .last()
+            .is_some_and(|scope| scope.outer.get(field.binding.as_str()) == Some(&declaration));
+        if captured && self.needs_drop(&value.ty, value.span)? {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a closure that moves a field whose type implements `Drop` out of a \
+                            captured local: not supported in Rawr yet"
+                    .into(),
+                source: value.span,
+            });
+        }
+        if !(matches!(binding.kind, BindingKind::Local) || owned_self)
             || !matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
             || !value.prelude.is_empty()
             || !self.moves_by_value(&value.ty)
-            || self
-                .closures
-                .last()
-                .is_some_and(|scope| scope.outer.get(field.binding.as_str()) == Some(&declaration))
+            || captured
         {
             return Ok(());
         }
@@ -18716,6 +19326,22 @@ impl<'a> Parser<'a> {
             binding
                 .moved_fields
                 .insert(field.member.clone(), value.span);
+        }
+        // A field with drop glue moves out: `()` is left in the local, whose
+        // own drop then passes over it. Its type's `drop` must see it, so a
+        // type with `impl Drop` keeps its fields (E0509).
+        if self.needs_drop(&value.ty, value.span)? {
+            self.reject_drop_move(field.definition.id(), true, value.span)?;
+            let moved = self.temporary("moved");
+            let mut source = origin::Fragment::plain(format!("{{ let {moved} = "));
+            source.push(std::mem::take(&mut value.source));
+            source.push_text(format!(
+                "; {}({}, {}); {moved} }}",
+                crate::engine::KEYWORD_CLEAR,
+                field.binding,
+                field.slot
+            ));
+            value.source = source;
         }
         Ok(())
     }
@@ -18783,6 +19409,12 @@ impl<'a> Parser<'a> {
         let resolved = self.inference.resolve(ty);
         if let Ty::FnItem { key, .. } = &resolved {
             return self.owning_closures.contains(&**key);
+        }
+        // With `impl Drop` in the crate, a value of a generic type moves as
+        // in Rust, unless its bounds make it `Copy`: its drop is its last
+        // owner's.
+        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) && self.drops() {
+            return !self.type_provides(&resolved, capability::Kind::Copy);
         }
         !matches!(
             resolved,
@@ -18920,8 +19552,22 @@ impl<'a> Parser<'a> {
         let touched = self.begin_write_backs();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
+        let depth = self.temporary_scopes.len();
+        self.open_temporaries();
         let bound = self.parse_binding_statement(let_keyword);
         self.field_entries.truncate(pending);
+        // A form of `let` that does not drop its temporaries with its value.
+        while self.temporary_scopes.len() > depth {
+            let temporaries = self.close_temporaries();
+            if bound.is_ok() && !temporaries.is_empty() {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a temporary value whose type implements `Drop` in this form of \
+                                `let`: dropping it where Rust does is not supported in Rawr yet"
+                        .into(),
+                    source: point_span(self.position()),
+                });
+            }
+        }
         bound?;
         self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
@@ -19018,8 +19664,10 @@ impl<'a> Parser<'a> {
         // `let r = &mut place;` keeps the borrow: `r` is the place.
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
+        let borrowed_value = matches!(self.peek(), Token::Ampersand | Token::And);
         let moved_borrow = matches!(self.peek(), Token::Identifier(ref alias) if self.aliases.contains_key(alias.as_str()))
             && matches!(self.peek_second(), Token::SemiColon);
+        let block_like = self.peek_block_like();
         let outer = self.mutable_borrow;
         if borrowing {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
@@ -19041,6 +19689,58 @@ impl<'a> Parser<'a> {
             self.last_expression = None;
             return self.consume_terminator(start).map(|_| ());
         }
+        // `let r = c.slot(0);`, `let x = v.get_mut(0).unwrap();`: the call
+        // is made here, once, and each use of `r` is the place it gave.
+        if let Ty::Reference { mutable: true, .. } = self.inference.resolve(&value.ty)
+            && let Some(Lvalue::Nested(nested)) = &value.lvalue
+            && Self::reached_once(nested)
+        {
+            let nested = (**nested).clone();
+            if let Some(annotation) = &annotation {
+                self.coerce_expr(annotation, &mut value)?;
+            }
+            let (statement, held) = self.hold_place(nested);
+            let rendered = self.with_field_entries(pending, statement);
+            self.write_output(rendered, span(start, value.span.end()));
+            self.entry_aliases.remove(&name);
+            self.borrow_lvalue(name, name_span, value.ty, Lvalue::Nested(Box::new(held)));
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
+        // `let r = if c { &mut self.a } else { &mut self.b };` in a function
+        // returning `&mut`: each branch gave its path below `self`
+        // (`returned_place`), and `r` is the place it names.
+        if self.place_output
+            && self.closures.is_empty()
+            && block_like
+            && value.lvalue.is_none()
+            && matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { mutable: true, .. }
+            )
+        {
+            let path = self.temporary("path");
+            let mut rendered = origin::Fragment::plain(format!("let {path} = "));
+            rendered.push(value.rendered_source());
+            rendered.push_text(";");
+            let rendered = self.with_field_entries(pending, rendered);
+            self.write_output(rendered, span(start, value.span.end()));
+            let receiver = Lvalue::Binding {
+                binding: "this".into(),
+                ty: Ty::Unknown,
+            };
+            let step = PlaceStep::Path {
+                path: origin::Fragment::plain(path),
+                call: None,
+            };
+            let held = places::place_step(&receiver, step, value.ty.clone());
+            self.entry_aliases.remove(&name);
+            self.borrow_lvalue(name, name_span, value.ty, held);
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         // A closure that changes `self` writes it back after its statement,
         // so it cannot outlive that statement in a local.
         if self.lend_self
@@ -19057,6 +19757,22 @@ impl<'a> Parser<'a> {
         } = self.inference.resolve(&value.ty)
             && (borrowing || moved_borrow)
         {
+            // `let r = &mut s.cells[i];`: `r` is the place, reached again
+            // from `s` at each use.
+            if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let rendered = self.with_field_entries(pending, origin::Fragment::default());
+                if !rendered.is_empty() {
+                    self.write_output(rendered, value.span);
+                }
+                self.entry_aliases.remove(&name);
+                self.borrow_lvalue(name, name_span, value.ty, lvalue);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self.consume_terminator(start).map(|_| ());
+            }
             // `let s = r;` moves the borrow `r` into `s`.
             let Some(Lvalue::Binding { binding: root, .. } | Lvalue::Place { binding: root, .. }) =
                 value.lvalue.clone()
@@ -19098,6 +19814,21 @@ impl<'a> Parser<'a> {
 
         self.consume_imported_value(&value, &name, value.span)?;
         self.move_local(&mut value)?;
+        // The temporaries the value made drop when it is made, unless a
+        // borrow of one is the value, which Rust keeps to the block's end.
+        let temporaries = self.close_temporaries();
+        if !temporaries.is_empty() {
+            if borrowed_value {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a `let` that borrows a temporary value whose type implements \
+                                `Drop`: keeping it to the block's end is not supported in Rawr yet"
+                        .into(),
+                    source: value.span,
+                });
+            }
+            value.source = self.with_temporaries(&temporaries, value.rendered_source());
+            value.prelude = origin::Fragment::default();
+        }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
@@ -19109,6 +19840,7 @@ impl<'a> Parser<'a> {
                 .map(|pipeline| (pipeline, *item)),
             _ => None,
         };
+        let hold = self.note_drop(&name, name_span, &ty)?;
         self.bindings.insert(
             name.clone(),
             Binding {
@@ -19121,6 +19853,21 @@ impl<'a> Parser<'a> {
             },
         );
         let keyword = if mutable { "let" } else { "const" };
+        // A shadowed value with drop glue is kept until its scope ends.
+        if let Some(hold) = hold {
+            let made = self.temporary("made");
+            let mut rendered = origin::Fragment::plain(format!("let {made} = "));
+            rendered.push(value.rendered_source());
+            rendered.push_text(format!(
+                "; {hold} {keyword} {name} = {}({made});",
+                crate::engine::KEYWORD_MOVE
+            ));
+            let rendered = self.with_field_entries(pending, rendered);
+            self.write_output(rendered, span(start, value.span.end()));
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         let mut rendered = origin::Fragment::plain(format!("{keyword} {name} = "));
         if let Some((pipeline, item)) = bound {
             let (code, pipeline, names) = self.bound_pipeline(pipeline);
@@ -19634,6 +20381,23 @@ impl<'a> Parser<'a> {
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
         let write_back =
             self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, &scrutinee)?;
+        // A value made for the statement drops at its end, or before
+        // `else`; a local's moved parts are left `()` in it.
+        let made = self.drops()
+            && subject.lvalue.is_none()
+            && subject.source.as_str() != "this"
+            && !self.subject_deref
+            && self.needs_drop(&subject.ty, subject.span)?;
+        let holder = if made {
+            drops::Holder::Local(scrutinee.clone(), Vec::new())
+        } else {
+            self.subject_holder(&subject, &scrutinee, self.subject_deref)?
+        };
+        let bound = resolved
+            .bindings
+            .iter()
+            .map(|binding| (binding.name.clone(), binding.span, binding.ty.clone()))
+            .collect::<Vec<_>>();
         let subject = self.pattern_subject(subject, &subject_ty)?;
         let host = self.take_host_checks()?;
         let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
@@ -19644,6 +20408,7 @@ impl<'a> Parser<'a> {
             .chain(&host.binds)
             .map(|binding| binding.name.to_string())
             .collect::<Vec<_>>();
+        let copies = self.shadow_copies(&drops::pattern_names(syntax))?;
         let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
         rendered.push(subject);
         rendered.push_text(format!(";\nlet {values} = switch {scrutinee} {{\n{label}"));
@@ -19656,10 +20421,17 @@ impl<'a> Parser<'a> {
         rendered.push_text(format!("[{}] }}", names.join(", ")));
         if let Some(otherwise) = otherwise {
             rendered.push_text(",\n_ => ");
-            rendered.push(otherwise.value.rendered_block());
+            if made {
+                rendered.push_text(format!("{{ {}", drops::glue_call(&scrutinee)));
+                rendered.push(otherwise.value.rendered_block());
+                rendered.push_text(" }");
+            } else {
+                rendered.push(otherwise.value.rendered_block());
+            }
         }
         rendered.push_text("\n};");
         bindings.extend(host.binds);
+        let mut declared = String::new();
         for (index, binding) in bindings.iter().enumerate() {
             let written = write_back.as_ref().is_some_and(|write_back| {
                 write_back
@@ -19669,7 +20441,11 @@ impl<'a> Parser<'a> {
             });
             let mutable = binding.mutable || written;
             let keyword = if mutable { "let" } else { "const" };
-            rendered.push_text(format!("\n{keyword} {} = {values}[{index}];", binding.name));
+            let _ = write!(
+                declared,
+                "\n{keyword} {} = {values}[{index}];",
+                binding.name
+            );
             self.bindings.insert(
                 binding.name.clone(),
                 Binding {
@@ -19682,6 +20458,25 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        // The moves out of what was matched, then the rest of a value made
+        // for it drops, before the bindings are declared.
+        if self.drops() {
+            let clears = self.pattern_drops(
+                Some(syntax),
+                &written_ty,
+                &holder,
+                &bound,
+                drops::Clears::BeforeBindings,
+            )?;
+            rendered.push_text(format!("\n{clears}"));
+            if made {
+                rendered.push_text(drops::glue_call(&scrutinee));
+            }
+        }
+        // Copies of the outer locals the bindings shadow, once the moves
+        // left `()` in them.
+        rendered.push_text(copies);
+        rendered.push_text(declared);
         self.write_backs.extend(write_back);
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, end));
@@ -19714,9 +20509,11 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         });
+        let dereferenced = matches!(self.peek(), Token::Multiply);
         let value = self.parse_expr_expecting(expected.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        self.subject_deref = dereferenced;
         self.move_pattern_parts(&syntax, &value);
         // `let (a, b) = &mut pair;`: the bindings are the place's parts.
         if annotation.is_none()
@@ -19770,16 +20567,40 @@ impl<'a> Parser<'a> {
         } else {
             let whole = self.temporary("pattern");
             let mut rendered = origin::Fragment::plain(format!("const {whole} = "));
-            rendered.push(value.rendered_source());
+            let temporaries = self.close_temporaries();
+            let made = self.with_temporaries(&temporaries, value.rendered_source());
+            rendered.push(made);
             rendered.push_text(";");
             (whole, rendered)
         };
+        // Copies of the outer locals the pattern's bindings shadow, made
+        // once the pattern's moves left `()` in them.
+        let copies = if self.drops() {
+            self.shadow_copies(&drops::pattern_names(&syntax))?
+        } else {
+            String::new()
+        };
         let destructured = self.destructure(&syntax, &whole, &ty);
         self.place_root = None;
+        let destructured_at = rendered.len();
         rendered.push_text(destructured?);
-        // The bindings own the parts now: the whole is dropped, so a part
-        // that is moved on drops with its new owner.
-        if !whole.is_empty() && !syntax.has_ref_mut() && self.moves_by_value(&ty) {
+        // With `impl Drop` in the crate, what the pattern moves out is left
+        // `()` where it was. A value made for the statement drops what stays
+        // in it when the statement ends, as in Rust.
+        let mut made = false;
+        if self.drops() && !whole.is_empty() && !syntax.has_ref_mut() {
+            let (before, after, dropped) =
+                self.let_pattern_drops(&syntax, &value, &ty, &whole, dereferenced)?;
+            // The moves out of a local go before the bindings, which may
+            // shadow it.
+            let destructured = rendered.split_off(destructured_at);
+            rendered.push_text(before);
+            rendered.push_text(copies);
+            rendered.push(destructured);
+            rendered.push_text(after);
+            made = dropped;
+        }
+        if !made && !whole.is_empty() && !syntax.has_ref_mut() && self.moves_by_value(&ty) {
             rendered.push_text(format!(
                 " {}({}({whole}));",
                 crate::engine::KEYWORD_DROP,
@@ -20163,12 +20984,51 @@ impl<'a> Parser<'a> {
         let touched = self.begin_write_backs();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
+        self.open_temporaries();
         let parsed = self.parse_expression_statement(pending);
+        let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
+        self.statement_temporaries(start, &temporaries);
         self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
         self.settle_parses()
+    }
+
+    /// The statement written from `start` with its temporaries: dropped
+    /// after it, or after its value when it is a tail.
+    fn statement_temporaries(&mut self, start: usize, temporaries: &[String]) {
+        if temporaries.is_empty() {
+            return;
+        }
+        let mut statement = self.output.split_off(start);
+        statement.trim_end();
+        match self.last_expression {
+            Some((tail, endpoint)) if tail >= start => {
+                let value = statement.split_off(tail - start);
+                let mut block = origin::Fragment::plain("{ ");
+                block.push(statement);
+                block.push_text(" ");
+                block.push(self.with_temporaries(temporaries, value));
+                block.push_text(" }");
+                let tail = self.write_output(block, endpoint);
+                self.last_expression = Some((tail, endpoint));
+            }
+            _ => {
+                let mut block = origin::Fragment::plain("{ ");
+                for temporary in temporaries {
+                    block.push_text(format!("let {temporary} = (); "));
+                }
+                block.push(statement);
+                block.push_text(" ");
+                for temporary in temporaries.iter().rev() {
+                    block.push_text(drops::glue_call(temporary));
+                    block.push_text(" ");
+                }
+                block.push_text("}\n");
+                self.output.push(block);
+            }
+        }
     }
 
     /// End a statement that made a closure changing `self`: bind the
@@ -20483,6 +21343,12 @@ impl<'a> Parser<'a> {
             } else {
                 self.consume_terminator(start)?
             };
+            // A tail returning a `&mut` place gives its path.
+            let value = if terminated {
+                value
+            } else {
+                self.returned_place(value, block_like)?
+            };
             if terminated {
                 if endpoint_tail {
                     self.reject_signature_support(
@@ -20515,9 +21381,17 @@ impl<'a> Parser<'a> {
                 // As in Rust, a block ending in a diverging statement
                 // (`return x;`, `break;`) diverges.
                 let diverges = matches!(self.inference.resolve(&value.ty), Ty::Never);
-                let mut rendered = self
-                    .discarded(&value)
-                    .unwrap_or_else(|| value.rendered_source());
+                let dropped = if diverges {
+                    None
+                } else {
+                    self.drop_statement_value(&value)?
+                };
+                let mut rendered = match dropped {
+                    Some(dropped) => dropped,
+                    None => self
+                        .discarded(&value)
+                        .unwrap_or_else(|| value.rendered_source()),
+                };
                 rendered.push_text(";");
                 let rendered = self.with_field_entries(pending, rendered);
                 self.write_output(rendered, value.span);
@@ -20548,6 +21422,8 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 self.consume_imported_value(&value, "returned value", value.span)?;
+                let mut value = value;
+                self.move_out_value(&mut value)?;
                 let output_start = self.write_output(value.rendered_source(), value.span);
                 self.last_type = value.ty;
                 self.last_expression = Some((output_start, value.span));
@@ -20608,6 +21484,12 @@ impl<'a> Parser<'a> {
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
+        if compound_operator(&assignment).is_none()
+            && self.needs_drop(lvalue.ty(), replacement.span)?
+            && let Some(read) = self.replaced_read(&lvalue)
+        {
+            self.drop_replaced(&lvalue.ty().clone(), read, &mut replacement)?;
+        }
         let rendered = match lvalue {
             Lvalue::Binding { .. } => {
                 let mut rendered = origin::Fragment::plain(format!("{binding_name} = "));
@@ -22387,6 +23269,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
+        let dereferenced = matches!(self.peek(), Token::Multiply);
         let subject = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
         let subject_ty = match self.inference.resolve(&subject.ty) {
@@ -22414,6 +23297,9 @@ impl<'a> Parser<'a> {
         let scrutinee = self.temporary("match");
         // Kept for the arms whose `&mut` bindings are written back.
         let place = subject.clone();
+        // The match's own scope holds a value made for it.
+        self.open_drops();
+        let holder = self.subject_holder(&place, &scrutinee, dereferenced)?;
         let subject = self.pattern_subject(subject, &subject_ty)?;
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let mut arms = Vec::new();
@@ -22422,6 +23308,10 @@ impl<'a> Parser<'a> {
         let mut wildcard = false;
         let original_bindings = self.bindings.clone();
         let mut arm_bindings = Vec::new();
+        // Copies of the outer locals the arms' bindings shadow, and moves
+        // out of a shadowed subject, after the match.
+        let mut match_copies = String::new();
+        let mut match_after = String::new();
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             if wildcard {
@@ -22436,6 +23326,10 @@ impl<'a> Parser<'a> {
             // The bindings a facade pattern in the arm makes, ahead of it.
             let mut arm_prefix = origin::Fragment::default();
             let mut write_back = None;
+            // The arm's bindings drop at its end; what they move out of the
+            // subject is left `()` there first.
+            self.open_drops();
+            let mut clears = String::new();
             // `_`, or a binding `name` that matches anything and binds it,
             // as in Rust.
             let catch_all = match self.peek() {
@@ -22453,6 +23347,7 @@ impl<'a> Parser<'a> {
                         && !matches!(self.peek_second(), Token::Reserved(ref text) if text.as_str() == "@") =>
                 {
                     let (name, declaration) = self.expect_name("match binding")?;
+                    match_copies.push_str(&self.shadow_copies(std::slice::from_ref(&name))?);
                     // The binding takes the subject by value.
                     self.move_local(&mut place.clone())?;
                     self.bindings.insert(
@@ -22466,6 +23361,16 @@ impl<'a> Parser<'a> {
                             kind: BindingKind::Local,
                         },
                     );
+                    clears = self.pattern_drops(
+                        None,
+                        &binding_ty,
+                        &holder,
+                        &[(name.clone(), declaration, binding_ty.clone())],
+                        drops::Clears::InArm,
+                    )?;
+                    let (deferred, after) = self.take_deferred_clears();
+                    match_copies.push_str(&deferred);
+                    match_after.push_str(&after);
                     Some(Some(name))
                 }
                 _ => None,
@@ -22475,9 +23380,17 @@ impl<'a> Parser<'a> {
                     self.next();
                     let normalize_private_calls =
                         std::mem::replace(&mut self.normalize_private_calls, false);
+                    self.open_temporaries();
                     let guard = self.parse_expr();
+                    let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
-                    let guard = guard?;
+                    let mut guard = guard?;
+                    if !temporaries.is_empty() {
+                        guard.source = self
+                            .with_temporaries(&temporaries, guard.rendered_source())
+                            .surrounded("(", ")");
+                        guard.prelude = origin::Fragment::default();
+                    }
                     self.require_type(&Ty::Bool, &guard.ty, guard.span)?;
                     ("_".to_string(), Some(guard.rendered_source()), false, bound)
                 } else {
@@ -22487,6 +23400,7 @@ impl<'a> Parser<'a> {
             } else {
                 let syntax = self.parse_pattern_syntax()?;
                 let resolved = self.resolve_root_pattern(&syntax, &binding_ty)?;
+                match_copies.push_str(&self.shadow_copies(&drops::pattern_names(&syntax))?);
                 let host = self.take_host_checks()?;
                 let alternatives = resolved.coverage.alternatives();
                 if alternatives.iter().all(|alternative| {
@@ -22541,6 +23455,21 @@ impl<'a> Parser<'a> {
                         },
                     );
                 }
+                let bound = resolved
+                    .bindings
+                    .iter()
+                    .map(|binding| (binding.name.clone(), binding.span, binding.ty.clone()))
+                    .collect::<Vec<_>>();
+                clears = self.pattern_drops(
+                    Some(&syntax),
+                    &binding_ty,
+                    &holder,
+                    &bound,
+                    drops::Clears::InArm,
+                )?;
+                let (deferred, after) = self.take_deferred_clears();
+                match_copies.push_str(&deferred);
+                match_after.push_str(&after);
 
                 self.bind_host_pattern(&host);
                 let host_binds = host.rendered_binds();
@@ -22548,9 +23477,17 @@ impl<'a> Parser<'a> {
                     self.next();
                     let normalize_private_calls =
                         std::mem::replace(&mut self.normalize_private_calls, false);
+                    self.open_temporaries();
                     let guard = self.parse_expr();
+                    let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
-                    let guard = guard?;
+                    let mut guard = guard?;
+                    if !temporaries.is_empty() {
+                        guard.source = self
+                            .with_temporaries(&temporaries, guard.rendered_source())
+                            .surrounded("(", ")");
+                        guard.prelude = origin::Fragment::default();
+                    }
                     self.require_type(&Ty::Bool, &guard.ty, guard.span)?;
                     Some(guard.rendered_source())
                 } else {
@@ -22614,6 +23551,14 @@ impl<'a> Parser<'a> {
                 self.write_backs.pop();
             }
             let mut action = action?;
+            let arm_drops = self.close_drops()?;
+            if !clears.is_empty() || !arm_drops.is_empty() {
+                let mut block = origin::Fragment::plain(format!("{{ {clears}"));
+                block.push(self.then_drops(action.value.rendered_source(), &arm_drops));
+                block.push_text(" }");
+                action.value.source = block;
+                action.value.prelude = origin::Fragment::default();
+            }
             if let Some(hook) = hook {
                 let value = self.temporary("arm");
                 let mut block = origin::Fragment::plain(format!("{{ let {value} = "));
@@ -22685,9 +23630,15 @@ impl<'a> Parser<'a> {
         // `_ if guard => a, rest..` is `_ => if guard { a } else { match rest }`
         // on the same subject, which is evaluated once. A catch-all binding
         // `name` is `_` with `let name = subject;` ahead of its guard and arm.
+        let match_drops = match_after + self.close_drops()?.as_str();
+        let matched = if match_drops.is_empty() {
+            String::new()
+        } else {
+            format!("let {} = ", self.temporary("matched"))
+        };
         let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
         source.push(subject);
-        source.push_text(format!(";\nswitch {scrutinee} {{\n"));
+        source.push_text(format!(";\n{match_copies}{matched}switch {scrutinee} {{\n"));
         let mut closers = Vec::new();
         for (label, guard, action, bound) in arms {
             let bind = bound.map(|name| format!("{{ let {name} = {scrutinee}; "));
@@ -22724,6 +23675,13 @@ impl<'a> Parser<'a> {
         for closer in closers.into_iter().rev() {
             source.push_text(closer);
         }
+        // The value made for the match drops after it.
+        if let Some(matched) = matched
+            .strip_prefix("let ")
+            .and_then(|matched| matched.strip_suffix(" = "))
+        {
+            source.push_text(format!(";\n{match_drops}{matched}\n"));
+        }
         source.push_text("}");
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
@@ -22750,12 +23708,14 @@ impl<'a> Parser<'a> {
             origin::Fragment,
             origin::Fragment,
             Option<WriteBack>,
+            drops::Condition,
         ),
         Error,
     > {
         self.expect(Token::Let, "`let` in a condition")?;
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
+        let dereferenced = matches!(self.peek(), Token::Multiply);
         let subject = self.parse_subject()?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
@@ -22766,6 +23726,18 @@ impl<'a> Parser<'a> {
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
         let write_back =
             self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
+        // The condition's scope: the value made for it, then its bindings,
+        // which the caller closes after the consequent or body.
+        self.open_drops();
+        let holder = self.subject_holder(&subject, scrutinee, dereferenced)?;
+        let otherwise = match &holder {
+            drops::Holder::Local(place, _)
+                if place == scrutinee && self.needs_drop(&subject.ty, subject.span)? =>
+            {
+                drops::glue_call(scrutinee)
+            }
+            _ => String::new(),
+        };
         let subject = self.pattern_subject(subject, &subject_ty)?;
         let host = self.take_host_checks()?;
         for binding in &resolved.bindings {
@@ -22787,6 +23759,21 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        let bound = resolved
+            .bindings
+            .iter()
+            .map(|binding| (binding.name.clone(), binding.span, binding.ty.clone()))
+            .collect::<Vec<_>>();
+        let copies = self.shadow_copies(&drops::pattern_names(&syntax))?;
+        let clears = self.pattern_drops(
+            Some(&syntax),
+            &written_ty,
+            &holder,
+            &bound,
+            drops::Clears::InArm,
+        )?;
+        let (deferred, after) = self.take_deferred_clears();
+        let copies = copies + deferred.as_str();
         self.bind_host_pattern(&host);
         let mut arm =
             origin::Fragment::plain(self.push_root_pattern(resolved.proof, &resolved.bindings));
@@ -22794,12 +23781,25 @@ impl<'a> Parser<'a> {
             arm.push_text(" if ");
             arm.push(condition);
         }
-        Ok((subject, arm, host.rendered_binds(), write_back))
+        let mut binds = host.rendered_binds();
+        binds.push_text(clears);
+        Ok((
+            subject,
+            arm,
+            binds,
+            write_back,
+            drops::Condition {
+                otherwise,
+                copies,
+                after,
+            },
+        ))
     }
 
     /// The subject of a `match`, `if let` or `while let`, which may be a
     /// `&mut` borrow of a place.
     fn parse_subject(&mut self) -> Result<ParsedExpr, Error> {
+        self.subject_deref = matches!(self.peek(), Token::Multiply);
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
         let outer = self.mutable_borrow;
@@ -22862,21 +23862,42 @@ impl<'a> Parser<'a> {
             Token::While if matches!(self.peek(), Token::Let) => {
                 let original = self.bindings.clone();
                 let scrutinee = self.temporary("match");
-                let (subject, arm, binds, write_back) = self.parse_let_condition(&scrutinee)?;
+                let depth = self.drop_scopes.len();
+                let (subject, arm, binds, write_back, condition) =
+                    self.parse_let_condition(&scrutinee)?;
+                // The condition's scope ends with each iteration.
+                if self.drops() {
+                    self.loop_drop_depth = Some(depth);
+                }
+                if !condition.after.is_empty() {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `while let` binding that shadows the local it moves a \
+                                    value whose type implements `Drop` out of: not supported in \
+                                    Rawr yet"
+                            .into(),
+                        source: start,
+                    });
+                }
                 let mut head = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
                 head.push(subject);
-                head.push_text(format!(";\nswitch {scrutinee} {{\n"));
+                head.push_text(format!(";\n{}switch {scrutinee} {{\n", condition.copies));
                 head.push(arm);
                 head.push_text(" => { ");
                 head.push(binds);
                 let written = write_back.is_some();
                 self.write_backs.extend(write_back);
+                // Without a match, the value made for the condition drops.
+                let tail = if condition.otherwise.is_empty() {
+                    " },\n_ => break\n}\n}".to_string()
+                } else {
+                    format!(" }},\n_ => {{ {}break }}\n}}\n}}", condition.otherwise)
+                };
                 let looped = self.parse_loop_body(
                     origin::Fragment::plain("loop"),
                     start,
                     label,
                     false,
-                    Some((head, origin::Fragment::plain(" },\n_ => break\n}\n}"))),
+                    Some((head, origin::Fragment::plain(tail))),
                     Some(&original),
                 );
                 if written {
@@ -22887,7 +23908,16 @@ impl<'a> Parser<'a> {
                 return looped;
             }
             Token::While => {
-                let condition = self.parse_head(Self::parse_expr)?;
+                self.open_temporaries();
+                let condition = self.parse_head(Self::parse_expr);
+                let temporaries = self.close_temporaries();
+                let mut condition = condition?;
+                if !temporaries.is_empty() {
+                    condition.source = self
+                        .with_temporaries(&temporaries, condition.rendered_source())
+                        .surrounded("(", ")");
+                    condition.prelude = origin::Fragment::default();
+                }
                 self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
                 let mut source = origin::Fragment::plain("while ");
                 source.push(condition.rendered_source());
@@ -22938,6 +23968,10 @@ impl<'a> Parser<'a> {
             })
         };
         let jump = self.temporary("jump");
+        let drop_depth = self
+            .loop_drop_depth
+            .take()
+            .unwrap_or(self.drop_scopes.len());
         self.loops.push(LoopFrame {
             label,
             jump,
@@ -22945,10 +23979,23 @@ impl<'a> Parser<'a> {
             ty: None,
             targeted: false,
             exits: BTreeSet::new(),
+            drop_depth,
         });
         let body = self.parse_match_action();
         let frame = self.loops.pop().expect("the loop pushed its frame");
-        let body = body?;
+        let mut body = body?;
+        // The iteration's pattern bindings drop at the end of each one.
+        let mut iteration = String::new();
+        while self.drops() && self.drop_scopes.len() > drop_depth {
+            iteration.push_str(&self.close_drops()?);
+        }
+        if !iteration.is_empty() {
+            let source = std::mem::replace(&mut body.value.source, origin::Fragment::plain("()"));
+            body.value.prelude.push(source);
+            body.value.prelude.push_text(";\n");
+            body.value.prelude.push_text(iteration);
+            body.value.prelude.push_text("\n");
+        }
         let inner = std::mem::replace(&mut self.bindings, original);
         // A body that goes on to its next iteration with a local of the
         // loop's scope moved uses the moved value there, as rustc's E0382.
@@ -23102,7 +24149,18 @@ impl<'a> Parser<'a> {
             }
         }
         let keyword = if breaking { "break" } else { "continue" };
+        let drops =
+            self.temporary_drops_here() + self.exit_drops(self.loops[target].drop_depth)?.as_str();
+        if let Some(value) = &mut value {
+            self.move_out_value(value)?;
+        }
         let mut source = origin::Fragment::plain("{ ");
+        if !drops.is_empty() && target + 1 == self.loops.len() {
+            let value = value.map(|value| value.rendered_source());
+            source = self.jump_with_drops(&drops, keyword, value);
+            return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
+        }
+        source.push_text(&drops);
         if target + 1 == self.loops.len() {
             source.push_text(keyword);
             if let Some(value) = value {
@@ -23143,6 +24201,7 @@ impl<'a> Parser<'a> {
         self.returns += 1;
         let mut source = origin::Fragment::plain("{ return");
         let mut end = start;
+        let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
         if matches!(
             self.peek(),
             Token::SemiColon | Token::RightBrace | Token::Comma | Token::EOF
@@ -23152,8 +24211,15 @@ impl<'a> Parser<'a> {
                 source.push_text(" ");
                 source.push(returned);
             }
+            if !drops.is_empty() {
+                let copied = self.copied_return("()".into());
+                source = self.jump_with_drops(&drops, "return", copied);
+                return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
+            }
         } else {
-            let mut value = self.parse_expr_expecting(Some(&output))?;
+            let block_like = self.peek_block_like();
+            let value = self.parse_expr_expecting(Some(&output))?;
+            let mut value = self.returned_place(value, block_like)?;
             end = value.span;
             self.reject_signature_support(
                 &value.ty,
@@ -23162,8 +24228,16 @@ impl<'a> Parser<'a> {
             )?;
             self.coerce_expr(&output, &mut value)?;
             self.consume_imported_value(&value, "returned value", value.span)?;
-            source.push_text(" ");
+            self.move_out_value(&mut value)?;
+            // The value's own temporaries drop once it is made.
+            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
             let returned = value.rendered_source();
+            if !drops.is_empty() {
+                let returned = self.copied_return(returned.clone()).unwrap_or(returned);
+                source = self.jump_with_drops(&drops, "return", Some(returned));
+                return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
+            }
+            source.push_text(" ");
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         }
         source.push_text("; }");
@@ -23234,6 +24308,16 @@ impl<'a> Parser<'a> {
             source.push_text(format!(", {value}, ());"));
             return Ok(source);
         }
+        // A nested place is read and stored back where it is, so two
+        // stores below one field (`swap(&mut s.pair.0, &mut s.pair.1)`)
+        // each keep the other's.
+        if let Some(Lvalue::Nested(nested)) = &place.lvalue {
+            self.require_mutable_binding(&nested.binding, place.span)?;
+            let nested = (**nested).clone();
+            let mut store = self.store_nested(&nested, value.into());
+            store.push_text(";");
+            return Ok(store);
+        }
         Ok(match self.keyed_place(place)? {
             Some(mut target) => {
                 target.push_text(format!(" = {value};"));
@@ -23257,7 +24341,7 @@ impl<'a> Parser<'a> {
     /// borrowed once, as Rust's borrow rules have them (E0499): two
     /// borrows of one local are apart only as two of its fields.
     fn mutable_arguments(
-        &self,
+        &mut self,
         arguments: &[ParsedExpr],
         indexes: impl IntoIterator<Item = usize>,
     ) -> Result<Vec<ParsedExpr>, Error> {
@@ -23293,19 +24377,11 @@ impl<'a> Parser<'a> {
                     expression: place.span,
                 });
             }
-            let root = |place: &ParsedExpr| match &place.lvalue {
-                Some(Lvalue::Binding { binding, .. } | Lvalue::Place { binding, .. }) => {
-                    (binding.clone(), None)
-                }
-                Some(Lvalue::Field(field)) => (field.binding.clone(), Some(field.slot)),
-                Some(Lvalue::Nested(nested)) => (nested.binding.clone(), None),
-                Some(Lvalue::Slice(slice)) => (slice.binding.clone(), None),
-                None => (ImmutableString::new(), None),
-            };
-            let (name, slot) = root(place);
+            let (name, parts) = self.borrowed_parts(place);
             if let Some(other) = places.iter().find(|other| {
-                let (other_name, other_slot) = root(other);
-                other_name == name && (slot.is_none() || other_slot.is_none() || slot == other_slot)
+                let (other_name, other_parts) = self.borrowed_parts(other);
+                let shared = parts.len().min(other_parts.len());
+                other_name == name && parts[..shared] == other_parts[..shared]
             }) {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
@@ -23315,9 +24391,86 @@ impl<'a> Parser<'a> {
                     source: Span::new(other.span.start(), place.span.end()),
                 });
             }
-            places.push(place.clone());
+            // `bump(c.slot(0))`: the call is made once, before the
+            // statement, and its place is read and stored through its path.
+            let mut place = place.clone();
+            if let Some(Lvalue::Nested(nested)) = &place.lvalue
+                && Self::reached_once(nested)
+            {
+                let (statement, held) = self.hold_place((**nested).clone());
+                self.field_entries
+                    .push((statement, origin::Fragment::default()));
+                let (read, at, store) = self.nested_parts(&held);
+                let value = self.temporary("value");
+                let mut source = origin::Fragment::plain("({ ");
+                source.push(read);
+                source.push_text(format!("let {value} = "));
+                source.push(at);
+                source.push_text("; ");
+                source.push(store);
+                source.push_text(format!("{value} }})"));
+                place.source = source;
+                place.prelude = origin::Fragment::default();
+                place.lvalue = Some(Lvalue::Nested(Box::new(held)));
+            }
+            places.push(place);
         }
         Ok(places)
+    }
+
+    /// The local a `&mut` place borrows, and the fields (`Ok(slot)`) and
+    /// tuple members (`Err(index)`) below it that it borrows: two borrows
+    /// of one local are apart only when these differ, as Rust's borrow
+    /// rules have them (E0499). An element `v[i]` borrows all of `v`.
+    fn borrowed_parts(&self, place: &ParsedExpr) -> (ImmutableString, Vec<Result<usize, usize>>) {
+        let mut parts = Vec::new();
+        let (binding, base, steps) = match &place.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => return (binding.clone(), parts),
+            Some(Lvalue::Place { binding, place, .. }) => (binding, place.as_str(), &[][..]),
+            Some(Lvalue::Field(field)) => {
+                return (field.binding.clone(), vec![Ok(field.slot)]);
+            }
+            Some(Lvalue::Nested(nested)) => {
+                (&nested.binding, nested.base.as_str(), &nested.steps[..])
+            }
+            Some(Lvalue::Slice(slice)) => return (slice.binding.clone(), parts),
+            None => return (ImmutableString::new(), parts),
+        };
+        // `t.0.1` of a tuple local is written `t[0][1]`.
+        let mut rest = base.strip_prefix(binding.as_str()).unwrap_or("?");
+        let mut ty = self
+            .bindings
+            .get(binding)
+            .map_or(Ty::Unknown, |binding| self.inference.resolve(&binding.ty));
+        while let Some(after) = rest.strip_prefix('[') {
+            let Ty::Tuple(members) = ty else {
+                return (binding.clone(), parts);
+            };
+            let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let (Ok(index), Some(after)) = (
+                after[..digits].parse::<usize>(),
+                after[digits..].strip_prefix(']'),
+            ) else {
+                return (binding.clone(), parts);
+            };
+            let Some(member) = members.get(index) else {
+                return (binding.clone(), parts);
+            };
+            parts.push(Err(index));
+            ty = self.inference.resolve(member);
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return (binding.clone(), parts);
+        }
+        for step in steps {
+            match step {
+                PlaceStep::Field { slot, .. } => parts.push(Ok(*slot)),
+                PlaceStep::Member(index) => parts.push(Err(*index)),
+                _ => break,
+            }
+        }
+        (binding.clone(), parts)
     }
 
     /// `for x in a..b` and `for x in a..=b` over `i64`.
@@ -23363,7 +24516,13 @@ impl<'a> Parser<'a> {
         )? {
             return Ok(looped);
         }
-        let lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // A `Box<dyn Iterator>` is its iterator at runtime.
+        if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
+            && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
+        {
+            lhs.ty = iterator;
+        }
         let operator = match self.peek() {
             Token::ExclusiveRange => "..",
             Token::InclusiveRange => "..=",
@@ -23374,6 +24533,15 @@ impl<'a> Parser<'a> {
                     || iterated.script().is_some() && self.type_implements(&iterated, "Iterator"))
                     && let Some((pipeline, item)) = self.for_pipeline(&lhs)
                 {
+                    if self.needs_drop(&item, lhs.span)? {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `for` over an iterator of values whose type implements \
+                                        `Drop`: dropping them where Rust does is not supported in \
+                                        Rawr yet; loop over the `Vec` itself"
+                                .into(),
+                            source: lhs.span,
+                        });
+                    }
                     let (setup, header, entry, exit) = Self::for_parts(pipeline, &name);
                     let mut looped = self.parse_for_body(
                         name,
@@ -23419,6 +24587,18 @@ impl<'a> Parser<'a> {
                     Ty::Array { .. } | Ty::Keyed(..)
                 ) {
                     self.move_local(&mut lhs)?;
+                    if self.needs_drop(&ty, lhs.span)? {
+                        return self.parse_owned_for(
+                            name,
+                            declaration,
+                            mutable,
+                            ty,
+                            lhs,
+                            start,
+                            label,
+                            pattern.as_ref(),
+                        );
+                    }
                 }
                 let mut source = origin::Fragment::plain(format!("for {name} in "));
                 source.push(lhs.rendered_source());
@@ -23437,6 +24617,32 @@ impl<'a> Parser<'a> {
         };
         self.next();
         let rhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // `for c in 'a'..='e'`: the chars between, as a chain of one loop.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            let range = self.range_iterator(&lhs, Some(&rhs), Ty::Char, operator == "..=");
+            let Some((pipeline, item)) = self.for_pipeline(&range) else {
+                return Err(self.unsupported("`for` over this `char` range"));
+            };
+            let (setup, header, entry, exit) = Self::for_parts(pipeline, &name);
+            let mut looped = self.parse_for_body(
+                name,
+                declaration,
+                mutable,
+                item,
+                header,
+                start,
+                label,
+                pattern.as_ref(),
+                Some((entry, exit)),
+            )?;
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(setup);
+            source.push(looped.source);
+            source.push_text(" }");
+            looped.source = source;
+            return Ok(looped);
+        }
         let item = self.integer_bounds(&lhs, Some(&rhs))?;
         let mut source = origin::Fragment::plain(format!("for {name} in "));
         source.push(lhs.rendered_source());
@@ -23469,6 +24675,20 @@ impl<'a> Parser<'a> {
         fused: Option<(origin::Fragment, origin::Fragment)>,
     ) -> Result<ParsedExpr, Error> {
         let outer = self.bindings.clone();
+        // Copies of the outer locals the loop's bindings shadow, made before
+        // the loop.
+        let mut names = vec![name.clone()];
+        if let Some(pattern) = pattern {
+            names.extend(drops::pattern_names(pattern));
+        }
+        let copies = self.shadow_copies(&names)?;
+        // Each iteration's element and the pattern's bindings drop at its
+        // end, and at a `break` or `continue`.
+        let depth = self.drop_scopes.len();
+        self.open_drops();
+        if self.drops() {
+            self.loop_drop_depth = Some(depth);
+        }
         self.bindings.insert(
             name.clone(),
             Binding {
@@ -23480,8 +24700,25 @@ impl<'a> Parser<'a> {
                 kind: BindingKind::Local,
             },
         );
+        self.note_drop_here(&name, declaration, &ty)?;
         let wrap = match pattern {
-            Some(pattern) => match self.destructure(pattern, &name, &ty) {
+            Some(pattern) => match self
+                .destructure(pattern, &name, &ty)
+                .and_then(|statements| {
+                    if !self.drops() {
+                        return Ok(statements);
+                    }
+                    let bound = self.pattern_bindings(pattern);
+                    let holder = drops::Holder::Local(name.to_string(), Vec::new());
+                    let clears = self.pattern_drops(
+                        Some(pattern),
+                        &ty,
+                        &holder,
+                        &bound,
+                        drops::Clears::InArm,
+                    )?;
+                    Ok(statements + clears.as_str())
+                }) {
                 Ok(statements) => Some((
                     origin::Fragment::plain(statements),
                     origin::Fragment::default(),
@@ -23508,7 +24745,56 @@ impl<'a> Parser<'a> {
         // The loop's bindings end with it; what it moved stays moved.
         let inner = std::mem::replace(&mut self.bindings, outer);
         self.keep_moves_from(&inner);
-        value
+        let mut value = value?;
+        if !copies.is_empty() {
+            value.source = value.source.surrounded(&format!("{{ {copies}"), " }");
+        }
+        Ok(value)
+    }
+
+    /// `for x in v` over a `Vec` or array whose elements have drop glue: the
+    /// loop takes each element out of `v` as it goes (`__rawr_clear`), and
+    /// what a `break` or `return` leaves drops when the loop ends.
+    #[allow(clippy::too_many_arguments)]
+    fn parse_owned_for(
+        &mut self,
+        name: ImmutableString,
+        declaration: Span,
+        mutable: bool,
+        ty: Ty,
+        lhs: ParsedExpr,
+        start: Span,
+        label: Option<ImmutableString>,
+        pattern: Option<&PatternSyntax>,
+    ) -> Result<ParsedExpr, Error> {
+        let (items, index) = (self.temporary("items"), self.temporary("index"));
+        self.open_drops();
+        self.note_drop_here(&items.as_str().into(), lhs.span, &lhs.ty)?;
+        let entry = origin::Fragment::plain(format!(
+            "{}({items}, {index}); {index} += 1; ",
+            crate::engine::KEYWORD_CLEAR
+        ));
+        let source = origin::Fragment::plain(format!("for {name} in {items}"));
+        let looped = self.parse_for_body(
+            name,
+            declaration,
+            mutable,
+            ty,
+            source,
+            start,
+            label,
+            pattern,
+            Some((entry, origin::Fragment::default())),
+        );
+        let rest = self.close_drops()?;
+        let mut looped = looped?;
+        let mut source = origin::Fragment::plain(format!("{{ let {items} = "));
+        source.push(lhs.rendered_source());
+        source.push_text(format!("; let {index} = 0; "));
+        source.push(looped.source);
+        source.push_text(format!("; {rest}() }}"));
+        looped.source = source;
+        Ok(looped)
     }
 
     /// `match` on an `i64`, `f64`, `char`, `&str` or `bool` with literal, range,
@@ -24584,7 +25870,22 @@ impl<'a> Parser<'a> {
                 let scrutinee = self.temporary("match");
                 let parsed = self.parse_let_condition(&scrutinee);
                 self.chain_link = outer;
-                let (subject, arm, binds, write_back) = parsed?;
+                let (subject, arm, binds, write_back, condition) = parsed?;
+                // A link's drops would need the chain's scopes.
+                let link_drops = self.close_drops()?;
+                if !link_drops.is_empty()
+                    || !condition.otherwise.is_empty()
+                    || !condition.copies.is_empty()
+                    || !condition.after.is_empty()
+                    || binds.as_str().contains(crate::engine::KEYWORD_CLEAR)
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a let chain over a value whose type implements `Drop`: \
+                                    not supported in Rawr yet"
+                            .into(),
+                        source: point_span(self.position()),
+                    });
+                }
                 self.write_backs.extend(write_back);
                 open.push_text(format!("{{ let {scrutinee} = "));
                 open.push(subject);
@@ -24692,15 +25993,32 @@ impl<'a> Parser<'a> {
             String::new()
         };
         let mut written = false;
+        let mut otherwise = None;
+        let mut copies = String::new();
+        let mut after = String::new();
         let (pattern, condition, original_bindings) = if matches!(self.peek(), Token::Let) {
             let original_bindings = self.bindings.clone();
-            let (subject, arm, binds, write_back) = self.parse_let_condition(&scrutinee)?;
+            let (subject, arm, binds, write_back, condition) =
+                self.parse_let_condition(&scrutinee)?;
+            otherwise = Some(condition.otherwise);
+            copies = condition.copies;
+            after = condition.after;
             written = write_back.is_some();
             self.write_backs.extend(write_back);
             let condition = self.literal("true", Ty::Bool, if_span);
             (Some((subject, arm, binds)), condition, original_bindings)
         } else {
-            let condition = self.parse_head(Self::parse_expr)?;
+            // The condition is a temporary scope.
+            self.open_temporaries();
+            let condition = self.parse_head(Self::parse_expr);
+            let temporaries = self.close_temporaries();
+            let mut condition = condition?;
+            if !temporaries.is_empty() {
+                condition.source = self
+                    .with_temporaries(&temporaries, condition.rendered_source())
+                    .surrounded("(", ")");
+                condition.prelude = origin::Fragment::default();
+            }
             self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
             (None, condition, self.bindings.clone())
         };
@@ -24713,7 +26031,18 @@ impl<'a> Parser<'a> {
         if written {
             self.write_backs.pop();
         }
-        let consequent = consequent?;
+        let mut consequent = consequent?;
+        // The condition's scope ends with the consequent; without a match,
+        // the value made for it drops before the alternative, as in Rust
+        // 2024.
+        if otherwise.is_some() {
+            let drops = self.close_drops()?;
+            if !drops.is_empty() {
+                let block = consequent.value.rendered_block();
+                consequent.value.source = self.then_drops(block, &drops);
+                consequent.value.prelude = origin::Fragment::default();
+            }
+        }
         let consequent_bindings = self.bindings.clone();
         self.bindings = original_bindings.clone();
         let alternative = if !matches!(self.peek(), Token::Else) {
@@ -24753,16 +26082,36 @@ impl<'a> Parser<'a> {
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
         if let Some((subject, arm, binds)) = pattern {
+            let matched = if after.is_empty() {
+                String::new()
+            } else {
+                format!("let {} = ", self.temporary("matched"))
+            };
             let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
             source.push(subject);
-            source.push_text(format!(";\nswitch {scrutinee} {{\n"));
+            source.push_text(format!(";\n{copies}{matched}switch {scrutinee} {{\n"));
             source.push(arm);
             source.push_text(" => { ");
             source.push(binds);
             source.push(consequent.value.rendered_block());
             source.push_text(" },\n_ => ");
-            source.push(alternative.value.rendered_block());
-            source.push_text("\n}\n}");
+            match otherwise.filter(|otherwise| !otherwise.is_empty()) {
+                Some(otherwise) => {
+                    source.push_text(format!("{{ {otherwise}"));
+                    source.push(alternative.value.rendered_block());
+                    source.push_text(" }");
+                }
+                None => source.push(alternative.value.rendered_block()),
+            }
+            source.push_text("\n}");
+            // A move out of a local the binding shadowed follows the match.
+            if let Some(matched) = matched
+                .strip_prefix("let ")
+                .and_then(|matched| matched.strip_suffix(" = "))
+            {
+                source.push_text(format!(";\n{after}{matched}"));
+            }
+            source.push_text("\n}");
             return Ok(self.operator_expr(source.surrounded("(", ")"), output, span));
         }
         let mut source = origin::Fragment::plain("if ");
@@ -24792,10 +26141,16 @@ impl<'a> Parser<'a> {
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
             self.last_type = Ty::Unit;
+            self.open_drops();
 
             while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
                 match self.peek() {
                     Token::Let => self.parse_binding(true)?,
+                    // `const fn f()` is a nested `fn` item.
+                    Token::Const if matches!(self.peek_second(), Token::Fn) => {
+                        self.next();
+                        self.skip_nested_fn()?;
+                    }
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
@@ -24810,7 +26165,8 @@ impl<'a> Parser<'a> {
             let inner_last_expression =
                 std::mem::replace(&mut self.last_expression, outer_last_expression);
             let syntax = span(start, end);
-            let (prelude, source, endpoint) = match inner_last_expression {
+            let tail = inner_last_expression.is_some();
+            let (mut prelude, mut source, endpoint) = match inner_last_expression {
                 Some((start, endpoint)) => {
                     let mut source = block_output.split_off(start);
                     source.trim_end();
@@ -24818,6 +26174,7 @@ impl<'a> Parser<'a> {
                 }
                 None => (block_output, origin::Fragment::plain("()"), syntax),
             };
+            self.close_block_drops(&mut prelude, &mut source, tail)?;
             return Ok(Branch {
                 value: ParsedExpr {
                     prelude,
@@ -24835,9 +26192,28 @@ impl<'a> Parser<'a> {
 
         let start = self.position();
         let pending = self.field_entries.len();
-        let mut value = self.parse_expr()?;
+        let block_like = self.peek_block_like();
+        // An arm is a temporary scope.
+        self.open_temporaries();
+        let value = self.parse_expr();
+        let temporaries = self.close_temporaries();
+        let mut value = value?;
+        if !temporaries.is_empty() {
+            if assignment_token(&self.peek()) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "an assignment to a temporary place whose type implements `Drop`"
+                        .into(),
+                    source: value.span,
+                });
+            }
+            value.source = self.with_temporaries(&temporaries, value.rendered_source());
+            value.prelude = origin::Fragment::default();
+        }
         if !assignment_token(&self.peek()) {
+            // An arm returning a `&mut` place gives its path.
+            value = self.returned_place(value, block_like)?;
             self.consume_imported_value(&value, "branch result", value.span)?;
+            self.move_out_value(&mut value)?;
             // A bare arm such as `Key::Char(c) => app.input.push(c)` reads
             // and stores its place itself, as a block arm's statements do.
             // Left to the whole `match`, its store would undo another
@@ -24903,6 +26279,12 @@ impl<'a> Parser<'a> {
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
+        if compound_operator(&assignment).is_none()
+            && self.needs_drop(lvalue.ty(), replacement.span)?
+            && let Some(read) = self.replaced_read(&lvalue)
+        {
+            self.drop_replaced(&lvalue.ty().clone(), read, &mut replacement)?;
+        }
         let mut source = origin::Fragment::plain("{ ");
         match lvalue {
             Lvalue::Binding { .. } => {
@@ -25217,6 +26599,13 @@ impl<'a> Parser<'a> {
             let element = Box::new(lhs.ty.clone());
             return Ok(self.binary(lhs, "..", rhs.clone(), Ty::Range(element)));
         }
+        // `'a'..='e'`: an iterator over the chars between.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            if let Some(rhs) = &rhs {
+                self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            }
+            return Ok(self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive));
+        }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
         let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
         self.last_range = Some((lhs, rhs, inclusive, range.span));
@@ -25267,7 +26656,22 @@ impl<'a> Parser<'a> {
             {
                 self.move_local(&mut lhs)?;
             }
-            let rhs = self.parse_binary(precedence + 1)?;
+            // The second operand of `&&` and `||` is a temporary scope.
+            let lazy = matches!(operator, Token::And | Token::Or);
+            if lazy {
+                self.open_temporaries();
+            }
+            let rhs = self.parse_binary(precedence + 1);
+            let temporaries = if lazy {
+                self.close_temporaries()
+            } else {
+                Vec::new()
+            };
+            let mut rhs = rhs?;
+            if !temporaries.is_empty() {
+                rhs.source = self.with_temporaries(&temporaries, rhs.rendered_source());
+                rhs.prelude = origin::Fragment::default();
+            }
             lhs = self.apply_binary(operator, lhs, rhs)?;
             if precedence == COMPARISON && binary_precedence(&self.peek()) == Some(COMPARISON) {
                 return Err(self.unsupported("chained comparison operators"));
@@ -25350,7 +26754,12 @@ impl<'a> Parser<'a> {
             source = Ty::Int(Int::I64);
             value.ty = source.clone();
         }
-        let literal = value.source.as_str().parse::<crate::FLOAT>().is_ok();
+        // A literal past `i64` (`wide_literal`) takes the cast's kind too.
+        let literal = value.source.as_str().parse::<crate::FLOAT>().is_ok()
+            || self
+                .pending_wide_literals
+                .iter()
+                .any(|pending| pending.ty == source);
         match (&source, &target) {
             (Ty::Int(Int::Var(_)), Ty::Int(_)) | (Ty::Float(Float::Var(_)), Ty::Float(_))
                 if literal => {}
@@ -25386,6 +26795,15 @@ impl<'a> Parser<'a> {
                 self.inference.bind(*id, target.clone());
                 true
             }
+            // An `i128` or a `u128` keeps a narrower kind's value as it is
+            // (`Int`), but for a `u64`'s or `usize`'s bits and a negative
+            // number into a `u128`.
+            (Ty::Int(from), Ty::Int(to)) if from.wide() || to.wide() => {
+                from == to
+                    || !from.wide()
+                        && !matches!(from, Int::U64 | Int::Usize)
+                        && (*to == Int::I128 || !from.signed())
+            }
             // Every kind keeps a value as Rust's 64-bit `as` leaves it.
             (Ty::Int(from), Ty::Int(to)) => {
                 let ((low, high), (to_low, to_high)) = (from.full_range(), to.full_range());
@@ -25407,6 +26825,9 @@ impl<'a> Parser<'a> {
             let code = match (&source, &target) {
                 (Ty::Int(Int::U64 | Int::Usize), Ty::Float(Float::F32)) => 13,
                 (Ty::Int(Int::U64 | Int::Usize), Ty::Float(_)) => 14,
+                (Ty::Int(Int::U64 | Int::Usize), Ty::Int(to)) if to.wide() => {
+                    kind_code(target.clone()) + UNSIGNED_SOURCE
+                }
                 _ => kind_code(target.clone()),
             };
             value.source = self.prelude_op(PreludeOp::Cast, [operand, code.to_string().into()]);
@@ -25424,6 +26845,29 @@ impl<'a> Parser<'a> {
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
         const NUMBERS: &[Ty] = &[Ty::Int(Int::I64), Ty::Float(Float::F64)];
+        // With drop glue in the crate: a comparison borrows its operands,
+        // so a value made for it is a temporary; another operator's trait
+        // takes them by value.
+        let mut lhs = lhs;
+        if self.drops() && !matches!(operator, Token::And | Token::Or) {
+            let compares = matches!(
+                operator,
+                Token::EqualsTo
+                    | Token::NotEqualsTo
+                    | Token::LessThan
+                    | Token::LessThanEqualsTo
+                    | Token::GreaterThan
+                    | Token::GreaterThanEqualsTo
+            );
+            for operand in [&mut lhs, &mut rhs] {
+                if compares {
+                    self.hold_temporary(operand)?;
+                } else if self.needs_drop(&operand.ty, operand.span)? {
+                    self.move_local(operand)?;
+                }
+            }
+        }
+        let lhs = lhs;
         // Bit operators, also through `&i64` and `&bool`: `& | ^` on two
         // integers of one kind or two `bool`s, the runtime's own; a shift
         // of any integer by any integer, with Rust's overflow panic.
@@ -25460,6 +26904,11 @@ impl<'a> Parser<'a> {
             };
             if matches!(symbol, "&" | "|" | "^") {
                 let ty = self.operand_type(&lhs, &mut rhs, &[Ty::Int(Int::I64), Ty::Bool])?;
+                if let Ty::Int(kind) = ty
+                    && kind.wide()
+                {
+                    return Ok(self.wide_binary(symbol, lhs, rhs, ty.clone(), ty));
+                }
                 return Ok(self.binary(lhs, symbol, rhs, ty));
             }
             let ty = self.integer_operand(&lhs)?;
@@ -25569,6 +27018,14 @@ impl<'a> Parser<'a> {
             }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
+        // An `i128` or a `u128` past `i64` is boxed: its operators are
+        // `INT_METHODS`'.
+        if let Ty::Int(kind) = ty
+            && kind.wide()
+        {
+            let output = output.unwrap_or_else(|| ty.clone());
+            return Ok(self.wide_binary(symbol, lhs, rhs, ty, output));
+        }
         // A `u64` or a `usize` is its bits in the runtime's `i64`: its
         // arithmetic is unsigned, and it orders with the sign bit flipped.
         if let Ty::Int(Int::U64 | Int::Usize) = ty {
@@ -25597,6 +27054,27 @@ impl<'a> Parser<'a> {
             return Ok(self.checked_arithmetic(value, symbol));
         };
         Ok(self.binary(lhs, symbol, rhs, output))
+    }
+
+    /// `lhs symbol rhs` of the `i128` or `u128` type `ty` through
+    /// `INT_METHODS`, of the type `output`.
+    fn wide_binary(
+        &mut self,
+        symbol: &str,
+        lhs: ParsedExpr,
+        rhs: ParsedExpr,
+        ty: Ty,
+        output: Ty,
+    ) -> ParsedExpr {
+        let expression = span(lhs.span.start(), rhs.span.end());
+        let source = self.int_op(
+            symbol,
+            lhs.rendered_source(),
+            rhs.rendered_source(),
+            &ty,
+            &ty,
+        );
+        self.operator_expr(source, output, expression)
     }
 
     /// The integer type of an operand, an unknown one taking `{integer}`.
@@ -25820,6 +27298,38 @@ impl<'a> Parser<'a> {
                     stores.push(cell_store);
                     place = origin::Fragment::plain(local);
                 }
+                PlaceStep::Path { path, call } => {
+                    if let Some((before, after)) = call {
+                        read.push_text(format!("let {} = ", path.as_str()));
+                        read.push(before.clone());
+                        read.push(place.clone());
+                        read.push(after.clone());
+                        read.push_text("; ");
+                    }
+                    let local = self.temporary("part");
+                    if overwrite && index == leaf {
+                        read.push_text(format!("let {local} = (); "));
+                    } else {
+                        let getter = self.push_op(Op::Prelude(PreludeOp::PathGet));
+                        read.push_text(format!("let {local} = "));
+                        read.push(place.clone());
+                        read.push_text(format!(".{getter}("));
+                        read.push(path.clone());
+                        read.push_text("); ");
+                    }
+                    let setter = self.push_op(Op::Prelude(PreludeOp::PathSet));
+                    let mut store = place.clone();
+                    store.push_text(format!(".{setter}("));
+                    store.push(path.clone());
+                    store.push_text(format!(", {local}); "));
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
+                PlaceStep::Setup(setup) => {
+                    read.push(setup.clone());
+                    read.push_text(" ");
+                }
+                PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
                 PlaceStep::Accessor {
                     place: bound,
                     stored,
@@ -26612,7 +28122,10 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            arguments.push((name, self.parse_expr()?));
+            // A format argument is borrowed.
+            let mut argument = self.parse_expr()?;
+            self.hold_temporary(&mut argument)?;
+            arguments.push((name, argument));
         }
         let end = self.expect(Token::RightParen, "')' after `format!` arguments")?;
         let expression = span(start.start(), end);
@@ -26900,78 +28413,143 @@ impl<'a> Parser<'a> {
             } else {
                 0
             };
-            let value = match spec.kind {
-                FormatKind::Exp { upper } => {
-                    if !number {
-                        return Err(mismatch("a number for `{:e}`"));
-                    }
-                    let unsigned = int.is_some_and(|kind| !kind.signed());
-                    let mode = i64::from(upper)
-                        + f32_mode
-                        + if int.is_some() { 4 } else { 0 }
-                        + if unsigned { 8 } else { 0 };
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatExp,
-                        [name, precision.into(), mode.to_string().into()],
-                    )
+            // A spec on `{:?}` of a value other than a number, which Rust's
+            // `Formatter` passes down to each leaf, as in `Some(       1)`.
+            let hex = match spec.kind {
+                FormatKind::HexDebug(radix) => Some(radix),
+                _ => None,
+            };
+            let spread = matches!(spec.kind, FormatKind::Debug | FormatKind::HexDebug(_))
+                && !number
+                && !matches!(ty, Ty::Infer(_))
+                && (hex.is_some()
+                    || width.is_some()
+                    || precision.is_some()
+                    || spec.sign
+                    || spec.zero);
+            let value = if spread {
+                // `pretty_debug` reads brackets, commas and quotes, so a fill
+                // of one would be read as structure.
+                if spec.alternate && width.is_some() && "{}[](),'\"".contains(spec.fill) {
+                    return Err(self.unsupported("a bracket, comma or quote fill in `{:#?}`"));
                 }
-                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
-                    let Some(kind) = int else {
-                        return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
-                            "an integer for this `format!` spec"
+                let parts = self.temporary("spec");
+                let align = spec
+                    .align
+                    .map_or_else(|| "()".to_string(), |align| format!("{align:?}"));
+                let flags =
+                    i64::from(spec.sign) + 2 * i64::from(spec.alternate) + 4 * i64::from(spec.zero);
+                source.push_text(format!(
+                    "let {parts} = [{}, {:?}, {align}, {flags}, {}, {}];\n",
+                    hex.unwrap_or(0),
+                    spec.fill,
+                    width.as_deref().unwrap_or("-1"),
+                    precision.as_deref().unwrap_or("-1"),
+                ));
+                self.debug_spec = Some(parts);
+                let rendered = self.debug_source(&ty, name, at);
+                self.debug_spec = None;
+                let rendered = rendered?;
+                if spec.alternate {
+                    self.prelude_op(PreludeOp::PrettyDebug, [rendered])
+                } else {
+                    rendered
+                }
+            } else {
+                match spec.kind {
+                    FormatKind::Exp { upper } => {
+                        if !number {
+                            return Err(mismatch("a number for `{:e}`"));
+                        }
+                        let unsigned = int.is_some_and(|kind| !kind.signed());
+                        let mode = i64::from(upper)
+                            + f32_mode
+                            + if int.is_some() { 4 } else { 0 }
+                            + if unsigned { 8 } else { 0 };
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatExp,
+                            [name, precision.into(), mode.to_string().into()],
+                        )
+                    }
+                    FormatKind::HexDebug(_) if float => {
+                        let debug = 1 + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
+                        let Some(kind) = int else {
+                            return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
+                                "an integer for this `format!` spec"
+                            } else {
+                                "an integer for `{:x?}`"
+                            }));
+                        };
+                        self.prelude_op(
+                            PreludeOp::FormatBits,
+                            [
+                                name,
+                                radix.to_string().into(),
+                                (if matches!(kind, Int::Var(_)) {
+                                    32
+                                } else {
+                                    kind.bits()
+                                })
+                                .to_string()
+                                .into(),
+                            ],
+                        )
+                    }
+                    FormatKind::Debug | FormatKind::Display if float => {
+                        let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Debug => {
+                        if spec.width.is_some()
+                            && !matches!(
+                                ty,
+                                Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool
+                            )
+                        {
+                            return Err(self.unsupported("a `{:?}` width on a compound value"));
+                        }
+                        let rendered = self.debug_source(&ty, name, at)?;
+                        if spec.alternate {
+                            self.prelude_op(PreludeOp::PrettyDebug, [rendered])
                         } else {
-                            "an integer for `{:x?}`"
-                        }));
-                    };
-                    self.prelude_op(
-                        PreludeOp::FormatBits,
-                        [
-                            name,
-                            radix.to_string().into(),
-                            kind.bits().to_string().into(),
-                        ],
-                    )
-                }
-                FormatKind::Debug | FormatKind::Display if float => {
-                    let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatFloat,
-                        [name, precision.into(), debug.to_string().into()],
-                    )
-                }
-                FormatKind::Debug => {
-                    if spec.width.is_some()
-                        && !matches!(ty, Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool)
-                    {
-                        return Err(self.unsupported("a `{:?}` width on a compound value"));
+                            rendered
+                        }
                     }
-                    let rendered = self.debug_source(&ty, name, at)?;
-                    if spec.alternate {
-                        self.prelude_op(PreludeOp::PrettyDebug, [rendered])
-                    } else {
-                        rendered
-                    }
+                    FormatKind::Display => match self.display_piece(&ty, name) {
+                        Some(text) => text,
+                        None => {
+                            return Err(Error::TypeMismatch {
+                                expected: "a type with `Display` in `format!`".into(),
+                                actual: ty.name(&self.models),
+                                expression: at,
+                            });
+                        }
+                    },
                 }
-                FormatKind::Display => match self.display_piece(&ty, name) {
-                    Some(text) => text,
-                    None => {
-                        return Err(Error::TypeMismatch {
-                            expected: "a type with `Display` in `format!`".into(),
-                            actual: ty.name(&self.models),
-                            expression: at,
-                        });
-                    }
-                },
             };
             let prefixed = spec.alternate
+                && int.is_some()
                 && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));
             let truncated = precision.is_some() && !number && spec.kind == FormatKind::Display;
             // `str`'s and `char`'s `Debug` ignore width and precision.
             let quoted =
                 spec.kind == FormatKind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
-            if !quoted && (width.is_some() || spec.sign && number || prefixed || truncated) {
+            if !quoted
+                && !spread
+                && (width.is_some() || spec.sign && number || prefixed || truncated)
+            {
                 let temporary = self.temporary("format");
                 source.push_text(format!("let {temporary} = "));
                 source.push(value);
@@ -27070,10 +28648,13 @@ impl<'a> Parser<'a> {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Reverse(_)
+            | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
             | Ty::Param(_)
             | Ty::Projection(..) => false,
+            // An `i128` or a `u128` past `i64` is boxed.
+            Ty::Int(kind) => !kind.wide(),
             _ => true,
         }
     }
@@ -27677,7 +29258,9 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         // Rust's sign and rounding methods, through the runtime's math.
         let unary = match (&number, member.as_str()) {
-            (Ty::Int(kind), "abs") if kind.signed() => Some(("abs", number.clone())),
+            (Ty::Int(kind), "abs") if kind.signed() && !kind.wide() => {
+                Some(("abs", number.clone()))
+            }
             (Ty::Float(_), member)
                 if let Some((_, function)) =
                     FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
@@ -27689,7 +29272,9 @@ impl<'a> Parser<'a> {
                 };
                 Some((*function, ty))
             }
-            (Ty::Int(kind), "signum") if kind.signed() => Some(("sign", number.clone())),
+            (Ty::Int(kind), "signum") if kind.signed() && !kind.wide() => {
+                Some(("sign", number.clone()))
+            }
             _ => None,
         };
         if let Some((function, ty)) = unary {
@@ -27763,7 +29348,8 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("a power method without exactly one argument"));
         };
         self.require_type(&exponent, &argument.ty, argument.span)?;
-        if let Ty::Int(Int::U64 | Int::Usize) = number {
+        // A `u64`'s bits and an `i128` or a `u128` past `i64`: `INT_METHODS`.
+        if let Ty::Int(Int::U64 | Int::Usize | Int::I128 | Int::U128) = number {
             let expression = span(value.span.start(), end);
             let source = self.int_op(
                 "**",
@@ -27812,7 +29398,9 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        if name == "is_power_of_two" && kind.signed() {
+        if name == "is_power_of_two" && kind.signed()
+            || SIGNED_INT_METHODS.contains(&name) && !kind.signed()
+        {
             return Err(Error::UnknownMember {
                 owner: kind.name().into(),
                 member: name.into(),
@@ -28031,12 +29619,39 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
-        let (mut arguments, end) = self.parse_call_arguments("string method arguments")?;
+        // `retain`'s closure takes each `char`.
+        if member.as_str() == "retain" {
+            self.closure_hints = vec![Some(Box::new([Ty::Char]))];
+        }
+        let arguments = self.parse_call_arguments("string method arguments");
+        self.closure_hints = Vec::new();
+        let (mut arguments, end) = arguments?;
         for argument in &mut arguments {
             self.strip_string_reference(argument);
         }
         let receiver = value.rendered_source().surrounded("(", ")");
         let expression = span(value.span.start(), end);
+        // `s.retain(f)`: the chars `f` keeps, in order, stored back as `s`.
+        if let ("retain", [filter]) = (member.as_str(), arguments.as_mut_slice()) {
+            let expected = Ty::Fn {
+                inputs: Box::new([Ty::Char]),
+                output: Box::new(Ty::Bool),
+            };
+            self.coerce_expr(&expected, filter)?;
+            let (keep, kept, c) = (
+                self.temporary("keep"),
+                self.temporary("kept"),
+                self.temporary("char"),
+            );
+            let mut source = origin::Fragment::plain(format!("{{ let {keep} = "));
+            source.push(filter.rendered_source());
+            source.push_text(format!("; let {kept} = \"\"; for {c} in "));
+            source.push(receiver.clone());
+            source.push_text(format!(" {{ if {keep}.call({c}) {{ {kept} += {c}; }} }} "));
+            source.push(self.store_into(&value, &kept)?);
+            source.push_text(" }");
+            return Ok(self.operator_expr(source, Ty::Unit, expression));
+        }
         if let ("split_at", [mid]) = (member.as_str(), arguments.as_mut_slice()) {
             self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
             let source = self.prelude_op(PreludeOp::SplitAt, [receiver, mid.rendered_source()]);
@@ -28181,10 +29796,11 @@ impl<'a> Parser<'a> {
                 };
                 (source, ty)
             }
-            // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
+            // `bytes()`, `char_indices()`, `splitn(n, pattern)` and `rsplitn(n, pattern)`: iterators
             // over the string's pieces; `as_bytes()` a `&[u8]` and
             // `into_bytes()` a `Vec<u8>`.
-            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", []) | ("splitn", [_, _]) => {
+            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", [])
+            | ("splitn" | "rsplitn", [_, _]) => {
                 let code = STR_PIECES
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -28289,8 +29905,8 @@ impl<'a> Parser<'a> {
                 // in a local.
                 // `index_mut`'s `&mut place` is its value; writes reach the
                 // place where it is inlined (`indexed_place`).
-                let index_mut =
-                    matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
+                let index_mut = self.place_output
+                    || matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
                 if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
                     return Err(self.unsupported(
                         "`&mut` borrow expressions other than a function's `&mut` argument",
@@ -28309,6 +29925,7 @@ impl<'a> Parser<'a> {
                 return Ok(operand.retain_origin());
             }
             let mut operand = self.parse_operand()?;
+            self.hold_temporary(&mut operand)?;
             operand.ty = Ty::Reference {
                 mutable: false,
                 target: Box::new(self.inference.resolve(&operand.ty)),
@@ -28339,6 +29956,7 @@ impl<'a> Parser<'a> {
                     ty: Ty::Unknown,
                 });
             }
+            let through_reference = matches!(resolved, Ty::Reference { .. });
             operand.lvalue = match (resolved, operand.lvalue.take()) {
                 (Ty::Reference { mutable: true, .. }, Some(Lvalue::Binding { binding, .. })) => {
                     Some(Lvalue::Binding {
@@ -28358,10 +29976,23 @@ impl<'a> Parser<'a> {
                     nested.ty = (*target).clone();
                     Some(Lvalue::Nested(nested))
                 }
+                // `*b` of a local `Box`: the box's own place, which a use
+                // by value moves, with drop glue in the crate.
+                (Ty::Boxed(Pointer::Box, _), Some(Lvalue::Binding { binding, .. }))
+                    if self.drops() =>
+                {
+                    Some(Lvalue::Binding {
+                        binding,
+                        ty: (*target).clone(),
+                    })
+                }
                 _ => None,
             };
             operand.ty = *target;
             operand.span = span(start, operand.span.end());
+            if through_reference && operand.lvalue.is_none() && self.drops() {
+                self.borrowed.insert(operand.span);
+            }
             return Ok(operand.retain_origin());
         }
         if matches!(self.peek(), Token::Minus | Token::UnaryMinus | Token::Bang) {
@@ -28409,6 +30040,13 @@ impl<'a> Parser<'a> {
                 actual: ty.name(&self.models),
                 expression: operand.span,
             });
+        }
+        if let Ty::Int(kind) = ty
+            && kind.wide()
+        {
+            let expression = span(start, operand.span.end());
+            let source = self.int_op("neg", operand.rendered_source(), "0".into(), &ty, &ty);
+            return Ok(self.operator_expr(source, ty, expression));
         }
         let source = operand
             .rendered_source()
@@ -28767,6 +30405,13 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
+            // std's `dyn Error`: its text and its `source`.
+            if self.std_error(&builtin, true)
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                value = self.parse_error_member(value, member, member_span)?;
+                continue;
+            }
             // A trait object has only its trait's methods, dispatched by
             // the value's runtime type.
             let object = match &builtin {
@@ -28994,14 +30639,18 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let cell = match &builtin {
-                Ty::Cell(inner) => Some((**inner).clone()),
+                Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                 Ty::Reference { target, .. } => match &**target {
-                    Ty::Cell(inner) => Some((**inner).clone()),
+                    Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                     _ => None,
                 },
                 _ => None,
             };
-            if let Some(inner) = cell {
+            if let Some((CellKind::Cell, inner)) = cell {
+                value = self.parse_plain_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            if let Some((_, inner)) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
@@ -29043,7 +30692,7 @@ impl<'a> Parser<'a> {
                 let mut source = value.rendered_source();
                 source.push_text(format!("[{index}]"));
                 let end = text_end(member_span.start(), &member);
-                // `t.0` of a local's place is a place.
+                // `t.0` of a local's place is a place, and so is `s.pair.0`.
                 let lvalue = match &value.lvalue {
                     Some(Lvalue::Binding { binding, .. } | Lvalue::Place { binding, .. })
                         if value.prelude.is_empty() =>
@@ -29054,6 +30703,11 @@ impl<'a> Parser<'a> {
                             place: source.clone(),
                         })
                     }
+                    Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) => Some(nested_step(
+                        lvalue,
+                        PlaceStep::Member(index),
+                        members[index].clone(),
+                    )),
                     _ => None,
                 };
                 value = self.operator_expr(
@@ -29281,6 +30935,9 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.require_capability(&model, capability, member_span)?;
+                if capability == capability::Kind::Clone {
+                    self.refuse_cell_clone(&value.ty, member_span)?;
+                }
                 let (op, ty) = if capability == capability::Kind::Debug {
                     (
                         Op::Debug {
@@ -29345,6 +31002,17 @@ impl<'a> Parser<'a> {
             };
             let substitution = self.nominal_substitution(definition_id, &arguments);
             let ty = instantiate(&Ty::from_resolved(&field.ty), &substitution);
+            // A field of a value made here is read from its temporary, and
+            // of a place read through a reference stays that place.
+            let through_reference =
+                matches!(self.inference.resolve(&value.ty), Ty::Reference { .. })
+                    || self.borrowed.contains(&value.span);
+            if let Some(temporary) = self.hold_temporary(&mut value)? {
+                value.lvalue = Some(Lvalue::Binding {
+                    binding: temporary,
+                    ty: value.ty.clone(),
+                });
+            }
             let lvalue = match &value.lvalue {
                 // `v[0].cells`, `s.a.b`: a field below an element or a field.
                 Some(lvalue @ (Lvalue::Place { .. } | Lvalue::Field(_) | Lvalue::Nested(_))) => {
@@ -29367,8 +31035,23 @@ impl<'a> Parser<'a> {
                     })
                 }),
             };
+            let lvalue = match (lvalue, &value.lvalue) {
+                (None, Some(Lvalue::Binding { binding, .. })) if self.drops() => {
+                    Some(Lvalue::Field(FieldLvalue {
+                        binding: binding.clone(),
+                        definition: definition.clone(),
+                        slot,
+                        member: member.clone(),
+                        ty: ty.clone(),
+                    }))
+                }
+                (lvalue, _) => lvalue,
+            };
             let helper = self.push_op(Op::Field { definition, slot });
             let expression_span = span(value.span.start(), member_span.end());
+            if through_reference && lvalue.is_none() && self.drops() {
+                self.borrowed.insert(expression_span);
+            }
             value = ParsedExpr {
                 prelude: value.prelude,
                 source: origin::Fragment::call(&helper, [value.source]),
@@ -29450,8 +31133,50 @@ impl<'a> Parser<'a> {
                 span(member_span.start(), end),
                 &substitution,
             )?;
+            // rustc's E0040: `drop` runs where the value drops, not by name.
+            if definition.trait_name().is_some_and(|name| name == "Drop") {
+                return Err(Error::Syntax {
+                    message: "explicit use of destructor method (E0040)".into(),
+                    label: "explicit destructor calls not allowed".into(),
+                    help: Some("consider using `drop` function: `drop(value)`".into()),
+                    at: member_span,
+                });
+            }
+            // `c.slot(1)` of `fn slot(&mut self, i: usize) -> &mut i32`:
+            // the place the output borrows.
+            let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+            if matches!(mode, receiver::Mode::Mutable)
+                && definition.name() != "index_mut"
+                && let Some(borrowed) = self.place_output(&output)
+            {
+                let call = span(value.span.start(), end);
+                let receiver = self.borrowed_receiver(&value, call)?;
+                let witnesses = self.witness_arguments(definition.generics(), &substitution, call);
+                let arguments = origin::Fragment::join(
+                    args.iter()
+                        .map(ParsedExpr::rendered_source)
+                        .chain(witnesses),
+                    ", ",
+                );
+                let method = method_name(definition.id());
+                let places =
+                    self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
+                let mut source =
+                    origin::Fragment::plain(format!("{}.{method}(", places::RECEIVER_PLACE));
+                source.push(arguments);
+                source.push_text(")");
+                let source = self.copied_call(source, &places)?;
+                return Ok(Ok(self.borrowed_call(&receiver, source, borrowed, call)));
+            }
+            // A nested receiver of a method that also copies `&mut`
+            // arguments back is read and stored around the call, so the
+            // copies' stores (`p.take(&mut s.t.0)`) come after its own.
+            let mut inline = None;
             let writeback = match mode {
-                receiver::Mode::Shared => None,
+                receiver::Mode::Shared => {
+                    self.hold_temporary(&mut value)?;
+                    None
+                }
                 // An element (`v[0]`) or a place below a field
                 // (`g.rows[i].cells[j]`) is changed where it is.
                 receiver::Mode::Mutable
@@ -29463,7 +31188,13 @@ impl<'a> Parser<'a> {
                 receiver::Mode::Mutable if let Some(Lvalue::Nested(nested)) = &value.lvalue => {
                     let nested = (**nested).clone();
                     self.require_mutable_binding(&nested.binding, member_span)?;
-                    Some(Writeback::Place(self.nested_place(&nested)))
+                    if method_copied(&definition, &self.models).is_empty() {
+                        Some(Writeback::Place(self.nested_place(&nested)))
+                    } else {
+                        let (read, place, store) = self.nested_parts(&nested);
+                        inline = Some((read, store));
+                        Some(Writeback::Place(place))
+                    }
                 }
                 receiver::Mode::Mutable => {
                     Some(self.require_mutable_receiver(&value, &definition, member_span)?)
@@ -29535,7 +31266,20 @@ impl<'a> Parser<'a> {
                     place.push_text(format!(".{method}("));
                     place.push(arguments);
                     place.push_text(")");
-                    place
+                    match inline {
+                        Some((read, store)) => {
+                            let result = self.temporary("result");
+                            let mut source = origin::Fragment::plain("({ ");
+                            source.push(read);
+                            source.push_text(format!("let {result} = "));
+                            source.push(place);
+                            source.push_text("; ");
+                            source.push(store);
+                            source.push_text(format!("{result} }})"));
+                            source
+                        }
+                        None => place,
+                    }
                 }
             };
             let source = self.copied_call(source, &places)?;
@@ -29835,6 +31579,11 @@ impl<'a> Parser<'a> {
             Token::ByteConstant(byte) => {
                 Ok(self.literal(byte.to_string(), Ty::Int(Int::U8), token_span))
             }
+            Token::FloatConstant(value)
+                if let Some(literal) = self.wide_literal(&value.1, token_span)? =>
+            {
+                Ok(literal)
+            }
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
                 let number = *value.0;
@@ -30131,6 +31880,15 @@ impl<'a> Parser<'a> {
         {
             return self.parse_print(stream, name_span);
         }
+        // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
+        // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
+        if matches!(self.peek(), Token::Bang)
+            && matches!(name.as_str(), "write" | "writeln")
+            && self.models.import(&name).is_none()
+            && !self.writes_into_formatter()
+        {
+            return self.parse_write_string(&name, name_span);
+        }
         // `write!(f, ..)` and `writeln!(f, ..)` into a `fmt` body's formatter.
         if matches!(self.peek(), Token::Bang)
             && matches!(name.as_str(), "write" | "writeln")
@@ -30199,7 +31957,16 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Bang)
             && matches!(
                 name.as_str(),
-                "concat" | "env" | "include_str" | "include_bytes" | "stringify"
+                "concat"
+                    | "env"
+                    | "option_env"
+                    | "include_str"
+                    | "include_bytes"
+                    | "stringify"
+                    | "line"
+                    | "column"
+                    | "file"
+                    | "module_path"
             )
             && self.models.import(&name).is_none()
         {
@@ -30235,12 +32002,12 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_matches(name_span);
         }
-        // `RefCell::new(value)` and `RefCell::default()`.
-        if let Some(skip) = self.cell_path(&name) {
+        // `RefCell::new(value)` and `RefCell::default()`, and `Cell`'s.
+        if let Some((skip, kind)) = self.cell_path(&name) {
             for _ in 0..skip {
                 self.next();
             }
-            return self.parse_cell_constructor(name_span);
+            return self.parse_cell_constructor(name_span, kind);
         }
         // `PhantomData`, also `PhantomData::<T>` or in full: a value that is
         // nothing at run time.
@@ -30258,10 +32025,39 @@ impl<'a> Parser<'a> {
             }
             return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
+        // `std::thread::sleep(duration)`, `thread::sleep`, `sleep`.
+        if let Some(skip) = self.sleep_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            let (mut arguments, end) = self.parse_call_arguments("`sleep` arguments")?;
+            let call = span(name_span.start(), end);
+            let [duration] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: "std::thread".into(),
+                    method: "sleep".into(),
+                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    call,
+                });
+            };
+            self.coerce_expr(&Ty::Time(Time::Duration), duration)?;
+            let code = time_code("sleep").to_string();
+            let source = self.prelude_op(
+                PreludeOp::Time,
+                ["()".into(), code.into(), duration.rendered_source()],
+            );
+            return Ok(self.operator_expr(source, Ty::Unit, call));
+        }
         // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
         if let Some((function, skip)) = self.mem_path(&name) {
             for _ in 0..skip {
                 self.next();
+            }
+            if function.starts_with("size_of") {
+                return self.parse_size_of(function, name_span);
+            }
+            if function == "drop" {
+                return self.parse_script_call("drop".into(), None, name_span);
             }
             return self.parse_mem_call(function, name_span);
         }
@@ -30303,12 +32099,25 @@ impl<'a> Parser<'a> {
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
             let mut arguments = arguments;
-            // `Vec::with_capacity(n)`: an empty `Vec`.
+            // `Vec::with_capacity(n)`: an empty `Vec` with room for `n`.
             if member.as_str() == "with_capacity"
                 && let [capacity] = arguments.as_mut_slice()
             {
                 self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
-                arguments.clear();
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let code = vec_method_code("with_capacity");
+                let mut source = origin::Fragment::plain(format!("{helper}([], {code}, "));
+                source.push(capacity.rendered_source());
+                source.push_text(", (), false)");
+                let element = Box::new(self.inference.fresh());
+                return Ok(self.operator_expr(
+                    source,
+                    Ty::Array {
+                        element,
+                        length: None,
+                    },
+                    span(name_span.start(), end),
+                ));
             } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
@@ -30354,6 +32163,24 @@ impl<'a> Parser<'a> {
                     span(name_span.start(), member_span.end()),
                 ));
             }
+            // An `Rc` or `Arc` is its value at runtime (D492.3), so nothing
+            // counts its clones.
+            if pointer != Pointer::Box
+                && matches!(
+                    member.as_str(),
+                    "strong_count" | "weak_count" | "ptr_eq" | "downgrade"
+                )
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "`{}::{member}`: an `{0}` is its value in Rawr, without a count or an \
+                         address",
+                        pointer.name()
+                    )
+                    .into(),
+                    source: member_span,
+                });
+            }
             let (arguments, end) =
                 self.parse_call_arguments(&format!("`{}` arguments", pointer.name()))?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
@@ -30361,6 +32188,12 @@ impl<'a> Parser<'a> {
             match member.as_str() {
                 "new" => {
                     let ty = Ty::Boxed(pointer, Box::new(self.inference.resolve(&argument.ty)));
+                    // A value with drop glue moves into its `Box`; an `Rc`
+                    // or `Arc` of one is refused (`needs_drop`).
+                    let mut argument = argument;
+                    if self.needs_drop(&ty, call)? {
+                        self.move_local(&mut argument)?;
+                    }
                     let source = argument.rendered_source();
                     return Ok(self.operator_expr(source, ty, call));
                 }
@@ -30610,10 +32443,15 @@ impl<'a> Parser<'a> {
             .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
             .collect();
         let function = |token: &Token| match token {
-            Token::Identifier(name) => ["swap", "replace", "take"]
+            Token::Identifier(name) => ["swap", "replace", "take", "size_of", "size_of_val"]
                 .into_iter()
                 .find(|function| *function == name.as_str()),
             _ => None,
+        };
+        // `std::mem::drop(x)` and `mem::drop(x)` are the prelude's `drop`.
+        let qualified = |token: &Token| match token {
+            Token::Identifier(name) if name.as_str() == "drop" => Some("drop"),
+            token => function(token),
         };
         // Free, or imported from `std::mem` (`use std::mem::{self, swap}`).
         let unbound = |this: &Self, name: &str| {
@@ -30634,17 +32472,121 @@ impl<'a> Parser<'a> {
                     && mem(&tokens[1])
                     && tokens[2] == Token::DoubleColon =>
             {
-                (function(&tokens[3])?, 4)
+                (qualified(&tokens[3])?, 4)
             }
             "mem" if tokens[0] == Token::DoubleColon && unbound(self, name) => {
-                (function(&tokens[1])?, 2)
+                (qualified(&tokens[1])?, 2)
             }
             name if unbound(self, name) => {
                 (function(&Token::Identifier(Box::new(name.into())))?, 0)
             }
             _ => return None,
         };
-        matches!(tokens[skip], Token::LeftParen).then_some((function, skip))
+        let next = if function == "size_of" {
+            Token::DoubleColon
+        } else {
+            Token::LeftParen
+        };
+        (tokens[skip] == next).then_some((function, skip))
+    }
+
+    /// A call of `std::thread::sleep` at `name`, by its path or imported
+    /// (`use std::thread;`, `use std::thread::sleep;`): the tokens before
+    /// its name.
+    #[inline(never)]
+    fn sleep_path(&mut self, name: &str) -> Option<usize> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..5)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let named = |token: &Token, wanted: &str| matches!(token, Token::Identifier(name) if name.as_str() == wanted);
+        // Imported from `std::thread`, and not a local item or binding.
+        let imported = |this: &Self, name: &str, from: &[&str]| {
+            this.models.get(name).is_none()
+                && this.models.function(name).is_none()
+                && !this.bindings.contains_key(name)
+                && this.models.import(name).is_some_and(|binding| {
+                    let path = binding.qualified.as_str();
+                    from.contains(&path.strip_suffix(name).unwrap_or(path))
+                })
+        };
+        let skip = match name {
+            "std" | "core"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "thread")
+                    && tokens[2] == Token::DoubleColon
+                    && named(&tokens[3], "sleep") =>
+            {
+                4
+            }
+            "thread"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "sleep")
+                    && imported(self, name, &["std::", "core::"]) =>
+            {
+                2
+            }
+            "sleep" if imported(self, name, &["std::thread::", "core::thread::"]) => 0,
+            _ => return None,
+        };
+        matches!(tokens[skip], Token::LeftParen).then_some(skip)
+    }
+
+    /// `size_of::<T>()` and `size_of_val(&value)`: rustc's size in bytes of
+    /// a number, `bool`, `char`, `()` or an array of them. Another type's
+    /// layout is rustc's own choice, so it is refused.
+    #[inline(never)]
+    fn parse_size_of(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let ty = if function == "size_of" {
+            self.expect(Token::DoubleColon, "'::' after `size_of`")?;
+            self.expect(Token::LessThan, "'<' after `size_of::`")?;
+            let ty = self.parse_local_type()?;
+            self.expect_close_angle("'>' after `size_of`'s type")?;
+            ty
+        } else {
+            self.inference.fresh()
+        };
+        let (mut arguments, end) = self.parse_call_arguments("`std::mem` arguments")?;
+        let call = span(name_span.start(), end);
+        let count = usize::from(function == "size_of_val");
+        if arguments.len() != count {
+            return Err(Error::InvalidMethodCall {
+                owner: "std::mem".into(),
+                method: function.into(),
+                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+                call,
+            });
+        }
+        let ty = match arguments.first_mut() {
+            Some(argument) => {
+                let expected = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(ty.clone()),
+                };
+                self.coerce_expr(&expected, argument)?;
+                self.inference.resolve(&ty)
+            }
+            None => self.inference.resolve(&ty),
+        };
+        let Some(size) = primitive_size(&ty) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`std::mem::{function}` of `{}`, whose layout is rustc's own; only numbers, \
+                     `bool`, `char`, `()` and arrays of them have a size in Rawr",
+                    ty.name(&self.models)
+                )
+                .into(),
+                source: call,
+            });
+        };
+        // The argument is still evaluated, for its effects.
+        let mut source = origin::Fragment::plain("{ ");
+        if let Some(argument) = arguments.first() {
+            source.push(argument.rendered_source());
+            source.push_text("; ");
+        }
+        source.push_text(format!("{size} }}"));
+        Ok(self.operator_expr(source, Ty::Int(Int::Usize), call))
     }
 
     /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
@@ -32540,6 +34482,7 @@ impl<'a> Parser<'a> {
         start: Span,
     ) -> Result<ParsedExpr, Error> {
         let turbofish = self.parse_prelude_turbofish(variant)?;
+        let inferred = turbofish.is_none();
         let (ok, err) = match turbofish {
             Some(types) => {
                 let mut types = types.into_iter();
@@ -32580,6 +34523,9 @@ impl<'a> Parser<'a> {
             Prelude::Err => err.clone(),
             _ => ok.clone(),
         };
+        if variant == Prelude::Err && inferred {
+            self.box_returned_error(value)?;
+        }
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
@@ -32589,8 +34535,28 @@ impl<'a> Parser<'a> {
             Prelude::Err => (PreludeOp::Err, Ty::Result(Box::new(ok), payload)),
             Prelude::None => unreachable!("`None` returned above"),
         };
+        // `Some(&mut self.a)` returned as an `Option<&mut T>` output keeps
+        // its place (`places::returned_place`).
+        let place = match (&variant, self.place_output && self.closures.is_empty()) {
+            (Prelude::Some, true)
+                if matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Reference { mutable: true, .. }
+                ) =>
+            {
+                value.lvalue.clone().or_else(|| {
+                    (value.source.as_str() == "this").then(|| Lvalue::Binding {
+                        binding: "this".into(),
+                        ty: value.ty.clone(),
+                    })
+                })
+            }
+            _ => None,
+        };
         let source = self.prelude_op(op, [value.rendered_source()]);
-        Ok(self.operator_expr(source, ty, expression))
+        let mut value = self.operator_expr(source, ty, expression);
+        value.lvalue = place;
+        Ok(value)
     }
 
     /// `value?` in a body returning `Option`: the `Some` value, or an early
@@ -32623,16 +34589,14 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
-        // `?` converts the error through `From`, as in Rust: `Err(e)?` in a
-        // body returning `Result<_, F>` returns `Err(F::from(e))`.
+        // `?` in a body returning `Result<_, Box<dyn Error>>` boxes an
+        // error, a `&str` or a `String` as `dyn Error`, as its `From` impls do.
         if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
             self.inference.resolve(&early),
             self.inference.resolve(&output),
         ) && !matches!(*error, Ty::Infer(_))
-            && let Some(target) = owner_id(&returned)
-            && !self.unifies(&returned, &error)
-            && let Some((conversion, ..)) =
-                self.select_conversion(target, Some(&returned), &error, value.span)
+            && self.boxed_std_error(&returned)
+            && !self.boxed_std_error(&error)
         {
             let ok = self.inference.fresh();
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
@@ -32646,6 +34610,82 @@ impl<'a> Parser<'a> {
             let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
             source.push(unwrapped);
             source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let Some(converted) = self.error_object(&error, unwrapped_error, true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `s.parse()?` there, whose error is known once the parse's target
+        // is: boxed by the target's kind.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && matches!(*error, Ty::Infer(_))
+            && self.boxed_std_error(&returned)
+            && let Some(target) = self
+                .pending_parses
+                .iter()
+                .find(|(_, pending, _)| self.inference.resolve(pending) == *error)
+                .map(|(target, ..)| target.clone())
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let helper = self.push_op(Op::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds: [target.clone(), target],
+            });
+            let converted = origin::Fragment::call(&helper, [unwrapped_error]);
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `?` converts the error through `From`, as in Rust: `Err(e)?` in a
+        // body returning `Result<_, F>` returns `Err(F::from(e))`.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && !matches!(*error, Ty::Infer(_))
+            && let Some(target) = owner_id(&returned)
+            && !self.unifies(&returned, &error)
+            && let Some((conversion, ..)) =
+                self.select_conversion(target, Some(&returned), &error, value.span)
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let mut value = value;
+            self.move_out_value(&mut value)?;
+            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(format!(" }} else {{ {drops}return "));
             let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
             let converted = origin::Fragment::call(method_name(conversion.id()), [error]);
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
@@ -32668,6 +34708,9 @@ impl<'a> Parser<'a> {
             });
         }
         // The early return is the operand itself: `None`, or `Err(error)`.
+        let mut value = value;
+        self.move_out_value(&mut value)?;
+        let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
         let operand = self.temporary("try");
         let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
         source.push(value.rendered_source());
@@ -32678,10 +34721,30 @@ impl<'a> Parser<'a> {
         let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
         source.push(unwrapped);
         let returned = origin::Fragment::plain(operand.as_str());
-        source.push_text(" } else { return ");
+        source.push_text(format!(" }} else {{ {drops}return "));
         source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         source.push_text("; } }");
-        Ok(self.operator_expr(source.surrounded("(", ")"), element, expression))
+        let source = source.surrounded("(", ")");
+        // `v.get_mut(i)?` is the element's place, as `unwrap()` keeps it.
+        let place = match &value.lvalue {
+            Some(lvalue)
+                if !matches!(lvalue, Lvalue::Slice(_))
+                    && matches!(
+                        self.inference.resolve(&element),
+                        Ty::Reference { mutable: true, .. }
+                    ) =>
+            {
+                let mut nested = places::as_nested(lvalue);
+                let mut setup = source.clone();
+                setup.push_text(";");
+                nested.steps.insert(0, PlaceStep::Setup(setup));
+                Some(Lvalue::Nested(Box::new(nested)))
+            }
+            _ => None,
+        };
+        let mut value = self.operator_expr(source, element, expression);
+        value.lvalue = place;
+        Ok(value)
     }
 
     /// The `Option` methods Rust code reaches for, as Rust names them. Each
@@ -32689,7 +34752,7 @@ impl<'a> Parser<'a> {
     /// the receiver.
     fn parse_option_method(
         &mut self,
-        value: ParsedExpr,
+        mut value: ParsedExpr,
         element: Ty,
         member: ImmutableString,
         member_span: Span,
@@ -32715,6 +34778,7 @@ impl<'a> Parser<'a> {
         };
         let (mut arguments, end) = self.parse_call_arguments("`Option` method arguments")?;
         self.closure_hints = Vec::new();
+        self.builtin_enum_receiver(&mut value, None, &member, &arguments, member_span)?;
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
             if arguments.len() == expected {
@@ -32765,12 +34829,20 @@ impl<'a> Parser<'a> {
             "unwrap_or" => {
                 arity(1, &arguments)?;
                 self.coerce_expr(&element, &mut arguments[0])?;
+                // The default, unused, drops.
+                if self.needs_drop(&element, member_span)? {
+                    self.move_local(&mut arguments[0])?;
+                }
                 source.push_text("let __rawr_or = ");
                 source.push(arguments[0].rendered_source());
                 source.push_text("; if ");
                 let test = is(self);
                 source.push(test);
                 source.push_text(" { ");
+                if self.needs_drop(&element, member_span)? {
+                    source.push_text(drops::glue_call("__rawr_or"));
+                    source.push_text(" ");
+                }
                 let unwrapped = unwrap(self);
                 source.push(unwrapped);
                 source.push_text(" } else { __rawr_or }");
@@ -33082,14 +35154,22 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        // `v.get_mut(i).unwrap()` is the element's place.
-        let place = if keeps_place {
-            value.lvalue.clone()
-        } else {
-            None
-        };
         // A block is not an `if` condition in the legacy parser.
-        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, expression);
+        let source = source.surrounded("(", ")");
+        // `v.get_mut(i).unwrap()` is the element's place, which the
+        // `Option` locates: it is evaluated, panicking on `None`, each time
+        // the place is reached.
+        let place = match &value.lvalue {
+            Some(lvalue) if keeps_place && !matches!(lvalue, Lvalue::Slice(_)) => {
+                let mut nested = places::as_nested(lvalue);
+                let mut setup = source.clone();
+                setup.push_text(";");
+                nested.steps.insert(0, PlaceStep::Setup(setup));
+                Some(Lvalue::Nested(Box::new(nested)))
+            }
+            _ => None,
+        };
+        let mut parsed = self.operator_expr(source, ty, expression);
         if place.is_some() {
             parsed.lvalue = place;
         }
@@ -33157,7 +35237,7 @@ impl<'a> Parser<'a> {
     /// after the receiver.
     fn parse_result_method(
         &mut self,
-        value: ParsedExpr,
+        mut value: ParsedExpr,
         ok: Ty,
         err: Ty,
         member: ImmutableString,
@@ -33175,6 +35255,13 @@ impl<'a> Parser<'a> {
         };
         let (mut arguments, end) = self.parse_call_arguments("`Result` method arguments")?;
         self.closure_hints = Vec::new();
+        self.builtin_enum_receiver(
+            &mut value,
+            Some((&ok, &err)),
+            &member,
+            &arguments,
+            member_span,
+        )?;
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
             if arguments.len() == expected {
@@ -33529,9 +35616,9 @@ impl<'a> Parser<'a> {
                 let value = self.default_source(inner, span)?;
                 self.prelude_op(PreludeOp::ReverseWrap, [value])
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let value = self.default_source(inner, span)?;
-                self.prelude_op(PreludeOp::CellNew, [value])
+                self.prelude_op(kind.new_op(), [value])
             }
             Ty::Tuple(members) => {
                 let members = members
@@ -33697,9 +35784,9 @@ impl<'a> Parser<'a> {
                 });
                 origin::Fragment::call(&helper, [lhs, rhs])
             }
-            // Maps and sets compare their sorted entries; `Reverse` its value;
-            // a host value by its type's own `PartialEq`.
-            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Time(_) | Ty::Host { .. } => {
+            // Maps and sets compare their sorted entries; `Reverse` and a
+            // cell their value; a host value by its type's own `PartialEq`.
+            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Cell(..) | Ty::Time(_) | Ty::Host { .. } => {
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),
@@ -33755,6 +35842,55 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
+        if self.std_error(&ty, false) {
+            return Ok(self.error_text(value, true));
+        }
+        if let Some(spec) = self.debug_spec.clone() {
+            // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
+            let leaf = match &ty {
+                // An integer literal's type defaults to `i32`.
+                Ty::Int(Int::Var(_)) => Some(1032),
+                Ty::Int(kind) => {
+                    Some(i64::from(kind.bits()) + if kind.signed() { 1000 } else { 2000 })
+                }
+                Ty::Float(Float::F32) => Some(1),
+                Ty::Float(_) => Some(2),
+                Ty::Bool => Some(3),
+                Ty::Unit => Some(4),
+                _ => None,
+            };
+            if let Some(code) = leaf {
+                return Ok(self.prelude_op(
+                    PreludeOp::FormatDebugLeaf,
+                    [value, spec.as_str().into(), code.to_string().into()],
+                ));
+            }
+            match &ty {
+                Ty::Script(id, ..) if self.models.std_impl(*id, "Debug", "fmt").is_none() => {
+                    let model = self.models.definition(*id).clone();
+                    self.require_capability(&model, capability::Kind::Debug, span)?;
+                    return Ok(
+                        self.prelude_op(PreludeOp::FormatSpecDebug, [value, spec.as_str().into()])
+                    );
+                }
+                Ty::Script(..)
+                | Ty::Param(_)
+                | Ty::Projection(..)
+                | Ty::Time(_)
+                | Ty::Host { .. } => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "a width, precision, sign or `x?` in `{{:?}}` of `{}`, whose `Debug` \
+                             is its own or generic",
+                            ty.name(&self.models)
+                        )
+                        .into(),
+                        source: span,
+                    });
+                }
+                _ => {}
+            }
+        }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
                 self.debug_source(target, value, span)?
@@ -33778,7 +35914,11 @@ impl<'a> Parser<'a> {
             Ty::Int(Int::U64 | Int::Usize) => {
                 self.prelude_op(PreludeOp::FormatRadix, [value, "10".into()])
             }
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) => value.surrounded("(\"\" + ", ")"),
+            Ty::Float(kind) => {
+                let mode = if *kind == Float::F32 { "3" } else { "1" };
+                self.prelude_op(PreludeOp::FormatFloat, [value, "-1".into(), mode.into()])
+            }
+            Ty::Bool | Ty::Int(_) => value.surrounded("(\"\" + ", ")"),
             // A `ParseIntError` and kin: its `Debug` by its message.
             Ty::ParseError(error) => {
                 let message = self.temporary("debug");
@@ -33895,10 +36035,11 @@ impl<'a> Parser<'a> {
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                let open = format!("(\"{} {{ value: \" + ", kind.name());
                 self.debug_source(inner, unwrapped, span)?
-                    .surrounded("(\"RefCell { value: \" + ", " + \" }\")")
+                    .surrounded(&open, " + \" }\")")
             }
             // `{1: "a", 2: "b"}` and `{1, 2}`, in key order.
             Ty::Keyed(kind, arguments) => {
@@ -33963,6 +36104,15 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A `VecDeque` is a `Vec` (`vec_deque_as_vec`): its back is the
+        // `Vec`'s end.
+        let member: ImmutableString = match member.as_str() {
+            "push_back" => "push".into(),
+            "pop_back" => "pop".into(),
+            "front" => "first".into(),
+            "back" => "last".into(),
+            _ => member,
+        };
         // `v.as_mut_slice()` is the place `v`, which a pattern writes back.
         let whole = (member.as_str() == "as_mut_slice")
             .then(|| value.lvalue.clone())
@@ -34006,6 +36156,36 @@ impl<'a> Parser<'a> {
         }
         if member.as_str() == "iter_mut" {
             return self.parse_iter_mut(&value, element, member_span);
+        }
+        // The methods that drop some elements, or move them through an
+        // iterator, other than `truncate` and `clear`.
+        if matches!(
+            member.as_str(),
+            "drain"
+                | "retain"
+                | "retain_mut"
+                | "dedup"
+                | "dedup_by"
+                | "dedup_by_key"
+                | "resize"
+                | "resize_with"
+                | "fill"
+                | "fill_with"
+                | "extend"
+                | "extend_from_slice"
+                | "append"
+                | "into_iter"
+                | "map"
+        ) && self.needs_drop(&element, member_span)?
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`{member}` on a `Vec` or array of values whose type implements `Drop`: \
+                     dropping them where Rust does is not supported in Rawr yet"
+                )
+                .into(),
+                source: member_span,
+            });
         }
         // `v.drain(range)`: the removed elements, as an iterator.
         if member.as_str() == "drain" {
@@ -34118,9 +36298,53 @@ impl<'a> Parser<'a> {
             locate.push_text(format!(".len() {{ {slot} = -1; }} "));
             return self.optional_element(&value, &element, &slot, locate, expression);
         }
+        // `v.first_mut()`, `v.last_mut()`: as `get_mut` of the end's index.
+        if matches!(member.as_str(), "first_mut" | "last_mut") && arguments.is_empty() {
+            let slot = self.temporary("index");
+            let mut locate = origin::Fragment::plain(format!("{slot} = "));
+            locate.push(receiver.clone());
+            locate.push_text(if member.as_str() == "last_mut" {
+                ".len() - 1; "
+            } else {
+                ".len(); "
+            });
+            if member.as_str() == "first_mut" {
+                locate.push_text(format!(
+                    "if {slot} > 0 {{ {slot} = 0; }} else {{ {slot} = -1; }} "
+                ));
+            }
+            return self.optional_element(&value, &element, &slot, locate, expression);
+        }
         let (source, ty) = match (member.as_str(), arguments.as_mut_slice()) {
             ("len", []) => (receiver.surrounded("", ".len()"), Ty::Int(Int::Usize)),
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
+            // `v.capacity()` of a local or a temporary: the runtime `Vec`'s.
+            // A field, an element or a borrowed `Vec` is read through a
+            // copy, whose capacity is its length. Rust grows a `Vec` of
+            // one-byte items from 8, not 4, and gives a `Vec` of zero-size
+            // items `usize::MAX`.
+            ("capacity", []) => {
+                if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. })
+                    || !matches!(value.lvalue, None | Some(Lvalue::Binding { .. }))
+                    || matches!(
+                        self.inference.resolve(&element),
+                        Ty::Int(Int::U8 | Int::I8) | Ty::Bool | Ty::Unit
+                    )
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct:
+                            "`capacity()` of a `Vec` of one-byte or zero-size items, or of one \
+                                    other than a local or a temporary"
+                                .into(),
+                        source: member_span,
+                    });
+                }
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecCapacity));
+                (
+                    receiver.surrounded("", &format!(".{helper}()")),
+                    Ty::Int(Int::Usize),
+                )
+            }
             // `v.iter()` borrows the elements, through any reference to
             // `v`; `v.into_iter()` takes them, or borrows them through `&v`.
             ("iter", []) => {
@@ -34140,10 +36364,13 @@ impl<'a> Parser<'a> {
                 };
                 return Ok(self.array_iterator(&value, item, end));
             }
-            ("clone", []) => match self.inference.resolve(&value.ty) {
-                Ty::Reference { target, .. } => (receiver, *target),
-                ty => (receiver, ty),
-            },
+            ("clone", []) => {
+                self.refuse_cell_clone(&value.ty, member_span)?;
+                match self.inference.resolve(&value.ty) {
+                    Ty::Reference { target, .. } => (receiver, *target),
+                    ty => (receiver, ty),
+                }
+            }
             ("to_vec", []) => (
                 receiver,
                 Ty::Array {
@@ -34189,13 +36416,15 @@ impl<'a> Parser<'a> {
                     }),
                 },
             ),
-            // `windows(n)` and `chunks(n)`: an iterator over `&[T]` slices.
-            ("windows" | "chunks", [size]) => {
+            // `windows(n)`, `chunks(n)` and the other `SLICE_CHUNKS`: an
+            // iterator over `&[T]` slices.
+            (name, [size]) if SLICE_CHUNKS.contains(&name) => {
                 self.coerce_expr(&Ty::Int(Int::Usize), size)?;
-                let windows = (member.as_str() == "windows").to_string();
+                let code = SLICE_CHUNKS.iter().position(|chunks| *chunks == name);
+                let code = code.unwrap_or_default().to_string();
                 let slices = self.prelude_op(
                     PreludeOp::SliceChunks,
-                    [receiver, size.rendered_source(), windows.into()],
+                    [receiver, size.rendered_source(), code.into()],
                 );
                 let slice = Ty::Array {
                     element: Box::new(element),
@@ -34276,27 +36505,35 @@ impl<'a> Parser<'a> {
             ("insert", [_, _])
             | ("remove" | "swap_remove", [_])
             | ("swap", [_, _])
-            | ("dedup" | "pop", []) => {
-                let code = VEC_METHODS
-                    .iter()
-                    .position(|name| *name == member.as_str())
-                    .expect("listed `Vec` method");
+            | ("push_front", [_])
+            | ("dedup" | "pop" | "pop_front", []) => {
+                // A deque's `push_front(x)` is `insert(0, x)`.
+                let front = member.as_str() == "push_front";
+                let name = if front { "insert" } else { member.as_str() };
+                let code = vec_method_code(name);
                 let mut operands = vec![origin::Fragment::from(code.to_string())];
+                if front {
+                    operands.push("0".into());
+                }
                 for (index, argument) in arguments.iter_mut().enumerate() {
-                    let expected = if member.as_str() == "insert" && index == 1 {
+                    let inserted = name == "insert" && (front || index == 1);
+                    let expected = if inserted {
                         element.clone()
                     } else {
                         Ty::Int(Int::Usize)
                     };
                     self.coerce_expr(&expected, argument)?;
+                    if inserted && self.needs_drop(&element, argument.span)? {
+                        self.move_local(argument)?;
+                    }
                     operands.push(argument.rendered_source());
                 }
                 operands.resize(4, "()".into());
                 let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
                 let source = self.mutation_call(&value, &helper, operands)?;
-                let ty = match member.as_str() {
+                let ty = match name {
                     "remove" | "swap_remove" => element,
-                    "pop" => Ty::Option(Box::new(element)),
+                    "pop" | "pop_front" => Ty::Option(Box::new(element)),
                     _ => Ty::Unit,
                 };
                 (source, ty)
@@ -34314,6 +36551,34 @@ impl<'a> Parser<'a> {
                     };
                     self.coerce_expr(&expected, argument)?;
                     operands.push(argument.rendered_source());
+                }
+                // `truncate` and `clear` drop the elements past the length,
+                // in order.
+                if matches!(member.as_str(), "truncate" | "clear")
+                    && self.needs_drop(&element, member_span)?
+                {
+                    let (length, kept, at) = (
+                        self.temporary("length"),
+                        self.temporary("kept"),
+                        self.temporary("at"),
+                    );
+                    let mut source = origin::Fragment::plain(format!("{{ let {length} = "));
+                    source.push(operands.pop().unwrap_or_else(|| "0".into()));
+                    source.push_text(format!("; let {kept} = "));
+                    source.push(receiver.clone());
+                    source.push_text("; ");
+                    let operands = if member.as_str() == "truncate" {
+                        vec![origin::Fragment::plain(length.clone())]
+                    } else {
+                        Vec::new()
+                    };
+                    source.push(self.mutation_call(&value, member.as_str(), operands)?);
+                    source.push_text(format!(
+                        "; let {at} = {length}; while {at} < {kept}.len() {{ {}({kept}[{at}]); \
+                         {at} += 1; }} }}",
+                        drops::GLUE
+                    ));
+                    return Ok(self.operator_expr(source, Ty::Unit, expression));
                 }
                 let source = self.mutation_call(&value, member.as_str(), operands)?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
@@ -34466,6 +36731,10 @@ impl<'a> Parser<'a> {
             // `map.entry(k).or_default().push(x)`) or a field.
             ("push", [argument]) => {
                 self.coerce_expr(&element, argument)?;
+                // The element moves in, out of its local.
+                if self.needs_drop(&element, argument.span)? {
+                    self.move_local(argument)?;
+                }
                 let operand = argument.rendered_source();
                 let source = self.mutation_call(&value, "push", vec![operand])?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
@@ -34930,6 +37199,11 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let outer_copy_out = std::mem::replace(&mut self.copy_out, copied.clone());
         let outer_copy_depth = std::mem::replace(&mut self.copy_out_depth, self.closures.len());
+        // The closure's body is a body of its own: its parameters drop at
+        // its end, and a `return` leaves only its scopes.
+        let outer_drops = std::mem::take(&mut self.drop_scopes);
+        let outer_drop_base = std::mem::replace(&mut self.drop_base, 0);
+        self.open_drops();
         for (name, ty, declaration) in &parameters {
             self.bindings.insert(
                 name.clone(),
@@ -34942,12 +37216,32 @@ impl<'a> Parser<'a> {
                     kind: BindingKind::Local,
                 },
             );
+            if self.drops() && name.as_str() != ASYNC_RESUME {
+                self.note_drop_here(name, *declaration, ty)?;
+            }
         }
         let mut destructured = String::new();
         for (index, pattern) in &patterns {
             let (name, ty, _) = &parameters[*index];
             let (name, ty) = (name.clone(), ty.clone());
-            match self.destructure(pattern, &name, &ty) {
+            let destructure = self
+                .destructure(pattern, &name, &ty)
+                .and_then(|statements| {
+                    if !self.drops() {
+                        return Ok(statements);
+                    }
+                    let bound = self.pattern_bindings(pattern);
+                    let holder = drops::Holder::Local(name.to_string(), Vec::new());
+                    let clears = self.pattern_drops(
+                        Some(pattern),
+                        &ty,
+                        &holder,
+                        &bound,
+                        drops::Clears::InArm,
+                    )?;
+                    Ok(statements + clears.as_str())
+                });
+            match destructure {
                 Ok(statements) => destructured.push_str(&statements),
                 Err(error) => {
                     self.copy_out = outer_copy_out;
@@ -34957,6 +37251,8 @@ impl<'a> Parser<'a> {
                     self.return_ty = outer_return;
                     self.returns = outer_returns;
                     self.return_blocked = outer_blocked;
+                    self.drop_scopes = outer_drops;
+                    self.drop_base = outer_drop_base;
                     self.closures.pop();
                     return Err(error);
                 }
@@ -34968,8 +37264,16 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), Token::LeftBrace) {
             self.parse_match_action().map(|branch| branch.value)
         } else {
-            self.parse_expr().and_then(|value| {
+            self.open_temporaries();
+            let body = self.parse_expr();
+            let temporaries = self.close_temporaries();
+            body.and_then(|mut value| {
+                if !temporaries.is_empty() {
+                    value.source = self.with_temporaries(&temporaries, value.rendered_source());
+                    value.prelude = origin::Fragment::default();
+                }
                 if !assignment_token(&self.peek()) {
+                    self.move_out_value(&mut value)?;
                     return Ok(value);
                 }
                 let start = value.span;
@@ -34981,6 +37285,9 @@ impl<'a> Parser<'a> {
                 ))
             })
         };
+        let parameter_drops = self.close_drops();
+        self.drop_scopes = outer_drops;
+        self.drop_base = outer_drop_base;
         self.copy_out = outer_copy_out;
         self.copy_out_depth = outer_copy_depth;
         self.loops = outer_loops;
@@ -35044,6 +37351,10 @@ impl<'a> Parser<'a> {
             block.push_text(" }");
             block
         };
+        let parameter_drops = parameter_drops?;
+        if !parameter_drops.is_empty() {
+            body_block = self.then_drops(body_block, &parameter_drops);
+        }
         if !copied.is_empty() {
             let mut block = origin::Fragment::plain("{ let __rawr_returned = ");
             block.push(body_block);
@@ -35065,6 +37376,26 @@ impl<'a> Parser<'a> {
             .filter(|name| self.move_capture(name, expression))
             .cloned()
             .collect();
+        // A closure that owns a value with drop glue drops it with itself,
+        // which Rawr's closures, values copied freely, cannot do.
+        for name in &moving {
+            let ty = self
+                .bindings
+                .get(name.as_str())
+                .map(|binding| binding.ty.clone());
+            if let Some(ty) = ty
+                && self.needs_drop(&ty, expression)?
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "a closure or async block that takes `{name}`, whose type implements \
+                         `Drop`, by move: dropping it with the closure is not supported in Rawr yet"
+                    )
+                    .into(),
+                    source: expression,
+                });
+            }
+        }
         let ty = match &self.callable {
             Some(callable) => {
                 self.closure_count += 1;
@@ -35248,8 +37579,13 @@ impl<'a> Parser<'a> {
                 return self.call_host_function(&items, owner, arguments, call);
             }
             self.move_local(argument)?;
-            let source =
-                origin::Fragment::call(crate::engine::KEYWORD_DROP, [argument.rendered_source()]);
+            // A value with drop glue runs it here.
+            let dropping = if self.needs_drop(&argument.ty, argument.span)? {
+                drops::GLUE
+            } else {
+                crate::engine::KEYWORD_DROP
+            };
+            let source = origin::Fragment::call(dropping, [argument.rendered_source()]);
             return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the
@@ -35348,12 +37684,44 @@ impl<'a> Parser<'a> {
                 // `&mut self` method is the receiver's.
                 arguments.remove(index);
                 let place = places[0].clone();
-                let operands = arguments
+                let operands: Vec<_> = arguments
                     .iter()
                     .map(ParsedExpr::rendered_source)
                     .chain(witnesses)
                     .collect();
-                let source = self.mutation_call(&place, &name, operands)?;
+                // `biggest(&mut v)` of `fn biggest(v: &mut Vec<i32>) ->
+                // &mut i32`: the place below `v` the output borrows.
+                if !opens_startup && let Some(borrowed) = self.place_output(&output) {
+                    let receiver = self.borrowed_receiver(&place, call)?;
+                    let mut source =
+                        origin::Fragment::plain(format!("{}.{name}(", places::RECEIVER_PLACE));
+                    source.push(origin::Fragment::join(operands, ", "));
+                    source.push_text(")");
+                    let source = self.copied_call(source, &places[1..])?;
+                    return Ok(self.borrowed_call(&receiver, source, borrowed, call));
+                }
+                // A nested place copied in and back beside it is stored
+                // after it, so the receiver is read and stored around the
+                // call (`two(&mut s.p.x, &mut s.p.y)`).
+                let source = match &place.lvalue {
+                    Some(Lvalue::Nested(nested)) if places.len() > 1 => {
+                        let nested = (**nested).clone();
+                        self.require_mutable_binding(&nested.binding, place.span)?;
+                        let (read, at, store) = self.nested_parts(&nested);
+                        let result = self.temporary("result");
+                        let mut source = origin::Fragment::plain("({ ");
+                        source.push(read);
+                        source.push_text(format!("let {result} = "));
+                        source.push(at);
+                        source.push_text(format!(".{name}("));
+                        source.push(origin::Fragment::join(operands, ", "));
+                        source.push_text("); ");
+                        source.push(store);
+                        source.push_text(format!("{result} }})"));
+                        source
+                    }
+                    _ => self.mutation_call(&place, &name, operands)?,
+                };
                 let source = self.copied_call(source, &places[1..])?;
                 let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));
@@ -35506,11 +37874,52 @@ impl<'a> Parser<'a> {
             prelude.push_text(";\n");
             temporaries.insert(field.clone(), temporary);
         }
+        // `..base` moves the fields it gives out of `base`: those with drop
+        // glue are left `()` there, and the rest of a value made for it
+        // drops with the statement's temporaries.
+        let mut base_clears = String::new();
+        if let Some(base) = base.as_mut()
+            && self.drops()
+        {
+            let mut taken = Vec::new();
+            for (slot, field) in item.fields.iter().enumerate() {
+                let ty = instantiate(&Ty::from_resolved(&field.ty), &substitution);
+                if !temporaries.contains_key(field.name.text.as_str())
+                    && self.needs_drop(&ty, base.span)?
+                {
+                    taken.push(slot);
+                }
+            }
+            if !taken.is_empty() {
+                self.reject_drop_move(definition.id(), true, base.span)?;
+                let holder = match &base.lvalue {
+                    Some(Lvalue::Binding { binding, .. }) => Some(binding.to_string()),
+                    None => self.hold_temporary(base)?.map(|held| held.to_string()),
+                    Some(_) => None,
+                };
+                let Some(holder) = holder else {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "`..base` of a place other than a local, with fields whose \
+                                    type implements `Drop`: not supported in Rawr yet"
+                            .into(),
+                        source: base.span,
+                    });
+                };
+                for slot in taken {
+                    let _ = write!(
+                        base_clears,
+                        "{}({holder}, {slot}); ",
+                        crate::engine::KEYWORD_CLEAR
+                    );
+                }
+            }
+        }
         let base_name = self.temporary("base");
         if let Some(base) = &base {
             prelude.push_text(format!("let {base_name} = "));
             prelude.push(base.rendered_source());
             prelude.push_text(";\n");
+            prelude.push_text(base_clears);
         }
         let mut ordered = Vec::with_capacity(item.fields.len());
         for (slot, field) in item.fields.iter().enumerate() {
@@ -36357,6 +38766,23 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
+        if matches!(name, "line" | "column") {
+            return Ok(self.literal(text, Ty::Int(Int::U32), at));
+        }
+        // `option_env!("NAME")`: `Some` of its value at compile time, or
+        // `None`; ?play's snippets have no environment.
+        if name == "option_env" {
+            let value = crate::resolve::files_denied()
+                .is_none()
+                .then(|| self.environment_variable(&text))
+                .flatten();
+            let ty = Ty::Option(Box::new(Ty::Str));
+            let source = match value {
+                Some(value) => self.prelude_op(PreludeOp::Some, [format!("{value:?}").into()]),
+                None => self.prelude_op(PreludeOp::None, []),
+            };
+            return Ok(self.operator_expr(source, ty, at));
+        }
         if name == "include_bytes" {
             // A file the host ships is read from its bundle's module, as the
             // constant the host built once: its bytes are the program's, as
@@ -36404,6 +38830,36 @@ impl<'a> Parser<'a> {
         name: &str,
         name_span: Span,
     ) -> Result<(String, Position), Error> {
+        // `line!()`, `column!()`, `file!()` and `module_path!()`: where the
+        // macro is written.
+        if matches!(name, "line" | "column" | "file" | "module_path") {
+            let end = match self.next() {
+                (Token::Unit, position) => position,
+                (Token::LeftParen, _) => self.expect(Token::RightParen, "`)` after `(`")?,
+                (_, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!("`{name}!` without `()`").into(),
+                        source: point_span(position),
+                    })
+                }
+            };
+            let at = name_span.start();
+            let text = match name {
+                "line" => at.line().unwrap_or_default().to_string(),
+                "column" => at.position().unwrap_or_default().to_string(),
+                "file" => match self.source_file() {
+                    Some(file) => cargo_env::file_path(&file),
+                    None => self.source_identity(),
+                },
+                _ => self.module_path(),
+            };
+            return Ok((text, end));
+        }
+        // `stringify!()` and `concat!()`: an empty string.
+        if matches!(name, "stringify" | "concat") && matches!(self.peek(), Token::Unit) {
+            let (_, position) = self.next();
+            return Ok((String::new(), position));
+        }
         let open = match self.next() {
             (Token::LeftParen | Token::LeftBracket | Token::LeftBrace, position) => position,
             (_, position) => {
@@ -36416,21 +38872,21 @@ impl<'a> Parser<'a> {
         if name == "stringify" {
             // The tokens as written, between the delimiters.
             let mut depth = 0usize;
-            let mut pieces = Vec::new();
+            let mut tokens = Vec::new();
             let end = loop {
                 match self.next() {
-                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), _) => {
+                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), at) => {
                         depth += 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::RightParen | Token::RightBracket | Token::RightBrace, position)
                         if depth == 0 =>
                     {
                         break position;
                     }
-                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), _) => {
+                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), at) => {
                         depth -= 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::EOF, position) => {
                         return Err(Error::UnsupportedNominalSyntax {
@@ -36438,10 +38894,22 @@ impl<'a> Parser<'a> {
                             source: span(open, position),
                         })
                     }
-                    (token, _) => pieces.push(token.to_string()),
+                    (token, at) => tokens.push((token, at)),
                 }
             };
-            return Ok((pieces.join(" "), end));
+            let key = self.models.sources.key(self.models.context.index());
+            let text = self
+                .models
+                .sources
+                .resolve(key)
+                .ok()
+                .and_then(|source| stringify_tokens(source.text(), &tokens, end));
+            let text = text.unwrap_or_else(|| {
+                let pieces: Vec<String> =
+                    tokens.iter().map(|(token, _)| token.to_string()).collect();
+                pieces.join(" ")
+            });
+            return Ok((text, end));
         }
         let mut arguments = Vec::new();
         let end = loop {
@@ -36535,7 +39003,15 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let sign = if negative { "-" } else { "" };
-        Ok(match self.next() {
+        let text = self.next();
+        // `1u8`: `concat!` writes the number without its suffix.
+        if matches!(text.0, Token::IntegerConstant(_) | Token::FloatConstant(_))
+            && let Token::Identifier(suffix) = self.peek()
+            && numeric_type(suffix.as_str()).is_some()
+        {
+            self.next();
+        }
+        Ok(match text {
             (Token::StringConstant(text), _) if !negative => text.to_string(),
             (Token::IntegerConstant(value), _) => format!("{sign}{value}"),
             (Token::FloatConstant(value), _) => format!("{sign}{}", value.1),
@@ -36546,7 +39022,14 @@ impl<'a> Parser<'a> {
                 if !negative
                     && matches!(
                         name.as_str(),
-                        "concat" | "env" | "include_str" | "stringify"
+                        "concat"
+                            | "env"
+                            | "include_str"
+                            | "stringify"
+                            | "line"
+                            | "column"
+                            | "file"
+                            | "module_path"
                     )
                     && matches!(self.peek(), Token::Bang) =>
             {
@@ -36563,6 +39046,46 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The name of the file this code is in, as its source names it.
+    fn source_identity(&self) -> String {
+        let key = self.models.sources.key(self.models.context.index());
+        self.models
+            .sources
+            .resolve(key)
+            .map(|source| source.identity().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The program's root file, when it is a file on disk.
+    fn entry_file(&self) -> Option<std::path::PathBuf> {
+        let key = self.models.sources.key(self.models.entry.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let path = std::path::PathBuf::from(source.identity());
+        path.is_file().then_some(path)
+    }
+
+    /// `module_path!()`: the crate's name and the modules of the item
+    /// being read, as `app::geometry`.
+    fn module_path(&self) -> String {
+        let root = match self.entry_file() {
+            Some(entry) => cargo_env::crate_name(&entry),
+            None => std::path::Path::new(&self.source_identity())
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .replace('-', "_"),
+        };
+        let modules = self
+            .callable
+            .as_ref()
+            .map(|key| key.modules())
+            .unwrap_or_default();
+        std::iter::once(root.as_str())
+            .chain(modules.iter().map(ImmutableString::as_str))
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
     /// The file this code is in, when it is a file on disk.
     fn source_file(&self) -> Option<std::path::PathBuf> {
         let key = self.models.sources.key(self.models.context.index());
@@ -36576,6 +39099,13 @@ impl<'a> Parser<'a> {
     /// environment's.
     fn environment_variable(&self, name: &str) -> Option<String> {
         {
+            // What Cargo sets for the crate this file is in.
+            if name.starts_with("CARGO_")
+                && let (Some(file), Some(entry)) = (self.source_file(), self.entry_file())
+                && let Some(value) = cargo_env::variable(&file, &entry, name)
+            {
+                return value;
+            }
             if name == "CARGO_MANIFEST_DIR" {
                 let file = self.source_file()?;
                 let manifest = file
@@ -36661,13 +39191,38 @@ impl<'a> Parser<'a> {
         // `u8::MAX`, `i64::MIN`, `f64::MAX`: the kind's bounds (`u64::MAX`
         // and `usize::MAX` are all 64 bits set).
         if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let at = span(name_span.start(), member_span.end());
+            if let Ty::Int(kind) = builtin {
+                let bound = match (kind, member.as_str()) {
+                    (Int::I128, "MAX") => Some(Wide::Signed(i128::MAX)),
+                    (Int::I128, "MIN") => Some(Wide::Signed(i128::MIN)),
+                    (Int::U128, "MAX") => Some(Wide::Unsigned(u128::MAX)),
+                    _ => None,
+                };
+                if let Some(bound) = bound {
+                    return self.wide_constant(bound, builtin, at);
+                }
+                if member.as_str() == "BITS" {
+                    return Ok(self.literal(kind.bits().to_string(), Ty::Int(Int::U32), at));
+                }
+            }
             let text = match (&builtin, member.as_str()) {
                 (Ty::Int(kind), "MAX") => kind.store(kind.full_range().1).to_string(),
                 (Ty::Int(kind), "MIN") => kind.range().0.to_string(),
                 (Ty::Float(Float::F32), "MAX") => format!("{:?}", f64::from(f32::MAX)),
                 (Ty::Float(Float::F32), "MIN") => format!("{:?}", f64::from(f32::MIN)),
+                (Ty::Float(Float::F32), "MIN_POSITIVE") => {
+                    format!("{:?}", f64::from(f32::MIN_POSITIVE))
+                }
+                (Ty::Float(Float::F32), "EPSILON") => format!("{:?}", f64::from(f32::EPSILON)),
                 (Ty::Float(_), "MAX") => format!("{:?}", f64::MAX),
                 (Ty::Float(_), "MIN") => format!("{:?}", f64::MIN),
+                (Ty::Float(_), "MIN_POSITIVE") => format!("{:?}", f64::MIN_POSITIVE),
+                (Ty::Float(_), "EPSILON") => format!("{:?}", f64::EPSILON),
+                // IEEE division by zero, as rustc folds these.
+                (Ty::Float(_), "INFINITY") => "(1.0 / 0.0)".into(),
+                (Ty::Float(_), "NEG_INFINITY") => "(-1.0 / 0.0)".into(),
+                (Ty::Float(_), "NAN") => "(0.0 / 0.0)".into(),
                 // `String::from`, `f64::sqrt`, `char::is_alphanumeric`: a
                 // function as a value.
                 (_, "from" | "try_from") => {
@@ -36838,6 +39393,14 @@ impl<'a> Parser<'a> {
             // Rust's lossless `From` impls among numbers: a wider integer,
             // an `f64` from an `f32` or an integer of at most 32 bits.
             let lossless = match (&builtin, &source) {
+                // Into an `i128` or a `u128` from a narrower kind of fixed
+                // width; a `u64`'s bits are read unsigned.
+                (Ty::Int(to), Ty::Int(from)) if to.wide() || from.wide() => {
+                    let fits = !from.wide()
+                        && !matches!(from, Int::Isize | Int::Usize)
+                        && (*to == Int::I128 || !from.signed());
+                    fits.then_some(*from == Int::U64)
+                }
                 (Ty::Int(to), Ty::Int(from)) => {
                     let ((low, high), (to_low, to_high)) = (from.full_range(), to.full_range());
                     (to_low <= low && high <= to_high).then_some(false)
@@ -36851,7 +39414,11 @@ impl<'a> Parser<'a> {
             if let Some(cast) = lossless {
                 let mut value = argument.rendered_source();
                 if cast {
-                    value = self.prelude_op(PreludeOp::Cast, [value, "11".into()]);
+                    let code = match builtin {
+                        Ty::Int(_) => kind_code(builtin.clone()) + UNSIGNED_SOURCE,
+                        _ => 11,
+                    };
+                    value = self.prelude_op(PreludeOp::Cast, [value, code.to_string().into()]);
                 }
                 return Ok(self.operator_expr(value, builtin, expression));
             }
@@ -37072,6 +39639,13 @@ impl<'a> Parser<'a> {
         let (member, member_span) = segments
             .pop()
             .expect("qualified paths retain a member after their owner");
+        // `Nope::<i32>`: a turbofish on a name that is no value.
+        if segments.is_empty() {
+            return Err(Error::UnknownVariable {
+                name: member,
+                reference: member_span,
+            });
+        }
         let owner: ImmutableString = segments
             .iter()
             .map(|(name, _)| name.as_str())
@@ -38117,6 +40691,75 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// An integer literal past `i64` (the tokenizer's float of its text
+    /// `text`): of its suffix's kind or the one inference settles on, which
+    /// must hold it. `None` for a float literal.
+    fn wide_literal(&mut self, text: &str, at: Span) -> Result<Option<ParsedExpr>, Error> {
+        let Some(value) = integer_text(text) else {
+            return Ok(None);
+        };
+        let ty = match self.peek() {
+            Token::Identifier(name) if Float::named(name.as_str()).is_some() => return Ok(None),
+            Token::Identifier(name) if let Some(kind) = Int::named(name.as_str()) => {
+                self.next();
+                Ty::Int(kind)
+            }
+            _ => {
+                let id = self.inference.fresh_id();
+                self.literal_kinds.push((id, true));
+                Ty::Int(Int::Var(id))
+            }
+        };
+        self.wide_constant(value, ty, at).map(Some)
+    }
+
+    /// The integer `value` of the integer type `ty` as the runtime keeps
+    /// it (`PreludeOp::WideLiteral`); a kind inference has not settled is
+    /// checked once it has.
+    fn wide_constant(&mut self, value: Wide, ty: Ty, at: Span) -> Result<ParsedExpr, Error> {
+        let digits = format!("{:?}", value.to_string());
+        let mut boxed = |kind: Int| {
+            let code = kind_code(Ty::Int(kind)).to_string();
+            let call = self.prelude_op(
+                PreludeOp::WideLiteral,
+                [digits.as_str().into(), code.into()],
+            );
+            call.as_str().to_string()
+        };
+        // A `u64`'s or a `usize`'s bits are an `i64` literal.
+        let bits = format!("({})", value.unsigned() as u64 as INT);
+        let source = match ty {
+            Ty::Int(Int::Var(_)) => {
+                let texts = [boxed(Int::I128), boxed(Int::U128), bits];
+                let width = texts.iter().map(String::len).max().unwrap_or_default();
+                let placeholder = format!(
+                    "{:<width$}",
+                    format!(
+                        "__rawr_wide_literal_{:08}",
+                        self.pending_wide_literals.len()
+                    )
+                );
+                self.pending_wide_literals.push(PendingWide {
+                    ty: ty.clone(),
+                    value,
+                    at,
+                    placeholder: placeholder.clone(),
+                    texts,
+                });
+                placeholder
+            }
+            Ty::Int(kind) if value.fits(kind).is_err() => {
+                return Err(literal_range(kind, value, at));
+            }
+            Ty::Int(Int::U64 | Int::Usize) => bits,
+            Ty::Int(kind) => boxed(kind),
+            _ => {
+                return Err(self.unsupported("an integer literal of a type that is not an integer"))
+            }
+        };
+        Ok(self.operator_expr(origin::Fragment::plain(source), ty, at))
+    }
+
     fn literal(&self, source: impl Into<String>, ty: Ty, span: Span) -> ParsedExpr {
         ParsedExpr {
             prelude: origin::Fragment::default(),
@@ -38272,7 +40915,13 @@ impl<'a> Parser<'a> {
                 self.next();
                 return self.parse_local_fn_type();
             }
-            let (trait_name, trait_span) = self.expect_name("trait object type")?;
+            // `dyn std::error::Error`: traits are crate-wide by name, as in
+            // item headers.
+            let (mut trait_name, mut trait_span) = self.expect_name("trait object type")?;
+            while matches!(self.peek(), Token::DoubleColon) {
+                self.next();
+                (trait_name, trait_span) = self.expect_name("trait object type")?;
+            }
             let ty = self.dyn_type(&trait_name, trait_span)?;
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
@@ -38382,8 +41031,8 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
                 return self.parse_phantom_type();
             }
-            if crate::resolve::std_cell(&name) && self.models.get("RefCell").is_none() {
-                return self.parse_cell_type();
+            if let Some(kind) = self.cell_named(&name) {
+                return self.parse_cell_type(kind);
             }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
@@ -38466,12 +41115,11 @@ impl<'a> Parser<'a> {
         {
             return self.parse_phantom_type();
         }
-        if name.as_str() == "RefCell"
-            && matches!(self.peek(), Token::LessThan)
+        if matches!(self.peek(), Token::LessThan)
             && qualified.is_none()
-            && self.models.get(&name).is_none()
+            && let Some(kind) = self.cell_named(&name)
         {
-            return self.parse_cell_type();
+            return self.parse_cell_type(kind);
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
@@ -38793,6 +41441,23 @@ impl<'a> Parser<'a> {
             }
             self.expect_close_angle("'>' after associated type bindings")?;
         }
+        // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
+        // Iterator<Item = T>` is.
+        if matches!(
+            trait_name,
+            "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+        ) && !self.models.traits.contains_key(trait_name)
+        {
+            return match (&positional[..], &mut bindings[..]) {
+                ([], [(name, item)]) if name.as_str() == "Item" => {
+                    Ok(Ty::Iter(Box::new(std::mem::replace(item, Ty::Unknown))))
+                }
+                _ => Err(Error::UnsupportedNominalSyntax {
+                    construct: format!("`dyn {trait_name}` without its `<Item = T>`").into(),
+                    source: span,
+                }),
+            };
+        }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {
                 name: trait_name.into(),
@@ -39100,6 +41765,52 @@ impl<'a> Parser<'a> {
                 target: from.clone(),
             };
             value.ty = source.clone();
+        }
+        // `Err(Box::new(e))` or `Err("text".into())` where a `Result<T,
+        // Box<dyn Error>>` is expected: its error boxed as below.
+        if let (Ty::Result(to_ok, to_error), Ty::Result(from_ok, from_error)) = (&target, &source)
+            && self.boxed_std_error(to_error)
+            && !self.boxed_std_error(from_error)
+            && !matches!(self.inference.resolve(from_error), Ty::Infer(_) | Ty::Never)
+        {
+            self.require_type(to_ok, from_ok, value.span)?;
+            let result = self.temporary("result");
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [result.as_str().into()]);
+            let Some(object) = self.error_object(from_error, error, true, value.span)? else {
+                return Err(Error::MissingCapability {
+                    owner: from_error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
+            boxed.push(value.rendered_source());
+            boxed.push_text("; if ");
+            boxed.push(self.prelude_op(PreludeOp::IsOk, [result.as_str().into()]));
+            boxed.push_text(format!(" {{ {result} }} else {{ "));
+            boxed.push(self.prelude_op(PreludeOp::Err, [object]));
+            boxed.push_text(" } }");
+            *value = self.operator_expr(boxed, target, value.span);
+            return Ok(None);
+        }
+        // An error, a box of one, a `&str` or a `String` where a `Box<dyn
+        // Error>` is expected: boxed as std's `dyn Error`, as its `From`
+        // impls and `Box`'s unsizing make one (`error_object.rs`).
+        if self.boxed_std_error(&target)
+            && !self.boxed_std_error(&source)
+            && !matches!(source, Ty::Infer(_) | Ty::Never)
+        {
+            let Some(object) =
+                self.error_object(&source, value.rendered_source(), true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: source.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            *value = self.operator_expr(object, target, value.span);
+            return Ok(None);
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
@@ -39688,6 +42399,9 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        if source.is_text() {
+            self.text_into.push(value.span);
+        }
         Ok(value.retain_origin())
     }
 
@@ -40466,9 +43180,11 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
-            | (Ty::Range(expected_element), Ty::Range(actual_element))
-            | (Ty::Cell(expected_element), Ty::Cell(actual_element)) => {
+            | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
+            }
+            (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
+                expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
                 self.unify_type(expected_ok, actual_ok) && self.unify_type(expected_err, actual_err)
@@ -41402,6 +44118,47 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Each name of an imported enum variant (`use Shape::*;`) as its path,
+/// `Shape::Circle`, where a path may start: not after `.` or `::`, and not
+/// before a `:` that names a field or a `::` that goes on to a name. A
+/// turbofish (`Empty::<i32>`) stays on the variant.
+fn expand_imported_variants(
+    models: &Models,
+    tokens: Vec<(Token, Position)>,
+) -> Vec<(Token, Position)> {
+    let mut expanded = Vec::with_capacity(tokens.len());
+    for index in 0..tokens.len() {
+        let (token, position) = &tokens[index];
+        let owner = match token {
+            Token::Identifier(name)
+                if !matches!(
+                    expanded.last(),
+                    Some((Token::Period | Token::DoubleColon, _))
+                ) && !matches!(
+                    (tokens.get(index + 1), tokens.get(index + 2)),
+                    (Some((Token::Colon, _)), _)
+                        | (
+                            Some((Token::DoubleColon, _)),
+                            Some((Token::Identifier(_), _))
+                        )
+                ) =>
+            {
+                models.imported_variant(name)
+            }
+            _ => None,
+        };
+        for segment in owner.into_iter().flatten() {
+            expanded.push((
+                Token::Identifier(Box::new(segment.as_str().into())),
+                *position,
+            ));
+            expanded.push((Token::DoubleColon, *position));
+        }
+        expanded.push((token.clone(), *position));
+    }
+    expanded
+}
+
 /// A closure body being parsed: the bindings declared outside it, and the
 /// ones it uses (captures).
 struct ClosureScope {
@@ -41423,7 +44180,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Iter(target)
         | Ty::Reverse(target)
         | Ty::Range(target)
-        | Ty::Cell(target) => contains_inference(target),
+        | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
         Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(contains_inference),
@@ -41464,6 +44221,9 @@ struct LoopFrame {
     targeted: bool,
     /// Enclosing loops (by depth) that a jump inside this loop targets.
     exits: BTreeSet<usize>,
+    /// The depth of `drop_scopes` outside the loop's body: a jump to the
+    /// loop drops the scopes above it.
+    drop_depth: usize,
 }
 
 /// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.
@@ -41767,14 +44527,17 @@ fn default_value(
 }
 
 /// Rust's `{:#?}` from the one-line `Debug` text: a `{`, `[` or `(` with
-/// members opens an indented line per member, each ending in `,`.
+/// members opens an indented line per member, each ending in `,`. Only the
+/// one space the one-line text writes after a `{` or a `,` goes, so a
+/// member's padding (`{:#6?}`) stays.
 fn pretty_debug(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let skip_spaces = |mut at: usize| {
-        while chars.get(at) == Some(&' ') {
-            at += 1;
+    let skip_spaces = |at: usize| {
+        if chars.get(at) == Some(&' ') {
+            at + 1
+        } else {
+            at
         }
-        at
     };
     let newline = |out: &mut String, depth: usize| {
         out.push('\n');
@@ -41783,6 +44546,8 @@ fn pretty_debug(text: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
     let mut at = 0;
+    // Whether each open bracket is a struct's `{ `.
+    let mut open = Vec::new();
     while let Some(&character) = chars.get(at) {
         match character {
             // A string or char literal, with its escapes, as it is.
@@ -41806,12 +44571,19 @@ fn pretty_debug(text: &str) -> String {
                     '[' => ']',
                     _ => ')',
                 };
-                let next = skip_spaces(at + 1);
+                // A struct's `S { a: 1 }` writes a space after its `{`; a
+                // map's or set's `{1: 2}` does not.
+                let named = at >= 2
+                    && chars[at - 1] == ' '
+                    && (chars[at - 2].is_alphanumeric() || chars[at - 2] == '_');
+                let named = character == '{' && named;
+                let next = if named { skip_spaces(at + 1) } else { at + 1 };
                 out.push(character);
                 if chars.get(next) == Some(&close) {
                     out.push(close);
                     at = next;
                 } else {
+                    open.push(named);
                     depth += 1;
                     newline(&mut out, depth);
                     at = next;
@@ -41829,8 +44601,9 @@ fn pretty_debug(text: &str) -> String {
                 }
                 continue;
             }
-            ' ' if chars.get(at + 1) == Some(&'}') => {}
+            ' ' if chars.get(at + 1) == Some(&'}') && open.last() == Some(&true) => {}
             '}' | ']' | ')' => {
+                open.pop();
                 out.push(',');
                 depth = depth.saturating_sub(1);
                 newline(&mut out, depth);
@@ -41846,7 +44619,14 @@ fn pretty_debug(text: &str) -> String {
 /// `value`'s `Debug` text, names Rawr keeps under another spelling written
 /// as Rust's (`demangle_names`).
 fn debug_value(value: &Dynamic, models: &Models) -> String {
-    let text = debug_text(value, models);
+    debug_value_spec(value, models, None)
+}
+
+/// `value`'s `Debug` text under a `{:?}` spec (`DebugSpec`), which Rust's
+/// derives pass down to each field: a width pads each number, as in
+/// `Some(       1)`, and `{:x?}` writes each integer in hexadecimal.
+fn debug_value_spec(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    let text = debug_text(value, models, spec);
     if text.contains("__rawr_") {
         crate::tokenizer::demangle_names(&text).into_owned()
     } else {
@@ -41854,23 +44634,26 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
     }
 }
 
-fn debug_text(value: &Dynamic, models: &Models) -> String {
-    if let Some(inner) = cell::value(value) {
-        return format!("RefCell {{ value: {} }}", debug_value(&inner, models));
+fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    if let Some((name, inner)) = cell::named_value(value) {
+        return format!(
+            "{name} {{ value: {} }}",
+            debug_value_spec(&inner, models, spec)
+        );
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
-        return format!("Reverse({})", debug_value(&reverse.0, models));
+        return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
     }
     if let Some(option) = crate::option::read(value) {
         return match option {
-            Some(inner) => format!("Some({})", debug_value(&inner, models)),
+            Some(inner) => format!("Some({})", debug_value_spec(&inner, models, spec)),
             None => "None".to_string(),
         };
     }
     if let Some(result) = crate::result::read(value) {
         return match result {
-            Ok(inner) => format!("Ok({})", debug_value(&inner, models)),
-            Err(inner) => format!("Err({})", debug_value(&inner, models)),
+            Ok(inner) => format!("Ok({})", debug_value_spec(&inner, models, spec)),
+            Err(inner) => format!("Err({})", debug_value_spec(&inner, models, spec)),
         };
     }
     match &value.0 {
@@ -41886,7 +44669,8 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
             // `W(1, "a")`, as Rust's `debug_tuple`.
             if item.form == crate::item::StructForm::Tuple {
                 let fields = item.fields.iter().zip(value.fields());
-                let fields = fields.map(|(field, value)| debug_typed(value, &field.ty, models));
+                let fields =
+                    fields.map(|(field, value)| debug_typed(value, &field.ty, models, spec));
                 return format!(
                     "{}({})",
                     item.name.text,
@@ -41902,7 +44686,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     output,
                     "{}: {}",
                     field.name.text,
-                    debug_typed(value, &field.ty, models)
+                    debug_typed(value, &field.ty, models, spec)
                 )
                 .expect("writing debug output into String cannot fail");
             }
@@ -41930,7 +44714,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .iter()
                     .zip(value.payload().iter().zip(variant.payload.iter()))
                     .map(|(field, (value, ty))| {
-                        format!("{}: {}", field.text, debug_typed(value, ty, models))
+                        format!("{}: {}", field.text, debug_typed(value, ty, models, spec))
                     });
                 return format!(
                     "{} {{ {} }}",
@@ -41945,25 +44729,33 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .payload()
                     .iter()
                     .zip(variant.payload.iter())
-                    .map(|(value, ty)| debug_typed(value, ty, models))
+                    .map(|(value, ty)| debug_typed(value, ty, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         }
-        _ => format!("{value:?}"),
+        _ => match spec {
+            Some(spec) => spec.leaf(value, DebugLeaf::of_value(value)),
+            None => format!("{value:?}"),
+        },
     }
 }
 
 /// `{:?}` of a field or payload of declared type `ty`: an `Ordering`,
 /// an integer at runtime, prints its variant, also inside an `Option`,
-/// `Vec`, `Box` or tuple.
-fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String {
+/// `Vec`, `Box` or tuple; a builtin number prints as its declared type.
+fn debug_typed(
+    value: &Dynamic,
+    ty: &type_ref::Type,
+    models: &Models,
+    spec: Option<&DebugSpec>,
+) -> String {
     match (ty, &value.0) {
-        (type_ref::Type::Path(path), Union::Int(value, ..))
+        (type_ref::Type::Path(path), Union::Int(..) | Union::Float(..))
             if path.target == type_ref::Target::Builtin
-                && matches!(path.name.as_str(), "u64" | "usize") =>
+                && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>
         {
-            (*value as u64).to_string()
+            spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
         }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>
@@ -41981,7 +44773,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             let members = values
                 .iter()
                 .zip(members.iter())
-                .map(|(value, ty)| debug_typed(value, ty, models))
+                .map(|(value, ty)| debug_typed(value, ty, models, spec))
                 .collect::<Vec<_>>();
             if members.len() == 1 {
                 format!("({},)", members[0])
@@ -41993,18 +44785,18 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             if let Some(inner) = ty.reverse_element()
                 && let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() =>
         {
-            format!("Reverse({})", debug_typed(&reverse.0, inner, models))
+            format!("Reverse({})", debug_typed(&reverse.0, inner, models, spec))
         }
         // `{k: v}` and `{k}`, as Rust's maps and sets print.
         (_, Union::Array(values, ..)) if let Some((_, arguments)) = ty.keyed_arguments() => {
             let entries = values.iter().map(|entry| match (&arguments[..], &entry.0) {
                 ([key, value], Union::Array(pair, ..)) if pair.len() == 2 => format!(
                     "{}: {}",
-                    debug_typed(&pair[0], key, models),
-                    debug_typed(&pair[1], value, models)
+                    debug_typed(&pair[0], key, models, spec),
+                    debug_typed(&pair[1], value, models, spec)
                 ),
-                ([key], _) => debug_typed(entry, key, models),
-                _ => debug_value(entry, models),
+                ([key], _) => debug_typed(entry, key, models, spec),
+                _ => debug_value_spec(entry, models, spec),
             });
             format!("{{{}}}", entries.collect::<Vec<_>>().join(", "))
         }
@@ -42017,7 +44809,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
                 "[{}]",
                 values
                     .iter()
-                    .map(|value| debug_typed(value, element, models))
+                    .map(|value| debug_typed(value, element, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -42025,10 +44817,227 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
         _ if let Some(element) = ty.option_element()
             && let Some(Some(inner)) = crate::option::read(value) =>
         {
-            format!("Some({})", debug_typed(&inner, element, models))
+            format!("Some({})", debug_typed(&inner, element, models, spec))
         }
-        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models),
-        _ => debug_value(value, models),
+        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models, spec),
+        _ => debug_value_spec(value, models, spec),
+    }
+}
+
+/// A builtin leaf of a `Debug` text, which a `{:?}` spec formats.
+#[derive(Clone, Copy)]
+enum DebugLeaf {
+    /// An integer of `bits` bits, signed or not.
+    Int {
+        bits: u32,
+        signed: bool,
+    },
+    Float {
+        single: bool,
+    },
+    Bool,
+    Unit,
+    /// A string, a char or another value, which ignore the spec.
+    Other,
+}
+
+impl DebugLeaf {
+    /// The leaf of a builtin type's name, for a declared field type.
+    fn of_name(name: &str) -> Option<Self> {
+        let int = |bits, signed| Some(Self::Int { bits, signed });
+        match name {
+            "i8" => int(8, true),
+            "u8" => int(8, false),
+            "i16" => int(16, true),
+            "u16" => int(16, false),
+            "i32" => int(32, true),
+            "u32" => int(32, false),
+            "i64" | "isize" => int(64, true),
+            "u64" | "usize" => int(64, false),
+            "f32" => Some(Self::Float { single: true }),
+            "f64" => Some(Self::Float { single: false }),
+            _ => None,
+        }
+    }
+
+    /// The leaf of a runtime value of unknown declared type.
+    fn of_value(value: &Dynamic) -> Self {
+        match &value.0 {
+            Union::Int(..) => Self::Int {
+                bits: 64,
+                signed: true,
+            },
+            Union::Float(..) => Self::Float { single: false },
+            Union::Bool(..) => Self::Bool,
+            Union::Unit(..) => Self::Unit,
+            _ => Self::Other,
+        }
+    }
+
+    /// A leaf by the code `PreludeOp::DebugLeaf` takes: 1 an `f32`, 2 an
+    /// `f64`, 3 a `bool`, 4 `()`, and 1000 plus the bits for a signed
+    /// integer or 2000 plus the bits for an unsigned one.
+    fn from_code(code: INT) -> Self {
+        match code {
+            1 => Self::Float { single: true },
+            2 => Self::Float { single: false },
+            3 => Self::Bool,
+            4 => Self::Unit,
+            1000.. => Self::Int {
+                bits: u32::try_from(code % 1000).unwrap_or(64),
+                signed: code < 2000,
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A `{:?}` spec as Rust's `Formatter` carries it through a derived
+/// `Debug`: `[hex, fill, align, flags, width, precision]` at runtime, with
+/// `hex` 16 or -16 for `{:x?}` or `{:X?}`, `align` a char or `()`, `flags`
+/// 1 for `+`, 2 for `#` and 4 for `0`, and -1 for no width or precision.
+struct DebugSpec {
+    hex: Option<bool>,
+    fill: char,
+    align: Option<char>,
+    sign: bool,
+    alternate: bool,
+    zero: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+}
+
+impl DebugSpec {
+    const PLAIN: Self = Self {
+        hex: None,
+        fill: ' ',
+        align: None,
+        sign: false,
+        alternate: false,
+        zero: false,
+        width: None,
+        precision: None,
+    };
+
+    fn read(spec: &Dynamic) -> Self {
+        let Ok(parts) = spec.as_array_ref() else {
+            return Self::PLAIN;
+        };
+        let int = |at: usize| parts.get(at).and_then(|part| part.as_int().ok());
+        let count = |at: usize| int(at).and_then(|value| usize::try_from(value).ok());
+        let flags = int(3).unwrap_or_default();
+        Self {
+            hex: match int(0) {
+                Some(16) => Some(false),
+                Some(-16) => Some(true),
+                _ => None,
+            },
+            fill: parts
+                .get(1)
+                .and_then(|fill| fill.as_char().ok())
+                .unwrap_or(' '),
+            align: parts.get(2).and_then(|align| align.as_char().ok()),
+            sign: flags & 1 != 0,
+            alternate: flags & 2 != 0,
+            zero: flags & 4 != 0,
+            width: count(4),
+            precision: count(5),
+        }
+    }
+
+    /// `text` cut to the precision and padded to the width, as
+    /// `Formatter::pad` does, aligned left by default.
+    fn pad(&self, text: &str) -> String {
+        let text: String = match self.precision {
+            Some(precision) => text.chars().take(precision).collect(),
+            None => text.to_string(),
+        };
+        self.align_text(&text, '<')
+    }
+
+    fn align_text(&self, text: &str, default: char) -> String {
+        let length = text.chars().count();
+        let Some(width) = self.width.filter(|width| *width > length) else {
+            return text.to_string();
+        };
+        let padding = width - length;
+        let (before, after) = match self.align.unwrap_or(default) {
+            '<' => (0, padding),
+            '^' => (padding / 2, padding - padding / 2),
+            _ => (padding, 0),
+        };
+        let fill = |count: usize| std::iter::repeat_n(self.fill, count).collect::<String>();
+        format!("{}{text}{}", fill(before), fill(after))
+    }
+
+    /// A number's sign, prefix and digits, padded as
+    /// `Formatter::pad_integral` does: `0` pads between the sign and the
+    /// digits.
+    fn pad_number(&self, negative: bool, prefix: &str, digits: &str) -> String {
+        let mut head = if negative {
+            "-".to_string()
+        } else if self.sign {
+            "+".to_string()
+        } else {
+            String::new()
+        };
+        head.push_str(prefix);
+        if self.zero
+            && let Some(width) = self.width
+        {
+            let length = head.chars().count() + digits.chars().count();
+            let zeros = "0".repeat(width.saturating_sub(length));
+            return format!("{head}{zeros}{digits}");
+        }
+        self.align_text(&format!("{head}{digits}"), '>')
+    }
+
+    /// `value`'s `Debug` text as a leaf of kind `leaf`.
+    fn leaf(&self, value: &Dynamic, leaf: DebugLeaf) -> String {
+        match (leaf, &value.0) {
+            (DebugLeaf::Int { bits, signed }, Union::Int(value, ..)) => {
+                let value = *value;
+                if let Some(upper) = self.hex {
+                    let all = value as u64;
+                    let masked = if bits >= 64 {
+                        all
+                    } else {
+                        all & ((1 << bits) - 1)
+                    };
+                    let digits = if upper {
+                        format!("{masked:X}")
+                    } else {
+                        format!("{masked:x}")
+                    };
+                    let prefix = if self.alternate { "0x" } else { "" };
+                    return self.pad_number(false, prefix, &digits);
+                }
+                if signed {
+                    self.pad_number(value < 0, "", &value.unsigned_abs().to_string())
+                } else {
+                    self.pad_number(false, "", &(value as u64).to_string())
+                }
+            }
+            (DebugLeaf::Float { single }, Union::Float(value, ..)) => {
+                let value = **value;
+                let text = match (self.precision, single) {
+                    (Some(precision), true) => format!("{:.precision$}", value as f32),
+                    (Some(precision), false) => format!("{value:.precision$}"),
+                    (None, true) => format!("{:?}", value as f32),
+                    (None, false) => format!("{value:?}"),
+                };
+                if value.is_nan() {
+                    return self.align_text(&text, '>');
+                }
+                match text.strip_prefix('-') {
+                    Some(digits) => self.pad_number(true, "", digits),
+                    None => self.pad_number(false, "", &text),
+                }
+            }
+            (DebugLeaf::Bool, Union::Bool(value, ..)) => self.pad(&value.to_string()),
+            (DebugLeaf::Unit, Union::Unit(..)) => self.pad("()"),
+            _ => format!("{value:?}"),
+        }
     }
 }
 
@@ -42065,12 +45074,21 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return Some(lhs.cmp(&rhs));
     }
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // `Reverse(a) < Reverse(b)` when `b < a`.
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
     ) {
         return compare_value(&rhs.0, &lhs.0, models);
+    }
+    // An `i128` or a `u128` past `i64`, boxed.
+    if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
+        && let Some(ordering) = wide_order(lhs, rhs)
+    {
+        return Some(ordering);
     }
     match (&lhs.0, &rhs.0) {
         (Union::Unit(..), Union::Unit(..)) => Some(std::cmp::Ordering::Equal),
@@ -42174,6 +45192,9 @@ pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
 }
 
 fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return value_matches(&lhs, &rhs, same);
+    }
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::time::Duration>(),
         rhs.read_lock::<std::time::Duration>(),
@@ -42240,6 +45261,13 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .iter()
                     .zip(rhs.iter())
                     .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
+        }
+        // An `i128` or a `u128` past `i64`, boxed.
+        (Union::Variant(..), Union::Variant(..) | Union::Int(..))
+        | (Union::Int(..), Union::Variant(..))
+            if let Some(ordering) = wide_order(lhs, rhs) =>
+        {
+            ordering == std::cmp::Ordering::Equal
         }
         (Union::Variant(..), Union::Variant(..)) => {
             match crate::host::value::host_equal(lhs, rhs) {
@@ -42769,10 +45797,9 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
         12 => result(text.parse::<char>(), Dynamic::from),
         15 => result(text.parse::<bool>(), Dynamic::from),
         16 => crate::result::ok(ImmutableString::from(text).into()),
-        code => match Int::KINDS
-            .get(code as usize)
-            .map_or("i64", |(name, _)| *name)
-        {
+        code => match Int::from_code(code).map_or("i64", Int::name) {
+            "i128" => result(text.parse::<i128>(), wide_i128),
+            "u128" => result(text.parse::<u128>(), wide_u128),
             "i8" => result(text.parse::<i8>(), |value| int(value.into())),
             "i16" => result(text.parse::<i16>(), |value| int(value.into())),
             "i32" => result(text.parse::<i32>(), |value| int(value.into())),
@@ -42788,6 +45815,8 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
 
 fn kind_code(ty: Ty) -> INT {
     match ty {
+        Ty::Int(Int::I128) => WIDE_I128,
+        Ty::Int(Int::U128) => WIDE_U128,
         Ty::Int(kind) => Int::KINDS
             .iter()
             .position(|(_, candidate)| *candidate == kind)
@@ -42905,6 +45934,149 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult 
     }
 }
 
+/// `stringify!`'s text of `tokens` (each with where it starts in `text`),
+/// which end where `end` closes the macro, as rustc's `print_tts` prints
+/// them: each token as written, and a space after one that the source
+/// spaces from the next unless `space_between` says no. `None` when a
+/// position is not in `text`.
+fn stringify_tokens(text: &str, tokens: &[(Token, Position)], end: Position) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut lines = vec![0usize];
+    for (index, c) in chars.iter().enumerate() {
+        if *c == '\n' {
+            lines.push(index + 1);
+        }
+    }
+    let offset = |at: Position| -> Option<usize> {
+        let line = *lines.get(at.line()?.checked_sub(1)?)?;
+        let index = line + at.position()?.checked_sub(1)?;
+        (index <= chars.len()).then_some(index)
+    };
+    let starts = tokens
+        .iter()
+        .map(|(_, at)| offset(*at))
+        .chain(std::iter::once(offset(end)))
+        .collect::<Option<Vec<usize>>>()?;
+    let pieces: Vec<String> = starts
+        .windows(2)
+        .map(|pair| {
+            chars[pair[0]..pair[1].max(pair[0])]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    // Rust's keywords, which an `(` after them is spaced from.
+    const KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "for",
+        "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "ref", "return", "self",
+        "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+        "async", "await", "dyn",
+    ];
+    let word = |piece: &str| {
+        piece
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '"' | '\''))
+    };
+    let opens = |token: &Token| {
+        matches!(
+            token,
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+        )
+    };
+    let closes = |token: &Token| {
+        matches!(
+            token,
+            Token::RightParen | Token::RightBracket | Token::RightBrace
+        )
+    };
+    let mut out = String::new();
+    for (index, (token, _)) in tokens.iter().enumerate() {
+        let piece = if matches!(token, Token::Unit) {
+            "()"
+        } else {
+            pieces[index].as_str()
+        };
+        out.push_str(piece);
+        let Some((next, _)) = tokens.get(index + 1) else {
+            break;
+        };
+        let next_piece = pieces[index + 1].as_str();
+        // Joint in the source: no space.
+        let spaced = chars
+            .get(starts[index + 1].wrapping_sub(1))
+            .is_some_and(|c| c.is_whitespace());
+        if !spaced {
+            continue;
+        }
+        // `{ b }` keeps its spaces inside; `(x)` and `[0]` have none.
+        if matches!(token, Token::LeftBrace) || matches!(next, Token::RightBrace) {
+            out.push(' ');
+            continue;
+        }
+        if opens(token) || closes(next) {
+            continue;
+        }
+        // A group, a word or a literal is not punctuation.
+        let punct = |token: &Token, piece: &str| {
+            !word(piece) && !opens(token) && !closes(token) && !matches!(token, Token::Unit)
+        };
+        let (left, right) = (punct(token, piece), punct(next, next_piece));
+        let space = match () {
+            // `x.y`, `tup.0`
+            () if piece == "." && !right => false,
+            // `foo,`, `x = 3;`, `x.y`
+            () if !left && matches!(next_piece, "," | ";" | ".") => false,
+            // `f(3)`, `fn(x: u8)`, `Self()`, `pub(crate)`
+            () if word(piece)
+                && !piece.starts_with(['"', '\''])
+                && (!KEYWORDS.contains(&piece) || matches!(piece, "fn" | "Self" | "pub"))
+                && matches!(next, Token::LeftParen | Token::Unit) =>
+            {
+                false
+            }
+            // `#[attr]`
+            () if piece == "#" && matches!(next, Token::LeftBracket) => false,
+            () => true,
+        };
+        if space {
+            out.push(' ');
+        }
+    }
+    Some(out)
+}
+
+/// rustc's size in bytes of a value of `ty`, for a type whose layout Rust
+/// fixes: a number, `bool`, `char`, `()` or an array of them.
+fn primitive_size(ty: &Ty) -> Option<u64> {
+    Some(match ty {
+        Ty::Unit => 0,
+        Ty::Bool => 1,
+        Ty::Char => 4,
+        // An integer literal's type defaults to `i32`.
+        Ty::Int(Int::Var(_)) => 4,
+        Ty::Int(kind) => u64::from(kind.bits() / 8),
+        Ty::Float(Float::F32) => 4,
+        Ty::Float(_) => 8,
+        Ty::Array {
+            element,
+            length: Some(length),
+        } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
+        _ => return None,
+    })
+}
+
+/// The slice methods `SliceChunks` runs, by code: each gives the slices.
+const SLICE_CHUNKS: &[&str] = &[
+    "chunks",
+    "windows",
+    "chunks_exact",
+    "rchunks",
+    "rchunks_exact",
+];
+
 /// The `Vec` methods `VecMethod` runs in place, by code.
 const VEC_METHODS: &[&str] = &[
     "insert",
@@ -42918,7 +46090,52 @@ const VEC_METHODS: &[&str] = &[
     "copy_from_slice",
     "split_off",
     "swap_remove",
+    "pop_front",
+    "with_capacity",
 ];
+
+/// `std::collections::VecDeque` in a body, by its path or as imported
+/// (`imported`), is `Vec`: Rawr's `Vec` is an array, which takes a
+/// deque's `push_front` and `pop_front` too (`parse_array_method`), and
+/// prints as a deque does.
+fn vec_deque_as_vec(tokens: &mut Vec<(Token, Position)>, imported: bool) {
+    let named = |token: &Token, name: &str| matches!(token, Token::Identifier(text) if text.as_str() == name);
+    let mut index = 0;
+    while index < tokens.len() {
+        if !named(&tokens[index].0, "VecDeque") {
+            index += 1;
+            continue;
+        }
+        // `std::collections::VecDeque` or `collections::VecDeque`.
+        let mut start = index;
+        if start >= 2
+            && named(&tokens[start - 2].0, "collections")
+            && tokens[start - 1].0 == Token::DoubleColon
+        {
+            start -= 2;
+            if start >= 2
+                && (named(&tokens[start - 2].0, "std")
+                    || named(&tokens[start - 2].0, "alloc")
+                    || named(&tokens[start - 2].0, "core"))
+                && tokens[start - 1].0 == Token::DoubleColon
+            {
+                start -= 2;
+            }
+        }
+        let qualified = start < index;
+        let after_path = index > 0 && !qualified && tokens[index - 1].0 == Token::DoubleColon;
+        if (qualified || imported) && !after_path {
+            let position = tokens[start].1;
+            tokens.splice(
+                start..=index,
+                [(Token::Identifier(Box::new("Vec".into())), position)],
+            );
+            index = start + 1;
+        } else {
+            index += 1;
+        }
+    }
+}
 
 /// A `VEC_METHODS` code by name.
 fn vec_method_code(name: &str) -> usize {
@@ -42976,6 +46193,8 @@ const TIME_METHODS: &[&str] = &[
     "compare",
     "from_secs_f32",
     "as_secs_f32",
+    // `std::thread::sleep(duration)`.
+    "sleep",
 ];
 
 fn time_code(name: &str) -> usize {
@@ -43015,6 +46234,12 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
     Ok(match name {
         "from_secs" => Dynamic::from(Duration::from_secs(unsigned(operand))),
         "from_millis" => Dynamic::from(Duration::from_millis(unsigned(operand))),
+        "sleep" => {
+            if let Some(duration) = duration(operand) {
+                std::thread::sleep(duration);
+            }
+            Dynamic::UNIT
+        }
         "from_micros" => Dynamic::from(Duration::from_micros(unsigned(operand))),
         "from_nanos" => Dynamic::from(Duration::from_nanos(unsigned(operand))),
         "from_secs_f64" | "from_secs_f32" => Dynamic::from(float(number(operand))?),
@@ -43170,6 +46395,9 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             "swap_remove index (is {a}) should be < len (is {len})"
         )),
         Some("swap_remove") => Ok(array.swap_remove(a)),
+        // A new `Vec` with room for `a` items, as `VecCapacity` reads it
+        // back; it grows by doubling from 4, as Rust's does.
+        Some("with_capacity") => Ok(Dynamic::from_array(crate::Array::with_capacity(a))),
         Some("swap") => match [a, b].into_iter().find(|index| *index >= len) {
             Some(index) => fail(format!(
                 "index out of bounds: the len is {len} but the index is {index}"
@@ -43187,6 +46415,8 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             Some(last) => crate::option::some(last),
             None => crate::option::none(),
         }),
+        Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
+        Some("pop_front") => Ok(crate::option::some(array.remove(0))),
         // A changed copy of `array[a..]` stored back over it.
         Some("store") => {
             let copy = value.into_array().unwrap_or_default();
@@ -43357,6 +46587,7 @@ const STR_PIECES: &[&str] = &[
     "from_utf8",
     "debug",
     "utf8_display",
+    "rsplitn",
 ];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
@@ -43419,6 +46650,16 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
                 Err(_) => {
                     let pattern = args[3].clone_cast::<ImmutableString>();
                     text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        "rsplitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.rsplitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.rsplitn(count, pattern.as_str()).map(string).collect()
                 }
             }
         }
@@ -43703,6 +46944,34 @@ const INT_METHODS: &[(&str, char, char)] = &[
     ("/", 'x', 't'),
     ("%", 'x', 't'),
     ("**", 'x', 't'),
+    // An `i128`'s and a `u128`'s operators, which the runtime's `i64` ones
+    // do not compute past `i64`.
+    ("neg", 'x', 't'),
+    ("&", 'x', 't'),
+    ("|", 'x', 't'),
+    ("^", 'x', 't'),
+    ("<", 'x', 'b'),
+    (">", 'x', 'b'),
+    ("<=", 'x', 'b'),
+    (">=", 'x', 'b'),
+    ("==", 'x', 'b'),
+    ("!=", 'x', 'b'),
+    // Methods of the signed kinds; `abs` and `signum` of the narrower ones
+    // are the runtime's.
+    ("abs", 'n', 't'),
+    ("signum", 'n', 't'),
+    ("unsigned_abs", 'n', 'a'),
+    ("is_negative", 'n', 'b'),
+    ("is_positive", 'n', 'b'),
+];
+
+/// The `INT_METHODS` only a signed kind has.
+const SIGNED_INT_METHODS: &[&str] = &[
+    "abs",
+    "signum",
+    "unsigned_abs",
+    "is_negative",
+    "is_positive",
 ];
 
 /// An `INT_METHODS` entry by name, for a method call.
@@ -43720,19 +46989,25 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     let panic = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
-    let kind = |code: INT| {
-        Int::KINDS
-            .get(code as usize)
-            .map_or(Int::I64, |(_, kind)| *kind)
+    let kind = |code: INT| Int::from_code(code).unwrap_or(Int::I64);
+    let (kind, mut operand_kind) = (kind(kinds[0]), kind(kinds[1]));
+    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
+    let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if kind.wide() || operand_kind.wide() && name == "try_from" {
+        return wide_method(kind, operand_kind, args);
+    }
+    // A shift by an `i128` or a `u128`: an amount past `i64` overflows.
+    let operand = if operand_kind.wide() {
+        operand_kind = Int::I64;
+        let amount = wide_value(args[2]).map_or(0, Wide::signed);
+        INT::try_from(amount.max(-1)).unwrap_or(INT::MAX)
+    } else {
+        args[2].as_int().unwrap_or_default()
     };
-    let (kind, operand_kind) = (kind(kinds[0]), kind(kinds[1]));
     let bits = kind.bits();
     let mask = u128::MAX >> (128 - bits);
     let (low, high) = kind.full_range();
     let value = args[0].as_int().unwrap_or_default();
-    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
-    let operand = args[2].as_int().unwrap_or_default();
-    let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
     if name == "try_from" {
         let source = operand_kind.widen(value);
         // `TryFromIntError`'s `Debug`, its runtime value.
@@ -43850,6 +47125,9 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
                 "rem_euclid" => kind.store(a.rem_euclid(b)),
                 "div_euclid" => kind.store(a.div_euclid(b)),
                 "abs_diff" => kind.unsigned().store((a - b).abs()),
+                "unsigned_abs" => kind.unsigned().store(a.abs()),
+                "is_negative" => return Ok((a < 0).into()),
+                "is_positive" => return Ok((a > 0).into()),
                 "is_power_of_two" => return Ok((a > 0 && a & (a - 1) == 0).into()),
                 "ilog2" | "ilog10" if a <= 0 => {
                     return panic("argument of integer logarithm must be positive")
@@ -43874,6 +47152,345 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     Ok(result)
 }
 
+/// A runtime integer as the number it is: an `i64`, or the boxed `i128`
+/// or `u128` an `i128` or a `u128` past `i64` is (`Int`).
+#[derive(Clone, Copy, Debug)]
+enum Wide {
+    Signed(i128),
+    Unsigned(u128),
+}
+
+impl Wide {
+    /// The number's place in one order of every `i128` and `u128`.
+    const fn key(self) -> (bool, u128) {
+        match self {
+            Self::Signed(value) => (value >= 0, value as u128),
+            Self::Unsigned(value) => (true, value),
+        }
+    }
+
+    /// The number as an `i128`, a `u128` past `i128::MAX` wrapped, as `as`
+    /// wraps it.
+    const fn signed(self) -> i128 {
+        match self {
+            Self::Signed(value) => value,
+            Self::Unsigned(value) => value as i128,
+        }
+    }
+
+    /// The number as a `u128`, a negative one wrapped.
+    const fn unsigned(self) -> u128 {
+        match self {
+            Self::Signed(value) => value as u128,
+            Self::Unsigned(value) => value,
+        }
+    }
+
+    /// The number in `kind`'s bounds, as `TryFrom` asks: `Err(true)` when
+    /// it is below them, `Err(false)` above.
+    fn fits(self, kind: Int) -> Result<(), bool> {
+        let (negative, magnitude) = match self {
+            Self::Signed(value) => (value < 0, value.unsigned_abs()),
+            Self::Unsigned(value) => (false, value),
+        };
+        let (low, high): (u128, u128) = match kind {
+            Int::U128 => (0, u128::MAX),
+            Int::I128 => (1 << 127, i128::MAX as u128),
+            kind => {
+                let (low, high) = kind.full_range();
+                (low.unsigned_abs(), high as u128)
+            }
+        };
+        match (negative, magnitude) {
+            (true, magnitude) if magnitude > low => Err(true),
+            (false, magnitude) if magnitude > high => Err(false),
+            _ => Ok(()),
+        }
+    }
+
+    /// The number as the runtime keeps a value of `kind`, wrapped to it:
+    /// an `i128` or a `u128` an `i64` when it fits one, else boxed.
+    fn store(self, kind: Int) -> Dynamic {
+        match kind {
+            Int::I128 => wide_i128(self.signed()),
+            Int::U128 => wide_u128(self.unsigned()),
+            kind => {
+                let bits = kind.bits();
+                let pattern = self.unsigned() & (u128::MAX >> (128 - bits));
+                Dynamic::from_int(kind.store(kind.sign(pattern as i128)))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Wide {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Signed(value) => value.fmt(formatter),
+            Self::Unsigned(value) => value.fmt(formatter),
+        }
+    }
+}
+
+/// The number an integer literal's text is (decimal, or `0x`, `0o`, `0b`
+/// digits, with an optional `-`); `None` for a float literal's or one past
+/// the `i128` and `u128` bounds.
+fn integer_text(text: &str) -> Option<Wide> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, text),
+    };
+    let magnitude = match digits.get(..2) {
+        Some("0x") => u128::from_str_radix(&digits[2..], 16).ok()?,
+        Some("0o") => u128::from_str_radix(&digits[2..], 8).ok()?,
+        Some("0b") => u128::from_str_radix(&digits[2..], 2).ok()?,
+        _ if digits.bytes().all(|byte| byte.is_ascii_digit()) => digits.parse().ok()?,
+        _ => return None,
+    };
+    if !negative {
+        return Some(i128::try_from(magnitude).map_or(Wide::Unsigned(magnitude), Wide::Signed));
+    }
+    (magnitude <= 1 << 127).then(|| Wide::Signed(0i128.wrapping_sub_unsigned(magnitude)))
+}
+
+/// Rust's error for an integer literal `value` out of `kind`'s range.
+fn literal_range(kind: Int, value: Wide, at: Span) -> Error {
+    Error::TypeMismatch {
+        expected: format!("a literal in the range of `{}`", kind.name()).into(),
+        actual: value.to_string().into(),
+        expression: at,
+    }
+}
+
+/// A runtime integer as the number it is, or `None` for another value.
+fn wide_value(value: &Dynamic) -> Option<Wide> {
+    if let Ok(value) = value.as_int() {
+        return Some(Wide::Signed(value.into()));
+    }
+    if let Some(value) = value.read_lock::<i128>() {
+        return Some(Wide::Signed(*value));
+    }
+    value
+        .read_lock::<u128>()
+        .map(|value| Wide::Unsigned(*value))
+}
+
+/// A runtime value of `kind` as the number it is: a `u64`'s or a `usize`'s
+/// bits read unsigned.
+fn kind_value(value: &Dynamic, kind: Int) -> Wide {
+    match (kind, value.as_int()) {
+        (Int::U64 | Int::Usize, Ok(bits)) => Wide::Unsigned(u128::from(bits as u64)),
+        _ => wide_value(value).unwrap_or(Wide::Signed(0)),
+    }
+}
+
+/// An `i128` as the runtime keeps it: an `i64` while it fits one.
+fn wide_i128(value: i128) -> Dynamic {
+    INT::try_from(value).map_or_else(|_| Dynamic::from(value), Dynamic::from_int)
+}
+
+/// A `u128` as the runtime keeps it: an `i64` while it fits one.
+fn wide_u128(value: u128) -> Dynamic {
+    INT::try_from(value).map_or_else(|_| Dynamic::from(value), Dynamic::from_int)
+}
+
+/// The order of two runtime integers where one is a boxed `i128` or
+/// `u128`; `None` when either is not an integer.
+fn wide_order(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+    Some(wide_value(lhs)?.key().cmp(&wide_value(rhs)?.key()))
+}
+
+/// `low..high` or `low..=high` where a bound is a boxed `i128` or `u128`:
+/// Rust's range of the kind, whose items the runtime's iterator boxes.
+pub(crate) fn wide_range(args: &mut FnCallArgs, inclusive: bool) -> RawrResult {
+    let (Some(low), Some(high)) = (wide_value(args[0]), wide_value(args[1])) else {
+        return Err(invariant("a 128-bit range bound is not an integer"));
+    };
+    Ok(match (low, high, inclusive) {
+        (Wide::Unsigned(_), ..) | (_, Wide::Unsigned(_), _) if inclusive => {
+            Dynamic::from(low.unsigned()..=high.unsigned())
+        }
+        (Wide::Unsigned(_), ..) | (_, Wide::Unsigned(_), _) => {
+            Dynamic::from(low.unsigned()..high.unsigned())
+        }
+        _ if inclusive => Dynamic::from(low.signed()..=high.signed()),
+        _ => Dynamic::from(low.signed()..high.signed()),
+    })
+}
+
+/// The runtime's operator `symbol` (`INT_METHODS`) where a value is a boxed
+/// `i128` or `u128` and no static type says which: a generic body's `+` or
+/// `<`, a literal pattern. Computed in `u128` when either is one.
+pub(crate) fn wide_operator(symbol: &str, args: &mut FnCallArgs) -> RawrResult {
+    let (Some(lhs), Some(rhs)) = (wide_value(args[0]), wide_value(args[1])) else {
+        return Err(invariant(
+            "a 128-bit operator on a value that is not an integer",
+        ));
+    };
+    match (lhs, rhs) {
+        (Wide::Unsigned(_), _) | (_, Wide::Unsigned(_)) => {
+            wide_u128_method(symbol, lhs.unsigned(), rhs.unsigned(), 0)
+        }
+        _ => wide_i128_method(symbol, lhs.signed(), rhs.signed(), 0),
+    }
+}
+
+/// `INT_METHODS`' entry of `args[1]` on an `i128` or a `u128` (`kind`), or
+/// `try_from` between such a kind and another, as debug Rust computes it.
+fn wide_method(kind: Int, operand_kind: Int, args: &mut FnCallArgs) -> RawrResult {
+    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
+    let (name, operand_type, _) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if name == "try_from" {
+        let source = kind_value(args[0], operand_kind);
+        // `TryFromIntError`'s `Debug`, its runtime value.
+        return Ok(match source.fits(kind) {
+            Ok(()) => crate::result::ok(source.store(kind)),
+            Err(below) => crate::result::err(
+                ImmutableString::from(if below {
+                    "TryFromIntError(NegOverflow)"
+                } else {
+                    "TryFromIntError(PosOverflow)"
+                })
+                .into(),
+            ),
+        });
+    }
+    let value = kind_value(args[0], kind);
+    let operand = match operand_type {
+        's' => kind_value(args[2], kind),
+        'u' => kind_value(args[2], Int::U32),
+        _ if matches!(name, "<<" | ">>" | "**") => kind_value(args[2], operand_kind),
+        _ => kind_value(args[2], kind),
+    };
+    // A shift amount or an exponent; one past `i128::MAX` overflows anyway.
+    let amount = match operand {
+        Wide::Signed(amount) => amount,
+        Wide::Unsigned(amount) => i128::try_from(amount).unwrap_or(i128::MAX),
+    };
+    if kind == Int::U128 {
+        wide_u128_method(name, value.unsigned(), operand.unsigned(), amount)
+    } else {
+        wide_i128_method(name, value.signed(), operand.signed(), amount)
+    }
+}
+
+/// `wide_method` of one of the 128-bit kinds: `$t`, kept by `$store`.
+macro_rules! wide_methods {
+    ($function:ident, $t:ty, $store:ident) => {
+        fn $function(name: &str, a: $t, b: $t, amount: i128) -> RawrResult {
+            let panic = |message: &str| -> RawrResult {
+                Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+            };
+            let zero: $t = 0;
+            let exponent = u32::try_from(amount).unwrap_or(u32::MAX);
+            let some = |value: Option<$t>| match value {
+                Some(value) => crate::option::some($store(value)),
+                None => crate::option::none(),
+            };
+            let pair = |(value, overflowed): ($t, bool)| {
+                Dynamic::from_array(vec![$store(value), overflowed.into()])
+            };
+            let exact = |value: Option<$t>, verb: &str| match value {
+                Some(value) => Ok($store(value)),
+                None => panic(&format!("attempt to {verb} with overflow")),
+            };
+            const DIVIDE: &str = "attempt to divide by zero";
+            const REMAINDER: &str = "attempt to calculate the remainder with a divisor of zero";
+            let divisor = matches!(
+                name,
+                "/" | "wrapping_div" | "saturating_div" | "overflowing_div" | "div_euclid"
+            );
+            let remainder = matches!(
+                name,
+                "%" | "wrapping_rem" | "overflowing_rem" | "rem_euclid"
+            );
+            if b == zero && (divisor || remainder) {
+                return panic(if divisor { DIVIDE } else { REMAINDER });
+            }
+            Ok(match name {
+                "+" => return exact(a.checked_add(b), "add"),
+                "-" => return exact(a.checked_sub(b), "subtract"),
+                "*" => return exact(a.checked_mul(b), "multiply"),
+                "/" => return exact(a.checked_div(b), "divide"),
+                "%" => return exact(a.checked_rem(b), "calculate the remainder"),
+                "**" => return exact(a.checked_pow(exponent), "multiply"),
+                "neg" => return exact(a.checked_neg(), "negate"),
+                "abs" if a < zero => return exact(a.checked_neg(), "negate"),
+                "abs" => $store(a),
+                "checked_add" => some(a.checked_add(b)),
+                "checked_sub" => some(a.checked_sub(b)),
+                "checked_mul" => some(a.checked_mul(b)),
+                "checked_div" => some(a.checked_div(b)),
+                "checked_rem" => some(a.checked_rem(b)),
+                "checked_neg" => some(a.checked_neg()),
+                "checked_pow" => some(a.checked_pow(exponent)),
+                "wrapping_add" => $store(a.wrapping_add(b)),
+                "wrapping_sub" => $store(a.wrapping_sub(b)),
+                "wrapping_mul" => $store(a.wrapping_mul(b)),
+                "wrapping_div" => $store(a.wrapping_div(b)),
+                "wrapping_rem" => $store(a.wrapping_rem(b)),
+                "wrapping_neg" => $store(a.wrapping_neg()),
+                "wrapping_pow" => $store(a.wrapping_pow(exponent)),
+                "saturating_add" => $store(a.saturating_add(b)),
+                "saturating_sub" => $store(a.saturating_sub(b)),
+                "saturating_mul" => $store(a.saturating_mul(b)),
+                "saturating_div" => $store(a.saturating_div(b)),
+                "saturating_pow" => $store(a.saturating_pow(exponent)),
+                "overflowing_add" => pair(a.overflowing_add(b)),
+                "overflowing_sub" => pair(a.overflowing_sub(b)),
+                "overflowing_mul" => pair(a.overflowing_mul(b)),
+                "overflowing_div" => pair(a.overflowing_div(b)),
+                "overflowing_rem" => pair(a.overflowing_rem(b)),
+                "overflowing_neg" => pair(a.overflowing_neg()),
+                "overflowing_pow" => pair(a.overflowing_pow(exponent)),
+                "count_ones" => INT::from(a.count_ones()).into(),
+                "count_zeros" => INT::from(a.count_zeros()).into(),
+                "leading_zeros" => INT::from(a.leading_zeros()).into(),
+                "trailing_zeros" => INT::from(a.trailing_zeros()).into(),
+                "rotate_left" => $store(a.rotate_left(exponent)),
+                "rotate_right" => $store(a.rotate_right(exponent)),
+                "rem_euclid" => return exact(a.checked_rem_euclid(b), "calculate the remainder"),
+                "div_euclid" => return exact(a.checked_div_euclid(b), "divide"),
+                "abs_diff" => wide_u128(a.abs_diff(b)),
+                "unsigned_abs" if a < zero => wide_u128((a as u128).wrapping_neg()),
+                "unsigned_abs" => wide_u128(a as u128),
+                "is_power_of_two" => (a > zero && a & (a - 1) == zero).into(),
+                "is_negative" => (a < zero).into(),
+                "is_positive" => (a > zero).into(),
+                "signum" => INT::from(a > zero).wrapping_sub(INT::from(a < zero)).into(),
+                "ilog2" | "ilog10" if a <= zero => {
+                    return panic("argument of integer logarithm must be positive")
+                }
+                "ilog2" => INT::from(a.ilog2()).into(),
+                "ilog10" => INT::from(a.ilog10()).into(),
+                "<<" | ">>" if !(0..128).contains(&amount) => {
+                    return panic(if name == "<<" {
+                        "attempt to shift left with overflow"
+                    } else {
+                        "attempt to shift right with overflow"
+                    })
+                }
+                "<<" => $store(a << exponent),
+                ">>" => $store(a >> exponent),
+                "!" => $store(!a),
+                "&" => $store(a & b),
+                "|" => $store(a | b),
+                "^" => $store(a ^ b),
+                "<" => (a < b).into(),
+                ">" => (a > b).into(),
+                "<=" => (a <= b).into(),
+                ">=" => (a >= b).into(),
+                "==" => (a == b).into(),
+                "!=" => (a != b).into(),
+                _ => return Err(invariant("an unknown integer method at runtime")),
+            })
+        }
+    };
+}
+
+wide_methods!(wide_i128_method, i128, wide_i128);
+wide_methods!(wide_u128_method, u128, wide_u128);
+
 /// `value as` the kind of `code` (`kind_code`), Rust's `as`: integers wrap
 /// to the width, floats saturate (`NaN` is `0`), `char` and `bool` are their
 /// numbers, a `u8` is a `char`, an `f32` is rounded.
@@ -43881,6 +47498,37 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
     let fail = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
+    // Into an `i128` or a `u128` (from a `u64`'s or a `usize`'s bits when
+    // `UNSIGNED_SOURCE` is added), or out of a boxed one.
+    let (code, source) = match code {
+        code if code >= UNSIGNED_SOURCE => (code - UNSIGNED_SOURCE, Int::U64),
+        code => (code, Int::I64),
+    };
+    let target = Int::from_code(code).filter(|kind| kind.wide());
+    if let (Some(target), Ok(float)) = (target, value.as_float()) {
+        // Rust's `as` saturates, and `NaN` is `0`.
+        return Ok(if target == Int::I128 {
+            wide_i128(float as i128)
+        } else {
+            wide_u128(float as u128)
+        });
+    }
+    if (target.is_some() || matches!(value.0, Union::Variant(..)))
+        && let Some(number) = wide_value(value).map(|_| kind_value(value, source))
+    {
+        return Ok(match (code, Int::from_code(code)) {
+            (_, Some(kind)) => number.store(kind),
+            (10, _) => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as f32 as crate::FLOAT,
+                Wide::Unsigned(value) => value as f32 as crate::FLOAT,
+            }),
+            (12, _) => Dynamic::from(char::from(number.unsigned() as u8)),
+            _ => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as crate::FLOAT,
+                Wide::Unsigned(value) => value as crate::FLOAT,
+            }),
+        });
+    }
     if let Ok(float) = value.as_float() {
         return Ok(match code {
             10 => Dynamic::from_float(float as f32 as crate::FLOAT),
@@ -43913,9 +47561,21 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
         10 => Dynamic::from_float(integer as f32 as crate::FLOAT),
         11 => Dynamic::from_float(integer as crate::FLOAT),
         12 => Dynamic::from(char::from(integer as u8)),
+        // A char range's item by its code point (`iterator::CHAR_OF_CODE`).
+        15 => {
+            match u32::try_from(integer).ok().and_then(char::from_u32) {
+                Some(c) => Dynamic::from(c),
+                None => return fail(
+                    "a `char` range across the surrogates U+D800 to U+DFFF is not supported in \
+                     Rawr yet",
+                ),
+            }
+        }
         // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
         13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
         14 => Dynamic::from_float(integer as u64 as crate::FLOAT),
+        // A `char` or a `bool` into an `i128` or a `u128`.
+        _ if target.is_some() => integer.into(),
         _ => {
             let kind = Int::KINDS[code as usize].1;
             let wrapped = match kind {
@@ -43930,6 +47590,17 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
             wrapped.into()
         }
     })
+}
+
+/// An integer literal past `i64` whose kind inference settles later: its
+/// placeholder, written over with its text as an `i128`, a `u128` or a
+/// `u64`'s bits (`Parser::wide_constant`).
+struct PendingWide {
+    ty: Ty,
+    value: Wide,
+    at: Span,
+    placeholder: String,
+    texts: [String; 3],
 }
 
 /// A float literal or arithmetic result whose kind inference settles

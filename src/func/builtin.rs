@@ -553,6 +553,47 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
         };
     }
 
+    // A checked Rust `i128` or `u128` past `i64` is boxed, beside an `i64`
+    // or another: Rust's operators on the numbers, for a generic body or a
+    // literal pattern.
+    let wide = |typ: TypeId| typ == TypeId::of::<i128>() || typ == TypeId::of::<u128>();
+    if (wide(type1) || wide(type2))
+        && (wide(type1) || type1 == TypeId::of::<INT>())
+        && (wide(type2) || type2 == TypeId::of::<INT>())
+    {
+        use crate::resolve::lower_nominal::wide_operator;
+        macro_rules! wide {
+            ($symbol:literal) => {
+                Some((|_, args| wide_operator($symbol, args), false))
+            };
+        }
+        return match op {
+            Plus => wide!("+"),
+            Minus => wide!("-"),
+            Multiply => wide!("*"),
+            Divide => wide!("/"),
+            Modulo => wide!("%"),
+            Ampersand => wide!("&"),
+            Pipe => wide!("|"),
+            XOr => wide!("^"),
+            EqualsTo => wide!("=="),
+            NotEqualsTo => wide!("!="),
+            GreaterThan => wide!(">"),
+            GreaterThanEqualsTo => wide!(">="),
+            LessThan => wide!("<"),
+            LessThanEqualsTo => wide!("<="),
+            ExclusiveRange => Some((
+                |_, args| crate::resolve::lower_nominal::wide_range(args, false),
+                false,
+            )),
+            InclusiveRange => Some((
+                |_, args| crate::resolve::lower_nominal::wide_range(args, true),
+                false,
+            )),
+            _ => None,
+        };
+    }
+
     // Default comparison operators for different, non-numeric types
     if type1 != type2 {
         return match op {

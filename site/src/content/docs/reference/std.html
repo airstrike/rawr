@@ -1,9 +1,9 @@
-<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell, mem, conversions, path and io.">
+<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, errors, path and io.">
 <article>
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
 <h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
-<p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
+<p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>retain</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>rsplitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="strings.rs" id="src-strings">let line = "  id=7, name=rawr ";
 let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
@@ -12,7 +12,7 @@ println!("{fields:?} {id}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
-<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
+<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>chunks_exact</code>, <code>rchunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code>, <code>capacity</code> and more. <code>get_mut</code>, <code>first_mut</code>, <code>last_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="find-retain.rs" id="src-find-retain">struct Item {
     id: u32,
@@ -52,7 +52,7 @@ println!("{angle:?} {wrapped:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite">45.0 0.75</span></div>
 </div>
 <h2 id="time"><code>Duration</code> and <code>Instant</code></h2>
-<p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
+<p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="time.rs" id="src-time">use std::time::{Duration, Instant};
 
@@ -79,7 +79,7 @@ async fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-futures" data-out="out-futures" aria-label="Run futures.rs" hidden></button><b>rawr run futures.rs</b><span id="out-futures" aria-live="polite">(2, 4)</span></div>
 </div>
 <h2 id="collections">Collections</h2>
-<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
+<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code>, <code>BTreeSet</code> and <code>VecDeque</code>. A map&rsquo;s <code>get_mut</code> lends a value to change. rawr treats a <code>VecDeque</code> as a <code>Vec</code>. It adds <code>push_front</code>, <code>pop_front</code>, <code>push_back</code>, <code>pop_back</code>, <code>front</code> and <code>back</code>. <code>BinaryHeap</code> isn&rsquo;t supported yet. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="hashmap.rs" id="src-hashmap">use std::collections::HashMap;
 
@@ -91,8 +91,10 @@ for word in "a b a".split(' ') {
 println!("a: {}, b: {}", counts["a"], counts["b"]);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-hashmap" data-out="out-hashmap" aria-label="Run hashmap.rs" hidden></button><b>rawr run hashmap.rs</b><span id="out-hashmap" aria-live="polite">a: 2, b: 1</span></div>
 </div>
-<h2 id="refcell"><code>RefCell</code></h2>
-<p><code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
+<h2 id="refcell"><code>RefCell</code> and <code>Cell</code></h2>
+<p><code>RefCell</code> has <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
+<p><code>Cell</code> has <code>new</code>, <code>default</code>, <code>get</code>, <code>set</code>, <code>replace</code>, <code>take</code>, <code>swap</code>, <code>into_inner</code> and <code>clone</code>. A <code>Cell</code> field changes through <code>&amp;self</code>.</p>
+<p>A cell&rsquo;s own <code>clone</code> makes a new cell. Cloning a struct, enum or <code>Vec</code> that holds a cell outside an <code>Rc</code> isn&rsquo;t supported yet, and rawr says so.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="refcell.rs" id="src-refcell">use std::cell::RefCell;
 
@@ -102,15 +104,33 @@ let len = cell.borrow().len(); // 2
 println!("{len}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite">2</span></div>
 </div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="cell.rs" id="src-cell">use std::cell::Cell;
+
+struct Counter { hits: Cell&lt;u32&gt; }
+impl Counter {
+    fn hit(&amp;self) { self.hits.set(self.hits.get() + 1); }
+}
+
+fn main() {
+    let c = Counter { hits: Cell::new(0) };
+    c.hit();
+    c.hit();
+    println!("{} {:?}", c.hits.get(), c.hits); // 2 Cell { value: 2 }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cell" data-out="out-cell" aria-label="Run cell.rs" hidden></button><b>rawr run cell.rs</b><span id="out-cell" aria-live="polite">2 Cell { value: 2 }</span></div>
+</div>
 <h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
-<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>.</p>
+<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>. Two fields or two tuple members of one value can be borrowed <code>&amp;mut</code> at once, as in <code>swap(&amp;mut pair.0, &amp;mut pair.1)</code>. <code>size_of::&lt;T&gt;()</code> and <code>size_of_val(&amp;x)</code> give rustc&rsquo;s size of a number, <code>bool</code>, <code>char</code>, <code>()</code> or an array of them. Other types are refused, because rustc chooses their layout.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="mem.rs" id="src-mem">let mut a = vec![1];
 let mut b = vec![2, 3];
 std::mem::swap(&amp;mut a, &amp;mut b);
 let old = std::mem::take(&amp;mut a); // [2, 3], and a is empty
-println!("{old:?} {a:?} {b:?}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite">[2, 3] [] [1]</span></div>
+println!("{old:?} {a:?} {b:?}");
+println!("{} {}", size_of::&lt;u64&gt;(), std::mem::size_of_val(&amp;[1u16; 3])); // 8 6</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite">[2, 3] [] [1]
+8 6</span></div>
 </div>
 <h2 id="traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></h2>
 <p><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits, and <code>std::cmp::Ordering</code>.</p>
@@ -139,6 +159,44 @@ let byte = u8::try_from(300_i64); // Err
 let degrees: f64 = Celsius(21.5).into();
 println!("{names:?} {parsed:?} {} {degrees}", byte.is_err());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-conversions" data-out="out-conversions" aria-label="Run conversions.rs" hidden></button><b>rawr run conversions.rs</b><span id="out-conversions" aria-live="polite">["a", "b"] [1] true 21.5</span></div>
+</div>
+<h2 id="errors"><code>std::error::Error</code></h2>
+<p>Your own error type implements <code>Error</code> with an empty <code>impl Error for MyErr {}</code> beside its <code>Display</code> and <code>Debug</code>. <code>Box&lt;dyn Error&gt;</code> holds your error, a std error such as <code>ParseIntError</code>, or a message. <code>Box&lt;dyn Error + Send + Sync&gt;</code> works the same way.</p>
+<p><code>?</code> boxes the error in a function that returns <code>Result&lt;T, Box&lt;dyn Error&gt;&gt;</code>. So do <code>Err(Box::new(e))</code> and <code>Err("text".into())</code>. <code>{e}</code>, <code>{e:?}</code> and <code>e.to_string()</code> print what Rust prints, and <code>e.source()</code> is <code>None</code>. A <code>main</code> that returns <code>Err</code> prints <code>Error: </code> and the error&rsquo;s <code>Debug</code> to stderr and exits with status 1.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="errors.rs" id="src-errors">use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct Negative(i64);
+
+impl fmt::Display for Negative {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter) -&gt; fmt::Result {
+        write!(f, "{} is negative", self.0)
+    }
+}
+
+impl Error for Negative {}
+
+fn parse(s: &amp;str) -&gt; Result&lt;i64, Box&lt;dyn Error&gt;&gt; {
+    let n: i64 = s.parse()?;
+    if n &lt; 0 {
+        return Err(Box::new(Negative(n)));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for s in ["4", "x", "-2"] {
+        match parse(s) {
+            Ok(n) =&gt; println!("{n}"),
+            Err(e) =&gt; println!("{e} | {e:?}"),
+        }
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-errors" data-out="out-errors" aria-label="Run errors.rs" hidden></button><b>rawr run errors.rs</b><span id="out-errors" aria-live="polite">4
+invalid digit found in string | ParseIntError { kind: InvalidDigit }
+-2 is negative | Negative(-2)</span></div>
 </div>
 <h2 id="path-io"><code>path</code>, <code>ffi</code>, <code>io</code>, <code>env</code> and <code>fs</code></h2>
 <p><code>std::path</code> and <code>std::ffi</code> work in every program. <code>PathBuf</code>, <code>Path</code>, <code>OsString</code> and <code>OsStr</code> are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function doesn&rsquo;t take one yet.</p>

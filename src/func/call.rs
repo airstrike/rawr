@@ -1293,6 +1293,12 @@ impl Engine {
             // every holder, so the value drops with its new owner.
             crate::engine::KEYWORD_MOVE if num_args == 1 => {
                 let arg = first_arg.unwrap();
+                // An owned `self` moves out of the method's receiver.
+                if let (Expr::ThisPtr(..), Some(this)) = (arg, this_ptr.as_deref_mut()) {
+                    let mut value = std::mem::take(this);
+                    value.set_access_mode(crate::types::dynamic::AccessMode::ReadWrite);
+                    return Ok(value.flatten());
+                }
                 if !matches!(arg, Expr::Variable(..)) {
                     let (value, ..) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
                     return Ok(value.flatten());
@@ -1306,6 +1312,40 @@ impl Engine {
                 };
                 value.set_access_mode(crate::types::dynamic::AccessMode::ReadWrite);
                 return Ok(value.flatten());
+            }
+
+            // Handle __rawr_clear(x, i, ..): `()` at the part of the local
+            // the indices reach, through fields, payloads and elements.
+            crate::engine::KEYWORD_CLEAR if num_args >= 1 => {
+                let arg = first_arg.unwrap();
+                let mut path = Vec::with_capacity(args_expr.len());
+                for expr in args_expr {
+                    let (value, pos) =
+                        self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
+                    let index = value
+                        .as_int()
+                        .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, pos))?;
+                    path.push(usize::try_from(index).unwrap_or(usize::MAX));
+                }
+                match arg {
+                    // An owned `self`.
+                    Expr::ThisPtr(..) => {
+                        if let Some(this) = this_ptr {
+                            clear_part(this, &path);
+                        }
+                    }
+                    Expr::Variable(..) => {
+                        match self.search_namespace(global, caches, scope, this_ptr, arg)? {
+                            crate::eval::Target::RefMut(slot) => clear_part(slot, &path),
+                            crate::eval::Target::SharedValue { mut guard, .. } => {
+                                clear_part(&mut guard, &path);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                return Ok(Dynamic::UNIT);
             }
 
             // Handle is_def_var(fn_name)
@@ -1812,5 +1852,31 @@ impl Engine {
             global, caches, scope, this_ptr, name, op_token, first_arg, rest_args, *hashes,
             *capture, pos,
         )
+    }
+}
+
+/// `()` at the part of `value` that `path` reaches: each index a struct's
+/// field, an enum variant's payload or an array's element. A part that is
+/// not there is left as it is.
+fn clear_part(value: &mut Dynamic, path: &[usize]) {
+    use crate::types::dynamic::Union;
+    let Some((&index, rest)) = path.split_first() else {
+        *value = Dynamic::UNIT;
+        return;
+    };
+    let part = match &mut value.0 {
+        Union::Struct(value, ..) => value.fields_mut().get_mut(index),
+        Union::Enum(value, ..) => value.payload_mut().get_mut(index),
+        Union::Array(value, ..) => value.get_mut(index),
+        Union::Shared(cell, ..) => {
+            if let Some(mut inner) = crate::func::locked_write(cell) {
+                clear_part(&mut inner, path);
+            }
+            return;
+        }
+        _ => None,
+    };
+    if let Some(part) = part {
+        clear_part(part, rest);
     }
 }

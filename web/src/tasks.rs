@@ -187,7 +187,7 @@ pub async fn run(source: String, output: js_sys::Function) -> String {
             output.push(true, &format!("{reason}\n"));
         } else {
             output.status = text::PANIC_STATUS;
-            let message = rawr_snippet::report(&text, &program, &source);
+            let message = text::panic(&report, &program, &source);
             output.push(true, &format!("{}\n", message.trim_end()));
         }
     } else if !finished && !output.truncated {
