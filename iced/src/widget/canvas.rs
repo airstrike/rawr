@@ -954,6 +954,17 @@ fn bind_bounds(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(iced::Point::ORIGIN))
         })
         .expect("the iced facade must retain Point::ORIGIN");
+    for (name, size) in [
+        ("ZERO", iced::Size::ZERO),
+        ("UNIT", iced::Size::UNIT),
+        ("INFINITE", iced::Size::INFINITE),
+    ] {
+        builder
+            .bind(format!("iced::Size::{name}"), move |_| {
+                Ok(Dynamic::from(size))
+            })
+            .expect("the iced facade must retain Size's constants");
+    }
     builder
         .bind("iced::mouse::Interaction::default", |_| {
             Ok(Dynamic::from(iced::mouse::Interaction::default()))

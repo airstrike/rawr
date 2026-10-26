@@ -298,6 +298,53 @@ fn language_print_macros_format_like_format() {
     rejected(r#"pub fn run() -> i64 { println!("{}", 1, 2); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!("{}"); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { eprintln!("{:x}", "x"); 0 } run()"#);
+}
+
+#[test]
+fn language_dbg_writes_the_value_where_it_is_and_returns_it() {
+    use std::sync::{Arc, Mutex};
+    let written = Arc::new(Mutex::new(Vec::<(crate::Output, String)>::new()));
+    let mut engine = Engine::new();
+    let log = written.clone();
+    engine.on_output(move |output, text| log.lock().unwrap().push((output, text.to_owned())));
+    let value = engine
+        .eval::<i64>(
+            r#"
+            #[derive(Debug)]
+            struct Tick { n: i64 }
+            fn main() -> i64 {
+                let a = 2;
+                let doubled = dbg!(a * 2);
+                dbg!(Tick { n: doubled });
+                dbg!();
+                dbg!(Some("x"),).map_or(0, |s| s.len() as i64) + doubled
+            }
+            main()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 5);
+    let written = written.lock().unwrap();
+    assert!(written
+        .iter()
+        .all(|(output, _)| *output == crate::Output::Stderr));
+    // Each line starts with where the macro is: `[file:line:column]`.
+    let texts = written
+        .iter()
+        .map(|(_, text)| {
+            assert!(text.starts_with('['), "{text}");
+            &text[text.find(']').unwrap() + 1..]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            " a * 2 = 4\n",
+            " Tick { n: doubled } = Tick {\n    n: 4,\n}\n",
+            "\n",
+            " Some(\"x\") = Some(\n    \"x\",\n)\n",
+        ]
+    );
     rejected(r#"pub fn run() -> i64 { print!(); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { let x: i64 = println!("a"); x } run()"#);
 }
@@ -7767,6 +7814,27 @@ fn language_let_chains() {
         value,
         (2 * 1000000 + 10 * 10000) + 300 + 7 * 10 + 4 * 1000 + 7 * 100000
     );
+    // A struct pattern's braces in a link are the pattern's, not the block.
+    let value = run(r#"
+        enum Preview { Loading, Ready { thumbnail: Option<i64>, size: i64 } }
+        fn card(preview: &Preview) -> i64 {
+            let shown = if let Preview::Ready { thumbnail, .. } = &preview
+                && let Some(t) = thumbnail
+            {
+                *t
+            } else {
+                -1
+            };
+            shown
+        }
+        pub fn run() -> i64 {
+            card(&Preview::Ready { thumbnail: Some(7), size: 2 }) * 100
+                + card(&Preview::Ready { thumbnail: None, size: 2 }) * 10
+                + card(&Preview::Loading)
+        }
+        run()
+    "#);
+    assert_eq!(value, 700 - 10 - 1);
     let error = rejected("pub fn run() -> i64 { let a = Some(1); if let Some(x) = a && x > 0 || true { 1 } else { 0 } } run()");
     assert!(error.contains("||"), "{error}");
 }
@@ -9176,6 +9244,84 @@ fn language_fx_hash_collections_are_rawr_maps() {
         run()
     "#);
     assert_eq!(value, 31);
+}
+
+#[test]
+fn language_debug_builders_write_what_std_writes() {
+    let text = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::fmt;
+            struct Life { cells: Vec<i64> }
+            impl fmt::Debug for Life {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.debug_struct("Life").field("cells", &self.cells.len()).finish()
+                }
+            }
+            struct Pair(i64, String);
+            impl fmt::Debug for Pair {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_tuple("Pair").field(&self.0).field(&self.1).finish()
+                }
+            }
+            struct Hidden;
+            impl fmt::Debug for Hidden {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_struct("Hidden").finish_non_exhaustive()
+                }
+            }
+            struct Few(Vec<i64>);
+            impl fmt::Debug for Few {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_list().entry(&self.0[0]).entry(&self.0[1]).finish()
+                }
+            }
+            struct None_;
+            impl fmt::Debug for None_ {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.debug_list().finish()
+                }
+            }
+            let life = Life { cells: vec![1, 2, 3] };
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}|{:#?}", life, Pair(1, "a".to_string()), Hidden,
+                Few(vec![4, 5]), None_, life)
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        text,
+        "Life { cells: 3 }|Pair(1, \"a\")|Hidden { .. }|[4, 5]|[]|Life {\n    cells: 3,\n}"
+    );
+}
+
+#[test]
+fn language_drain_and_clear_empty_a_map_or_set() {
+    let value = run(r#"
+        use std::collections::{HashMap, HashSet};
+        struct State { births: HashSet<i64>, ages: HashMap<i64, i64> }
+        impl State {
+            fn settle(&mut self, life: &mut Vec<i64>) {
+                self.births.drain().for_each(|cell| life.push(cell));
+                self.ages.clear();
+            }
+        }
+        pub fn run() -> i64 {
+            let mut state = State { births: HashSet::new(), ages: HashMap::new() };
+            state.births.insert(4);
+            state.births.insert(5);
+            state.ages.insert(1, 2);
+            let mut life = Vec::new();
+            state.settle(&mut life);
+            let mut local = HashMap::new();
+            local.insert(3, 30);
+            let total: i64 = local.drain().map(|(k, v)| k + v).sum();
+            life.sort();
+            life[0] * 1000 + life[1] * 100 + total
+                + (state.births.len() + state.ages.len() + local.len()) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 4000 + 500 + 33);
 }
 
 #[test]

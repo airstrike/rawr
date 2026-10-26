@@ -257,6 +257,38 @@ fn bind_events(builder: &mut host::runtime::Builder) {
             _ => Dynamic::from(iced::Point::ORIGIN),
         },
     );
+    read::<mouse::Event>(builder, "iced::mouse::Event::delta", |event| match event {
+        mouse::Event::WheelScrolled { delta } => Dynamic::from(*delta),
+        _ => Dynamic::from(mouse::ScrollDelta::Pixels { x: 0.0, y: 0.0 }),
+    });
+    test!(
+        mouse::ScrollDelta,
+        "iced::mouse::ScrollDelta::Lines",
+        mouse::ScrollDelta::Lines { .. }
+    );
+    test!(
+        mouse::ScrollDelta,
+        "iced::mouse::ScrollDelta::Pixels",
+        mouse::ScrollDelta::Pixels { .. }
+    );
+    read::<mouse::ScrollDelta>(
+        builder,
+        "iced::mouse::ScrollDelta::x",
+        |delta| match delta {
+            mouse::ScrollDelta::Lines { x, .. } | mouse::ScrollDelta::Pixels { x, .. } => {
+                Dynamic::from(f64::from(*x))
+            }
+        },
+    );
+    read::<mouse::ScrollDelta>(
+        builder,
+        "iced::mouse::ScrollDelta::y",
+        |delta| match delta {
+            mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
+                Dynamic::from(f64::from(*y))
+            }
+        },
+    );
     for (name, button) in [
         ("Left", mouse::Button::Left),
         ("Right", mouse::Button::Right),

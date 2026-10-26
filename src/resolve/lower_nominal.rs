@@ -910,6 +910,16 @@ fn instance_surface_type(
     })
 }
 
+/// A `Range<T>` value's runtime type: a `Range<f64>` of floats, else a
+/// `Range<i64>` of integers or chars' code points.
+fn range_type_id(element: &Ty) -> TypeId {
+    if matches!(element, Ty::Float(_)) {
+        TypeId::of::<std::ops::Range<crate::FLOAT>>()
+    } else {
+        TypeId::of::<std::ops::Range<INT>>()
+    }
+}
+
 /// Whether an instance type holds a value Rust takes as `rawr::Value`.
 #[cfg(feature = "rust-import")]
 fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> bool {
@@ -7317,7 +7327,7 @@ impl Ty {
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
-            Self::Range(_) => Some(TypeId::of::<std::ops::Range<crate::FLOAT>>()),
+            Self::Range(element) => Some(range_type_id(element)),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
@@ -9401,6 +9411,10 @@ type ClosureOutput = (Rc<HostTyProof>, usize);
 /// A host callable parameter's input types, when known, and its output.
 type ClosureHint = (Option<Box<[Ty]>>, Option<ClosureOutput>);
 
+/// A facade pattern met below a script pattern: the hidden name its value
+/// is bound to, the pattern, the value's type and the binding mode.
+type HostCheck = (ImmutableString, PatternSyntax, Ty, Option<bool>);
+
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
     input: Peekable<IntoIter<(Token, Position)>>,
@@ -9483,6 +9497,10 @@ struct Parser<'a> {
     /// Iterator chains by the source of their iterator expression, fused by
     /// the consumer that runs them.
     pipelines: BTreeMap<String, iterator::Pipeline>,
+    /// `a..b` of integers or chars by the source of its iterator, with the
+    /// value it is as Rust's `Range<T>`: what an imported generic item such
+    /// as rand's `random_range` takes in its place.
+    range_values: BTreeMap<String, (origin::Fragment, Ty)>,
     /// The bounds of the range parsed last, with its span: what `v[a..b]`
     /// slices by.
     last_range: Option<(ParsedExpr, Option<ParsedExpr>, bool, Span)>,
@@ -9564,8 +9582,13 @@ struct Parser<'a> {
     slice_arity: std::cell::Cell<usize>,
     /// Patterns on facade values met below a script pattern: the hidden
     /// name the value is bound to, the pattern and the value's type. The
-    /// pattern's site lowers them to tests and bindings.
-    host_checks: std::cell::RefCell<Vec<(ImmutableString, PatternSyntax, Ty)>>,
+    /// pattern's site lowers them to tests and bindings. Each keeps the
+    /// binding mode it was met in: `Some(mutable)` below a reference.
+    host_checks: std::cell::RefCell<Vec<HostCheck>>,
+    /// The binding mode of the facade pattern being lowered: its bindings
+    /// are references (`Some(mutable)`) when it matches through one, as
+    /// rustc's default binding mode makes them.
+    host_binding_mode: std::cell::Cell<Option<bool>>,
     /// A host call's one signature, whose closure arguments take their
     /// parameter types from the arguments before them, as Rust infers
     /// `pick_list(selected, options, |x| x.to_string())`'s `x`.
@@ -9797,6 +9820,7 @@ impl<'a> Parser<'a> {
             array_hint: None,
             collect_hint: None,
             pipelines: BTreeMap::new(),
+            range_values: BTreeMap::new(),
             last_range: None,
             field_entries: Vec::new(),
             native_modules: engine.global_modules.clone(),
@@ -9828,6 +9852,7 @@ impl<'a> Parser<'a> {
             binding_mode: std::cell::Cell::new(None),
             slice_arity: std::cell::Cell::new(0),
             host_checks: std::cell::RefCell::new(Vec::new()),
+            host_binding_mode: std::cell::Cell::new(None),
             deferred_hints: None,
             pending_bounds: Vec::new(),
             generic_traits: BTreeMap::new(),
@@ -14793,9 +14818,13 @@ impl<'a> Parser<'a> {
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
-            Ty::Range(_) => intrinsic::Type::builtin(
-                "Range<f64>",
-                TypeId::of::<std::ops::Range<crate::FLOAT>>(),
+            Ty::Range(element) => intrinsic::Type::builtin(
+                if matches!(*element, Ty::Float(_)) {
+                    "Range<f64>"
+                } else {
+                    "Range<i64>"
+                },
+                range_type_id(&element),
             ),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
@@ -15081,6 +15110,28 @@ impl<'a> Parser<'a> {
         fits
     }
 
+    /// Whether an item's parameter at `index` is a type parameter that a
+    /// bound fills with a `Range<T>`, as rand's `random_range` has
+    /// `R: SampleRange<T>` implemented for `Range<T>`.
+    fn takes_range(&self, items: &[crate::host::item::Definition], index: usize) -> bool {
+        items.iter().any(|item| {
+            let signature = item.signature();
+            let Some(crate::host::type_ref::Shape::Parameter(name)) = signature
+                .parameters()
+                .get(index)
+                .map(crate::host::type_ref::Type::shape)
+            else {
+                return false;
+            };
+            signature.relations().iter().any(|relation| {
+                relation.parameter() == name.to_string()
+                    && relation.cases().iter().any(|case| {
+                        matches!(case.this(), crate::host::signature::Pattern::Range(_))
+                    })
+            })
+        })
+    }
+
     fn select_host_signature_form(
         &mut self,
         items: &[crate::host::item::Definition],
@@ -15123,6 +15174,17 @@ impl<'a> Parser<'a> {
             })
         };
         for (index, argument) in arguments.iter_mut().enumerate() {
+            // `0..n` or `'a'..'z'` where an imported item's type parameter
+            // takes a `Range<T>` (rand's `R: SampleRange<T>`): the range
+            // itself, not an iterator over it.
+            if !facade
+                && self.takes_range(items, index)
+                && let Some((value, ty)) = self.range_values.get(argument.source.as_str()).cloned()
+            {
+                argument.source = value;
+                argument.prelude = origin::Fragment::default();
+                argument.ty = ty;
+            }
             // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
             // as the closure that calls it.
             if facade
@@ -20356,10 +20418,7 @@ impl<'a> Parser<'a> {
         pending: usize,
     ) -> Result<(), Error> {
         let written_ty = self.inference.resolve(&subject.ty);
-        let subject_ty = match written_ty.clone() {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&written_ty);
         let resolved = self.resolve_root_pattern(syntax, &written_ty)?;
         if otherwise.is_none() {
             let rows = resolved
@@ -22093,10 +22152,21 @@ impl<'a> Parser<'a> {
                             | PatternSyntax::Or { .. }
                     ) =>
             {
+                // `&&T` matches the `T` below both, as rustc does.
+                let mut mutable = *mutable;
+                let mut target = self.inference.resolve(target);
+                while let Ty::Reference {
+                    target: inner,
+                    mutable: inner_mutable,
+                } = target
+                {
+                    mutable = mutable && inner_mutable;
+                    target = self.inference.resolve(&inner);
+                }
                 let mode = self.binding_mode.get();
                 self.binding_mode
-                    .set(Some(mode.map_or(*mutable, |outer| outer && *mutable)));
-                (self.inference.resolve(target), Some(mode))
+                    .set(Some(mode.map_or(mutable, |outer| outer && mutable)));
+                (target, Some(mode))
             }
             _ => (expected, None),
         };
@@ -22138,7 +22208,12 @@ impl<'a> Parser<'a> {
         {
             let mut checks = self.host_checks.borrow_mut();
             let name: ImmutableString = format!("__rawr_host_{}", checks.len()).into();
-            checks.push((name.clone(), syntax.clone(), expected.clone()));
+            checks.push((
+                name.clone(),
+                syntax.clone(),
+                expected.clone(),
+                self.binding_mode.get(),
+            ));
             drop(checks);
             binding_declarations.push(PatternBinding {
                 name: name.clone(),
@@ -23226,6 +23301,17 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// The value below every `&` of a pattern's subject, which its
+    /// patterns match: `&&T` matches as `T` does, as rustc's default binding
+    /// mode reads it.
+    fn referenced(&self, ty: &Ty) -> Ty {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        ty
+    }
+
     /// The subject of a pattern switch: a nominal enum is validated first.
     fn pattern_subject(
         &mut self,
@@ -23272,10 +23358,7 @@ impl<'a> Parser<'a> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
         let subject = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
-        let subject_ty = match self.inference.resolve(&subject.ty) {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&subject.ty);
         if matches!(
             subject_ty,
             Ty::Int(_) | Ty::Char | Ty::String | Ty::Str | Ty::Bool | Ty::Float(_)
@@ -23719,10 +23802,7 @@ impl<'a> Parser<'a> {
         let subject = self.parse_subject()?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
-        let subject_ty = match written_ty.clone() {
-            Ty::Reference { target, .. } => *target,
-            ty => ty,
-        };
+        let subject_ty = self.referenced(&written_ty);
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
         let write_back =
             self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
@@ -25017,13 +25097,16 @@ impl<'a> Parser<'a> {
     fn take_host_checks(&mut self) -> Result<HostPattern, Error> {
         let checks = std::mem::take(&mut *self.host_checks.borrow_mut());
         let mut pattern = HostPattern::default();
-        for (name, syntax, ty) in checks {
-            self.host_pattern(
+        for (name, syntax, ty, mode) in checks {
+            let outer = self.host_binding_mode.replace(mode);
+            let lowered = self.host_pattern(
                 &syntax,
                 origin::Fragment::plain(name.as_str()),
                 &ty,
                 &mut pattern,
-            )?;
+            );
+            self.host_binding_mode.set(outer);
+            lowered?;
         }
         Ok(pattern)
     }
@@ -25077,9 +25160,36 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         out: &mut HostPattern,
     ) -> Result<(), Error> {
-        let ty = match self.inference.resolve(ty) {
-            Ty::Reference { target, .. } => self.inference.resolve(&target),
-            ty => ty,
+        // Through `&T` a binding is a reference, Rust's default binding mode;
+        // a `&` pattern takes the value itself.
+        let (ty, through) = match self.inference.resolve(ty) {
+            Ty::Reference { target, mutable } => (self.inference.resolve(&target), Some(mutable)),
+            ty => (ty, None),
+        };
+        let outer = self.host_binding_mode.get();
+        let mode = match syntax {
+            PatternSyntax::Reference { .. } if through.is_some() => None,
+            _ => outer.or(through),
+        };
+        self.host_binding_mode.set(mode);
+        let lowered = self.host_pattern_in_mode(syntax, value, ty, out);
+        self.host_binding_mode.set(outer);
+        lowered
+    }
+
+    fn host_pattern_in_mode(
+        &mut self,
+        syntax: &PatternSyntax,
+        value: origin::Fragment,
+        ty: Ty,
+        out: &mut HostPattern,
+    ) -> Result<(), Error> {
+        let bound = |ty: &Ty, mode: Option<bool>| match mode {
+            Some(mutable) => Ty::Reference {
+                mutable,
+                target: Box::new(ty.clone()),
+            },
+            None => ty.clone(),
         };
         match syntax {
             PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. } => Ok(()),
@@ -25093,7 +25203,7 @@ impl<'a> Parser<'a> {
                     PatternBinding {
                         name: name.clone(),
                         span: *span,
-                        ty,
+                        ty: bound(&ty, self.host_binding_mode.get()),
                         mutable: *mutable,
                     },
                     value,
@@ -25123,7 +25233,7 @@ impl<'a> Parser<'a> {
                     PatternBinding {
                         name: name.clone(),
                         span: *name_span,
-                        ty: ty.clone(),
+                        ty: bound(&ty, self.host_binding_mode.get()),
                         mutable: false,
                     },
                     value.clone(),
@@ -25629,6 +25739,15 @@ impl<'a> Parser<'a> {
             unreachable!("host matches are selected for facade types");
         };
         let owner_path = proof.definition.path();
+        // A match through `&T` binds references, as rustc's default binding
+        // mode does.
+        let written = match self.inference.resolve(&subject.ty) {
+            Ty::Reference { mutable, .. } => Ty::Reference {
+                mutable,
+                target: Box::new(subject_ty.clone()),
+            },
+            _ => subject_ty.clone(),
+        };
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let original_bindings = self.bindings.clone();
@@ -25642,7 +25761,7 @@ impl<'a> Parser<'a> {
             self.host_pattern(
                 &syntax,
                 origin::Fragment::plain(temporary.as_str()),
-                &subject_ty,
+                &written,
                 &mut compiled,
             )?;
             self.bind_host_pattern(&compiled);
@@ -25837,9 +25956,22 @@ impl<'a> Parser<'a> {
         let leading_let = matches!(self.peek(), Token::Let);
         let mut depth = 0usize;
         let mut previous = Token::EOF;
+        // Between a `let` and its `=`, a brace is a struct pattern's
+        // (`let Preview::Ready { thumbnail, .. } = &preview`), not the block.
+        let mut pattern = false;
         for (token, _) in self.input.clone() {
             match token {
+                Token::Let if depth == 0 && previous == Token::And => return true,
+                Token::Let if depth == 0 => pattern = true,
+                Token::Equals if depth == 0 => pattern = false,
+                Token::LeftBrace if pattern => depth += 1,
                 Token::LeftParen | Token::LeftBracket => depth += 1,
+                Token::RightBrace if pattern => {
+                    let Some(next) = depth.checked_sub(1) else {
+                        return false;
+                    };
+                    depth = next;
+                }
                 Token::RightParen | Token::RightBracket => {
                     let Some(next) = depth.checked_sub(1) else {
                         return false;
@@ -25847,7 +25979,6 @@ impl<'a> Parser<'a> {
                     depth = next;
                 }
                 Token::LeftBrace | Token::SemiColon | Token::EOF if depth == 0 => return false,
-                Token::Let if depth == 0 && previous == Token::And => return true,
                 Token::And if depth == 0 && leading_let => return true,
                 _ => {}
             }
@@ -26604,12 +26735,46 @@ impl<'a> Parser<'a> {
             if let Some(rhs) = &rhs {
                 self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
             }
-            return Ok(self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive));
+            let range = self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive);
+            self.record_range_value(&lhs, rhs.as_ref(), Ty::Char, inclusive, &range);
+            return Ok(range);
         }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
-        let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
+        let range = self.range_iterator(&lhs, rhs.as_ref(), item.clone(), inclusive);
+        self.record_range_value(&lhs, rhs.as_ref(), item, inclusive, &range);
         self.last_range = Some((lhs, rhs, inclusive, range.span));
         Ok(range)
+    }
+
+    /// Keep `low..high` of integers or chars as the value Rust's
+    /// `Range<T>` is, a Rawr `Range<i64>` of the bounds (a char's code
+    /// point), for an imported generic item that takes the range itself.
+    fn record_range_value(
+        &mut self,
+        low: &ParsedExpr,
+        high: Option<&ParsedExpr>,
+        item: Ty,
+        inclusive: bool,
+        range: &ParsedExpr,
+    ) {
+        let Some(high) = high.filter(|_| !inclusive) else {
+            return;
+        };
+        let bound = |this: &mut Self, value: &ParsedExpr| {
+            let value = value.rendered_source().surrounded("(", ")");
+            if item == Ty::Char {
+                this.prelude_op(PreludeOp::Cast, [value, "7".into()])
+            } else {
+                value
+            }
+        };
+        let mut value = bound(self, low);
+        value.push_text(" .. ");
+        value.push(bound(self, high));
+        self.range_values.insert(
+            range.source.as_str().to_string(),
+            (value.surrounded("(", ")"), Ty::Range(Box::new(item))),
+        );
     }
 
     /// A range's bounds: integers of one kind, which its items have.
@@ -30341,6 +30506,20 @@ impl<'a> Parser<'a> {
                 value = self.parse_value_fmt(value, formatter)?;
                 continue;
             }
+            // `f.debug_struct("Life").field("cells", &n).finish()` and its
+            // kin, in a `fmt` body.
+            if matches!(
+                member.as_str(),
+                "debug_struct" | "debug_tuple" | "debug_list"
+            ) && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && self
+                    .formatter
+                    .as_ref()
+                    .is_some_and(|formatter| value.source.as_str() == formatter.as_str())
+            {
+                value = self.parse_debug_builder(value, &member)?;
+                continue;
+            }
             // `f.write_str(text)` into a `fmt` body's formatter.
             if member == "write_str"
                 && matches!(self.peek(), Token::LeftParen)
@@ -31880,6 +32059,12 @@ impl<'a> Parser<'a> {
         {
             return self.parse_print(stream, name_span);
         }
+        if matches!(self.peek(), Token::Bang)
+            && name.as_str() == "dbg"
+            && self.models.import(&name).is_none()
+        {
+            return self.parse_dbg(name_span);
+        }
         // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
         // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
         if matches!(self.peek(), Token::Bang)
@@ -32697,6 +32882,168 @@ impl<'a> Parser<'a> {
         let stderr = origin::Fragment::plain(if stderr { "true" } else { "false" });
         let source = self.prelude_op(PreludeOp::Print, [text, stderr]);
         Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)))
+    }
+
+    /// `f.debug_struct(name)`, `f.debug_tuple(name)` or `f.debug_list()`
+    /// after the formatter `f`, with its `.field(..)` or `.entry(..)` calls
+    /// and the `.finish()` or `.finish_non_exhaustive()` that ends it: the
+    /// text std's builders write (`Life { cells: 3 }`, `Pair(1, 2)`,
+    /// `[1, 2]`) into the formatter, and `Ok(())`. `{:#?}` lays it out as a
+    /// derived `Debug`'s.
+    fn parse_debug_builder(
+        &mut self,
+        formatter: ParsedExpr,
+        builder: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let (mut arguments, _) = self.parse_call_arguments("debug builder arguments")?;
+        let mut end;
+        let (open, close) = match builder {
+            "debug_struct" => (" { ", " }"),
+            "debug_tuple" => ("(", ")"),
+            _ => ("[", "]"),
+        };
+        let mut text = if builder == "debug_list" {
+            if !arguments.is_empty() {
+                return Err(self.unsupported("`debug_list` with arguments"));
+            }
+            origin::Fragment::plain("\"\"")
+        } else {
+            let [name] = arguments.as_mut_slice() else {
+                return Err(self.unsupported("a debug builder without its one name"));
+            };
+            self.strip_string_reference(name);
+            self.require_type(&Ty::String, &name.ty, name.span)?;
+            name.rendered_source().surrounded("(", ")")
+        };
+        let mut parts = Vec::new();
+        let mut non_exhaustive = false;
+        loop {
+            if !matches!(self.peek(), Token::Period) {
+                return Err(self.unsupported("a debug builder without `.finish()`"));
+            }
+            self.next();
+            let (method, method_span) = self.expect_name("a debug builder method")?;
+            let (mut arguments, call_end) =
+                self.parse_call_arguments("debug builder method arguments")?;
+            end = call_end;
+            match (builder, method.as_str(), arguments.as_mut_slice()) {
+                (_, "finish", []) => break,
+                ("debug_struct", "finish_non_exhaustive", []) => {
+                    non_exhaustive = true;
+                    break;
+                }
+                ("debug_struct", "field", [name, field]) => {
+                    self.strip_string_reference(name);
+                    self.require_type(&Ty::String, &name.ty, name.span)?;
+                    let debug =
+                        self.debug_source(&field.ty, field.rendered_source(), field.span)?;
+                    let mut part = name.rendered_source().surrounded("(", ")");
+                    part.push_text(" + \": \" + ");
+                    part.push(debug.surrounded("(", ")"));
+                    parts.push(part);
+                }
+                ("debug_tuple", "field", [field]) | ("debug_list", "entry", [field]) => {
+                    let debug =
+                        self.debug_source(&field.ty, field.rendered_source(), field.span)?;
+                    parts.push(debug.surrounded("(", ")"));
+                }
+                _ => {
+                    return Err(Error::UnknownMember {
+                        owner: "Formatter".into(),
+                        member: method,
+                        reference: method_span,
+                    });
+                }
+            }
+        }
+        if non_exhaustive {
+            parts.push(origin::Fragment::plain("\"..\""));
+        }
+        if !parts.is_empty() || builder == "debug_list" || non_exhaustive {
+            text.push_text(format!(" + {open:?} + "));
+            if parts.is_empty() {
+                text.push_text("\"\"");
+            }
+            text.push(origin::Fragment::join(parts, " + \", \" + "));
+            text.push_text(format!(" + {close:?}"));
+        }
+        let mut source = origin::Fragment::plain("{ ");
+        source.push(formatter.rendered_source());
+        source.push_text(" += (");
+        source.push(text);
+        source.push_text("); ");
+        source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
+        source.push_text(" }");
+        Ok(self.operator_expr(
+            source,
+            Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Unit)),
+            span(formatter.span.start(), end),
+        ))
+    }
+
+    /// `dbg!(value)`: `[file:line:column] value = {value:#?}` on stderr, as
+    /// std's `dbg!` writes it, and the value itself. `dbg!()` writes only
+    /// where it is.
+    fn parse_dbg(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
+        self.next();
+        let at = name_span.start();
+        let file = match self.source_file() {
+            Some(file) => cargo_env::file_path(&file),
+            None => self.source_identity(),
+        };
+        let place = format!(
+            "[{file}:{}:{}]",
+            at.line().unwrap_or_default(),
+            at.position().unwrap_or_default()
+        );
+        if matches!(self.peek(), Token::Unit) {
+            let (_, end) = self.next();
+            let text = origin::Fragment::plain(format!("{:?}", format!("{place}\n")));
+            let source = self.prelude_op(PreludeOp::Print, [text, "true".into()]);
+            return Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)));
+        }
+        self.expect(Token::LeftParen, "'(' after `dbg!`")?;
+        let tokens = self.input.clone();
+        let mut value = self.parse_expr()?;
+        let stop = self.position();
+        if matches!(self.peek(), Token::Comma) {
+            self.next();
+        }
+        if !matches!(self.peek(), Token::RightParen) {
+            return Err(self.unsupported("`dbg!` of more than one value"));
+        }
+        let end = self.expect(Token::RightParen, "')' after `dbg!`")?;
+        let tokens = tokens
+            .take_while(|(_, position)| *position != stop)
+            .collect::<Vec<_>>();
+        let key = self.models.sources.key(self.models.context.index());
+        let written = self
+            .models
+            .sources
+            .resolve(key)
+            .ok()
+            .and_then(|source| stringify_tokens(source.text(), &tokens, stop))
+            .unwrap_or_else(|| {
+                tokens
+                    .iter()
+                    .map(|(token, _)| token.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+        self.move_local(&mut value)?;
+        let held = self.temporary("dbg");
+        let debug = self.debug_source(&value.ty, held.as_str().into(), value.span)?;
+        let pretty = self.prelude_op(PreludeOp::PrettyDebug, [debug]);
+        let mut text = origin::Fragment::plain(format!("{:?} + ", format!("{place} {written} = ")));
+        text.push(pretty);
+        text.push_text(" + \"\\n\"");
+        let print = self.prelude_op(PreludeOp::Print, [text, "true".into()]);
+        let mut source = origin::Fragment::plain(format!("{{ let {held} = "));
+        source.push(value.rendered_source());
+        source.push_text("; ");
+        source.push(print);
+        source.push_text(format!("; {held} }}"));
+        Ok(self.operator_expr(source, value.ty, span(name_span.start(), end)))
     }
 
     /// The rest of [`Self::parse_name_primary`], kept out of its frame: a
