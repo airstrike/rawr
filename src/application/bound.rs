@@ -49,9 +49,11 @@ impl BoundLaunch {
     }
 
     /// Run the closures native code calls on this thread in this
-    /// application, as an iced view value's closures (D558 tier 2).
+    /// application, as an iced view value's closures (D558 tier 2). A build
+    /// without the importer has no imported values, so none to run.
     #[cfg(feature = "sync")]
     pub fn serve_closures(&self) {
+        #[cfg(feature = "rust-import")]
         crate::island::serve_application(
             self.generation(),
             self.launch.authority().clone(),
