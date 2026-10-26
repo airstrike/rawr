@@ -260,6 +260,7 @@ impl Watcher {
 
     /// Wait up to one poll for a save, past its debounce.
     fn changed(&self) -> bool {
+        self.0.poll();
         let now = Instant::now();
         if self.0.start(now).is_some() {
             return true;

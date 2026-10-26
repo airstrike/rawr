@@ -237,6 +237,7 @@ fn session(
             Err(error) => return Err(framework(error, source.clone())),
         }
 
+        adapter.poll();
         let now = Instant::now();
         if now >= refresh_at {
             refresh_at = now + REFRESH_POLL;

@@ -21,6 +21,9 @@ pub struct Adapter {
     notices: notice::Notices,
     wake: notice::Publisher,
     history: native::History,
+    /// Whether [`Adapter::poll`] stats the sources: not for a watcher whose
+    /// native callbacks are disabled.
+    polls: bool,
 }
 
 /// Shared registration control for the watcher's current and staged input union.
@@ -42,6 +45,8 @@ pub struct StagedInputs {
 struct Watch {
     watcher: notify::RecommendedWatcher,
     roots: BTreeMap<PathBuf, bool>,
+    /// What the watcher registered for `roots`: see [`registration`].
+    registered: BTreeMap<PathBuf, bool>,
     handler: Option<Handler>,
 }
 
@@ -279,7 +284,8 @@ impl Adapter {
             directories.iter().map(PathBuf::as_path),
             trees.iter().map(PathBuf::as_path),
         )?;
-        register_all(&mut watcher, &roots)?;
+        let registered = registration(&roots, &filter.paths());
+        register_all(&mut watcher, &registered)?;
         let handler = native.then(|| Handler {
             history: history.clone(),
             filter: Arc::clone(&filter),
@@ -290,6 +296,7 @@ impl Adapter {
             watch: Mutex::new(Watch {
                 watcher,
                 roots,
+                registered,
                 handler,
             }),
             filter: Arc::clone(&filter),
@@ -303,7 +310,36 @@ impl Adapter {
             notices: receiver,
             wake,
             history,
+            polls: native,
         })
+    }
+
+    /// Stat each Rawr source input, as an owner does between notices, and
+    /// deliver a changed one as the data event the native stream would.
+    /// Under a busy disk FSEvents can deliver a save seconds late; a few
+    /// stats a tick see it at once. A source seen the first time only
+    /// records its identity: its events still arrive from the stream.
+    pub fn poll(&self) {
+        if !self.polls {
+            return;
+        }
+        let changed = self.history.poll(self.filter.sources());
+        if changed.is_empty() {
+            return;
+        }
+        let handler = Handler {
+            history: self.history.clone(),
+            filter: Arc::clone(&self.filter),
+            gate: Arc::clone(&self.gate),
+            notices: self.wake.clone(),
+        };
+        for path in &changed {
+            handler.handle(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Data(notify::event::DataChange::Content),
+            ))
+            .add_path(path.clone())));
+        }
+        self.history.deliver(&changed);
     }
 
     /// Return watcher notices without granting candidate authority.
@@ -447,7 +483,7 @@ impl Control {
                     .and_modify(|current| *current |= recursive)
                     .or_insert(recursive);
             }
-            watch.replace(desired)
+            watch.replace(desired, &self.filter.paths())
         })();
         if result.is_err() {
             self.gate.suspend();
@@ -464,7 +500,7 @@ impl Control {
                 directories.iter().map(PathBuf::as_path),
                 trees.iter().map(PathBuf::as_path),
             )?;
-            watch.replace(desired)
+            watch.replace(desired, &self.filter.paths())
         })();
         match result {
             Ok(()) => Vec::new(),
@@ -477,9 +513,13 @@ impl Control {
 }
 
 impl Watch {
-    fn replace(&mut self, desired: BTreeMap<PathBuf, bool>) -> Result<(), Error> {
+    fn replace(
+        &mut self,
+        desired: BTreeMap<PathBuf, bool>,
+        exact: &BTreeSet<PathBuf>,
+    ) -> Result<(), Error> {
         let handler = self.handler.clone();
-        self.replace_with(desired, || match handler {
+        self.replace_with(desired, exact, || match handler {
             Some(handler) => notify::recommended_watcher(move |event| handler.handle(event)),
             None => notify::recommended_watcher(|_event| {}),
         })
@@ -488,15 +528,18 @@ impl Watch {
     fn replace_with(
         &mut self,
         desired: BTreeMap<PathBuf, bool>,
+        exact: &BTreeSet<PathBuf>,
         start: impl FnOnce() -> notify::Result<notify::RecommendedWatcher>,
     ) -> Result<(), Error> {
-        if self.roots == desired {
+        let registered = registration(&desired, exact);
+        if self.registered == registered {
+            self.roots = desired;
             return Ok(());
         }
         // The incumbent remains alive through every fallible successor step.
         // Native lifecycle work never runs under the scheduler admission gate.
         let mut successor = start().map_err(Error::Start)?;
-        register_all(&mut successor, &desired)?;
+        register_all(&mut successor, &registered)?;
         // The successor cannot see events queued before its SinceNow origin.
         // Deliver those incumbent callbacks before retiring it. This lock is
         // registration-only; callbacks use the gate/filter, never this mutex.
@@ -504,6 +547,7 @@ impl Watch {
         self.watcher.drain().map_err(Error::Start)?;
         let retired = std::mem::replace(&mut self.watcher, successor);
         self.roots = desired;
+        self.registered = registered;
         drop(retired);
         Ok(())
     }
@@ -526,6 +570,54 @@ fn register_all(
             })?;
     }
     registration.commit().map_err(Error::Start)
+}
+
+/// The paths the native watcher registers for `roots`. FSEvents watches a
+/// directory's whole subtree, whatever the mode: a directory watched for its
+/// own entries that holds another root (`/` for a missing Cargo config, a
+/// home, a workspace whose `target` builds) would deliver every event below
+/// it, and under a busy disk the stream lags seconds and drops into rescans.
+/// Such a directory registers the exact inputs it stands for instead, which
+/// FSEvents reports whether or not they exist yet.
+#[cfg(target_os = "macos")]
+fn registration(
+    roots: &BTreeMap<PathBuf, bool>,
+    exact: &BTreeSet<PathBuf>,
+) -> BTreeMap<PathBuf, bool> {
+    let holds_root = |root: &PathBuf| {
+        roots
+            .range::<PathBuf, _>((std::ops::Bound::Excluded(root), std::ops::Bound::Unbounded))
+            .next()
+            .is_some_and(|(next, _)| next.starts_with(root))
+    };
+    let replaced = roots
+        .iter()
+        .filter(|(root, recursive)| !**recursive && holds_root(root))
+        .map(|(root, _)| root)
+        .collect::<BTreeSet<_>>();
+    let mut registered = roots
+        .iter()
+        .filter(|(root, _)| !replaced.contains(root))
+        .map(|(root, recursive)| (root.clone(), *recursive))
+        .collect::<BTreeMap<_, _>>();
+    for path in exact {
+        let nearest = path
+            .ancestors()
+            .skip(1)
+            .find(|ancestor| roots.contains_key(*ancestor));
+        if nearest.is_some_and(|root| replaced.contains(&root.to_path_buf())) {
+            registered.insert(path.clone(), false);
+        }
+    }
+    registered
+}
+
+#[cfg(not(target_os = "macos"))]
+fn registration(
+    roots: &BTreeMap<PathBuf, bool>,
+    _exact: &BTreeSet<PathBuf>,
+) -> BTreeMap<PathBuf, bool> {
+    roots.clone()
 }
 
 fn mode(recursive: bool) -> RecursiveMode {
@@ -691,6 +783,42 @@ impl Filter {
         }
     }
 
+    /// Every exact input path, current and staged.
+    fn paths(&self) -> BTreeSet<PathBuf> {
+        match self {
+            Self::Publication(publication) => {
+                publication.read().paths().into_vec().into_iter().collect()
+            }
+            Self::Direct(state) => {
+                let state = read(state);
+                std::iter::once(&state.current)
+                    .chain(state.staged.iter().map(|entry| &entry.inputs))
+                    .flat_map(|inputs| inputs.paths().iter().cloned())
+                    .collect()
+            }
+        }
+    }
+
+    /// Every input path with only a Rawr source role, current and staged.
+    fn sources(&self) -> BTreeSet<PathBuf> {
+        match self {
+            Self::Publication(publication) => publication
+                .read()
+                .current()
+                .source_paths()
+                .iter()
+                .cloned()
+                .collect(),
+            Self::Direct(state) => {
+                let state = read(state);
+                std::iter::once(&state.current)
+                    .chain(state.staged.iter().map(|entry| &entry.inputs))
+                    .flat_map(|inputs| inputs.source_paths().iter().cloned())
+                    .collect()
+            }
+        }
+    }
+
     /// Every non-source input path and recursive root, current and staged.
     fn native(&self) -> (Box<[PathBuf]>, Box<[PathBuf]>) {
         match self {
@@ -797,6 +925,12 @@ impl Handler {
         self.notices.publish_with(|| {
             match self.gate.observe_if_notice(now, || {
                 let (relevant, source_only) = self.filter.classify(&change);
+                // A source write the poll already delivered, reported late.
+                let relevant = relevant
+                    && !(source_only
+                        && change
+                            .known_paths()
+                            .is_some_and(|paths| self.history.delivered(paths)));
                 if matches!(change, input::Change::Rescan) {
                     self.history.rescan();
                 } else if relevant && !source_only {
@@ -893,9 +1027,12 @@ mod tests {
         let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
         let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
         let mut watch = super::lock(&adapter.control.watch);
+        let exact = adapter.filter.paths();
         let desired = watch.roots.clone();
         watch
-            .replace_with(desired, || panic!("unchanged roots restarted observation"))
+            .replace_with(desired, &exact, || {
+                panic!("unchanged roots restarted observation")
+            })
             .unwrap();
     }
 
@@ -904,18 +1041,21 @@ mod tests {
         let fixture = Fixture::new("failed-successor");
         let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
         let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
+        let exact = adapter.filter.paths();
         let mut watch = super::lock(&adapter.control.watch);
         let original = watch.roots.clone();
         let mut desired = original.clone();
-        desired.insert(fixture.root.join("missing"), false);
+        // No backend registers a path none of whose ancestors exist. FSEvents
+        // registers a missing path below an existing directory by name.
+        desired.insert(std::path::PathBuf::from("rawr-absent-root/missing"), false);
         assert!(watch
-            .replace_with(desired.clone(), || Err(notify::Error::generic(
+            .replace_with(desired.clone(), &exact, || Err(notify::Error::generic(
                 "start failed"
             )))
             .is_err());
         assert_eq!(watch.roots, original);
         assert!(watch
-            .replace_with(desired, || notify::recommended_watcher(|_| {}))
+            .replace_with(desired, &exact, || notify::recommended_watcher(|_| {}))
             .is_err());
         assert_eq!(watch.roots, original);
     }
@@ -1213,6 +1353,33 @@ mod tests {
         assert!(!super::lock(&adapter.control.watch)
             .roots
             .contains_key(&second));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fsevents_register_the_exact_inputs_of_a_directory_holding_another_root() {
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::path::PathBuf;
+        let roots = BTreeMap::from([
+            (PathBuf::from("/"), false),
+            (PathBuf::from("/work/app"), false),
+            (PathBuf::from("/work/app/src"), false),
+            (PathBuf::from("/registry/dep"), true),
+        ]);
+        let exact = BTreeSet::from([
+            PathBuf::from("/.cargo/config.toml"),
+            PathBuf::from("/work/app/Cargo.toml"),
+            PathBuf::from("/work/app/src/main.rs"),
+        ]);
+        assert_eq!(
+            super::registration(&roots, &exact),
+            BTreeMap::from([
+                (PathBuf::from("/.cargo/config.toml"), false),
+                (PathBuf::from("/registry/dep"), true),
+                (PathBuf::from("/work/app/Cargo.toml"), false),
+                (PathBuf::from("/work/app/src"), false),
+            ])
+        );
     }
 
     #[test]
