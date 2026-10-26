@@ -290,21 +290,21 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/start.html"), ["hello.rs", "cart.rs"]);
   assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
   assert.deepEqual(at("docs/reference/items.html"), [
-    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "geometry.rs", "derive.rs",
+    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "mut-ref.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "geometry.rs", "variants.rs", "derive.rs",
   ]);
   assert.deepEqual(at("docs/reference/types.html"), [
-    "integers.rs", "sqrt.rs", "text.rs", "tuples.rs", "option.rs", "rc.rs", "impl-iter.rs", "fn-pointer.rs", "casts.rs",
+    "integers.rs", "wide.rs", "sqrt.rs", "text.rs", "tuples.rs", "option.rs", "rc.rs", "impl-iter.rs", "dyn-iter.rs", "fn-pointer.rs", "casts.rs",
   ]);
   assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs", "shapes.rs", "countdown.rs", "bag.rs"]);
   assert.deepEqual(at("docs/reference/patterns.html"), [
     "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
   ]);
   assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "struct-update.rs"]);
-  assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
-  assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "format.rs"]);
+  assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "drop-order.rs", "clone-out.rs", "rc-refcell.rs"]);
+  assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "write.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
     "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs", "futures.rs",
-    "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs", "path.rs",
+    "hashmap.rs", "refcell.rs", "cell.rs", "mem.rs", "ordering.rs", "conversions.rs", "errors.rs", "path.rs",
   ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
   assert.deepEqual(at("docs/iced/index.html"), ["counter.rs"]);
