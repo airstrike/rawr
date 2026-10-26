@@ -55,6 +55,8 @@ closures/retain_capture.rs	E0502:3
 closures/retain_other.rs	ok	0	"[1]\n"
 closures/returned_closure_borrows_local.rs	E0373:3
 closures/returned_closure_reborrows_parameter.rs	ok	0	"1\n"
+closures/returned_impl_closure_borrows_local.rs	E0373:3
+closures/returned_impl_closure_moves_local.rs	ok	0	"1\n"
 closures/returned_kept_after_closure.rs	E0502:7
 closures/returns_borrow.rs	E0502:5
 closures/returns_borrow_ended.rs	ok	0	"[1, 2]\n[1, 2, 3]\n"
@@ -69,6 +71,8 @@ closures/shared_kept_push.rs	E0502:4
 closures/shared_kept_read.rs	ok	0	"2 2\n"
 closures/signature_relates_borrows.rs	E0597:4
 closures/static_bound.rs	E0373:6
+closures/static_bound_first.rs	E0373:6
+closures/static_bound_impl.rs	E0373:6
 closures/static_bound_move.rs	ok	0	"2\n"
 closures/string_capture.rs	E0502:5
 closures/string_capture_ok.rs	ok	0	"abc\n"
@@ -767,6 +771,24 @@ closures/mutations/nested_closure_v_7_closure_mut_across.rs	E0499:7 E0502:8
 closures/mutations/nested_closure_v_7_closure_mut_ended.rs	E0499:7 E0502:9
 closures/mutations/nested_closure_v_7_closure_returned_across.rs	E0502:7 E0502:9
 closures/mutations/nested_closure_v_7_closure_shared_across.rs	E0502:7 E0502:8
+closures/mutations/option_get_or_insert_with_o_6_closure_back_edge.rs	E0502:9
+closures/mutations/option_get_or_insert_with_o_6_closure_into_branch.rs	E0502:7
+closures/mutations/option_get_or_insert_with_o_6_closure_mut_across.rs	E0502:7
+closures/mutations/option_get_or_insert_with_o_6_closure_mut_ended.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_o_6_closure_returned_across.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_o_6_closure_shared_across.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_v_5_closure_back_edge.rs	E0499:8
+closures/mutations/option_get_or_insert_with_v_5_closure_into_branch.rs	E0499:6
+closures/mutations/option_get_or_insert_with_v_5_closure_mut_across.rs	E0499:6
+closures/mutations/option_get_or_insert_with_v_5_closure_mut_ended.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_v_5_closure_returned_across.rs	E0502:7
+closures/mutations/option_get_or_insert_with_v_5_closure_shared_across.rs	E0502:6
+closures/mutations/option_get_or_insert_with_v_6_closure_back_edge.rs	E0502:9
+closures/mutations/option_get_or_insert_with_v_6_closure_into_branch.rs	E0502:7
+closures/mutations/option_get_or_insert_with_v_6_closure_mut_across.rs	E0502:7
+closures/mutations/option_get_or_insert_with_v_6_closure_mut_ended.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_v_6_closure_returned_across.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closures/mutations/option_get_or_insert_with_v_6_closure_shared_across.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
 closures/mutations/option_pattern_in_body_o_4_closure_back_edge.rs	E0502:4 E0506:7
 closures/mutations/option_pattern_in_body_o_4_closure_into_branch.rs	E0502:4 E0506:5
 closures/mutations/option_pattern_in_body_o_4_closure_mut_across.rs	E0502:4 E0506:5
@@ -1193,6 +1215,30 @@ closures/mutations/use_while_mutably_borrowed_x_6_closure_mut_across.rs	E0503:4 
 closures/mutations/use_while_mutably_borrowed_x_6_closure_mut_ended.rs	E0503:4
 closures/mutations/use_while_mutably_borrowed_x_6_closure_returned_across.rs	E0503:4
 closures/mutations/use_while_mutably_borrowed_x_6_closure_shared_across.rs	E0503:4
+closures/mutations/vec_of_closures_calls_4_closure_back_edge.rs	E0499:7 E0502:9
+closures/mutations/vec_of_closures_calls_4_closure_into_branch.rs	E0499:5 E0502:9
+closures/mutations/vec_of_closures_calls_4_closure_mut_across.rs	E0499:5 E0502:7
+closures/mutations/vec_of_closures_calls_4_closure_mut_ended.rs	E0502:7
+closures/mutations/vec_of_closures_calls_4_closure_returned_across.rs	E0502:6 E0502:8
+closures/mutations/vec_of_closures_calls_4_closure_shared_across.rs	E0502:5 E0502:7
+closures/mutations/vec_of_closures_calls_6_closure_back_edge.rs	E0502:5 E0502:9
+closures/mutations/vec_of_closures_calls_6_closure_into_branch.rs	E0502:5 E0502:7
+closures/mutations/vec_of_closures_calls_6_closure_mut_across.rs	E0502:5 E0502:7
+closures/mutations/vec_of_closures_calls_6_closure_mut_ended.rs	E0502:5
+closures/mutations/vec_of_closures_calls_6_closure_returned_across.rs	E0502:5
+closures/mutations/vec_of_closures_calls_6_closure_shared_across.rs	E0502:5
+closures/mutations/vec_of_closures_v_4_closure_back_edge.rs	E0502:7 E0502:9
+closures/mutations/vec_of_closures_v_4_closure_into_branch.rs	E0502:5 E0502:9
+closures/mutations/vec_of_closures_v_4_closure_mut_across.rs	E0502:5 E0502:7
+closures/mutations/vec_of_closures_v_4_closure_mut_ended.rs	E0502:7
+closures/mutations/vec_of_closures_v_4_closure_returned_across.rs	E0502:8
+closures/mutations/vec_of_closures_v_4_closure_shared_across.rs	E0502:7
+closures/mutations/vec_of_closures_v_5_closure_back_edge.rs	E0502:5 E0499:8
+closures/mutations/vec_of_closures_v_5_closure_into_branch.rs	E0502:5 E0499:6
+closures/mutations/vec_of_closures_v_5_closure_mut_across.rs	E0502:5 E0499:6
+closures/mutations/vec_of_closures_v_5_closure_mut_ended.rs	E0502:5 E0502:7
+closures/mutations/vec_of_closures_v_5_closure_returned_across.rs	E0502:7
+closures/mutations/vec_of_closures_v_5_closure_shared_across.rs	E0502:6
 closures/mutations/while_let_borrow_stack_8_closure_back_edge.rs	E0499:11
 closures/mutations/while_let_borrow_stack_8_closure_into_branch.rs	E0499:9
 closures/mutations/while_let_borrow_stack_8_closure_mut_across.rs	E0499:9

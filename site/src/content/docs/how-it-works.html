@@ -44,7 +44,7 @@ fn main() {
     println!("{l}");
 }</code></pre>
 </div>
-<p>A closure borrows what it captures where it is written, and holds those borrows for as long as it is used, as in rustc. A closure that changes a captured value borrows it as <code>&amp;mut</code>. A <code>move</code> closure takes what it captures, and so does a closure that moves a captured value out. A closure captures only the fields it uses, as <code>s.a</code> of <code>s</code>, and all of a value it indexes. A call of a closure keeps the borrows its body returns of what it captured.</p>
+<p>A closure borrows what it captures where it is written, and holds those borrows for as long as it is used, as in rustc. A closure that changes a captured value borrows it as <code>&amp;mut</code>. A <code>move</code> closure takes what it captures, and so does a closure that moves a captured value out. A closure captures only the fields it uses, as <code>s.a</code> of <code>s</code>, and all of a value it indexes. A call of a closure keeps the borrows its body returns of what it captured. A closure that borrows a local is refused with E0373 when it is returned or passed where <code>'static</code> is asked, as by <code>impl Fn() + 'static</code>.</p>
 <div class="block">
   <div class="file"><b>closure.rs</b></div>
   <pre><code data-lang="rust">fn main() {

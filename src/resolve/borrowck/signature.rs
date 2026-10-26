@@ -197,7 +197,27 @@ impl Reader<'_> {
                 outer: None,
                 inner: vec![Region::Captures],
             },
-            Type::Path(_) if ty.fn_signature().is_some() || ty.dyn_trait().is_some() => Shape {
+            // A function value holds what it captures: within the
+            // lifetimes its type is bounded by (`impl Fn() + 'a`), or any.
+            Type::Path(path) if ty.fn_signature().is_some() => {
+                let bounded: Vec<Region> = path
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Lifetime(span) => Some(self.lifetime(Some(*span))),
+                        Argument::Type(_) => None,
+                    })
+                    .collect();
+                Shape {
+                    outer: None,
+                    inner: if bounded.is_empty() {
+                        vec![Region::Unknown]
+                    } else {
+                        bounded
+                    },
+                }
+            }
+            Type::Path(_) if ty.dyn_trait().is_some() => Shape {
                 outer: None,
                 inner: vec![Region::Unknown],
             },
@@ -262,22 +282,6 @@ fn opaque(name: &str) -> bool {
     {
         let _ = name;
         false
-    }
-}
-
-/// Whether `ty` names the type parameter `name`.
-fn mentions(ty: &Type, name: &str) -> bool {
-    match ty {
-        Type::Unit(_) => false,
-        Type::Tuple { members, .. } => members.iter().any(|member| mentions(member, name)),
-        Type::Reference { target, .. } => mentions(target, name),
-        Type::Path(path) => {
-            (matches!(path.target, Target::Parameter) && path.name == name)
-                || path.arguments.iter().any(|argument| match argument {
-                    Argument::Type(ty) => mentions(ty, name),
-                    Argument::Lifetime(_) => false,
-                })
-        }
     }
 }
 
@@ -453,25 +457,9 @@ pub(crate) fn summary(
         .collect();
     let statics = parameters
         .iter()
-        .zip(&signature.parameters)
-        .map(|(shape, ty)| {
+        .map(|shape| {
             if shape.outer == Some(Region::Static) {
                 return Keeps::All;
-            }
-            // `f: F` of `F: Fn() + 'static` is read as a function type, its
-            // parameter gone from the signature: what the bound asks of it
-            // these facts can't tell.
-            if ty.fn_signature().is_some()
-                && bounds.iter().any(|(from, to)| {
-                    to == "static"
-                        && !signature
-                            .parameters
-                            .iter()
-                            .chain([&signature.output])
-                            .any(|ty| mentions(ty, from))
-                })
-            {
-                return Keeps::Unknown;
             }
             let bounded = |region: &Region| match region {
                 Region::Static => true,
