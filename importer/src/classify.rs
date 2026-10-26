@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 29;
+const CLASSIFIER_VERSION: u32 = 30;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4378,6 +4378,13 @@ impl<P: api::Phase> Context<'_, P> {
                 Some((target, mode)) => {
                     guard = Some(mode);
                     target
+                }
+                // A `&str` the method lends, as url's `Url::scheme(&self)`
+                // gives, is a copy of its text.
+                None if is_str_reference(signature.output()) => {
+                    representability::convert::Type::Builtin(
+                        representability::convert::Builtin::Text,
+                    )
                 }
                 // An output Rawr cannot hold whose type implements
                 // `Display`, as `DelayedFormat<StrftimeItems<'a>>`, is its
