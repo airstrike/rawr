@@ -445,6 +445,14 @@ export class PlayBot extends Container<Env> {
     };
   }
 
+  // Every start records what it started. That covers ensure's starts and the
+  // library's own, which a request to a stopped container makes (as after a
+  // rollout), so the next cron does not restart a bot on the deployed image.
+  override async onStart() {
+    await this.ctx.storage.put(STARTED_KEY, this.wanted());
+    await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
+  }
+
   // The bot gets no inbound requests, so idleness means nothing: never sleep.
   override async onActivityExpired() {}
 
@@ -506,8 +514,6 @@ export class PlayBot extends Container<Env> {
         await this.event("worker", "error", `start failed: ${String(error).slice(0, 400)}`);
         return false;
       }
-      await this.ctx.storage.put(STARTED_KEY, deployed);
-      await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
     }
     return this.ctx.container?.running ?? false;
   }
