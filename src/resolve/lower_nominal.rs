@@ -18,6 +18,8 @@ mod reverse;
 mod collected_tests;
 mod compare;
 #[cfg(test)]
+mod copies_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
@@ -3981,7 +3983,9 @@ impl PreludeOp {
             | Self::SetAlgebra
             | Self::VecCapacity
             | Self::KeyedRange
-            | Self::PathGet => Some(false),
+            | Self::PathGet
+            | Self::GenericDebug
+            | Self::DisplayText => Some(false),
             _ => None,
         }
     }
@@ -6409,8 +6413,9 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
     let by_reference = match &op {
         ExecutableOp::Prelude(op) | ExecutableOp::Shaped { op, .. } => op.by_reference(),
         // A facade method with a `&mut self` receiver changes the receiver
-        // it is called on, which the caller stores back.
+        // it is called on, and one with `&self` reads it where it is.
         ExecutableOp::Intrinsic { proof } if proof.mutates_receiver() => Some(true),
+        ExecutableOp::Intrinsic { proof } if proof.borrows_receiver() => Some(false),
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
@@ -8213,6 +8218,12 @@ impl ParsedExpr {
     fn retain_origin(mut self) -> Self {
         self.source.cover(self.span);
         self
+    }
+
+    /// Whether this value is a local read by its name, which a call or a
+    /// `format!` can borrow where it is instead of a copy (D568).
+    fn is_local(&self) -> bool {
+        self.prelude.is_empty() && is_valid_identifier(self.source.as_str())
     }
 }
 
@@ -19087,6 +19098,7 @@ impl<'a> Parser<'a> {
         let summary = self.host_summary(&item, &self.inference.resolve(&ty), arguments.len());
         self.note_call(call.end(), summary);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
+        let shared = item.receiver() == Some(receiver::Mode::Shared);
         let guard = item.guard();
         let opens = item.opens();
         let places = if item.imported_identity().is_some() {
@@ -19103,9 +19115,9 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
-        // `animation.go_mut(..)` of a facade value in a place: the call
-        // changes a copy, which is stored back, as a script `&mut self`
-        // method's receiver is.
+        // `animation.go_mut(..)` of a facade value in a place: a local is
+        // changed where it is. Any other place is changed through a copy,
+        // which is stored back, as a script `&mut self` method's receiver is.
         if mutable
             && (definition.identity().imported().is_none() || through_guard)
             && !scoped
@@ -19113,6 +19125,29 @@ impl<'a> Parser<'a> {
             && let Some(lvalue) = receiver.lvalue.clone()
         {
             self.require_mutable_binding(lvalue.binding(), member_span)?;
+            let local = match &lvalue {
+                Lvalue::Binding { binding, .. } => Some(binding.as_str()),
+                Lvalue::Place { place, .. } => Some(place.as_str()),
+                _ => None,
+            };
+            if receiver.is_local() && local == Some(receiver.source.as_str()) {
+                let (mut prelude, operands) = self.private_operands(&helper, arguments);
+                let mut source = receiver.source;
+                source.push_text(format!(".{helper}("));
+                source.push(origin::Fragment::join(operands, ", "));
+                source.push_text(")");
+                prelude.push(source);
+                return Ok(ParsedExpr {
+                    prelude: origin::Fragment::default(),
+                    source: prelude.surrounded("{ ", " }"),
+                    ty,
+                    span: call,
+                    lvalue: None,
+                    outcome,
+                    evaluation,
+                }
+                .retain_origin());
+            }
             let place = self.temporary("receiver");
             let result = self.temporary("result");
             let mut prelude = origin::Fragment::default();
@@ -19144,8 +19179,16 @@ impl<'a> Parser<'a> {
             }
             .retain_origin());
         }
-        let (prelude, source) =
-            self.private_call(&helper, std::iter::once(receiver).chain(arguments));
+        // A `&self` receiver that is a local is lent where it is. It is
+        // read after the arguments, which Rust's borrow of it keeps from
+        // changing it.
+        let (prelude, source) = if shared && self.normalize_private_calls && receiver.is_local() {
+            let (prelude, operands) = self.private_operands(&helper, arguments);
+            let source = self.op_call(&helper, std::iter::once(receiver.source).chain(operands));
+            (prelude, source)
+        } else {
+            self.private_call(&helper, std::iter::once(receiver).chain(arguments))
+        };
         let value = ParsedExpr {
             prelude,
             source,
@@ -29615,11 +29658,23 @@ impl<'a> Parser<'a> {
             while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
                 ty = self.inference.resolve(&target);
             }
-            let temporary = self.temporary("format");
-            source.push_text(format!("let {temporary} = "));
-            source.push(argument.rendered_source());
-            source.push_text(";\n");
-            names.push(temporary);
+            // The macro borrows a local where it is (D568). Rust's borrow
+            // keeps the later arguments from changing it. One a later
+            // argument moved, which rustc refuses (E0505), is read first.
+            let moved = |name: &str| {
+                self.bindings
+                    .get(name)
+                    .is_some_and(|local| !local.available || !local.moved_fields.is_empty())
+            };
+            if argument.is_local() && !moved(argument.source.as_str()) {
+                names.push(argument.source.as_str().to_string());
+            } else {
+                let temporary = self.temporary("format");
+                source.push_text(format!("let {temporary} = "));
+                source.push(argument.rendered_source());
+                source.push_text(";\n");
+                names.push(temporary);
+            }
             types.push((ty, argument.span));
         }
 
@@ -44824,6 +44879,17 @@ impl<'a> Parser<'a> {
                 .collect::<Vec<_>>();
             return (origin::Fragment::default(), self.op_call(helper, operands));
         }
+        let (prelude, operands) = self.private_operands(helper, operands);
+        (prelude, self.op_call(helper, operands))
+    }
+
+    /// Each operand of a pushed operation evaluated once, in order, into a
+    /// local of its own.
+    fn private_operands(
+        &mut self,
+        helper: &str,
+        operands: impl IntoIterator<Item = ParsedExpr>,
+    ) -> (origin::Fragment, Vec<origin::Fragment>) {
         let mut prelude = origin::Fragment::default();
         let operands = operands
             .into_iter()
@@ -44832,7 +44898,7 @@ impl<'a> Parser<'a> {
                 self.materialize(operand, &format!("{helper}_arg_{index}"), &mut prelude)
             })
             .collect::<Vec<_>>();
-        (prelude, self.op_call(helper, operands))
+        (prelude, operands)
     }
 
     /// The call of a pushed operation. A host operation in a body whose
