@@ -1382,6 +1382,23 @@ fn thread_parent(channel: &GuildChannel) -> Option<ChannelId> {
         .flatten()
 }
 
+/// Exit on SIGTERM, which a container rollout sends first. The bot is the
+/// container's PID 1, which has no default action for SIGTERM, so without
+/// this it would run on until the SIGKILL minutes later. The minute's stats
+/// go out first if they can within 2 s.
+#[cfg(unix)]
+async fn exit_on_sigterm(shared: Arc<Shared>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let Ok(mut term) = signal(SignalKind::terminate()) else {
+        eprintln!("rawr-play-bot: cannot listen for SIGTERM");
+        return;
+    };
+    term.recv().await;
+    eprintln!("rawr-play-bot: SIGTERM; exiting");
+    let _ = tokio::time::timeout(Duration::from_secs(2), shared.send_stats()).await;
+    std::process::exit(0);
+}
+
 #[tokio::main]
 async fn main() {
     let Some(token) = token() else {
@@ -1465,6 +1482,8 @@ async fn main() {
         servers: AtomicU64::new(0),
         reporting: AtomicBool::new(false),
     });
+    #[cfg(unix)]
+    tokio::spawn(exit_on_sigterm(Arc::clone(&shared)));
     let mut defaults = rawr_play::Options::default();
     defaults.limits.time = still;
     // Read the bundled fonts once, so the page cache holds them before the
