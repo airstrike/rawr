@@ -3181,7 +3181,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 41] = [
     "Clone",
     "Hash",
     "Copy",
@@ -3222,6 +3222,7 @@ pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
     "IndexMut",
     "FromIterator",
     "Error",
+    "Drop",
 ];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
@@ -3386,6 +3387,13 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         }
         // `std::error::Error`'s methods all have defaults.
         "Copy" | "Eq" | "Hash" | "IntoFragment" | "Error" => Vec::new(),
+        // `trait Drop { fn drop(&mut self); }`: the destructor, which Rawr
+        // runs where Rust drops a value (`lower_nominal::drops`).
+        "Drop" => {
+            let mut drop = function("drop", true, Vec::new(), None);
+            drop.receiver = Some(crate::item::Receiver::Mutable(Span::NONE));
+            vec![drop]
+        }
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.

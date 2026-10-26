@@ -563,6 +563,11 @@ impl Model {
         expected: &type_ref::Type,
         shared: &mut BTreeSet<usize>,
     ) -> Result<(), construction::Error> {
+        // A part a move took out of its local, which Rust leaves
+        // inaccessible, is `()` (`__rawr_clear`).
+        if value.is_unit() {
+            return Ok(());
+        }
         if let Some(element) = expected.option_element() {
             return match crate::option::read(value) {
                 Some(Some(inner)) => self.validate_type(&inner, element, shared),

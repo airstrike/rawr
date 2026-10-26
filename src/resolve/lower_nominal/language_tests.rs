@@ -10548,3 +10548,225 @@ run()"#,
     );
     assert_eq!(value, "(2, 24) None Vec<i32>, x.len(), a + b x1-2 9");
 }
+
+/// The `Noisy` type the drop tests share: its `drop` prints its name.
+const NOISY: &str = r#"
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+"#;
+
+/// What `body`, after `NOISY` and with `main()` called, prints.
+fn dropped(body: &str) -> String {
+    printed(&format!("{NOISY}{body}\nmain();"))
+}
+
+/// The error `body`, after `NOISY`, gives.
+fn drop_refused(body: &str) -> String {
+    match Engine::new().run(&format!("{NOISY}{body}\nmain();")) {
+        Ok(()) => panic!("Rawr runs this program, which it should refuse: {body}"),
+        Err(error) => error.to_string(),
+    }
+}
+
+#[test]
+fn language_drop_runs_where_rustc_drops() {
+    // Each expected text is what the program built by rustc prints.
+    let printed = dropped(
+        r#"
+fn main() {
+    let _a = Noisy("a");
+    {
+        let _b = Noisy("b");
+        println!("inner");
+    }
+    let c = Noisy("c");
+    drop(c);
+    let v = vec![Noisy("v1"), Noisy("v2")];
+    println!("len {}", v.len());
+    drop(v);
+    std::mem::drop(Noisy("w"));
+    let _x = Noisy("x");
+    let _y = Noisy("y");
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "inner\ndrop b\ndrop c\nlen 2\ndrop v1\ndrop v2\ndrop w\nend\ndrop y\ndrop x\ndrop a\n"
+    );
+}
+
+#[test]
+fn language_drop_temporaries_and_assignments() {
+    let printed = dropped(
+        r#"
+struct Holder {
+    n: Noisy,
+}
+fn make(s: &'static str) -> Noisy {
+    Noisy(s)
+}
+fn main() {
+    Noisy("t");
+    let _ = Noisy("u");
+    let _x = Noisy("x");
+    let n = make("n").0;
+    println!("{} {}", n, make("p").0);
+    let mut a = Noisy("a1");
+    a = Noisy("a2");
+    let mut h = Holder { n: Noisy("h1") };
+    h.n = Noisy("h2");
+    let mut c = Noisy("c1");
+    let d = c;
+    c = Noisy("c2");
+    println!("{} {} {}", a.0, c.0, d.0);
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "drop t\ndrop u\ndrop n\nn p\ndrop p\ndrop a1\ndrop h1\na2 c2 c1\n\
+         drop c1\ndrop c2\ndrop h2\ndrop a2\ndrop x\n"
+    );
+}
+
+#[test]
+fn language_drop_fields_and_holders_in_order() {
+    let printed = dropped(
+        r#"
+struct Outer {
+    name: &'static str,
+    first: Noisy,
+    second: Noisy,
+}
+impl Drop for Outer {
+    fn drop(&mut self) {
+        println!("drop outer {}", self.name);
+    }
+}
+enum E {
+    A(Noisy),
+    B { x: Noisy, y: Noisy },
+}
+fn main() {
+    let _o = Outer { name: "o", first: Noisy("f1"), second: Noisy("f2") };
+    let _e = E::B { x: Noisy("ex"), y: Noisy("ey") };
+    let _f = E::A(Noisy("ea"));
+    let _t = (Noisy("t1"), 5, Noisy("t2"));
+    let _b = Box::new(Noisy("box"));
+    let _s = Some(Noisy("some"));
+    let _r: Result<Noisy, i32> = Ok(Noisy("ok"));
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "end\ndrop ok\ndrop some\ndrop box\ndrop t1\ndrop t2\ndrop ea\ndrop ex\ndrop ey\n\
+         drop outer o\ndrop f1\ndrop f2\n"
+    );
+}
+
+#[test]
+fn language_drop_moves_and_jumps() {
+    let printed = dropped(
+        r#"
+fn take(n: Noisy) {
+    println!("took {}", n.0);
+}
+fn early(flag: bool) -> i32 {
+    let _a = Noisy("ea");
+    if flag {
+        let _b = Noisy("eb");
+        return 1;
+    }
+    2
+}
+fn tried(fail: bool) -> Result<i32, String> {
+    let _q = Noisy("q");
+    let r: Result<i32, String> = if fail { Err("bad".to_string()) } else { Ok(3) };
+    let v = r?;
+    Ok(v)
+}
+fn main() {
+    let a = Noisy("a");
+    take(a);
+    println!("r {}", early(true));
+    for i in 0..3 {
+        let _l = Noisy("loop");
+        if i == 1 {
+            break;
+        }
+    }
+    println!("q {:?}", tried(true));
+    let o = Some(Noisy("o"));
+    if let Some(n) = o {
+        println!("got {}", n.0);
+    }
+    let v = vec![Noisy("v1"), Noisy("v2"), Noisy("v3")];
+    for n in v {
+        if n.0 == "v2" {
+            break;
+        }
+    }
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "took a\ndrop a\ndrop eb\ndrop ea\nr 1\ndrop loop\ndrop loop\ndrop q\n\
+         q Err(\"bad\")\ngot o\ndrop o\ndrop v1\ndrop v2\ndrop v3\nend\n"
+    );
+}
+
+#[test]
+fn language_drop_refuses_what_it_cannot_drop_exactly() {
+    let error = drop_refused(
+        "use std::rc::Rc;\nfn main() { let a = Rc::new(Noisy(\"rc\")); let _b = a.clone(); }",
+    );
+    assert!(error.contains("inside an `Rc`"), "{error}");
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+    let error = drop_refused(
+        "fn main() { let n = Noisy(\"n\"); let f = move || println!(\"{}\", n.0); f(); }",
+    );
+    assert!(error.contains("by move"), "{error}");
+    // rustc's E0040 and E0509.
+    let error = drop_refused("fn main() { let mut n = Noisy(\"n\"); n.drop(); }");
+    assert!(error.contains("E0040"), "{error}");
+    let error = drop_refused(
+        "struct W { n: Noisy }\nimpl Drop for W { fn drop(&mut self) {} }\n\
+         fn main() { let w = W { n: Noisy(\"n\") }; let n = w.n; println!(\"{}\", n.0); }",
+    );
+    assert!(error.contains("E0509"), "{error}");
+}
+
+#[test]
+fn language_drop_leaves_a_crate_without_drop_as_it_was() {
+    // Without `impl Drop`, nothing calls the drop glue: values drop with
+    // their last copy, as before.
+    let printed = printed(
+        r#"
+struct Quiet(&'static str);
+fn main() {
+    let q = Quiet("q");
+    let v = vec![q];
+    println!("{}", v.len());
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "1\n");
+    let source = "struct Quiet(i64);\nfn main() { let q = Quiet(1); let _ = q.0; }";
+    let ast = Engine::new()
+        .compile(source)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(ast
+        .iter_functions()
+        .all(|function| function.name != super::drops::GLUE));
+}

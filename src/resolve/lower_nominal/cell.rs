@@ -244,6 +244,8 @@ impl Parser<'_> {
         match (member.as_str(), arguments.as_mut_slice()) {
             ("new", [value]) => {
                 let ty = Ty::Cell(kind, Box::new(self.inference.resolve(&value.ty)));
+                // A cell of a value with drop glue is refused.
+                self.needs_drop(&ty, call)?;
                 let source = self.prelude_op(kind.new_op(), [value.rendered_source()]);
                 Ok(self.operator_expr(source, ty, call))
             }
