@@ -1121,7 +1121,7 @@ fn resolve_imports(
             match host.entry(&std_reexport(&prefix, host)) {
                 None if std_fmt_import(&prefix) => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
-                Some(host::Entry::Item(_) | host::Entry::Endpoint(_)) => {
+                Some(host::Entry::Item(_) | host::Entry::Endpoint(_) | host::Entry::Builtin(_)) => {
                     return Err(Error::InvalidImport {
                         path: prefix,
                         reason: "import groups require a module or type namespace".into(),
@@ -1189,6 +1189,14 @@ fn resolve_imports(
                     },
                 );
             }
+            if matches!(binding.target, item::Import::Alias)
+                && let Some(host::Entry::Builtin(builtin)) = host.entry(&binding.qualified)
+            {
+                types.insert(
+                    binding.name.text.clone(),
+                    type_ref::Target::Alias(type_ref::Alias::builtin(builtin, binding.name.span)),
+                );
+            }
         }
 
         uses[index] = Some(item::Use {
@@ -1236,14 +1244,23 @@ fn module_header_types(
             continue;
         };
         let qualified = format!("{}{}", binding.qualified, &name[first.name.text.len()..]);
-        if let Some(host::Entry::Type(definition)) = host.entry(&qualified) {
-            types.insert(
-                name,
-                type_ref::Target::Host {
-                    definition: definition.clone(),
-                    owner: host.type_owner(&qualified).cloned(),
-                },
-            );
+        match host.entry(&qualified) {
+            Some(host::Entry::Type(definition)) => {
+                types.insert(
+                    name,
+                    type_ref::Target::Host {
+                        definition: definition.clone(),
+                        owner: host.type_owner(&qualified).cloned(),
+                    },
+                );
+            }
+            Some(host::Entry::Builtin(builtin)) => {
+                types.insert(
+                    name,
+                    type_ref::Target::Alias(type_ref::Alias::builtin(builtin, path.span)),
+                );
+            }
+            _ => {}
         }
     }
 }
@@ -1270,6 +1287,8 @@ fn resolve_import_binding(
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),
         },
+        // A facade's alias of a builtin, as iced's `markdown::Uri`.
+        Some(host::Entry::Builtin(_)) => item::Import::Alias,
         Some(host::Entry::Endpoint(contract)) => {
             let (_, owner) =
                 host.operation_endpoint(&qualified)

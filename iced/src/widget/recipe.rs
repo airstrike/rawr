@@ -134,10 +134,11 @@ impl View {
 }
 
 /// A native value a recipe borrows at each lowering, as `PaneGrid::new`
-/// borrows the `pane_grid::State`: a copy the view's transition put in the
-/// application's home, which the lowering context lends for iced's view
-/// lifetime. The State can change only in a transition, which evaluates the
-/// view again, so the copy is the value the view borrows.
+/// borrows the `pane_grid::State` (D568): the value itself, which moves
+/// from the runner's arena into the application's home the first time a
+/// view borrows it and stays there. The lowering context lends the home
+/// for iced's view lifetime, and the arena's slot reaches the value in the
+/// home for the State's other uses, as `update` changing it in place.
 pub struct Native<T> {
     handle: crate::home::Handle,
     marker: std::marker::PhantomData<fn() -> T>,
@@ -166,6 +167,18 @@ impl<T: Any + Send> Native<T> {
     /// The value, borrowed for the view lifetime `context` lends.
     pub fn get<'a>(&self, context: &Context<'a>) -> Option<&'a T> {
         context.home()?.get::<T>(&self.handle).ok()
+    }
+
+    /// `f` of the value, in the home of the transition running now or the
+    /// one the running call borrows.
+    pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> Result<R, String> {
+        crate::home::get::<T, R>(&self.handle, f).map_err(|error| error.to_string())
+    }
+
+    /// `f` of the value changed in place, which only a transition may: a
+    /// call a view runs borrows the home shared (E0502).
+    pub fn write<R>(&self, f: impl FnOnce(&mut T) -> R) -> Result<R, String> {
+        crate::home::with_mut::<T, R>(&self.handle, f).map_err(|error| error.to_string())
     }
 }
 

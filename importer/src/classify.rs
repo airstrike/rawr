@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 29;
+const CLASSIFIER_VERSION: u32 = 32;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4378,6 +4378,20 @@ impl<P: api::Phase> Context<'_, P> {
                 Some((target, mode)) => {
                     guard = Some(mode);
                     target
+                }
+                // A `&str` the method lends, as url's `Url::scheme(&self)`
+                // gives: script code sees the `&str` rustc sees (D568). The
+                // receiver is borrowed for the call only, and the text
+                // crosses as a copy made there, as Rawr's strings can't
+                // point into native memory. A use that conflicts with the
+                // borrow is rustc's to refuse, in `rawr check`.
+                None if is_str_reference(signature.output()) => {
+                    representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Builtin(
+                            representability::convert::Builtin::Str,
+                        )),
+                    }
                 }
                 // An output Rawr cannot hold whose type implements
                 // `Display`, as `DelayedFormat<StrftimeItems<'a>>`, is its

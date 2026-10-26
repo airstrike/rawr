@@ -4,6 +4,8 @@
 //! same with a small copy of that API, as the example writes it.
 
 use natives::grid;
+use natives::label;
+use natives::label::Caption;
 
 #[derive(Debug, Clone, Copy)]
 struct Pane {
@@ -80,7 +82,26 @@ impl Example {
     }
 }
 
+fn shout(caption: label::Caption) -> label::Caption {
+    caption + "!"
+}
+
+fn whisper(caption: Caption) -> Caption {
+    let quiet: Caption = caption.to_lowercase();
+    quiet
+}
+
 fn main() {
+    // A `&str` a method lends: borrowed for the call, and the value
+    // changes after its last use, as non-lexical lifetimes allow.
+    let caption: label::Caption = label::caption("top");
+    println!("{}", shout(caption));
+    println!("{}", whisper(label::caption("Mid")));
+    let mut label = natives::label::Label::new("left");
+    let text: &str = label.text();
+    println!("{text} {}", label.text() == "left");
+    label.set("right");
+    println!("{}", label.text().len());
     let mut example = Example::new();
     let first = example.panes.maximized().unwrap_or_else(|| {
         let (_, pane) = grid::State::new(0_u8);

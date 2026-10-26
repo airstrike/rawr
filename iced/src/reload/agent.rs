@@ -71,6 +71,13 @@ pub fn socket(root: &std::path::Path) -> PathBuf {
 pub(crate) enum Step {
     Click(Target),
     Key(Key),
+    /// The left button pressed at `from`, the pointer moved to `to`, and
+    /// the button released there unless `hold`, as a pane is dragged.
+    Drag {
+        from: Point,
+        to: Point,
+        hold: bool,
+    },
 }
 
 /// Where a click lands.
@@ -201,6 +208,21 @@ pub(crate) fn parse(text: &str) -> Result<Request, String> {
                 request
                     .steps
                     .push(Step::Click(Target::Point(Point::new(x, y))));
+            }
+            "drag" | "hold" => {
+                let numbers = rest
+                    .split_whitespace()
+                    .map(str::parse::<f32>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| format!("`{command}` takes four numbers: `{line}`"))?;
+                let [x, y, to_x, to_y] = numbers[..] else {
+                    return Err(format!("`{command}` takes four numbers: `{line}`"));
+                };
+                request.steps.push(Step::Drag {
+                    from: Point::new(x, y),
+                    to: Point::new(to_x, to_y),
+                    hold: command == "hold",
+                });
             }
             "click-text" => request
                 .steps
@@ -394,11 +416,39 @@ impl<S, Message: Clone + Send + 'static> Live<S, Message> {
             ..call.clone()
         });
         if call.done < reset {
-            (self.session)(state).pointer = None;
+            (self.session)(state).pointer.set(None);
             return Task::batch([(self.reset)(state), Task::done(next)]);
         }
         match call.request.steps.get(call.done - reset) {
             Some(Step::Key(key)) => return inject(tap(key.clone()).collect(), next),
+            Some(Step::Drag { from, to, hold }) => {
+                // The pointer follows the drag's moves until it ends.
+                let session = (self.session)(state);
+                session.pointer.set(Some(*from));
+                session.released.set(false);
+                session.dragging.set(true);
+                // The pointer moves in steps, as a hand moves it, so a
+                // widget sees the drag start and the place it ends.
+                let mut events = vec![
+                    Event::Mouse(mouse::Event::CursorMoved { position: *from }),
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                ];
+                for step in 1..=8_u8 {
+                    let t = f32::from(step) / 8.0;
+                    events.push(Event::Mouse(mouse::Event::CursorMoved {
+                        position: Point::new(
+                            from.x + (to.x - from.x) * t,
+                            from.y + (to.y - from.y) * t,
+                        ),
+                    }));
+                }
+                if !hold {
+                    events.push(Event::Mouse(mouse::Event::ButtonReleased(
+                        mouse::Button::Left,
+                    )));
+                }
+                return inject(events, next);
+            }
             Some(Step::Click(target)) => {
                 let point = match (target, &call.at) {
                     (Target::Point(point), _) | (_, Some(Some(point))) => *point,
@@ -421,7 +471,8 @@ impl<S, Message: Clone + Send + 'static> Live<S, Message> {
                     }
                 };
                 let session = (self.session)(state);
-                session.pointer = Some(point);
+                session.pointer.set(Some(point));
+                session.dragging.set(false);
                 session.released.set(false);
                 return inject(
                     vec![
@@ -475,14 +526,16 @@ pub(crate) fn shot(call: &Call, saved: crate::screenshot::Saved) {
 /// real mouse moves, and a capture waiting for the next frame.
 #[derive(Default)]
 pub(crate) struct Session {
-    pointer: Option<Point>,
+    pointer: Cell<Option<Point>>,
     released: Cell<bool>,
+    /// A drag step under way: the pointer follows its moves.
+    dragging: Cell<bool>,
     drawn: Option<Call>,
 }
 
 impl Session {
     fn cursor(&self, cursor: mouse::Cursor) -> mouse::Cursor {
-        match self.pointer {
+        match self.pointer.get() {
             Some(point) if !self.released.get() => mouse::Cursor::Available(point),
             _ => cursor,
         }
@@ -556,8 +609,16 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Pointed<'_
         viewport: &Rectangle,
     ) {
         match event {
+            Event::Mouse(mouse::Event::CursorMoved { position }) if self.session.dragging.get() => {
+                self.session.pointer.set(Some(*position));
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if self.session.dragging.get() =>
+            {
+                self.session.dragging.set(false);
+            }
             Event::Mouse(mouse::Event::CursorMoved { position })
-                if self.session.pointer != Some(*position) =>
+                if self.session.pointer.get() != Some(*position) =>
             {
                 self.session.released.set(true);
             }
@@ -957,7 +1018,7 @@ mod tests {
         }
 
         fn click(&mut self, value: &str, point: Point) -> Vec<Message> {
-            self.session.pointer = Some(point);
+            self.session.pointer.set(Some(point));
             self.session.released.set(false);
             self.send(
                 value,
@@ -1009,6 +1070,22 @@ mod tests {
             Step::Click(Target::Point(Point::new(10.0, 20.0)))
         );
         assert_eq!(request.steps, super::parse("click 10 20\nclick-text Second\nclick-id name\ntype h\ntype i\nkey space\ntype there\nkey cmd+a\nkey enter").unwrap().steps);
+        assert_eq!(
+            super::parse("drag 1 2 3 4\nhold 5 6 7 8").unwrap().steps,
+            [
+                Step::Drag {
+                    from: Point::new(1.0, 2.0),
+                    to: Point::new(3.0, 4.0),
+                    hold: false,
+                },
+                Step::Drag {
+                    from: Point::new(5.0, 6.0),
+                    to: Point::new(7.0, 8.0),
+                    hold: true,
+                },
+            ]
+        );
+        assert!(super::parse("drag 1 2 3").is_err());
         assert!(super::parse("click 1").is_err());
         assert!(super::parse("key hyper+a").is_err());
         assert!(super::parse("fly").is_err());

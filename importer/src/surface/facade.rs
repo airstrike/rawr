@@ -143,6 +143,11 @@ pub struct Facade {
     /// is a module to Rawr. The bridge brings each into scope, so a method
     /// a trait provides resolves in Rust as it does in the program.
     traits: Box<[Box<str>]>,
+    /// The type aliases of builtin types, as iced's `pub type Uri = String;`
+    /// in `markdown`: each path, relative to the root, and the builtin's
+    /// Rust name, in path order.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    builtins: Box<[(Box<str>, Box<str>)]>,
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -462,6 +467,7 @@ impl Plan {
                             types: Box::default(),
                             items: Box::default(),
                             traits: Box::default(),
+                            builtins: Box::default(),
                         },
                     );
                     index
@@ -478,6 +484,24 @@ impl Plan {
                     traits.insert(position, relative);
                 }
                 facade.traits = traits.into_boxed_slice();
+                continue;
+            }
+            // A type alias of a builtin, as iced's `markdown::Uri` is
+            // `String`, names the builtin.
+            if let Representability::Value(plan) = outcome.representability()
+                && plan.parameters().is_empty()
+                && let Some(builtin) = builtin_alias(plan.ty())
+            {
+                let mut builtins = std::mem::take(&mut facade.builtins).into_vec();
+                if let Err(position) =
+                    builtins.binary_search_by(|(path, _)| path.as_ref().cmp(relative.as_ref()))
+                {
+                    builtins
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    builtins.insert(position, (copy(&relative)?, copy(builtin)?));
+                }
+                facade.builtins = builtins.into_boxed_slice();
                 continue;
             }
             if let Some(ty) = type_definition(&relative, outcome)? {
@@ -866,6 +890,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             types,
             items: Box::default(),
             traits: Box::default(),
+            builtins: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -983,6 +1008,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 types: Box::from([dial]),
                 items: Box::default(),
                 traits: Box::default(),
+                builtins: Box::default(),
             },
             iced,
         ]),
@@ -1115,6 +1141,25 @@ impl Facade {
     /// Iterate the traits Rawr code names, relative to the root.
     pub fn traits(&self) -> impl ExactSizeIterator<Item = &str> {
         self.traits.iter().map(AsRef::as_ref)
+    }
+    /// Iterate the type aliases of builtins: each path, relative to the
+    /// root, and the builtin's Rust name (`String`, `u32`).
+    pub fn builtins(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.builtins
+            .iter()
+            .map(|(path, builtin)| (path.as_ref(), builtin.as_ref()))
+    }
+}
+
+/// The Rust name of the builtin a type alias names, as `pub type Uri =
+/// String;` names `String`.
+#[must_use]
+pub fn builtin_alias(ty: &representability::convert::Type) -> Option<&'static str> {
+    use representability::convert::{Builtin, Type};
+    match ty {
+        Type::Builtin(Builtin::String) => Some("String"),
+        Type::Builtin(builtin) => builtin.rust_name(),
+        _ => None,
     }
 }
 

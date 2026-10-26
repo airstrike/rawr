@@ -60,7 +60,7 @@
   <tr><td><code>list_previews</code></td><td>Lists the project&rsquo;s <code>#[preview]</code>s without rendering them.</td></tr>
   <tr><td><code>render_preview</code></td><td>Renders one preview and returns the PNG.</td></tr>
   <tr><td><code>click</code>, <code>type_text</code>, <code>press_key</code></td><td>Send input to the running window. A click finds a widget by its text or id, or goes to a point.</td></tr>
-  <tr><td><code>do</code></td><td>Sends a list of clicks, text and keys in order.</td></tr>
+  <tr><td><code>do</code></td><td>Sends a list of clicks, text, keys and drags in order. A drag presses at one point and moves to another, as a pane is dragged in a <code>pane_grid</code>. With <code>release</code> set to false it keeps the button down, so a screenshot shows the drag under way.</td></tr>
   <tr><td><code>reset</code></td><td>Boots the app afresh.</td></tr>
 </table>
 <p>Each input tool can return a screenshot. An iced window takes its own screenshot, so it needs no permission. <a href="/docs/iced/previews">Previews</a> has more on previews.</p>

@@ -1046,6 +1046,12 @@ fn build(
     if let Some(seed) = compatibility {
         builder.install_compatibility_projections(seed)?;
     }
+    // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
+    for (path, builtin) in facade.builtins() {
+        builder
+            .builtin_alias(path, builtin)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
     // A trait the program names is a module (`use rand::Rng;`), unless the
     // profile already gives its path a meaning (iced's `Widget`).
     for path in facade.traits() {

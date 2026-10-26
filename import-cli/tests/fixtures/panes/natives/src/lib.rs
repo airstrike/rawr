@@ -119,3 +119,35 @@ pub mod grid {
         }
     }
 }
+
+/// A value whose methods lend a `&str` from it, as url's `Url::scheme`
+/// does.
+pub mod label {
+    /// A type alias of a builtin, as iced's `markdown::Uri` is `String`.
+    pub type Caption = String;
+
+    pub fn caption(text: &str) -> Caption {
+        text.to_uppercase()
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Label {
+        text: String,
+    }
+
+    impl Label {
+        pub fn new(text: &str) -> Self {
+            Label {
+                text: text.to_owned(),
+            }
+        }
+
+        pub fn text(&self) -> &str {
+            &self.text
+        }
+
+        pub fn set(&mut self, text: &str) {
+            self.text = text.to_owned();
+        }
+    }
+}

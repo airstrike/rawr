@@ -82,7 +82,16 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+
+/// A native value an iced view borrows lives in the application's home
+/// (D568): its slot reaches it there, and holds no value of its own.
+#[allow(dead_code)]
+trait Homed: Any {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error>;
+    fn mutable(&self, call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error>;
+    fn as_any(&self) -> &dyn Any;
+}
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -361,6 +370,9 @@ enum Error {
     /// A value native code lent the call (D558.3), by its type's name,
     /// that can't be reached.
     Lent(&'static str, __rawr_internal::scope::Error),
+    /// A value an iced view borrows, in the application's home, that
+    /// can't be reached, as the home says (D568).
+    Home(String),
 }
 
 impl std::fmt::Debug for Error {
@@ -385,6 +397,7 @@ impl std::fmt::Debug for Error {
                 "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
+            Self::Home(reason) => f.write_str(reason),
         }
     }
 }
@@ -406,6 +419,7 @@ impl Error {
             Self::Value(_) => 12,
             Self::NotClone(_) => 13,
             Self::Lent(..) => 14,
+            Self::Home(_) => 15,
         }
     }
 }
@@ -448,12 +462,12 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
                 slot
             }
         };
         let entry = self.slots.get_mut(slot as usize).ok_or(Error::StaleHandle)?;
-        if entry.value.is_some() { return Err(Error::StaleHandle); }
+        if entry.value.is_some() || entry.homed.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
         entry.leased = false;
         entry.debug = None;
@@ -481,7 +495,13 @@ impl Arena {
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
         }
-        (entry.debug?)(entry.value.as_deref()?)
+        let debug = entry.debug?;
+        if let Some(homed) = &entry.homed {
+            let mut text = None;
+            homed.shared(&mut |value| text = debug(value)).ok()?;
+            return text;
+        }
+        debug(entry.value.as_deref()?)
     }
 
     #[allow(dead_code)]
@@ -510,8 +530,42 @@ impl Arena {
     /// `==` of two values of one type by its `PartialEq`.
     /// `call` of the value `handle` names.
     fn with_value<R>(&self, handle: NativeHandle, call: impl FnOnce(&dyn Any) -> R) -> Option<R> {
+        if let Some(homed) = self.homed(&handle) {
+            let mut call = Some(call);
+            let mut output = None;
+            homed.shared(&mut |value| output = call.take().map(|call| call(value))).ok()?;
+            return output;
+        }
         let (_, value) = self.live(handle)?;
         Some(call(value))
+    }
+
+    /// The home a homed slot's value lives in ([`Homed`]).
+    fn homed(&self, handle: &NativeHandle) -> Option<&dyn Homed> {
+        if handle.epoch != self.epoch { return None; }
+        let entry = self.slots.get(handle.slot as usize)?;
+        if entry.generation != handle.generation { return None; }
+        entry.homed.as_deref()
+    }
+
+    /// Move the value of `handle` into the application's home, where an
+    /// iced view borrows it (D568), once: `home` keeps it there, and the
+    /// slot reaches it through what `home` gives back.
+    #[allow(dead_code)]
+    fn home<T: 'static, H: Homed + Clone>(
+        &mut self,
+        handle: NativeHandle,
+        home: impl FnOnce(T) -> Result<H, Error>,
+    ) -> Result<H, Error> {
+        if let Some(homed) = self.homed(&handle) {
+            return homed.as_any().downcast_ref::<H>().cloned().ok_or(Error::TypeMismatch);
+        }
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        let value = value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)?;
+        let homed = home(value)?;
+        self.slots[index].homed = Some(Box::new(homed.clone()));
+        Ok(homed)
     }
 
     fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
@@ -546,7 +600,13 @@ impl Arena {
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
         }
-        (entry.display?)(entry.value.as_deref()?)
+        let display = entry.display?;
+        if let Some(homed) = &entry.homed {
+            let mut text = None;
+            homed.shared(&mut |value| text = display(value)).ok()?;
+            return text;
+        }
+        display(entry.value.as_deref()?)
     }
 
     fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
@@ -574,6 +634,18 @@ impl Arena {
     }
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+        // A homed value is copied out by its `Clone`, as a slot's is; one
+        // without it stays where the view borrows it.
+        if let Some(homed) = self.homed(&handle) {
+            let clone = self.slots[handle.slot as usize].clone.ok_or(Error::Leased)?;
+            let mut copied = None;
+            homed.shared(&mut |value| copied = clone(value))?;
+            return copied
+                .ok_or(Error::TypeMismatch)?
+                .downcast::<T>()
+                .map(|value| *value)
+                .map_err(|_| Error::TypeMismatch);
+        }
         let index = self.index::<T>(&handle)?;
         // A script copies a handle where it copies the value, so a `Clone`
         // value is cloned out and its slot stays valid for every copy.
@@ -640,7 +712,7 @@ impl Arena {
         // A value lent to a future keeps its witness.
         (handle.epoch == self.epoch
             && handle.generation == entry.generation
-            && (entry.value.is_some() || entry.leased))
+            && (entry.value.is_some() || entry.leased || entry.homed.is_some()))
             .then_some(entry.witness.as_ref())
             .flatten()
     }
@@ -652,7 +724,10 @@ impl Arena {
     ) -> Result<(), Error> {
         let index = handle.slot as usize;
         let entry = self.slots.get_mut(index).ok_or(Error::StaleHandle)?;
-        if handle.epoch != self.epoch || handle.generation != entry.generation || entry.value.is_none() {
+        if handle.epoch != self.epoch
+            || handle.generation != entry.generation
+            || (entry.value.is_none() && entry.homed.is_none())
+        {
             return Err(Error::StaleHandle);
         }
         entry.witness = Some(witness);
@@ -663,6 +738,9 @@ impl Arena {
     /// refuses every use until the future gives it back.
     #[allow(dead_code)]
     fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
+        if self.homed(&handle).is_some() {
+            return Err(Error::Leased);
+        }
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         self.slots[index].leased = true;
@@ -693,6 +771,7 @@ impl Arena {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
+            let mut homed = Vec::new();
             for (epoch, slot, generation) in batch {
                 if epoch != self.epoch {
                     continue;
@@ -704,6 +783,7 @@ impl Arena {
                     continue;
                 }
                 dropped.push(entry.value.take());
+                homed.push(entry.homed.take());
                 entry.leased = false;
                 entry.witness = None;
                 entry.project = None;
@@ -717,6 +797,7 @@ impl Arena {
                 }
             }
             drop(dropped);
+            drop(homed);
         }
     }
 
@@ -737,6 +818,16 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&T) -> R,
     ) -> Result<R, Error> {
+        if let Some(homed) = self.homed(&handle) {
+            let mut call = Some(call);
+            let mut output = None;
+            homed.shared(&mut |value| {
+                if let (Some(call), Some(value)) = (call.take(), value.downcast_ref::<T>()) {
+                    output = Some(call(value));
+                }
+            })?;
+            return output.ok_or(Error::TypeMismatch);
+        }
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index]
             .value
@@ -751,6 +842,16 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut T) -> R,
     ) -> Result<R, Error> {
+        if let Some(homed) = self.homed(&handle) {
+            let mut call = Some(call);
+            let mut output = None;
+            homed.mutable(&mut |value| {
+                if let (Some(call), Some(value)) = (call.take(), value.downcast_mut::<T>()) {
+                    output = Some(call(value));
+                }
+            })?;
+            return output.ok_or(Error::TypeMismatch);
+        }
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index]
             .value
@@ -771,6 +872,25 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut Self, &mut T) -> R,
     ) -> Result<R, Error> {
+        // A homed value is in the home, so the arena is free to lend.
+        if let Some(index) = self.homed(&handle).map(|_| handle.slot as usize) {
+            let homed = self.slots[index].homed.take().ok_or(Error::StaleHandle)?;
+            let mut call = Some(call);
+            let mut output = None;
+            let result = homed.mutable(&mut |value| {
+                if let (Some(call), Some(value)) = (call.take(), value.downcast_mut::<T>()) {
+                    output = Some(call(self, value));
+                }
+            });
+            if let Some(entry) = self.slots.get_mut(index)
+                && entry.generation == handle.generation
+                && entry.homed.is_none()
+            {
+                entry.homed = Some(homed);
+            }
+            result?;
+            return output.ok_or(Error::TypeMismatch);
+        }
         let index = self.index::<T>(&handle)?;
         let mut value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         self.slots[index].leased = true;
@@ -8428,6 +8548,14 @@ fn render_give(
         } if matches!(**lent, convert::Type::Sequence { .. }) => {
             return render_give(lent, value, output);
         }
+        // A `&str` a method lends, as url's `Url::scheme`: the text,
+        // copied where the borrow ends (`lent_copy`).
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if **lent == convert::Type::Builtin(convert::Builtin::Str) => {
+            writeln!(output, "    Ok(Dynamic::from(String::from({value})))")
+        }
         // A `&T` given to a script closure: a copy.
         convert::Type::Borrowed {
             mutable: false,
@@ -8739,6 +8867,12 @@ fn render_to_dynamic(
             if matches!(**lent, convert::Type::Sequence { .. }) =>
         {
             return render_to_dynamic(lent, value, depth, output);
+        }
+        // A `&str`: its text.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if **lent == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from(String::from({value})))")
         }
         // A `&T` native code gives a script closure, as pane_grid's
         // `view(pane, &state, ..)` gives `&S`: a copy.
@@ -9391,13 +9525,22 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
 }
 
 /// `.to_vec()` after a call whose output is a `&[T]` it lends: the copy
-/// Rawr's array is made of, before the borrow ends (D558 slice 2).
+/// Rawr's array is made of, before the borrow ends (D558 slice 2). And
+/// `.to_owned()` after one whose output is a `&str` it lends, as url's
+/// `Url::scheme`: Rawr's strings can't point into native memory, so the
+/// text is copied there, and the receiver is borrowed for the call only
+/// (D568).
 fn lent_copy(signature: &crate::classify::representability::signature::Signature) -> &'static str {
     match signature.output() {
         convert::Type::Borrowed { mutable: false, ty }
             if matches!(**ty, convert::Type::Sequence { .. }) =>
         {
             ".to_vec()"
+        }
+        convert::Type::Borrowed { mutable: false, ty }
+            if **ty == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            ".to_owned()"
         }
         _ => "",
     }
