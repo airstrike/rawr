@@ -140,6 +140,7 @@ impl<'a> OptimizerState<'a> {
                 calc_fn_hash(None, fn_name, arg_values.len()),
                 &mut arg_values.iter_mut().collect::<FnArgsVec<_>>(),
                 false,
+                false,
                 true,
                 Position::NONE,
             )

@@ -229,15 +229,6 @@ impl<'a> Target<'a> {
             _ => None,
         }
     }
-    /// Convert a shared or reference [`Target`] into a target with an owned value.
-    #[inline(always)]
-    pub fn into_owned(self) -> Self {
-        match self {
-            Self::RefMut(r) => Self::TempValue(r.clone()),
-            Self::SharedValue { shared_value, .. } => Self::TempValue(shared_value),
-            _ => self,
-        }
-    }
     /// Get the source [`Dynamic`] of the [`Target`].
     #[allow(dead_code)]
     #[inline]

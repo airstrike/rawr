@@ -286,119 +286,20 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Each time the runtime copies a `Tally`: the type has no `Clone` for
-    /// Rawr code, so any copy is one standing in for a borrow.
-    static COPIES: AtomicUsize = AtomicUsize::new(0);
-
-    struct Tally(i64);
-
-    impl Clone for Tally {
-        fn clone(&self) -> Self {
-            COPIES.fetch_add(1, Ordering::SeqCst);
-            Self(self.0)
-        }
-    }
-
-    fn facade() -> crate::host::facade::Definition {
-        use crate::host::{facade, item, signature, type_ref};
-        let mut builder = facade::Builder::new("tally", facade::Abi::new(1).unwrap()).unwrap();
-        builder.type_::<Tally>("Tally", &[], &[]).unwrap();
-        let tally = || type_ref::Type::registered("Tally").unwrap();
-        let int = || type_ref::Type::builtin(type_ref::Builtin::I64);
-        let mut new = signature::Builder::new();
-        new.output(tally());
-        builder
-            .item(item::Definition::associated_function("Tally::new", new.finish()).unwrap())
-            .unwrap();
-        let mut add = signature::Builder::new();
-        add.parameter(int()).output(type_ref::Type::unit());
-        builder
-            .item(
-                item::Definition::method(
-                    "Tally::add",
-                    crate::receiver::Mode::Mutable,
-                    add.finish(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        let mut total = signature::Builder::new();
-        total.output(int());
-        builder
-            .item(
-                item::Definition::method(
-                    "Tally::total",
-                    crate::receiver::Mode::Shared,
-                    total.finish(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        builder.finish().unwrap()
-    }
-
-    fn run(source: &str) -> i64 {
-        let mut engine = crate::Engine::new();
-        engine.register_host_facade(facade()).unwrap();
-        let engine = crate::Shared::new(engine);
-        let authority = engine
-            .compile_authority(source)
-            .unwrap_or_else(|error| panic!("{error}"));
-        let mut runtime = crate::host::runtime::Builder::new(facade());
-        runtime
-            .bind("tally::Tally::new", |_| Ok(crate::Dynamic::from(Tally(0))))
-            .unwrap();
-        runtime
-            .bind("tally::Tally::add", |args| {
-                let n = args[1].as_int().expect("an i64");
-                args[0].write_lock::<Tally>().expect("a tally").0 += n;
-                Ok(crate::Dynamic::UNIT)
-            })
-            .unwrap();
-        runtime
-            .bind("tally::Tally::total", |args| {
-                Ok(crate::Dynamic::from_int(
-                    args[0].read_lock::<Tally>().expect("a tally").0,
-                ))
-            })
-            .unwrap();
-        let mut registry = crate::host::runtime::Registry::new();
-        registry.install(runtime.finish()).unwrap();
-        let run = authority
-            .items()
-            .find(|item| item.key().name() == "run")
-            .unwrap()
-            .clone();
-        authority
-            .invoke_bound(&run, &mut [], crate::Shared::new(registry))
-            .unwrap_or_else(|error| panic!("{error}"))
-            .as_int()
-            .unwrap()
-    }
-
-    /// What `run` returns, and how many times the run copied a `Tally`.
-    fn copies(body: &str) -> (i64, usize) {
-        COPIES.store(0, Ordering::SeqCst);
-        let value = run(&format!(
-            "use tally::Tally;\npub fn run() -> i64 {{\n{body}\n}}"
-        ));
-        (value, COPIES.load(Ordering::SeqCst))
-    }
+    use super::super::copies_tests::copies;
 
     const TAIL: &str =
         "a.total() * 1000000 + b.total() * 10000 + low.len() as i64 * 10 + high.len() as i64";
 
     /// A `&mut` local given new borrows reaches a native value that has no
     /// `Clone`, and a large `Vec` of them used in a loop, as the place
-    /// itself: the run copies a `Tally` exactly as often as the same calls
-    /// made on the locals by name do. A copy of the referent at each use
-    /// would add copies for each call through `r`, and one per element
-    /// already pushed for each `push` through `v`.
+    /// itself: the run copies no `Tally`, as the same calls made on the
+    /// locals by name copy none. A copy of the referent at each use would
+    /// add copies for each call through `r`, and one per element already
+    /// pushed for each `push` through `v`.
     #[test]
     fn rebound_borrow_reaches_its_referent_without_a_copy() {
-        let (through, through_copies) = copies(&format!(
+        let through = copies(&format!(
             "let mut a = Tally::new();
             let mut b = Tally::new();
             let mut r = &mut a;
@@ -419,7 +320,7 @@ mod tests {
             }}
             {TAIL}"
         ));
-        let (named, named_copies) = copies(&format!(
+        let named = copies(&format!(
             "let mut a = Tally::new();
             let mut b = Tally::new();
             for n in 0..10 {{
@@ -440,11 +341,8 @@ mod tests {
             }}
             {TAIL}"
         ));
-        assert_eq!(through, 10 * 1000000 + 35 * 10000 + 1000 * 10 + 3000);
-        assert_eq!(named, through);
-        assert_eq!(
-            through_copies, named_copies,
-            "a copy stood in for the borrow"
-        );
+        let expected = (10 * 1000000 + 35 * 10000 + 1000 * 10 + 3000, 0);
+        assert_eq!(through, expected, "a copy stood in for the borrow");
+        assert_eq!(named, expected);
     }
 }

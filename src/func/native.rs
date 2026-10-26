@@ -534,6 +534,7 @@ impl<'a> NativeCallContext<'a> {
                     args,
                     is_ref_mut,
                     false,
+                    false,
                     self.call_position(),
                 )
                 .map(|(r, ..)| r);
