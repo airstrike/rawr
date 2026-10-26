@@ -524,6 +524,412 @@ mutations/word_count_top_16_mut_across.rs	E0502:17
 mutations/word_count_top_16_mut_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
 mutations/word_count_top_16_other_arm.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
 mutations/word_count_top_16_shared_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+patterns/array_ref_index_conflict.rs	E0506:4
+patterns/array_refs_apart.rs	ok	0	"[11, 2, 23]\n"
+patterns/catch_all_binding_copy_while_borrowed.rs	E0503:5
+patterns/default_mode_field_conflict.rs	E0506:9
+patterns/default_mode_field_ended.rs	ok	0	"[1, 4] 3\n"
+patterns/enum_payload_ref_mut.rs	ok	0	"2\n[1, 2]\n"
+patterns/enum_payload_ref_mut_conflict.rs	E0503:9
+patterns/holder_subject_disjoint.rs	ok	0	"[1, 4] 3\n"
+patterns/holder_subject_whole_conflict.rs	E0502:10
+patterns/if_let_mut_ref_assign.rs	E0506:4
+patterns/if_let_mut_ref_assign_after.rs	ok	0	"None\n"
+patterns/let_else_ref_mut_conflict.rs	E0502:6
+patterns/let_else_ref_mut_ended.rs	ok	0	"Some([1, 2]) true\n"
+patterns/let_tuple_copy_part_apart.rs	ok	0	"1 (1, 3)\n"
+patterns/let_tuple_copy_part_conflict.rs	E0503:4
+patterns/let_tuple_mut_ref_conflict.rs	E0499:4
+patterns/let_tuple_mut_ref_ended.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/match_move_part_other_shared.rs	ok	0	"1 [2]\n"
+patterns/match_move_part_while_shared.rs	E0505:9
+patterns/match_ref_mut_arm_conflict.rs	E0502:5
+patterns/match_ref_mut_arm_ended.rs	ok	0	"true\nSome([1, 2])\n"
+patterns/match_ref_other_while_mut.rs	ok	0	"1\n[2, 3]\n"
+patterns/match_ref_while_mut.rs	E0502:9
+patterns/nested_option_ref.rs	ok	0	"(Some([1, 4]), 3)\n"
+patterns/nested_option_ref_conflict.rs	E0502:4
+patterns/option_test_while_borrowed.rs	E0503:4
+patterns/ref_let_conflict.rs	E0502:4
+patterns/ref_let_ended.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/ref_mut_let_conflict.rs	E0499:4
+patterns/ref_mut_let_ended.rs	ok	0	"[1, 2, 1]\n"
+patterns/scalar_binding_arm_while_borrowed.rs	E0503:5
+patterns/scalar_subject_read_while_borrowed.rs	E0503:4
+patterns/scalar_subject_wildcard_while_borrowed.rs	ok	0	"20 2\n"
+patterns/shared_default_mode_assign.rs	E0506:9
+patterns/single_variant_let_discard.rs	ok	0	"ok\n"
+patterns/single_variant_match_discard.rs	ok	0	"a\n"
+patterns/struct_field_test_other_borrowed.rs	ok	0	"10 [1]\n"
+patterns/struct_field_test_while_borrowed.rs	E0503:8
+patterns/struct_subject_read_other_field.rs	ok	0	"2 2 2\n"
+patterns/struct_subject_read_while_borrowed.rs	E0503:9
+patterns/tuple_ref_parts_apart.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/tuple_ref_parts_conflict.rs	E0499:4
+patterns/tuple_ref_shared_then_mut.rs	E0502:4
+patterns/tuple_ref_two_parts.rs	ok	0	"([1, 1], [2])\n"
+patterns/tuple_test_part_borrowed.rs	ok	0	"10 (1, 3)\n"
+patterns/tuple_test_same_part_borrowed.rs	E0503:4
+patterns/while_let_ref_mut.rs	ok	0	"None\n"
+patterns/while_let_ref_mut_conflict.rs	E0502:4
+patterns/wildcard_struct_while_borrowed.rs	ok	0	"any\n2\n"
+patterns/mutations/array_ref_index_conflict_arr_4_back_edge.rs	E0499:4 E0506:7
+patterns/mutations/array_ref_index_conflict_arr_4_fresh_each_iteration.rs	E0499:5 E0506:7
+patterns/mutations/array_ref_index_conflict_arr_4_into_branch.rs	E0499:4 E0506:5
+patterns/mutations/array_ref_index_conflict_arr_4_mut_across.rs	E0499:4 E0506:5
+patterns/mutations/array_ref_index_conflict_arr_4_mut_ended.rs	E0499:4 E0506:6
+patterns/mutations/array_ref_index_conflict_arr_4_other_arm.rs	E0499:4 E0506:8
+patterns/mutations/array_ref_index_conflict_arr_4_shared_across.rs	E0502:4 E0506:5
+patterns/mutations/array_ref_index_conflict_arr_6_back_edge.rs	E0506:4 E0502:9
+patterns/mutations/array_ref_index_conflict_arr_6_fresh_each_iteration.rs	E0506:4
+patterns/mutations/array_ref_index_conflict_arr_6_into_branch.rs	E0506:4 E0502:7
+patterns/mutations/array_ref_index_conflict_arr_6_mut_across.rs	E0506:4 E0502:7
+patterns/mutations/array_ref_index_conflict_arr_6_mut_ended.rs	E0506:4
+patterns/mutations/array_ref_index_conflict_arr_6_other_arm.rs	E0506:4
+patterns/mutations/array_ref_index_conflict_arr_6_shared_across.rs	E0506:4
+patterns/mutations/array_refs_apart_arr_6_back_edge.rs	E0502:9
+patterns/mutations/array_refs_apart_arr_6_fresh_each_iteration.rs	ok	0	"[11, 2, 23]\n[11, 2, 23]\n"
+patterns/mutations/array_refs_apart_arr_6_into_branch.rs	E0502:7
+patterns/mutations/array_refs_apart_arr_6_mut_across.rs	E0502:7
+patterns/mutations/array_refs_apart_arr_6_mut_ended.rs	ok	0	"[11, 2, 23]\n"
+patterns/mutations/array_refs_apart_arr_6_other_arm.rs	ok	0	"[11, 2, 23]\n"
+patterns/mutations/array_refs_apart_arr_6_shared_across.rs	ok	0	"[11, 2, 23]\n"
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_back_edge.rs	E0503:5 E0502:11
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_fresh_each_iteration.rs	E0503:5
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_into_branch.rs	E0503:5 E0502:9
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_mut_across.rs	E0503:5 E0502:9
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_mut_ended.rs	E0503:5
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_other_arm.rs	E0503:5
+patterns/mutations/catch_all_binding_copy_while_borrowed_t_8_shared_across.rs	E0503:5
+patterns/mutations/default_mode_field_conflict_s_13_back_edge.rs	E0506:9 E0502:16 E0502:16
+patterns/mutations/default_mode_field_conflict_s_13_fresh_each_iteration.rs	E0506:9
+patterns/mutations/default_mode_field_conflict_s_13_into_branch.rs	E0506:9 E0502:14 E0502:14
+patterns/mutations/default_mode_field_conflict_s_13_mut_across.rs	E0506:9 E0502:14 E0502:14
+patterns/mutations/default_mode_field_conflict_s_13_mut_ended.rs	E0506:9
+patterns/mutations/default_mode_field_conflict_s_13_other_arm.rs	E0506:9
+patterns/mutations/default_mode_field_conflict_s_13_shared_across.rs	E0506:9
+patterns/mutations/default_mode_field_ended_s_13_back_edge.rs	E0502:16 E0502:16
+patterns/mutations/default_mode_field_ended_s_13_fresh_each_iteration.rs	ok	0	"[1, 4] 3\n[1, 4] 3\n"
+patterns/mutations/default_mode_field_ended_s_13_into_branch.rs	E0502:14 E0502:14
+patterns/mutations/default_mode_field_ended_s_13_mut_across.rs	E0502:14 E0502:14
+patterns/mutations/default_mode_field_ended_s_13_mut_ended.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/default_mode_field_ended_s_13_other_arm.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/default_mode_field_ended_s_13_shared_across.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/holder_subject_disjoint_s_14_back_edge.rs	E0502:17 E0502:17
+patterns/mutations/holder_subject_disjoint_s_14_fresh_each_iteration.rs	ok	0	"[1, 4] 3\n[1, 4] 3\n"
+patterns/mutations/holder_subject_disjoint_s_14_into_branch.rs	E0502:15 E0502:15
+patterns/mutations/holder_subject_disjoint_s_14_mut_across.rs	E0502:15 E0502:15
+patterns/mutations/holder_subject_disjoint_s_14_mut_ended.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/holder_subject_disjoint_s_14_other_arm.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/holder_subject_disjoint_s_14_shared_across.rs	ok	0	"[1, 4] 3\n"
+patterns/mutations/holder_subject_whole_conflict_s_15_back_edge.rs	E0502:10 E0502:18 E0502:18
+patterns/mutations/holder_subject_whole_conflict_s_15_fresh_each_iteration.rs	E0502:10
+patterns/mutations/holder_subject_whole_conflict_s_15_into_branch.rs	E0502:10 E0502:16 E0502:16
+patterns/mutations/holder_subject_whole_conflict_s_15_mut_across.rs	E0502:10 E0502:16 E0502:16
+patterns/mutations/holder_subject_whole_conflict_s_15_mut_ended.rs	E0502:10
+patterns/mutations/holder_subject_whole_conflict_s_15_other_arm.rs	E0502:10
+patterns/mutations/holder_subject_whole_conflict_s_15_shared_across.rs	E0502:10
+patterns/mutations/if_let_mut_ref_assign_after_o_7_back_edge.rs	E0502:10
+patterns/mutations/if_let_mut_ref_assign_after_o_7_fresh_each_iteration.rs	ok	0	"None\nNone\n"
+patterns/mutations/if_let_mut_ref_assign_after_o_7_into_branch.rs	E0502:8
+patterns/mutations/if_let_mut_ref_assign_after_o_7_mut_across.rs	E0502:8
+patterns/mutations/if_let_mut_ref_assign_after_o_7_mut_ended.rs	ok	0	"None\n"
+patterns/mutations/if_let_mut_ref_assign_after_o_7_other_arm.rs	ok	0	"None\n"
+patterns/mutations/if_let_mut_ref_assign_after_o_7_shared_across.rs	ok	0	"None\n"
+patterns/mutations/if_let_mut_ref_assign_o_7_back_edge.rs	E0506:4 E0502:10
+patterns/mutations/if_let_mut_ref_assign_o_7_fresh_each_iteration.rs	E0506:4
+patterns/mutations/if_let_mut_ref_assign_o_7_into_branch.rs	E0506:4 E0502:8
+patterns/mutations/if_let_mut_ref_assign_o_7_mut_across.rs	E0506:4 E0502:8
+patterns/mutations/if_let_mut_ref_assign_o_7_mut_ended.rs	E0506:4
+patterns/mutations/if_let_mut_ref_assign_o_7_other_arm.rs	E0506:4
+patterns/mutations/if_let_mut_ref_assign_o_7_shared_across.rs	E0506:4
+patterns/mutations/let_else_ref_mut_conflict_o_8_back_edge.rs	E0502:6 E0502:11
+patterns/mutations/let_else_ref_mut_conflict_o_8_fresh_each_iteration.rs	E0502:6
+patterns/mutations/let_else_ref_mut_conflict_o_8_into_branch.rs	E0502:6 E0502:9
+patterns/mutations/let_else_ref_mut_conflict_o_8_mut_across.rs	E0502:6 E0502:9
+patterns/mutations/let_else_ref_mut_conflict_o_8_mut_ended.rs	E0502:6
+patterns/mutations/let_else_ref_mut_conflict_o_8_other_arm.rs	E0502:6
+patterns/mutations/let_else_ref_mut_conflict_o_8_shared_across.rs	E0502:6
+patterns/mutations/let_else_ref_mut_ended_o_8_back_edge.rs	E0502:11
+patterns/mutations/let_else_ref_mut_ended_o_8_fresh_each_iteration.rs	ok	0	"Some([1, 2]) true\nSome([1, 2]) true\n"
+patterns/mutations/let_else_ref_mut_ended_o_8_into_branch.rs	E0502:9
+patterns/mutations/let_else_ref_mut_ended_o_8_mut_across.rs	E0502:9
+patterns/mutations/let_else_ref_mut_ended_o_8_mut_ended.rs	ok	0	"Some([1, 2]) true\n"
+patterns/mutations/let_else_ref_mut_ended_o_8_other_arm.rs	ok	0	"Some([1, 2]) true\n"
+patterns/mutations/let_else_ref_mut_ended_o_8_shared_across.rs	ok	0	"Some([1, 2]) true\n"
+patterns/mutations/let_tuple_copy_part_apart_t_6_back_edge.rs	E0502:9
+patterns/mutations/let_tuple_copy_part_apart_t_6_fresh_each_iteration.rs	ok	0	"1 (1, 3)\n1 (1, 3)\n"
+patterns/mutations/let_tuple_copy_part_apart_t_6_into_branch.rs	E0502:7
+patterns/mutations/let_tuple_copy_part_apart_t_6_mut_across.rs	E0502:7
+patterns/mutations/let_tuple_copy_part_apart_t_6_mut_ended.rs	ok	0	"1 (1, 3)\n"
+patterns/mutations/let_tuple_copy_part_apart_t_6_other_arm.rs	ok	0	"1 (1, 3)\n"
+patterns/mutations/let_tuple_copy_part_apart_t_6_shared_across.rs	ok	0	"1 (1, 3)\n"
+patterns/mutations/let_tuple_copy_part_conflict_t_6_back_edge.rs	E0503:4 E0502:9
+patterns/mutations/let_tuple_copy_part_conflict_t_6_fresh_each_iteration.rs	E0503:4
+patterns/mutations/let_tuple_copy_part_conflict_t_6_into_branch.rs	E0503:4 E0502:7
+patterns/mutations/let_tuple_copy_part_conflict_t_6_mut_across.rs	E0503:4 E0502:7
+patterns/mutations/let_tuple_copy_part_conflict_t_6_mut_ended.rs	E0503:4
+patterns/mutations/let_tuple_copy_part_conflict_t_6_other_arm.rs	E0503:4
+patterns/mutations/let_tuple_copy_part_conflict_t_6_shared_across.rs	E0503:4
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_back_edge.rs	E0499:4 E0499:7
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_fresh_each_iteration.rs	E0499:5 E0499:7
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_into_branch.rs	E0499:4 E0499:5
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_mut_across.rs	E0499:4 E0499:5
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_mut_ended.rs	E0499:4 E0499:6
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_other_arm.rs	E0499:4 E0499:8
+patterns/mutations/let_tuple_mut_ref_conflict_t_4_shared_across.rs	E0502:4 E0499:5
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_back_edge.rs	E0499:4 E0502:9
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_fresh_each_iteration.rs	E0499:4
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_into_branch.rs	E0499:4 E0502:7
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_mut_across.rs	E0499:4 E0502:7
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_mut_ended.rs	E0499:4
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_other_arm.rs	E0499:4
+patterns/mutations/let_tuple_mut_ref_conflict_t_6_shared_across.rs	E0499:4
+patterns/mutations/let_tuple_mut_ref_ended_t_5_back_edge.rs	E0499:8
+patterns/mutations/let_tuple_mut_ref_ended_t_5_fresh_each_iteration.rs	ok	0	"([1, 4], [2, 3, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_5_into_branch.rs	E0499:6
+patterns/mutations/let_tuple_mut_ref_ended_t_5_mut_across.rs	E0499:6
+patterns/mutations/let_tuple_mut_ref_ended_t_5_mut_ended.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_5_other_arm.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_5_shared_across.rs	E0502:6
+patterns/mutations/let_tuple_mut_ref_ended_t_6_back_edge.rs	E0502:9
+patterns/mutations/let_tuple_mut_ref_ended_t_6_fresh_each_iteration.rs	ok	0	"([1, 4], [2, 3])\n([1, 4], [2, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_6_into_branch.rs	E0502:7
+patterns/mutations/let_tuple_mut_ref_ended_t_6_mut_across.rs	E0502:7
+patterns/mutations/let_tuple_mut_ref_ended_t_6_mut_ended.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_6_other_arm.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/let_tuple_mut_ref_ended_t_6_shared_across.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/match_ref_mut_arm_conflict_o_11_back_edge.rs	E0502:5 E0502:14
+patterns/mutations/match_ref_mut_arm_conflict_o_11_fresh_each_iteration.rs	E0502:5
+patterns/mutations/match_ref_mut_arm_conflict_o_11_into_branch.rs	E0502:5 E0502:12
+patterns/mutations/match_ref_mut_arm_conflict_o_11_mut_across.rs	E0502:5 E0502:12
+patterns/mutations/match_ref_mut_arm_conflict_o_11_mut_ended.rs	E0502:5
+patterns/mutations/match_ref_mut_arm_conflict_o_11_other_arm.rs	E0502:5
+patterns/mutations/match_ref_mut_arm_conflict_o_11_shared_across.rs	E0502:5
+patterns/mutations/match_ref_mut_arm_ended_o_11_back_edge.rs	E0502:14
+patterns/mutations/match_ref_mut_arm_ended_o_11_fresh_each_iteration.rs	ok	0	"true\nSome([1, 2])\nSome([1, 2])\n"
+patterns/mutations/match_ref_mut_arm_ended_o_11_into_branch.rs	E0502:12
+patterns/mutations/match_ref_mut_arm_ended_o_11_mut_across.rs	E0502:12
+patterns/mutations/match_ref_mut_arm_ended_o_11_mut_ended.rs	ok	0	"true\nSome([1, 2])\n"
+patterns/mutations/match_ref_mut_arm_ended_o_11_other_arm.rs	ok	0	"true\nSome([1, 2])\n"
+patterns/mutations/match_ref_mut_arm_ended_o_11_shared_across.rs	ok	0	"true\nSome([1, 2])\n"
+patterns/mutations/match_ref_other_while_mut_s_12_back_edge.rs	E0502:15
+patterns/mutations/match_ref_other_while_mut_s_12_fresh_each_iteration.rs	ok	0	"1\n[2, 3]\n[2, 3]\n"
+patterns/mutations/match_ref_other_while_mut_s_12_into_branch.rs	E0502:13
+patterns/mutations/match_ref_other_while_mut_s_12_mut_across.rs	E0502:13
+patterns/mutations/match_ref_other_while_mut_s_12_mut_ended.rs	ok	0	"1\n[2, 3]\n"
+patterns/mutations/match_ref_other_while_mut_s_12_other_arm.rs	ok	0	"1\n[2, 3]\n"
+patterns/mutations/match_ref_other_while_mut_s_12_shared_across.rs	ok	0	"1\n[2, 3]\n"
+patterns/mutations/match_ref_while_mut_s_12_back_edge.rs	E0502:9 E0502:15
+patterns/mutations/match_ref_while_mut_s_12_fresh_each_iteration.rs	E0502:9
+patterns/mutations/match_ref_while_mut_s_12_into_branch.rs	E0502:9 E0502:13
+patterns/mutations/match_ref_while_mut_s_12_mut_across.rs	E0502:9 E0502:13
+patterns/mutations/match_ref_while_mut_s_12_mut_ended.rs	E0502:9
+patterns/mutations/match_ref_while_mut_s_12_other_arm.rs	E0502:9
+patterns/mutations/match_ref_while_mut_s_12_shared_across.rs	E0502:9
+patterns/mutations/nested_option_ref_conflict_p_8_back_edge.rs	E0502:4 E0502:11
+patterns/mutations/nested_option_ref_conflict_p_8_fresh_each_iteration.rs	E0502:4
+patterns/mutations/nested_option_ref_conflict_p_8_into_branch.rs	E0502:4 E0502:9
+patterns/mutations/nested_option_ref_conflict_p_8_mut_across.rs	E0502:4 E0502:9
+patterns/mutations/nested_option_ref_conflict_p_8_mut_ended.rs	E0502:4
+patterns/mutations/nested_option_ref_conflict_p_8_other_arm.rs	E0502:4
+patterns/mutations/nested_option_ref_conflict_p_8_shared_across.rs	E0502:4
+patterns/mutations/nested_option_ref_p_7_back_edge.rs	E0502:10
+patterns/mutations/nested_option_ref_p_7_fresh_each_iteration.rs	ok	0	"(Some([1, 4]), 3)\n(Some([1, 4]), 3)\n"
+patterns/mutations/nested_option_ref_p_7_into_branch.rs	E0502:8
+patterns/mutations/nested_option_ref_p_7_mut_across.rs	E0502:8
+patterns/mutations/nested_option_ref_p_7_mut_ended.rs	ok	0	"(Some([1, 4]), 3)\n"
+patterns/mutations/nested_option_ref_p_7_other_arm.rs	ok	0	"(Some([1, 4]), 3)\n"
+patterns/mutations/nested_option_ref_p_7_shared_across.rs	ok	0	"(Some([1, 4]), 3)\n"
+patterns/mutations/option_test_while_borrowed_o_9_back_edge.rs	E0503:4 E0502:12
+patterns/mutations/option_test_while_borrowed_o_9_fresh_each_iteration.rs	E0503:4
+patterns/mutations/option_test_while_borrowed_o_9_into_branch.rs	E0503:4 E0502:10
+patterns/mutations/option_test_while_borrowed_o_9_mut_across.rs	E0503:4 E0502:10
+patterns/mutations/option_test_while_borrowed_o_9_mut_ended.rs	E0503:4
+patterns/mutations/option_test_while_borrowed_o_9_other_arm.rs	E0503:4
+patterns/mutations/option_test_while_borrowed_o_9_shared_across.rs	E0503:4
+patterns/mutations/ref_let_conflict_v_4_back_edge.rs	E0502:4 E0499:7
+patterns/mutations/ref_let_conflict_v_4_fresh_each_iteration.rs	E0502:5 E0502:7
+patterns/mutations/ref_let_conflict_v_4_into_branch.rs	E0502:4 E0499:5
+patterns/mutations/ref_let_conflict_v_4_mut_across.rs	E0502:4 E0499:5
+patterns/mutations/ref_let_conflict_v_4_mut_ended.rs	E0502:4 E0502:6
+patterns/mutations/ref_let_conflict_v_4_other_arm.rs	E0502:4 E0502:8
+patterns/mutations/ref_let_conflict_v_4_shared_across.rs	E0502:5
+patterns/mutations/ref_let_ended_v_5_back_edge.rs	E0499:8
+patterns/mutations/ref_let_ended_v_5_fresh_each_iteration.rs	ok	0	"[1]\n[1, 1, 1]\n"
+patterns/mutations/ref_let_ended_v_5_into_branch.rs	E0499:6
+patterns/mutations/ref_let_ended_v_5_mut_across.rs	E0499:6
+patterns/mutations/ref_let_ended_v_5_mut_ended.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/mutations/ref_let_ended_v_5_other_arm.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/mutations/ref_let_ended_v_5_shared_across.rs	E0502:6
+patterns/mutations/ref_let_ended_v_6_back_edge.rs	E0502:9
+patterns/mutations/ref_let_ended_v_6_fresh_each_iteration.rs	ok	0	"[1]\n[1, 1]\n[1, 1]\n"
+patterns/mutations/ref_let_ended_v_6_into_branch.rs	E0502:7
+patterns/mutations/ref_let_ended_v_6_mut_across.rs	E0502:7
+patterns/mutations/ref_let_ended_v_6_mut_ended.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/mutations/ref_let_ended_v_6_other_arm.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/mutations/ref_let_ended_v_6_shared_across.rs	ok	0	"[1]\n[1, 1]\n"
+patterns/mutations/ref_mut_let_conflict_v_4_back_edge.rs	E0499:4 E0499:7
+patterns/mutations/ref_mut_let_conflict_v_4_fresh_each_iteration.rs	E0499:5 E0499:7
+patterns/mutations/ref_mut_let_conflict_v_4_into_branch.rs	E0499:4 E0499:5
+patterns/mutations/ref_mut_let_conflict_v_4_mut_across.rs	E0499:4 E0499:5
+patterns/mutations/ref_mut_let_conflict_v_4_mut_ended.rs	E0499:4 E0499:6
+patterns/mutations/ref_mut_let_conflict_v_4_other_arm.rs	E0499:4 E0499:8
+patterns/mutations/ref_mut_let_conflict_v_4_shared_across.rs	E0502:4 E0499:5
+patterns/mutations/ref_mut_let_conflict_v_6_back_edge.rs	E0499:4 E0502:9
+patterns/mutations/ref_mut_let_conflict_v_6_fresh_each_iteration.rs	E0499:4
+patterns/mutations/ref_mut_let_conflict_v_6_into_branch.rs	E0499:4 E0502:7
+patterns/mutations/ref_mut_let_conflict_v_6_mut_across.rs	E0499:4 E0502:7
+patterns/mutations/ref_mut_let_conflict_v_6_mut_ended.rs	E0499:4
+patterns/mutations/ref_mut_let_conflict_v_6_other_arm.rs	E0499:4
+patterns/mutations/ref_mut_let_conflict_v_6_shared_across.rs	E0499:4
+patterns/mutations/ref_mut_let_ended_v_5_back_edge.rs	E0499:8
+patterns/mutations/ref_mut_let_ended_v_5_fresh_each_iteration.rs	ok	0	"[1, 2, 1, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_5_into_branch.rs	E0499:6
+patterns/mutations/ref_mut_let_ended_v_5_mut_across.rs	E0499:6
+patterns/mutations/ref_mut_let_ended_v_5_mut_ended.rs	ok	0	"[1, 2, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_5_other_arm.rs	ok	0	"[1, 2, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_5_shared_across.rs	E0502:6
+patterns/mutations/ref_mut_let_ended_v_6_back_edge.rs	E0502:9
+patterns/mutations/ref_mut_let_ended_v_6_fresh_each_iteration.rs	ok	0	"[1, 2, 1]\n[1, 2, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_6_into_branch.rs	E0502:7
+patterns/mutations/ref_mut_let_ended_v_6_mut_across.rs	E0502:7
+patterns/mutations/ref_mut_let_ended_v_6_mut_ended.rs	ok	0	"[1, 2, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_6_other_arm.rs	ok	0	"[1, 2, 1]\n"
+patterns/mutations/ref_mut_let_ended_v_6_shared_across.rs	ok	0	"[1, 2, 1]\n"
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_back_edge.rs	E0503:5 E0502:11
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_fresh_each_iteration.rs	E0503:5
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_into_branch.rs	E0503:5 E0502:9
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_mut_across.rs	E0503:5 E0502:9
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_mut_ended.rs	E0503:5
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_other_arm.rs	E0503:5
+patterns/mutations/scalar_binding_arm_while_borrowed_x_8_shared_across.rs	E0503:5
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_back_edge.rs	E0503:4 E0502:12
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_fresh_each_iteration.rs	E0503:4
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_into_branch.rs	E0503:4 E0502:10
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_mut_across.rs	E0503:4 E0502:10
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_mut_ended.rs	E0503:4
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_other_arm.rs	E0503:4
+patterns/mutations/scalar_subject_read_while_borrowed_x_9_shared_across.rs	E0503:4
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_back_edge.rs	E0502:11
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_fresh_each_iteration.rs	ok	0	"20 2\n20 2\n"
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_into_branch.rs	E0502:9
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_mut_across.rs	E0502:9
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_mut_ended.rs	ok	0	"20 2\n"
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_other_arm.rs	ok	0	"20 2\n"
+patterns/mutations/scalar_subject_wildcard_while_borrowed_x_8_shared_across.rs	ok	0	"20 2\n"
+patterns/mutations/shared_default_mode_assign_s_13_back_edge.rs	E0506:9 E0502:16
+patterns/mutations/shared_default_mode_assign_s_13_fresh_each_iteration.rs	E0506:9
+patterns/mutations/shared_default_mode_assign_s_13_into_branch.rs	E0506:9 E0502:14
+patterns/mutations/shared_default_mode_assign_s_13_mut_across.rs	E0506:9 E0502:14
+patterns/mutations/shared_default_mode_assign_s_13_mut_ended.rs	E0506:9
+patterns/mutations/shared_default_mode_assign_s_13_other_arm.rs	E0506:9
+patterns/mutations/shared_default_mode_assign_s_13_shared_across.rs	E0506:9
+patterns/mutations/struct_field_test_other_borrowed_s_13_back_edge.rs	E0502:16
+patterns/mutations/struct_field_test_other_borrowed_s_13_fresh_each_iteration.rs	ok	0	"10 [1]\n10 [1]\n"
+patterns/mutations/struct_field_test_other_borrowed_s_13_into_branch.rs	E0502:14
+patterns/mutations/struct_field_test_other_borrowed_s_13_mut_across.rs	E0502:14
+patterns/mutations/struct_field_test_other_borrowed_s_13_mut_ended.rs	ok	0	"10 [1]\n"
+patterns/mutations/struct_field_test_other_borrowed_s_13_other_arm.rs	ok	0	"10 [1]\n"
+patterns/mutations/struct_field_test_other_borrowed_s_13_shared_across.rs	ok	0	"10 [1]\n"
+patterns/mutations/struct_field_test_while_borrowed_s_13_back_edge.rs	E0503:8 E0502:16
+patterns/mutations/struct_field_test_while_borrowed_s_13_fresh_each_iteration.rs	E0503:8
+patterns/mutations/struct_field_test_while_borrowed_s_13_into_branch.rs	E0503:8 E0502:14
+patterns/mutations/struct_field_test_while_borrowed_s_13_mut_across.rs	E0503:8 E0502:14
+patterns/mutations/struct_field_test_while_borrowed_s_13_mut_ended.rs	E0503:8
+patterns/mutations/struct_field_test_while_borrowed_s_13_other_arm.rs	E0503:8
+patterns/mutations/struct_field_test_while_borrowed_s_13_shared_across.rs	E0503:8
+patterns/mutations/struct_subject_read_other_field_s_12_back_edge.rs	E0502:15 E0502:15
+patterns/mutations/struct_subject_read_other_field_s_12_fresh_each_iteration.rs	ok	0	"2 2 2\n2 2 2\n"
+patterns/mutations/struct_subject_read_other_field_s_12_into_branch.rs	E0502:13 E0502:13
+patterns/mutations/struct_subject_read_other_field_s_12_mut_across.rs	E0502:13 E0502:13
+patterns/mutations/struct_subject_read_other_field_s_12_mut_ended.rs	ok	0	"2 2 2\n"
+patterns/mutations/struct_subject_read_other_field_s_12_other_arm.rs	ok	0	"2 2 2\n"
+patterns/mutations/struct_subject_read_other_field_s_12_shared_across.rs	ok	0	"2 2 2\n"
+patterns/mutations/struct_subject_read_while_borrowed_s_12_back_edge.rs	E0503:9 E0502:15 E0502:15
+patterns/mutations/struct_subject_read_while_borrowed_s_12_fresh_each_iteration.rs	E0503:9
+patterns/mutations/struct_subject_read_while_borrowed_s_12_into_branch.rs	E0503:9 E0502:13 E0502:13
+patterns/mutations/struct_subject_read_while_borrowed_s_12_mut_across.rs	E0503:9 E0502:13 E0502:13
+patterns/mutations/struct_subject_read_while_borrowed_s_12_mut_ended.rs	E0503:9
+patterns/mutations/struct_subject_read_while_borrowed_s_12_other_arm.rs	E0503:9
+patterns/mutations/struct_subject_read_while_borrowed_s_12_shared_across.rs	E0503:9
+patterns/mutations/tuple_ref_parts_apart_t_4_back_edge.rs	E0499:4 E0499:7
+patterns/mutations/tuple_ref_parts_apart_t_4_fresh_each_iteration.rs	E0499:5
+patterns/mutations/tuple_ref_parts_apart_t_4_into_branch.rs	E0499:4 E0499:5
+patterns/mutations/tuple_ref_parts_apart_t_4_mut_across.rs	E0499:4 E0499:5
+patterns/mutations/tuple_ref_parts_apart_t_4_mut_ended.rs	E0499:4
+patterns/mutations/tuple_ref_parts_apart_t_4_other_arm.rs	E0499:4
+patterns/mutations/tuple_ref_parts_apart_t_4_shared_across.rs	E0502:4 E0502:5
+patterns/mutations/tuple_ref_parts_apart_t_6_back_edge.rs	E0502:9
+patterns/mutations/tuple_ref_parts_apart_t_6_fresh_each_iteration.rs	ok	0	"([1, 4], [2, 3])\n([1, 4], [2, 3])\n"
+patterns/mutations/tuple_ref_parts_apart_t_6_into_branch.rs	E0502:7
+patterns/mutations/tuple_ref_parts_apart_t_6_mut_across.rs	E0502:7
+patterns/mutations/tuple_ref_parts_apart_t_6_mut_ended.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/tuple_ref_parts_apart_t_6_other_arm.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/tuple_ref_parts_apart_t_6_shared_across.rs	ok	0	"([1, 4], [2, 3])\n"
+patterns/mutations/tuple_ref_parts_conflict_t_4_back_edge.rs	E0499:4 E0499:7
+patterns/mutations/tuple_ref_parts_conflict_t_4_fresh_each_iteration.rs	E0499:5 E0499:7
+patterns/mutations/tuple_ref_parts_conflict_t_4_into_branch.rs	E0499:4 E0499:5
+patterns/mutations/tuple_ref_parts_conflict_t_4_mut_across.rs	E0499:4 E0499:5
+patterns/mutations/tuple_ref_parts_conflict_t_4_mut_ended.rs	E0499:4 E0499:6
+patterns/mutations/tuple_ref_parts_conflict_t_4_other_arm.rs	E0499:4 E0499:8
+patterns/mutations/tuple_ref_parts_conflict_t_4_shared_across.rs	E0502:4 E0499:5
+patterns/mutations/tuple_ref_parts_conflict_t_6_back_edge.rs	E0499:4 E0502:9
+patterns/mutations/tuple_ref_parts_conflict_t_6_fresh_each_iteration.rs	E0499:4
+patterns/mutations/tuple_ref_parts_conflict_t_6_into_branch.rs	E0499:4 E0502:7
+patterns/mutations/tuple_ref_parts_conflict_t_6_mut_across.rs	E0499:4 E0502:7
+patterns/mutations/tuple_ref_parts_conflict_t_6_mut_ended.rs	E0499:4
+patterns/mutations/tuple_ref_parts_conflict_t_6_other_arm.rs	E0499:4
+patterns/mutations/tuple_ref_parts_conflict_t_6_shared_across.rs	E0499:4
+patterns/mutations/tuple_ref_shared_then_mut_t_4_back_edge.rs	E0502:4 E0499:7
+patterns/mutations/tuple_ref_shared_then_mut_t_4_fresh_each_iteration.rs	E0502:5 E0502:7
+patterns/mutations/tuple_ref_shared_then_mut_t_4_into_branch.rs	E0502:4 E0499:5
+patterns/mutations/tuple_ref_shared_then_mut_t_4_mut_across.rs	E0502:4 E0499:5
+patterns/mutations/tuple_ref_shared_then_mut_t_4_mut_ended.rs	E0502:4 E0502:6
+patterns/mutations/tuple_ref_shared_then_mut_t_4_other_arm.rs	E0502:4 E0502:8
+patterns/mutations/tuple_ref_shared_then_mut_t_4_shared_across.rs	E0502:5
+patterns/mutations/tuple_ref_two_parts_t_5_back_edge.rs	E0502:8
+patterns/mutations/tuple_ref_two_parts_t_5_fresh_each_iteration.rs	ok	0	"([1, 1], [2])\n([1, 1], [2])\n"
+patterns/mutations/tuple_ref_two_parts_t_5_into_branch.rs	E0502:6
+patterns/mutations/tuple_ref_two_parts_t_5_mut_across.rs	E0502:6
+patterns/mutations/tuple_ref_two_parts_t_5_mut_ended.rs	ok	0	"([1, 1], [2])\n"
+patterns/mutations/tuple_ref_two_parts_t_5_other_arm.rs	ok	0	"([1, 1], [2])\n"
+patterns/mutations/tuple_ref_two_parts_t_5_shared_across.rs	ok	0	"([1, 1], [2])\n"
+patterns/mutations/tuple_test_part_borrowed_t_9_back_edge.rs	E0502:12
+patterns/mutations/tuple_test_part_borrowed_t_9_fresh_each_iteration.rs	ok	0	"10 (1, 3)\n10 (1, 3)\n"
+patterns/mutations/tuple_test_part_borrowed_t_9_into_branch.rs	E0502:10
+patterns/mutations/tuple_test_part_borrowed_t_9_mut_across.rs	E0502:10
+patterns/mutations/tuple_test_part_borrowed_t_9_mut_ended.rs	ok	0	"10 (1, 3)\n"
+patterns/mutations/tuple_test_part_borrowed_t_9_other_arm.rs	ok	0	"10 (1, 3)\n"
+patterns/mutations/tuple_test_part_borrowed_t_9_shared_across.rs	ok	0	"10 (1, 3)\n"
+patterns/mutations/tuple_test_same_part_borrowed_t_9_back_edge.rs	E0503:4 E0502:12
+patterns/mutations/tuple_test_same_part_borrowed_t_9_fresh_each_iteration.rs	E0503:4
+patterns/mutations/tuple_test_same_part_borrowed_t_9_into_branch.rs	E0503:4 E0502:10
+patterns/mutations/tuple_test_same_part_borrowed_t_9_mut_across.rs	E0503:4 E0502:10
+patterns/mutations/tuple_test_same_part_borrowed_t_9_mut_ended.rs	E0503:4
+patterns/mutations/tuple_test_same_part_borrowed_t_9_other_arm.rs	E0503:4
+patterns/mutations/tuple_test_same_part_borrowed_t_9_shared_across.rs	E0503:4
+patterns/mutations/while_let_ref_mut_conflict_o_10_back_edge.rs	E0502:4 E0502:13
+patterns/mutations/while_let_ref_mut_conflict_o_10_fresh_each_iteration.rs	E0502:4
+patterns/mutations/while_let_ref_mut_conflict_o_10_into_branch.rs	E0502:4 E0502:11
+patterns/mutations/while_let_ref_mut_conflict_o_10_mut_across.rs	E0502:4 E0502:11
+patterns/mutations/while_let_ref_mut_conflict_o_10_mut_ended.rs	E0502:4
+patterns/mutations/while_let_ref_mut_conflict_o_10_other_arm.rs	E0502:4
+patterns/mutations/while_let_ref_mut_conflict_o_10_shared_across.rs	E0502:4
+patterns/mutations/while_let_ref_mut_o_10_back_edge.rs	E0502:13
+patterns/mutations/while_let_ref_mut_o_10_fresh_each_iteration.rs	ok	0	"None\nNone\n"
+patterns/mutations/while_let_ref_mut_o_10_into_branch.rs	E0502:11
+patterns/mutations/while_let_ref_mut_o_10_mut_across.rs	E0502:11
+patterns/mutations/while_let_ref_mut_o_10_mut_ended.rs	ok	0	"None\n"
+patterns/mutations/while_let_ref_mut_o_10_other_arm.rs	ok	0	"None\n"
+patterns/mutations/while_let_ref_mut_o_10_shared_across.rs	ok	0	"None\n"
+patterns/mutations/wildcard_struct_while_borrowed_s_11_back_edge.rs	E0502:14
+patterns/mutations/wildcard_struct_while_borrowed_s_11_fresh_each_iteration.rs	ok	0	"any\n2\n2\n"
+patterns/mutations/wildcard_struct_while_borrowed_s_11_into_branch.rs	E0502:12
+patterns/mutations/wildcard_struct_while_borrowed_s_11_mut_across.rs	E0502:12
+patterns/mutations/wildcard_struct_while_borrowed_s_11_mut_ended.rs	ok	0	"any\n2\n"
+patterns/mutations/wildcard_struct_while_borrowed_s_11_other_arm.rs	ok	0	"any\n2\n"
+patterns/mutations/wildcard_struct_while_borrowed_s_11_shared_across.rs	ok	0	"any\n2\n"
 slice1/argument_borrow_until_call.rs	E0502:10
 slice1/argument_borrows_in_turn.rs	ok	0	"4\n"
 slice1/assign_after_last_use.rs	ok	0	"3\n"

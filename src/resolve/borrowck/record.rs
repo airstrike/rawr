@@ -28,6 +28,20 @@ pub(crate) struct ValueStart {
     borrowed: usize,
 }
 
+/// What a pattern matches against ([`Recorder::matched`]).
+#[derive(Clone, Debug)]
+pub(crate) enum Matched {
+    /// A place: a pattern's parts are places below it.
+    Place(Place),
+    /// A reference made for the match (`&mut s`): what a pattern binds
+    /// below it holds these loans, and what it reads through it conflicts
+    /// with none.
+    Origins(Vec<Origin>),
+    /// A value of its own, made for the match: whether making it borrowed,
+    /// which a binding that may hold a borrow would keep.
+    Value { made: bool },
+}
+
 /// The facts of a body being read.
 pub(crate) struct Recorder {
     body: Body,
@@ -271,31 +285,98 @@ impl Recorder {
         }
     }
 
-    /// The use starting at `start` is a match's subject: it reads the
-    /// discriminant when it has one, and patterns do not move all of it.
-    pub(crate) fn subject(&mut self, start: Position, discriminant: bool) {
-        let Some(point) = self.mentioned(start) else {
-            return;
-        };
-        if let Some(Fact::Access {
-            access: Access::Read | Access::Shared | Access::Move,
-            loan: None,
-            ..
-        }) = self.body.fact(point)
+    /// What a pattern matches against: the value spanning `span`, begun at
+    /// `start`, whose use starts at `begin` when `place` says it is a place.
+    /// A place's use reads nothing itself: the pattern reads, moves and
+    /// borrows the parts it tests and binds ([`Recorder::part`]).
+    pub(crate) fn matched(
+        &mut self,
+        begin: Position,
+        span: Span,
+        place: bool,
+        start: ValueStart,
+    ) -> Matched {
+        if place
+            && let Some((point, mut place)) = self.mention_place(begin)
+            && let Some(Fact::Access {
+                access: Access::Read | Access::Shared | Access::Move,
+                loan: None,
+                ..
+            }) = self.body.fact(point)
         {
-            self.set_access(
-                point,
-                if discriminant {
-                    Access::Read
-                } else {
-                    Access::None
-                },
-            );
-            if !discriminant && let Some(Fact::Access { span, .. }) = self.body.fact(point) {
-                let span = *span;
-                self.unmodeled("the parts of a match's subject its patterns read", span);
-            }
+            self.set_access(point, Access::None);
             self.subjects.insert(point);
+            // A bare holder is matched as the reference it is.
+            if place.projection == [Projection::Deref] && !self.dereferenced.contains(&point) {
+                place.projection.clear();
+            }
+            return Matched::Place(place);
+        }
+        if let Some(origins) = self.origins.get(&span) {
+            return Matched::Origins(origins.clone());
+        }
+        Matched::Value {
+            made: self.body.loans.len() > start.loans || self.borrowed > start.borrowed,
+        }
+    }
+
+    /// A pattern reads (`Read`, `Length`) or moves (`Move`) the part
+    /// `place` of what it matches, at `span`.
+    pub(crate) fn part(&mut self, place: Place, access: Access, span: Span) {
+        if place.projection.first() == Some(&Projection::Deref) {
+            self.push(Fact::Use(place.local));
+        }
+        self.push(Fact::Access {
+            place,
+            access,
+            span,
+            loan: None,
+        });
+    }
+
+    /// A pattern binds `into` by reference to the part `place` of what it
+    /// matches (`ref x`, or a binding below a reference): a borrow of the
+    /// part made here, at `span`, which `into` takes.
+    pub(crate) fn part_borrow(&mut self, place: Place, mutable: bool, span: Span, into: Local) {
+        let through = (place.projection.first() == Some(&Projection::Deref)).then_some(place.local);
+        if let Some(holder) = through {
+            self.push(Fact::Use(holder));
+        }
+        let point = self.push(Fact::Access {
+            place: place.clone(),
+            access: if mutable {
+                Access::Mutable
+            } else {
+                Access::Shared
+            },
+            span,
+            loan: None,
+        });
+        let loan = self.make_loan(point, place, mutable, span);
+        let temporary = self.body.loans[loan.0 as usize].temporary;
+        // A reborrow through a holder keeps what the holder borrows.
+        if let Some(holder) = through {
+            self.body.flows.push(Flow {
+                from: Origin::Local(holder),
+                into: temporary,
+                at: point,
+            });
+        }
+        self.take(into, &[Origin::Loan(loan)]);
+    }
+
+    /// `into` is given a value holding the loans `origins` here: a pattern's
+    /// binding of a reference's part, or of the reference itself.
+    pub(crate) fn take(&mut self, into: Local, origins: &[Origin]) {
+        self.push(Fact::Def(into));
+        for origin in origins {
+            let from = self.origin_local(*origin);
+            let at = self.push(Fact::Use(from));
+            self.body.flows.push(Flow {
+                from: Origin::Local(from),
+                into,
+                at,
+            });
         }
     }
 
@@ -369,28 +450,6 @@ impl Recorder {
             && !self.subjects.contains(&point)
         {
             self.set_access(point, Access::Move);
-        }
-    }
-
-    /// A pattern moves the parts `fields` out of the use starting at
-    /// `start` (`let S { x, .. } = s;`): each of them, not all of it.
-    pub(crate) fn moved_parts(&mut self, start: Position, fields: &[ImmutableString], span: Span) {
-        let Some((point, place)) = self.mention_place(start) else {
-            return;
-        };
-        if fields.is_empty() {
-            return;
-        }
-        self.set_access(point, Access::Read);
-        for field in fields {
-            let mut place = place.clone();
-            place.projection.push(Projection::Field(field.clone()));
-            self.push(Fact::Access {
-                place,
-                access: Access::Move,
-                span,
-                loan: None,
-            });
         }
     }
 

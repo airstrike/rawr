@@ -1,0 +1,15 @@
+fn main() {
+    let mut v = vec![1];
+    let ref a = v;
+    println!("{:?}", a);
+    let __s = &v;
+    v.push(1);
+    __see(__s);
+    println!("{:?}", v);
+}
+
+fn __touch<T>(_: &mut T) {}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}
