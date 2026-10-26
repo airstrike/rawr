@@ -70,7 +70,8 @@ impl Parser<'_> {
     /// `r = ..` of a `&mut` local `r` that is its place at run time, before
     /// the value is read: one given new borrows is a runtime local of its
     /// own (`reborrow.rs`), but not yet one that borrows a field or an
-    /// element, for which a new borrow would write the place instead.
+    /// element, or one in an async body, for which a new borrow would write
+    /// the place instead.
     pub(super) fn refuse_rebound_alias(&mut self, target: Span, ty: &Ty) -> Result<(), Error> {
         let Some((name, declaration)) = self.flow().mentioned_local(target.start()) else {
             return Ok(());
@@ -89,7 +90,7 @@ impl Parser<'_> {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "giving the `&mut` local `{name}` a new borrow when it borrows a field or \
-                     an element: not supported in Rawr yet"
+                     an element, or in an async body: not supported in Rawr yet"
                 )
                 .into(),
                 source: target,

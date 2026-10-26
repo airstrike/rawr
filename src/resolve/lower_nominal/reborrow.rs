@@ -1,91 +1,70 @@
 //! A `&mut` local given new borrows (T107, D573.4): `r = &mut b`, or
-//! `prev = r` of another `&mut` local. Rawr has no references at runtime,
-//! and a `&mut` local that keeps one borrow is the place it borrows
-//! (`places.rs`). One given new borrows refers to a place that only the
-//! run decides, as in a loop that moves it on to the next local, so it
-//! is a runtime local of its own holding which local it borrows, by that
-//! local's key. Each use reads that local and stores it back
-//! (`PlaceStep::Select`), so a write through `r` reaches the local it
-//! refers to at that point, as in Rust.
+//! `prev = r` of another `&mut` local. A `&mut` local that keeps one
+//! borrow is the place it borrows (`places.rs`). One given new borrows
+//! refers to a place that only the run decides, as in a loop that moves it
+//! on to the next local, so it is a runtime local of its own holding where
+//! the local it borrows is: `r = __rawr_slot_of_b` (`KEYWORD_SLOT_OF`).
+//! Each use is `__rawr_through_r`, which the evaluator resolves to that
+//! local itself, as it resolves a local's name, so a call or a write
+//! through `r` reaches the place and nothing is copied.
 //!
-//! A use of `r` reaches any local in scope there that could be its
-//! referent. NLL keeps a borrowed local alive while the borrow is used, so
-//! the local `r` refers to is in scope at each use. A shadowed one is not
-//! nameable, and the run stops there rather than reading another local.
+//! Where a local is, is its index in the function's scope, or the receiver.
+//! A local keeps its index while it lives, and NLL keeps a borrowed local
+//! alive while the borrow is used. An async body's locals move between
+//! scopes at each `.await`, so there a new borrow stays refused.
 
 use super::*;
-
-/// What the run reports if a `&mut` local's referent is not nameable at a
-/// use: only a shadowed local, which a later `let` hid.
-const SHADOWED: &str =
-    "the local a `&mut` local refers to is shadowed here: not supported in Rawr yet";
+use crate::engine::{KEYWORD_SLOT_OF, KEYWORD_THROUGH};
 
 impl Parser<'_> {
-    /// The key of the local declared at `declaration`, which a `&mut`
-    /// local given new borrows holds while it refers to that local.
-    fn reborrow_key(&mut self, declaration: Span) -> usize {
-        if let Some(key) = self
-            .reborrow_roots
-            .iter()
-            .position(|root| *root == declaration)
-        {
-            return key;
-        }
-        self.reborrow_roots.push(declaration);
-        self.reborrow_roots.len() - 1
-    }
-
-    /// The key of the whole local `name`, when a `&mut` local may refer to
-    /// it: a mutable local of the body that is not itself a place, or a
-    /// `&mut` parameter, whose runtime local is the caller's place
-    /// (`this`) or a copy of it given back.
-    fn root_key(&mut self, name: &str) -> Option<usize> {
-        let binding = self.bindings.get(name)?;
-        let declaration = binding.declaration;
+    /// Whether the whole local `name` may be what a `&mut` local refers to:
+    /// a mutable local of the body that is not itself a place, a `&mut`
+    /// parameter's copy, or the receiver `this`.
+    fn reborrow_root(&self, name: &str) -> bool {
+        let Some(binding) = self.bindings.get(name) else {
+            return false;
+        };
         let aliased = self
             .aliases
             .get(name)
-            .is_some_and(|(aliased, _)| *aliased == declaration)
+            .is_some_and(|(aliased, _)| *aliased == binding.declaration)
             || self.entry_aliases.contains_key(name)
             || self.cell_guards.contains_key(name);
-        if aliased || !binding.mutable || !matches!(binding.kind, BindingKind::Local) {
-            return None;
-        }
-        Some(self.reborrow_key(declaration))
+        !aliased && binding.mutable && matches!(binding.kind, BindingKind::Local)
     }
 
-    /// The type of the value the runtime local of the root `ty` holds: a
-    /// `&mut` parameter's is what it refers to.
-    fn root_value(&self, ty: &Ty) -> Ty {
-        match self.inference.resolve(ty) {
-            Ty::Reference {
-                mutable: true,
-                target,
-            } => *target,
-            ty => ty,
-        }
+    /// The `&mut` local given new borrows that `place` reaches, by name.
+    fn selector_of(&self, binding: &str, place: &origin::Fragment) -> bool {
+        place
+            .as_str()
+            .strip_prefix(KEYWORD_THROUGH)
+            .is_some_and(|name| name == binding)
+            && self.bindings.get(binding).is_some_and(|local| {
+                self.reborrow_selectors
+                    .get(binding)
+                    .is_some_and(|(declaration, _)| *declaration == local.declaration)
+            })
     }
 
     /// What a `&mut` local given new borrows holds for `value`, a `&mut`
     /// to a whole local (`&mut b`, or `r` of a `let r = &mut b;`) or
-    /// another such local (`prev = r`): the runtime text of the key, and
-    /// whether it is another such local's.
-    pub(super) fn reborrow_source(&mut self, value: &ParsedExpr) -> Option<(String, bool)> {
-        match value.lvalue.as_ref()? {
-            Lvalue::Binding { binding, .. } => {
-                let binding = binding.clone();
-                self.root_key(&binding).map(|key| (key.to_string(), false))
-            }
-            Lvalue::Place { binding, place, .. } if place.as_str() == binding.as_str() => {
-                let binding = binding.clone();
-                self.root_key(&binding).map(|key| (key.to_string(), false))
-            }
-            Lvalue::Nested(nested) => match nested.steps.as_slice() {
-                [PlaceStep::Select { selector, .. }] => Some((selector.to_string(), true)),
-                _ => None,
-            },
-            _ => None,
+    /// another such local (`prev = r`): the runtime text of where its
+    /// referent is, and whether it is another such local's. `None` where a
+    /// new borrow can't be held yet.
+    pub(super) fn reborrow_source(&self, value: &ParsedExpr) -> Option<(String, bool)> {
+        if self.closures.last().is_some_and(|scope| scope.asynchronous) {
+            return None;
         }
+        let root = match value.lvalue.as_ref()? {
+            Lvalue::Binding { binding, .. } => binding,
+            Lvalue::Place { binding, place, .. } if self.selector_of(binding, place) => {
+                return Some((binding.to_string(), true));
+            }
+            Lvalue::Place { binding, place, .. } if place.as_str() == binding.as_str() => binding,
+            _ => return None,
+        };
+        self.reborrow_root(root)
+            .then(|| (format!("{KEYWORD_SLOT_OF}{root}"), false))
     }
 
     /// Whether the local `name`, just declared, is given a new value
@@ -116,22 +95,21 @@ impl Parser<'_> {
         false
     }
 
-    /// `name` (declared at `declaration`, of the type `ty`, a `&mut` to
-    /// `target`) is a `&mut` local given new borrows, whose runtime local
-    /// of the same name holds its referent's key. `mutable` is whether it
-    /// was declared `let mut`.
+    /// `name` (declared at `declaration`, of the type `ty`, a `&mut`) is a
+    /// `&mut` local given new borrows, whose runtime local of the same name
+    /// holds where its referent is. `mutable` is whether it was declared
+    /// `let mut`.
     pub(super) fn select_local(
         &mut self,
         name: ImmutableString,
         declaration: Span,
         ty: Ty,
-        target: Ty,
         mutable: bool,
     ) {
         self.bindings.insert(
             name.clone(),
             Binding {
-                ty,
+                ty: ty.clone(),
                 // Writes through it need the place it refers to, which
                 // was borrowed `&mut`; whether it may be given a new
                 // borrow is `mutable`.
@@ -142,45 +120,39 @@ impl Parser<'_> {
                 kind: BindingKind::Local,
             },
         );
-        let place = NestedLvalue {
+        self.reborrow_selectors
+            .insert(name.clone(), (declaration, mutable));
+        let place = Lvalue::Place {
             binding: name.clone(),
-            base: origin::Fragment::plain(name.to_string()),
-            steps: vec![PlaceStep::Select {
-                selector: name.clone(),
-                target: target.clone(),
-                mutable,
-            }],
-            ty: target,
+            ty,
+            place: origin::Fragment::plain(format!("{KEYWORD_THROUGH}{name}")),
         };
-        self.aliases
-            .insert(name, (declaration, Lvalue::Nested(Box::new(place))));
+        self.aliases.insert(name, (declaration, place));
     }
 
-    /// The `&mut` local given new borrows that `target`, the left side of
-    /// an assignment, is as a whole (not `*r`): its name and whether it
-    /// was declared `let mut`.
+    /// The `&mut` local given new borrows that `lvalue`, the left side of
+    /// an assignment of the type `target`, is as a whole (not `*r`): its
+    /// name and whether it was declared `let mut`.
     pub(super) fn rebound_selector(
         &self,
         target: &Ty,
         lvalue: &Lvalue,
     ) -> Option<(ImmutableString, bool)> {
-        let Lvalue::Nested(nested) = lvalue else {
+        let Lvalue::Place { binding, place, .. } = lvalue else {
             return None;
         };
-        let [PlaceStep::Select {
-            selector, mutable, ..
-        }] = nested.steps.as_slice()
-        else {
+        if !self.selector_of(binding, place) {
             return None;
-        };
-        let binding = self.bindings.get(selector)?;
-        (self.inference.resolve(target) == self.inference.resolve(&binding.ty))
-            .then(|| (selector.clone(), *mutable))
+        }
+        let local = self.bindings.get(binding)?;
+        let (_, mutable) = self.reborrow_selectors.get(binding)?;
+        (self.inference.resolve(target) == self.inference.resolve(&local.ty))
+            .then(|| (binding.clone(), *mutable))
     }
 
     /// `r = value;` of the `&mut` local given new borrows `selector`
-    /// (`target` is the use of `r`, of the type `target_ty`): the statement giving it the key of
-    /// what `value` borrows, and the value's span.
+    /// (`target` is the use of `r`, of the type `target_ty`): the statement
+    /// giving it where what `value` borrows is, and the value's span.
     pub(super) fn rebind_selector(
         &mut self,
         target: Span,
@@ -213,8 +185,8 @@ impl Parser<'_> {
         let Some((source, _)) = self.reborrow_source(&replacement) else {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "giving the `&mut` local `{selector}` a borrow of a place other than a \
-                     whole local: not supported in Rawr yet"
+                    "giving the `&mut` local `{selector}` a borrow of a field or an element: \
+                     not supported in Rawr yet"
                 )
                 .into(),
                 source: replacement.span,
@@ -231,70 +203,169 @@ impl Parser<'_> {
             replacement.span,
         ))
     }
+}
 
-    /// The place a `&mut` local given new borrows refers to, read into a
-    /// local after `read` (or not read when the statement `overwrite`s
-    /// it): that local, and the statement storing it back into the place.
-    pub(super) fn selected_place(
-        &mut self,
-        selector: &str,
-        target: &Ty,
-        read: &mut origin::Fragment,
-        overwrite: bool,
-    ) -> (origin::Fragment, origin::Fragment) {
-        let arms = self.reborrow_arms(selector, target);
-        let part = self.temporary("part");
-        let mut text = format!("let {part} = ");
-        if overwrite {
-            text.push_str("();");
-        } else {
-            for (key, root) in &arms {
-                text.push_str(&format!("if {selector} == {key} {{ {root} }} else "));
-            }
-            text.push_str(&format!("{{ throw {SHADOWED:?} }};"));
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Each time the runtime copies a `Tally`: the type has no `Clone` for
+    /// Rawr code, so any copy is one standing in for a borrow.
+    static COPIES: AtomicUsize = AtomicUsize::new(0);
+
+    struct Tally(i64);
+
+    impl Clone for Tally {
+        fn clone(&self) -> Self {
+            COPIES.fetch_add(1, Ordering::SeqCst);
+            Self(self.0)
         }
-        text.push(' ');
-        read.push_text(text);
-        let mut store = String::new();
-        for (key, root) in &arms {
-            store.push_str(&format!(
-                "if {selector} == {key} {{ {root} = {part}; }} else "
-            ));
-        }
-        store.push_str(&format!("{{ throw {SHADOWED:?}; }} "));
-        (
-            origin::Fragment::plain(part),
-            origin::Fragment::plain(store),
-        )
     }
 
-    /// The locals in scope that a `&mut` local `selector` to `target` may
-    /// refer to, with their keys: each mutable local of a type that
-    /// unifies with `target`.
-    fn reborrow_arms(&mut self, selector: &str, target: &Ty) -> Vec<(usize, ImmutableString)> {
-        let candidates: Vec<(ImmutableString, Ty)> = self
-            .bindings
-            .iter()
-            .filter(|(name, binding)| {
-                name.as_str() != selector
-                    && binding.mutable
-                    && matches!(binding.kind, BindingKind::Local)
-                    && !self
-                        .aliases
-                        .get(name.as_str())
-                        .is_some_and(|(aliased, _)| *aliased == binding.declaration)
+    fn facade() -> crate::host::facade::Definition {
+        use crate::host::{facade, item, signature, type_ref};
+        let mut builder = facade::Builder::new("tally", facade::Abi::new(1).unwrap()).unwrap();
+        builder.type_::<Tally>("Tally", &[], &[]).unwrap();
+        let tally = || type_ref::Type::registered("Tally").unwrap();
+        let int = || type_ref::Type::builtin(type_ref::Builtin::I64);
+        let mut new = signature::Builder::new();
+        new.output(tally());
+        builder
+            .item(item::Definition::associated_function("Tally::new", new.finish()).unwrap())
+            .unwrap();
+        let mut add = signature::Builder::new();
+        add.parameter(int()).output(type_ref::Type::unit());
+        builder
+            .item(
+                item::Definition::method(
+                    "Tally::add",
+                    crate::receiver::Mode::Mutable,
+                    add.finish(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut total = signature::Builder::new();
+        total.output(int());
+        builder
+            .item(
+                item::Definition::method(
+                    "Tally::total",
+                    crate::receiver::Mode::Shared,
+                    total.finish(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        builder.finish().unwrap()
+    }
+
+    fn run(source: &str) -> i64 {
+        let mut engine = crate::Engine::new();
+        engine.register_host_facade(facade()).unwrap();
+        let engine = crate::Shared::new(engine);
+        let authority = engine
+            .compile_authority(source)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let mut runtime = crate::host::runtime::Builder::new(facade());
+        runtime
+            .bind("tally::Tally::new", |_| Ok(crate::Dynamic::from(Tally(0))))
+            .unwrap();
+        runtime
+            .bind("tally::Tally::add", |args| {
+                let n = args[1].as_int().expect("an i64");
+                args[0].write_lock::<Tally>().expect("a tally").0 += n;
+                Ok(crate::Dynamic::UNIT)
             })
-            .map(|(name, binding)| (name.clone(), self.root_value(&binding.ty)))
-            .collect();
-        let mut arms = Vec::new();
-        for (name, ty) in candidates {
-            if self.unifies(target, &ty)
-                && let Some(key) = self.root_key(&name)
-            {
-                arms.push((key, name));
-            }
-        }
-        arms.sort();
-        arms
+            .unwrap();
+        runtime
+            .bind("tally::Tally::total", |args| {
+                Ok(crate::Dynamic::from_int(
+                    args[0].read_lock::<Tally>().expect("a tally").0,
+                ))
+            })
+            .unwrap();
+        let mut registry = crate::host::runtime::Registry::new();
+        registry.install(runtime.finish()).unwrap();
+        let run = authority
+            .items()
+            .find(|item| item.key().name() == "run")
+            .unwrap()
+            .clone();
+        authority
+            .invoke_bound(&run, &mut [], crate::Shared::new(registry))
+            .unwrap_or_else(|error| panic!("{error}"))
+            .as_int()
+            .unwrap()
+    }
+
+    /// What `run` returns, and how many times the run copied a `Tally`.
+    fn copies(body: &str) -> (i64, usize) {
+        COPIES.store(0, Ordering::SeqCst);
+        let value = run(&format!(
+            "use tally::Tally;\npub fn run() -> i64 {{\n{body}\n}}"
+        ));
+        (value, COPIES.load(Ordering::SeqCst))
+    }
+
+    const TAIL: &str =
+        "a.total() * 1000000 + b.total() * 10000 + low.len() as i64 * 10 + high.len() as i64";
+
+    /// A `&mut` local given new borrows reaches a native value that has no
+    /// `Clone`, and a large `Vec` of them used in a loop, as the place
+    /// itself: the run copies a `Tally` exactly as often as the same calls
+    /// made on the locals by name do. A copy of the referent at each use
+    /// would add copies for each call through `r`, and one per element
+    /// already pushed for each `push` through `v`.
+    #[test]
+    fn rebound_borrow_reaches_its_referent_without_a_copy() {
+        let (through, through_copies) = copies(&format!(
+            "let mut a = Tally::new();
+            let mut b = Tally::new();
+            let mut r = &mut a;
+            for n in 0..10 {{
+                r.add(n);
+                if n == 4 {{
+                    r = &mut b;
+                }}
+            }}
+            let mut low = Vec::new();
+            let mut high = Vec::new();
+            let mut v = &mut low;
+            for n in 0..4000 {{
+                v.push(Tally::new());
+                if n == 999 {{
+                    v = &mut high;
+                }}
+            }}
+            {TAIL}"
+        ));
+        let (named, named_copies) = copies(&format!(
+            "let mut a = Tally::new();
+            let mut b = Tally::new();
+            for n in 0..10 {{
+                if n <= 4 {{
+                    a.add(n);
+                }} else {{
+                    b.add(n);
+                }}
+            }}
+            let mut low = Vec::new();
+            let mut high = Vec::new();
+            for n in 0..4000 {{
+                if n <= 999 {{
+                    low.push(Tally::new());
+                }} else {{
+                    high.push(Tally::new());
+                }}
+            }}
+            {TAIL}"
+        ));
+        assert_eq!(through, 10 * 1000000 + 35 * 10000 + 1000 * 10 + 3000);
+        assert_eq!(named, through);
+        assert_eq!(
+            through_copies, named_copies,
+            "a copy stood in for the borrow"
+        );
     }
 }

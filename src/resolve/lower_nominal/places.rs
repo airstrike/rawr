@@ -1189,11 +1189,6 @@ impl Parser<'_> {
                          accessor",
                     ))
                 }
-                PlaceStep::Select { .. } => {
-                    return Err(unsupported(
-                        "returning a `&mut` through a `&mut` local given new borrows",
-                    ))
-                }
             }
         }
         if !current.is_empty() || pieces.is_empty() {

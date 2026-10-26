@@ -2,6 +2,7 @@
 
 use super::{Caches, EvalContext, GlobalRuntimeState, Target};
 use crate::ast::Expr;
+use crate::engine::{KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
 use crate::packages::string_basic::{print_with_func, FUNC_TO_STRING};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, RawrResult, RawrResultOf, Scope, SmartString, ERR};
@@ -51,6 +52,16 @@ impl Engine {
         expr: &Expr,
     ) -> RawrResultOf<Target<'s>> {
         // Make sure that the pointer indirection is taken only when absolutely necessary.
+
+        // Where a local is, and the local a `&mut` local given new borrows
+        // refers to (`KEYWORD_SLOT_OF`): names no `let` declares, so the
+        // parser gave them no index.
+        if let Expr::Variable(v, None, ..) = expr
+            && v.0.is_none()
+            && (v.1.starts_with(KEYWORD_SLOT_OF) || v.1.starts_with(KEYWORD_THROUGH))
+        {
+            return Self::search_place(scope, this_ptr, v.1.as_str(), expr);
+        }
 
         // A bare script-function name is a function pointer, not a variable read.
         //
@@ -168,6 +179,39 @@ impl Engine {
 
         val.try_into()
     }
+    /// `__rawr_slot_of_b`, where the local `b` is (its index in the scope,
+    /// or `-1` for `this`), and `__rawr_through_r`, the local itself that
+    /// the index `r` holds names: the place, written through, not a copy.
+    fn search_place<'s>(
+        scope: &'s mut Scope,
+        this_ptr: Option<&'s mut Dynamic>,
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<Target<'s>> {
+        let missing = |name: &str| -> crate::RawrError {
+            ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
+        };
+        if let Some(local) = name.strip_prefix(KEYWORD_SLOT_OF) {
+            let slot = if local == KEYWORD_THIS {
+                -1
+            } else {
+                scope.search(local).ok_or_else(|| missing(local))? as crate::INT
+            };
+            return Ok(Dynamic::from_int(slot).into());
+        }
+        let holder = name.strip_prefix(KEYWORD_THROUGH).unwrap_or(name);
+        let index = scope.search(holder).ok_or_else(|| missing(holder))?;
+        let slot = scope
+            .get_mut_by_index(index)
+            .as_int()
+            .map_err(|_| missing(name))?;
+        match usize::try_from(slot) {
+            Ok(slot) if slot < scope.len() => scope.get_mut_by_index(slot).try_into(),
+            Ok(_) => Err(missing(name)),
+            Err(_) => this_ptr.ok_or_else(|| missing(KEYWORD_THIS))?.try_into(),
+        }
+    }
+
     /// Search for a variable within the scope or within imports,
     /// depending on whether the variable name is namespace-qualified.
     pub(crate) fn search_namespace<'s>(

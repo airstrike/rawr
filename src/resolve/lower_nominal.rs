@@ -8290,16 +8290,6 @@ enum PlaceStep {
     /// A tuple's member, `t.0`: its index, which two borrows of a place's
     /// members keep apart, as two of its fields are (E0499).
     Member(usize),
-    /// The local a `&mut` local given new borrows refers to (`r = &mut b`,
-    /// `prev = r`): the runtime local `selector` holds that local's key
-    /// (`reborrow.rs`), and the place is read from it and stored back.
-    /// Always the first step. `mutable` is whether the `&mut` local may
-    /// itself be given a new borrow (`let mut r`); `target` is its type.
-    Select {
-        selector: ImmutableString,
-        target: Ty,
-        mutable: bool,
-    },
 }
 
 /// Whether `op=` on `nested` opens it ([`Parser::open_compound`]): it
@@ -9679,9 +9669,9 @@ struct Parser<'a> {
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
     aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
-    /// The locals a `&mut` local given new borrows may refer to, by their
-    /// declaration: each one's key is its index (`reborrow.rs`).
-    reborrow_roots: Vec<Span>,
+    /// The `&mut` locals given new borrows, by name: their declaration and
+    /// whether they were declared `let mut` (`reborrow.rs`).
+    reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
     /// The body's borrow facts, solved once it is read (D572, `borrows.rs`).
     flow: std::cell::RefCell<super::borrowck::record::Recorder>,
     /// The loop about to be read already entered its head (`while`'s
@@ -9993,7 +9983,7 @@ impl<'a> Parser<'a> {
             cell_guards: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
-            reborrow_roots: Vec::new(),
+            reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
             loop_entered: false,
             loop_iterator: None,
@@ -20431,7 +20421,7 @@ impl<'a> Parser<'a> {
                 self.write_output(rendered, span(start, value.span.end()));
                 self.entry_aliases.remove(&name);
                 self.bound_value(&name, name_span, &value, value_start);
-                self.select_local(name, name_span, value.ty.clone(), *target, mutable);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
                 self.last_type = Ty::Unit;
                 self.last_expression = None;
                 return self.consume_terminator(start).map(|_| ());
@@ -28405,18 +28395,6 @@ impl<'a> Parser<'a> {
                     stores.push(store);
                     place = origin::Fragment::plain(local);
                 }
-                PlaceStep::Select {
-                    selector, target, ..
-                } => {
-                    let (part, store) = self.selected_place(
-                        selector,
-                        target,
-                        &mut read,
-                        overwrite && index == leaf,
-                    );
-                    stores.push(store);
-                    place = part;
-                }
             }
         }
         let mut store = origin::Fragment::default();
@@ -29324,9 +29302,18 @@ impl<'a> Parser<'a> {
                                     expression,
                                 );
                                 this.flow().shared(expression.start());
+                                // A `&mut` local is the place it borrows.
+                                let source = match this.aliases.get(name.as_str()) {
+                                    Some((aliased, Lvalue::Place { place, .. }))
+                                        if *aliased == binding.declaration =>
+                                    {
+                                        place.clone()
+                                    }
+                                    _ => origin::Fragment::plain(name.clone()),
+                                };
                                 let captured = ParsedExpr {
                                     prelude: origin::Fragment::default(),
-                                    source: origin::Fragment::plain(name.clone()),
+                                    source,
                                     ty: binding.ty.clone(),
                                     span: expression,
                                     lvalue: None,

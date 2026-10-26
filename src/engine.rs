@@ -35,6 +35,13 @@ pub const KEYWORD_DROP: &str = "__rawr_drop";
 /// `()` at field or element 0, then 2, of the local, so the local's own
 /// drop passes over what moved (`lower_nominal::drops`).
 pub const KEYWORD_CLEAR: &str = "__rawr_clear";
+/// `__rawr_slot_of_b` reads as where the local `b` is: its index in the
+/// scope, or `-1` for the receiver `this`. A `&mut` local given new borrows
+/// (`r = &mut b`) holds that, and `__rawr_through_r` is then the local `r`
+/// refers to, as the place itself, not a copy (`lower_nominal::reborrow`).
+pub const KEYWORD_SLOT_OF: &str = "__rawr_slot_of_";
+/// The local a `&mut` local given new borrows refers to: [`KEYWORD_SLOT_OF`].
+pub const KEYWORD_THROUGH: &str = "__rawr_through_";
 pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
 pub const KEYWORD_THIS: &str = "this";
 pub const KEYWORD_GLOBAL: &str = "global";
