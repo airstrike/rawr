@@ -143,7 +143,7 @@ pub fn view(app: &amp;App, width: u16) -&gt; View {
   <li>A marked <code>impl Widget</code> doesn&rsquo;t reach native code yet.</li>
   <li>A failing save&rsquo;s error shows when the program ends or restarts, not while it holds the screen.</li>
   <li>rawr resets the terminal only when the program changed its settings. A program that enters the alternate screen without raw mode isn&rsquo;t reset.</li>
-  <li>The marked module may also be the crate root with a marked <code>main</code>. Then every save restarts the program, and its state starts over.</li>
+  <li>The marked module may also be the crate root with a marked <code>main</code>. A loop that <code>main</code> drives itself never calls back into marked code, so each save restarts the program, and its state starts over. <a href="/docs/run#swap">A running marked main</a> says when a save swaps instead.</li>
   <li>rawr-import runs on Unix systems.</li>
 </ul>
 </article>

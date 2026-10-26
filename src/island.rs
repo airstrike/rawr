@@ -66,6 +66,7 @@ pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
     // On the thread that serves calls (native code called from marked code),
     // the call runs here and now.
     if let Some(current) = current() {
+        let _entry = crate::future::entry();
         return current.answer(path, arguments);
     }
     let Some(forward) = SERVER.get() else {
@@ -107,6 +108,7 @@ impl Call {
                 arguments,
                 reply,
             } => {
+                let _entry = crate::future::entry();
                 let answer = match current() {
                     Some(current) => current.answer(&path, &arguments),
                     None => failure(&format!("rawr: no generation is published for `{path}`")),
@@ -334,11 +336,224 @@ pub(crate) fn shared(
         .filter(|item| item.kind() == item::Kind::Method && item.key().name() == "Clone::clone")
         .filter_map(|item| Some((item.key().owner()?.clone(), item.clone())))
         .collect();
+    let layouts = layouts(authority.items());
     std::sync::Arc::new(Shared {
         authority,
         runtime,
         clones,
+        layouts,
     })
+}
+
+/// The function that writes a lifted closure, by package, module path and
+/// name: its closures are named `{name}{closure#N}`. `None` for any other
+/// item.
+#[cfg(feature = "sync")]
+fn enclosing(key: &item::Key) -> Option<String> {
+    let at = key.name().find("{closure#")?;
+    let mut path = String::from(key.package());
+    for module in key.modules() {
+        path.push_str("::");
+        path.push_str(module);
+    }
+    path.push_str("::");
+    path.push_str(&key.name()[..at]);
+    Some(path)
+}
+
+/// The closures each function writes, in key order, found once for a
+/// generation.
+#[cfg(feature = "sync")]
+fn layouts<'a>(
+    items: impl Iterator<Item = &'a item::Value>,
+) -> HashMap<String, Box<[item::Value]>> {
+    let mut layouts = HashMap::<String, Vec<item::Value>>::new();
+    for item in items {
+        if let Some(enclosing) = enclosing(item.key()) {
+            layouts.entry(enclosing).or_default().push(item.clone());
+        }
+    }
+    layouts
+        .into_iter()
+        .map(|(enclosing, mut closures)| {
+            closures.sort_by(|a, b| a.key().cmp(b.key()));
+            (enclosing, closures.into_boxed_slice())
+        })
+        .collect()
+}
+
+/// Whether two generations' closures of one function are the same: the
+/// same keys, each with the same signature and captures (D553.5). A
+/// closure inserted before another renumbers it, and the other's body
+/// would run a sibling's.
+#[cfg(feature = "sync")]
+fn same_closures(one: Option<&[item::Value]>, other: Option<&[item::Value]>) -> bool {
+    match (one, other) {
+        (Some(one), Some(other)) => {
+            one.len() == other.len() && one.iter().zip(other).all(|(a, b)| a.same_item(b))
+        }
+        _ => false,
+    }
+}
+
+/// The crate root's `fn main`, from `fn` to its closing brace, without its
+/// comments and with each run of whitespace one space: an edit that only
+/// moves or reflows it changes nothing. The closures it writes are part of
+/// it, so an edit to one restarts too. `None` without a `fn main`.
+#[cfg(feature = "sync")]
+fn main_text(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let start = (0..bytes.len()).find(|&at| {
+        text.is_char_boundary(at)
+            && text[at..].starts_with("fn")
+            && (at == 0 || !is_ident(bytes[at - 1]))
+            && text[at + 2..].trim_start().starts_with("main")
+            && text[at + 2..].trim_start()[4..]
+                .trim_start()
+                .starts_with(['(', '<'])
+            && bytes.get(at + 2).is_some_and(u8::is_ascii_whitespace)
+    })?;
+    let mut output = String::new();
+    let mut depth = 0_usize;
+    let mut at = start;
+    let mut space = false;
+    while at < bytes.len() {
+        let rest = &text[at..];
+        let byte = bytes[at];
+        let skip = if rest.starts_with("//") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if let Some(comment) = rest.strip_prefix("/*") {
+            comment.find("*/").map_or(rest.len(), |end| end + 4)
+        } else {
+            0
+        };
+        if skip > 0 {
+            space = true;
+            at += skip;
+            continue;
+        }
+        if byte.is_ascii_whitespace() {
+            space = true;
+            at += 1;
+            continue;
+        }
+        if space && !output.is_empty() {
+            output.push(' ');
+        }
+        space = false;
+        let length = if byte == b'"' || (byte == b'r' && rest[1..].starts_with(['"', '#'])) {
+            // A string: its text counts as it is.
+            let hashes = rest[usize::from(byte == b'r')..]
+                .bytes()
+                .take_while(|&b| b == b'#')
+                .count();
+            let open = usize::from(byte == b'r') + hashes + 1;
+            if byte == b'r' || hashes > 0 {
+                let close = format!("\"{}", "#".repeat(hashes));
+                rest[open..]
+                    .find(&close)
+                    .map_or(rest.len(), |end| open + end + close.len())
+            } else {
+                let mut end = 1;
+                while end < rest.len() && bytes[at + end] != b'"' {
+                    end += if bytes[at + end] == b'\\' { 2 } else { 1 };
+                }
+                (end + 1).min(rest.len())
+            }
+        } else if byte == b'\'' && rest[1..].starts_with('\\') {
+            rest[2..].find('\'').map_or(rest.len(), |end| end + 3)
+        } else if byte == b'\'' && rest[1..].chars().nth(1) == Some('\'') {
+            1 + rest[1..].chars().next().map_or(0, char::len_utf8) + 1
+        } else {
+            rest.chars().next().map_or(1, char::len_utf8)
+        };
+        output.push_str(&rest[..length]);
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(output);
+                }
+            }
+            _ => {}
+        }
+        at += length;
+    }
+    Some(output)
+}
+
+/// Why `candidate` can't replace `current` while a marked `main` runs
+/// (D553.6), in one line for `rawr run` to restart with. `None` when it
+/// swaps in: a body edit, or a new function or type.
+///
+/// - A script type whose fields or variants changed: rawr can't yet see
+///   which script values native code stores as `rawr::Value`.
+/// - A callable a marked `main`'s own frame gave native code, which no
+///   longer rebinds: `main` never runs again to give a new one.
+/// - A program that never called from native code into script code: no
+///   entry would ever admit the new generation.
+#[cfg(feature = "sync")]
+#[must_use]
+pub fn refusal(
+    current: &crate::reload::Generation,
+    candidate: &crate::reload::Candidate,
+) -> Option<String> {
+    let path = |key: &type_def::Key| {
+        key.modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([key.name()])
+            .collect::<Vec<_>>()
+            .join("::")
+    };
+    for (identity, fingerprint) in current.schemas().iter() {
+        let type_def::Identity::Script(key) = identity else {
+            continue;
+        };
+        match candidate.schemas().get(identity) {
+            Some(next) if next == fingerprint => {}
+            Some(_) => return Some(format!("`{}` changed its fields", path(key))),
+            None => return Some(format!("`{}` was removed", path(key))),
+        }
+    }
+    if !crate::future::called_from_native() {
+        return Some("the source changed".to_owned());
+    }
+    // `main` runs once: an edit to it would need it to run again.
+    if main_text(current.source().entry_source().text())
+        != main_text(candidate.source().entry_source().text())
+    {
+        return Some("`main` changed".to_owned());
+    }
+    let held = crate::future::held();
+    if held.is_empty() {
+        return None;
+    }
+    let items = candidate
+        .items()
+        .map(|item| (item.key(), item))
+        .collect::<HashMap<_, _>>();
+    let closures = layouts(candidate.items());
+    for (function, program) in held {
+        let key = function.key();
+        let same = items.get(key).is_some_and(|next| next.same_item(&function))
+            && enclosing(key).is_none_or(|enclosing| {
+                same_closures(
+                    closures.get(&enclosing).map(|closures| &**closures),
+                    program.closures(key),
+                )
+            });
+        if !same {
+            let name = key.name();
+            return Some(match name.find("{closure#") {
+                Some(at) => format!("a closure `{}` gave native code changed", &name[..at]),
+                None => format!("`{name}`, which `main` gave native code, changed"),
+            });
+        }
+    }
+    None
 }
 
 /// The published program as any thread may use it (D490): calls with an
@@ -349,6 +564,8 @@ struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
     clones: HashMap<type_def::Identity, item::Value>,
+    /// The closures each function writes (D553.5).
+    layouts: HashMap<String, Box<[item::Value]>>,
 }
 
 #[cfg(feature = "sync")]
@@ -386,6 +603,18 @@ impl crate::future::Remote for Shared {
 
     fn debug(&self, value: &Dynamic) -> Option<String> {
         self.authority.model().debug_text(value)
+    }
+
+    fn rebinds(&self, function: &item::Value, from: &dyn crate::future::Remote) -> bool {
+        let key = function.key();
+        self.authority.rebind(function).is_ok()
+            && (enclosing(key).is_none() || same_closures(self.closures(key), from.closures(key)))
+    }
+
+    fn closures(&self, closure: &item::Key) -> Option<&[item::Value]> {
+        self.layouts
+            .get(&enclosing(closure)?)
+            .map(|closures| &**closures)
     }
 }
 
@@ -524,4 +753,35 @@ mod tests {
             r#"Job { id: 7, name: "seven", tags: ["a"], next: Some(Done { at: 3 }) }"#
         );
     }
+}
+
+/// A generation compiled on the protocol thread is admitted on the thread
+/// that owns the program (D553.9, check 2): what a compiled program holds
+/// moves between threads.
+#[cfg(all(test, feature = "sync"))]
+#[test]
+fn a_compiled_program_moves_to_the_owner_thread() {
+    fn moves<T: Send>() {}
+    moves::<crate::Shared<crate::Engine>>();
+    moves::<crate::AST>();
+    moves::<crate::reload::Candidate>();
+    moves::<std::sync::Arc<crate::reload::Generation>>();
+    moves::<crate::host::facade::Definition>();
+    moves::<crate::package::import::runner::account::Observation>();
+}
+
+/// What of `main` a running program compares: its text without comments
+/// or layout, strings and characters as written, up to its closing brace.
+#[cfg(all(test, feature = "sync"))]
+#[test]
+fn main_text_ignores_layout_and_comments_and_stops_at_its_brace() {
+    let one = "// rawr\nuse x::y;\n\nfn main() {\n    // a comment\n    let s = \"}\";\n    let c = '}';\n    run(|t| { t + 1 }, 40);\n}\n\nfn step() {}\n";
+    let moved = "// rawr\nuse x::y;\nfn helper() -> i64 { 2 }\n\nfn  main()  {\n    let s = \"}\"; /* note */\n    let c = '}';\n    run(|t| {\n        t + 1\n    }, 40);\n}\n";
+    let edited = one.replace("40", "50");
+    let text = main_text(one).unwrap();
+    assert!(text.starts_with("fn main() {"), "{text}");
+    assert!(text.ends_with("40); }"), "{text}");
+    assert_eq!(main_text(moved), main_text(one));
+    assert_ne!(main_text(&edited), main_text(one));
+    assert_eq!(main_text("fn domain() {}"), None);
 }

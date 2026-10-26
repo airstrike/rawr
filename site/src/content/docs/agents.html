@@ -47,6 +47,7 @@
 <p>The events <code>wait</code> returns are these:</p>
 <ul>
   <li><code>running</code>: the program runs.</li>
+  <li><code>queued</code>: a save reached a program with a marked <code>main</code> in a native loop. The loop takes it at its next call into marked code, and <code>swapped</code> follows. In Freya that is the next event.</li>
   <li><code>swapped</code>: a save changed the running program in place, and it kept its state.</li>
   <li><code>restarting</code>: a save restarts the program, for the reason given.</li>
   <li><code>failed</code>: a start or a save failed, with diagnostics. The last good program keeps running.</li>

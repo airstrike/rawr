@@ -51,7 +51,32 @@
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
   <li>Marked code can&rsquo;t call items written in the native root itself.</li>
 </ul>
-<p>A marked <code>main</code> runs on the process&rsquo;s main thread too, with the interpreter. So a marked crate root can start a winit event loop itself, as Freya&rsquo;s <code>launch</code> does. A save restarts such a program.</p>
+<p>A marked <code>main</code> runs on the process&rsquo;s main thread too, with the interpreter. So a marked crate root can start a winit event loop itself, as Freya&rsquo;s <code>launch</code> does. A save reaches such a program while it runs, as <a href="#swap">a running marked main</a> says.</p>
+
+<h2 id="swap">A running marked main</h2>
+<p>A marked <code>main</code> often hands control to a native loop: a framework&rsquo;s event loop, a game loop or a timer. That loop calls your marked functions and closures back. A save reaches the program at the loop&rsquo;s next such call, and the program keeps running.</p>
+<ul>
+  <li>The next call runs the new code. Everything that call runs uses the same version of your code.</li>
+  <li>The framework keeps its state: its window, its widgets and the values it holds for you.</li>
+  <li>The new code compiles beside the running program, so the loop doesn&rsquo;t stall while it compiles.</li>
+  <li>A save of several files arrives whole.</li>
+  <li>A save that doesn&rsquo;t compile prints its error, and the program keeps running.</li>
+</ul>
+<p>A closure that native code holds runs its new body when the function that writes it has the same closures as before, with the same captures. Otherwise it runs its old body until the framework asks for it again. A function passed by name always runs its new body when its signature is the same.</p>
+<p>Some saves restart the program with one line that says why:</p>
+<ul>
+  <li>a struct or enum with new fields or variants, since native code may hold a value of the old shape;</li>
+  <li>an edit to <code>main</code> itself, closures written in it included, since <code>main</code> runs only once;</li>
+  <li>a changed function that <code>main</code> gave native code, since <code>main</code> doesn&rsquo;t run again to give a new one;</li>
+  <li>a program whose native code never called back into marked code;</li>
+  <li>a new native call, or an edit to <code>Cargo.toml</code> or a native file;</li>
+  <li>a panic after a save, such as a framework&rsquo;s check that its hooks keep their order.</li>
+</ul>
+<div class="block"><pre><code>rawr: `Scale` changed its fields; restarting the program</code></pre></div>
+
+<h3 id="next-event">When the edit shows</h3>
+<p>A loop that runs every frame shows the edit at its next frame. A game loop and a ratatui loop are such loops.</p>
+<p>A framework that redraws only what changed shows the edit at its next event. Freya is such a framework: it calls a component again only when its state changes, so an edit shows when you next click or type. Showing an edit at once would need the framework to rerun every component and keep its state, and Freya has no call that does both. Its own reload resets every <code>use_state</code>.</p>
 
 <h2 id="async">An async main</h2>
 <p>A marked crate root may have an <code>async fn main</code> under its runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>. The runtime is the one in your <code>Cargo.toml</code>, built by Cargo as <code>cargo run</code> builds it. rawr adds none and favors none.</p>
@@ -135,6 +160,7 @@ sum 5050</span></div>
 <ul>
   <li>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
   <li>A <a href="#native-main">native main</a> picks up a body edit at its next call into the marked file, and keeps running.</li>
+  <li>A <a href="#swap">marked main</a> in a native loop picks up a body edit at the loop&rsquo;s next call into marked code, and keeps running.</li>
   <li>Any other running program restarts when you save, with the same arguments. One line on stderr says so:</li>
 </ul>
 <div class="block"><pre><code>rawr: the source changed; restarting the program</code></pre></div>

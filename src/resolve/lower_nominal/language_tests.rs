@@ -9819,3 +9819,90 @@ fn language_float_exclusive_range_is_a_value() {
     );
     rejected("pub fn run() -> i64 { let _r = 0.5..1; 0 } run()");
 }
+
+/// A callable native code holds runs a new generation's body when it
+/// rebinds by its stable identity (D553.5, D553.9 check 1): a named
+/// function and a closure with the same captures do, and the closure stays
+/// in its own generation once a closure written before it renumbers it, or
+/// once its captures change.
+#[cfg(all(feature = "sync", feature = "rust-import"))]
+#[test]
+fn language_held_callables_rebind_to_a_new_generation_by_stable_identity() {
+    let generation = |source: &str| {
+        let mut engine = Engine::new();
+        engine.register_host_facade(style_facade()).unwrap();
+        let engine = crate::Shared::new(engine);
+        let executable = engine
+            .compile_executable(source)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let authority = engine.authorize(executable).unwrap();
+        let items = authority.items().cloned().collect::<Vec<_>>();
+        let program = crate::island::shared(
+            authority,
+            crate::Shared::new(crate::host::runtime::Registry::new()),
+        );
+        (program, items)
+    };
+    let (first, items) = generation(
+        r#"
+use ui::{Button, button};
+fn shade(base: i64, pressed: bool) -> i64 { if pressed { base } else { 0 } }
+pub fn view(k: i64) -> Button { button().style(move |base, pressed| shade(base, pressed) + k) }
+"#,
+    );
+    let (edited, _) = generation(
+        r#"
+use ui::{Button, button};
+fn shade(base: i64, pressed: bool) -> i64 { if pressed { base * 10 } else { 0 } }
+pub fn view(k: i64) -> Button { button().style(move |base, pressed| shade(base, pressed) + k * 2) }
+"#,
+    );
+    let (inserted, _) = generation(
+        r#"
+use ui::{Button, button};
+fn shade(base: i64, pressed: bool) -> i64 { if pressed { base * 10 } else { 0 } }
+pub fn view(k: i64) -> Button { button().style(|base, _| base).style(move |base, pressed| shade(base, pressed) + k * 2) }
+"#,
+    );
+    let (recaptured, _) = generation(
+        r#"
+use ui::{Button, button};
+fn shade(base: i64, pressed: bool) -> i64 { if pressed { base * 10 } else { 0 } }
+pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, pressed) + j * 2) }
+"#,
+    );
+    // What the first generation gave native code: `shade`, and the closure
+    // with its capture `k = 3`.
+    let item = |name: &str| {
+        items
+            .iter()
+            .find(|item| item.key().name().starts_with(name))
+            .unwrap_or_else(|| panic!("no `{name}`"))
+            .clone()
+    };
+    let shade = item("shade");
+    let closure = item("view{closure#").bind(vec![crate::Dynamic::from(3_i64)]);
+    let call = |program: &crate::future::Program, function: &crate::item::Value| {
+        program
+            .invoke(
+                function,
+                &mut [crate::Dynamic::from(5_i64), crate::Dynamic::from(true)],
+            )
+            .unwrap()
+            .as_int()
+            .unwrap()
+    };
+    assert_eq!(call(&first, &shade), 5);
+    assert_eq!(call(&first, &closure), 5 + 3);
+    // A body edit: both run the new bodies, the closure with its capture.
+    assert!(edited.rebinds(&shade, first.as_ref()));
+    assert!(edited.rebinds(&closure, first.as_ref()));
+    assert_eq!(call(&edited, &shade), 50);
+    assert_eq!(call(&edited, &closure), 50 + 6);
+    // A closure written before it renumbers it: it stays pinned, while the
+    // named function still rebinds.
+    assert!(inserted.rebinds(&shade, first.as_ref()));
+    assert!(!inserted.rebinds(&closure, first.as_ref()));
+    // A capture renamed: its fingerprint differs.
+    assert!(!recaptured.rebinds(&closure, first.as_ref()));
+}

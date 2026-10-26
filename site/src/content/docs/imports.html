@@ -86,7 +86,7 @@ fn main() {
 <h2 id="gaps">Known gaps</h2>
 <ul>
   <li>A program that rawr-import runs exits with status 1 when it fails, a panic included. Rust would exit with 101.</li>
-  <li>rawr-import restarts a program with a marked <code>main</code> when you save. A native <code>main</code> picks up a body edit at its next call. <a href="/docs/run#reload">Reload</a> says more.</li>
+  <li>A program with a marked <code>main</code> picks up a body edit when native code next calls back into it, as Freya does at its next event. A native <code>main</code> picks up a body edit at its next call. <a href="/docs/run#reload">Reload</a> says more.</li>
   <li>A guarded value without <code>Clone</code> stops the program where it is read. A guard of a <code>Vec</code> or a tuple can be read but not changed yet. A guard inside an <code>Option</code> or a <code>Result</code>, as <code>Mutex::lock</code> gives, isn&rsquo;t supported yet.</li>
   <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
 </ul>

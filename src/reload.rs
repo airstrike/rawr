@@ -127,6 +127,12 @@ impl Candidate {
         self
     }
 
+    /// The items this candidate declares, lifted closures among them.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn items(&self) -> impl ExactSizeIterator<Item = &crate::item::Value> {
+        self.catalog.items()
+    }
+
     /// Return this candidate's immutable metadata proof.
     #[must_use]
     pub const fn generation(&self) -> &Arc<Generation> {

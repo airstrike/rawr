@@ -509,7 +509,7 @@ impl State {
                     event["percent"].as_u64().unwrap_or(0),
                 ));
             }
-            "running" | "swapped" => {
+            "running" | "queued" | "swapped" => {
                 self.phase = Phase::Running;
                 self.failure = None;
             }

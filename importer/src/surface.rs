@@ -243,8 +243,10 @@ struct SurfaceCanonical<'a> {
     builders: &'a [builder::Plan],
 }
 
+/// A demand's native items, each once, without the use sites that named
+/// them: what a runner is built from.
 #[derive(Clone, Copy)]
-struct UniqueIdentities<'a>(&'a [Entry]);
+pub(crate) struct UniqueIdentities<'a>(pub(crate) &'a [Entry]);
 
 /// Counts canonical bytes; `overflow` marks a checked-arithmetic failure only.
 /// The byte target is compared afterwards and recorded, never refused.
