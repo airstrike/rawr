@@ -117,6 +117,25 @@ fn main() {
 <p>A <code>&amp;mut Vec</code> of numbers that the call fills, as <code>read_event_into(&amp;mut buf)</code> fills <code>buf</code>, gets the call&rsquo;s changes back when its frame ends. That is where Rust&rsquo;s borrow of it ends, so the statement after the <code>match</code>, such as <code>buf.clear()</code>, sees them. A <code>let</code> that binds such a value, as in <code>let event = reader.read_event_into(&amp;mut buf)?;</code>, isn&rsquo;t supported yet. Match on the call in a statement of its own, as quick-xml&rsquo;s README does.</p>
 <p>An imported type that implements <code>Iterator</code> is walked by a <code>for</code> loop, and the iterator methods work on it, as in <code>e.attributes().map(|a| a.unwrap().value).collect::&lt;Vec&lt;_&gt;&gt;()</code>. A <code>Cow&lt;str&gt;</code> a crate gives is a <code>String</code>, and a <code>Cow&lt;[u8]&gt;</code> or a <code>&amp;[u8]</code> is a copy of its bytes, which no longer borrows. A byte string pattern, as in <code>b"tag1" =&gt; ..</code>, matches a <code>&amp;[u8]</code>, as in Rust.</p>
 <p>A value in a frame is printed, cloned and matched as any imported value is. It stays in the frame until the frame ends, even after your code drops it.</p>
+<p>A value in a frame can be an argument of a native call, as it is in Rust. pulldown-cmark&rsquo;s README hands its parser to <code>push_html</code>:</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b><span>pulldown-cmark&rsquo;s README example</span></div>
+  <pre><code data-lang="rust">// rawr
+use pulldown_cmark::{html, Options, Parser};
+
+fn main() {
+    let markdown_input = "Hello world, this is a ~~complicated~~ *very simple* example.";
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(markdown_input, options);
+
+    let mut html_output = String::new();
+    html::push_html(&amp;mut html_output, parser);
+    print!("{html_output}");
+}</code></pre>
+</div>
+<p><code>push_html</code> takes the parser by value, so the call moves it out of the frame, as Rust moves it. Using <code>parser</code> after the call says it was moved (E0382). The call runs inside the frame, and a value it gives that carries the borrow stays in the frame too.</p>
+<p>A <code>&amp;mut String</code> that a native call writes into, as <code>push_html</code>&rsquo;s first argument is, gets the call&rsquo;s changes back when the call returns. So does a <code>&amp;mut Vec</code> of numbers.</p>
 
 <h2 id="generics">Generic items and your own types</h2>
 <p>A generic Rust function or method can take your own types, as <code>mpsc::channel::&lt;Job&gt;()</code> does with a struct from a marked file. rawr builds the item once in its runner at <code>rawr::Value</code>, which carries any of your values as they are. A value that comes back, as <code>recv</code> gives a <code>Job</code>, is checked against the type you named.</p>
@@ -137,5 +156,6 @@ fn main() {
   <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
   <li>A <code>while let</code> whose subject borrows a <code>&amp;mut</code> buffer its call fills isn&rsquo;t supported yet. Match on the call in the loop&rsquo;s body, as quick-xml&rsquo;s README does.</li>
   <li>A value that borrows can&rsquo;t be stored in a struct of yours, kept in a collection past its frame, or held across an <code>.await</code>.</li>
+  <li>A value in a frame can be an argument by value, not by reference yet. A call can&rsquo;t take values from two frames yet.</li>
 </ul>
 </article>

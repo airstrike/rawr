@@ -106,6 +106,24 @@ pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
 <p>A <code>&amp;mut Frame</code> borrows the terminal&rsquo;s buffer, so it can&rsquo;t be copied into marked code. rawr lends it instead, for the length of the call. Each of <code>frame</code>&rsquo;s methods reaches the native frame itself, so what <code>draw</code> renders is in the buffer when the call returns. A borrowed parameter of any type your marked crate doesn&rsquo;t declare is lent the same way.</p>
 <p>The borrow ends with the call, as in Rust. A marked function can&rsquo;t keep the frame in what it returns, or in an argument native code takes back. rawr refuses that with Rust&rsquo;s borrow rule (E0515, E0521). A copy kept anywhere else is useless after the call, and using it says so (E0597).</p>
 <p>A widget&rsquo;s state works as in Rust. <code>render_stateful_widget</code> borrows the <code>ListState</code> for its call, and the list scrolls the selection into view in it. Here the app keeps the selection and the offset as plain numbers, and <code>draw</code> makes the <code>ListState</code> from them and reads them back.</p>
+<p>A lent value can be an argument of a native call, as well as the receiver of its methods. So native code can keep the <code>ListState</code> and lend it with the frame:</p>
+<div class="block">
+  <div class="file"><b>src/ui.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use ratatui::widgets::{Block, List, ListState};
+use ratatui::Frame;
+
+pub fn draw(frame: &amp;mut Frame, state: &amp;mut ListState) {
+    if state.selected().is_none() {
+        state.select(Some(1));
+    }
+    let list = List::new(["alpha", "beta", "gamma"])
+        .block(Block::bordered().title("list"))
+        .highlight_symbol("&gt; ");
+    frame.render_stateful_widget(list, frame.area(), state);
+}</code></pre>
+</div>
+<p><code>main</code> calls it as <code>terminal.draw(|frame| ui::draw(frame, &amp;mut state))</code>. The list changes <code>main</code>&rsquo;s own <code>ListState</code>, as in Rust.</p>
 
 <h2 id="reload">What swaps and what restarts</h2>
 <p>A save of a marked file reaches the program at its next call into that file.</p>
