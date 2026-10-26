@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Record the pinned rustc's verdict on each program of the borrow corpus.
 
-    python3 -I tests/borrowck/record.py [files...]
+    python3 -I tests/borrowck/record.py [folders or files...]
 
-With no files, it records every `.rs` under `tests/borrowck` and writes
-`tests/borrowck/rustc.tsv`: one row per program, its path relative to this
-directory, rustc's error codes with their lines (`E0502:7`), or `ok`
+With folders, or with none for every folder, it records each `.rs` under a
+corpus folder and writes that folder's `rustc.tsv`: one row per program, its
+path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`), or `ok`
 followed by what the program's binary printed (escaped), which the
-differential harness compares with rawr's run. With files, it prints the
-rows instead (for picking cases). Builds go under `target/borrowck`.
+differential harness compares with rawr's run. With `.rs` files, it prints
+the rows instead (for picking cases). Builds go under `target/borrowck`.
 
 The corpus: `ui/` holds the cases of rustc 1.96.0's tests/ui/borrowck and
 tests/ui/nll that rawr's frontend lowers (rustc's tests, MIT OR Apache-2.0
@@ -72,21 +72,25 @@ def main():
     version = subprocess.run(["rustc", f"+{TOOLCHAIN}", "--version"], capture_output=True, text=True)
     if not version.stdout.startswith(PINNED):
         sys.exit(f"the corpus is recorded with {PINNED.strip()}, not {version.stdout.strip()}")
-    files = sys.argv[1:]
+    arguments = sys.argv[1:]
+    files = [path for path in arguments if path.endswith(".rs")]
+    for path in files:
+        print(f"{path}\t{verdict(os.path.abspath(path))}")
     if files:
-        for path in files:
-            print(f"{path}\t{verdict(os.path.abspath(path))}")
         return
-    rows = []
-    for directory, _, names in sorted(os.walk(HERE)):
-        for name in sorted(names):
-            if name.endswith(".rs"):
-                path = os.path.join(directory, name)
-                rows.append(f"{os.path.relpath(path, HERE)}\t{verdict(path)}")
-    with open(os.path.join(HERE, "rustc.tsv"), "w") as out:
-        out.write(f"# {version.stdout.strip()}, edition {EDITION}\n")
-        out.write("\n".join(rows) + "\n")
-
+    folders = [os.path.abspath(path) for path in arguments] or [
+        os.path.join(HERE, name) for name in sorted(os.listdir(HERE)) if os.path.isdir(os.path.join(HERE, name))
+    ]
+    for folder in folders:
+        rows = []
+        for directory, _, names in sorted(os.walk(folder)):
+            for name in sorted(names):
+                if name.endswith(".rs"):
+                    path = os.path.join(directory, name)
+                    rows.append(f"{os.path.relpath(path, HERE)}\t{verdict(path)}")
+        with open(os.path.join(folder, "rustc.tsv"), "w") as out:
+            out.write(f"# {version.stdout.strip()}, edition {EDITION}\n")
+            out.write("\n".join(rows) + "\n")
 
 if __name__ == "__main__":
     main()

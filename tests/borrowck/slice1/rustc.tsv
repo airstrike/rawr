@@ -1,0 +1,52 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+slice1/argument_borrow_until_call.rs	E0502:10
+slice1/argument_borrows_in_turn.rs	ok	0	"4\n"
+slice1/assign_after_last_use.rs	ok	0	"3\n"
+slice1/assign_borrowed.rs	E0506:4
+slice1/block_scope_dead.rs	ok	0	"[1, 2, 3]\n"
+slice1/branch_value_after_last_use.rs	ok	0	"1\n[2, 3]\n"
+slice1/branch_value_holds_both.rs	E0502:6
+slice1/break_continue_end_paths.rs	ok	0	"[1, 1, 3, 9]\n"
+slice1/closure_inline_use.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+slice1/element_method.rs	ok	0	"[1]\n"
+slice1/element_method_while_borrowed.rs	E0502:12
+slice1/field_conflict.rs	E0503:8
+slice1/fields_apart.rs	ok	0	"101 12\n"
+slice1/for_over_shared_borrow.rs	ok	0	"[1, 2, 3]\n"
+slice1/for_over_shared_borrow_mutated.rs	E0502:5
+slice1/holder_copy_keeps_borrow.rs	E0502:5
+slice1/holder_reassigned.rs	ok	0	"1\n1 [1, 3]\n"
+slice1/index_assign_after_last_use.rs	ok	0	"1 [5, 2]\n"
+slice1/index_assign_borrowed.rs	E0502:4
+slice1/index_assign_index_reads.rs	E0502:3
+slice1/labeled_break.rs	ok	0	"[1, 1, 2, 7]\n"
+slice1/labeled_continue_conflict.rs	E0499:8
+slice1/last_use_ends_borrow.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+slice1/loop_borrow_carried_conflict.rs	E0499:7
+slice1/loop_borrow_carried_into_next.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+slice1/loop_borrow_each_iteration.rs	ok	0	"5 [1, 0, 2]\n"
+slice1/loop_borrow_outlives_iteration.rs	ok	0	"[1, 0, 1, 2]\n"
+slice1/match_arm_conflict.rs	E0499:6
+slice1/match_arms.rs	ok	0	"[1, 2, 2]\n"
+slice1/method_two_phase.rs	ok	0	"[0, 1]\n"
+slice1/method_while_borrowed.rs	E0502:15
+slice1/move_after_last_use.rs	ok	0	"1 1\n"
+slice1/move_while_borrowed.rs	E0505:7
+slice1/mutable_twice.rs	E0499:4
+slice1/oracle_branch_arms.rs	ok	0	"[1, 1]\n"
+slice1/oracle_loop_back_edge.rs	E0502:7
+slice1/oracle_stale_shared.rs	E0502:4
+slice1/panic_ends_path.rs	E0502:4
+slice1/panic_ends_path_ok.rs	ok	0	"[1, 2]\n"
+slice1/reborrow_conflict.rs	E0499:5
+slice1/reborrow_through_holder.rs	ok	0	"[1, 2, 3]\n"
+slice1/return_ends_path.rs	ok	0	"2 2\n"
+slice1/string_push_after_last_use.rs	ok	0	"1 ab\n"
+slice1/string_push_while_borrowed.rs	E0502:4
+slice1/try_operator_path.rs	ok	0	"Some(4) [4, 4]\n"
+slice1/two_phase_holder_arg.rs	E0502:4
+slice1/two_phase_len.rs	ok	0	"[1, 2, 2, 3]\n"
+slice1/two_phase_mutable_arg.rs	E0499:4
+slice1/use_while_mutably_borrowed.rs	E0503:4
+slice1/while_let_borrow.rs	ok	0	"[6]\n"
+slice1/while_let_conflict.rs	E0499:8
