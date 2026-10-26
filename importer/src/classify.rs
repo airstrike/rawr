@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 26;
+const CLASSIFIER_VERSION: u32 = 27;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5147,6 +5147,24 @@ impl<P: api::Phase> Context<'_, P> {
                     element: Box::new(self.convert(element)?),
                     owned: true,
                 }),
+            });
+        }
+        // `&mut String`, as pulldown-cmark's `push_html(&mut s, ..)` writes
+        // into: Rawr's string, copied in and back out as `&mut Vec<T>` is.
+        if let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            ty: target,
+            ..
+        } = ty
+            && let Ok(
+                string @ representability::convert::Type::Builtin(
+                    representability::convert::Builtin::String,
+                ),
+            ) = self.convert(target)
+        {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(string),
             });
         }
         // `&T` or `&mut T` of a value Rawr holds, leased from its slot for

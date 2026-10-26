@@ -1011,6 +1011,108 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
 }
 
+/// A value native code lent the call (D558.3) that an argument reaches,
+/// erased: its type is `'static`, as ratatui's `ListState` is.
+#[allow(dead_code)]
+enum Reached<'a> {
+    Shared(&'a (dyn Any + 'static)),
+    Mutable(&'a mut (dyn Any + 'static)),
+}
+
+#[allow(dead_code)]
+impl<'a> Reached<'a> {
+    fn reborrow(&mut self) -> Reached<'_> {
+        match self {
+            Self::Shared(value) => Reached::Shared(*value),
+            Self::Mutable(value) => Reached::Mutable(&mut **value),
+        }
+    }
+
+    fn shared<T: 'static>(self) -> Option<&'a T> {
+        match self {
+            Self::Shared(value) => value.downcast_ref(),
+            Self::Mutable(value) => value.downcast_ref(),
+        }
+    }
+
+    fn mutable<T: 'static>(self) -> Option<&'a mut T> {
+        match self {
+            Self::Shared(_) => None,
+            Self::Mutable(value) => value.downcast_mut(),
+        }
+    }
+}
+
+/// The lent arguments a call reached, by argument index.
+type LentArguments<'r> = [(usize, Option<Reached<'r>>)];
+
+/// Reaches the value `lent` names through the accessor its trampoline made
+/// for a `T`, mutably or not, and hands it to `visit`.
+type Reach = fn(__rawr_internal::scope::Lent, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
+
+#[allow(dead_code)]
+fn reach_lent<T: 'static>(
+    lent: __rawr_internal::scope::Lent,
+    mutable: bool,
+    visit: &mut dyn FnMut(Reached<'_>),
+) -> Result<(), Error> {
+    let failed = |error| Error::Lent(lent.name(), error);
+    let reached = if mutable {
+        let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
+        access(lent.nonce().bits(), &mut |value| visit(Reached::Mutable(value)))
+    } else {
+        let access: fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+        access(lent.nonce().bits(), &mut |value| visit(Reached::Shared(value)))
+    };
+    reached.map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))
+}
+
+/// Run `body` with each argument at `lendable` (its index, whether the call
+/// takes it `&mut`, and how to reach it) that is a value native code lent
+/// (D558.3) reached for the call, nested in its accessor, as ratatui's
+/// `render_stateful_widget(.., state)` takes a `&mut ListState` lent to a
+/// marked function. Each is claimed for the call alone, as a borrow is.
+#[allow(dead_code)]
+fn with_lent_arguments(
+    arguments: &mut Arguments<'_, '_, '_>,
+    lendable: &[(usize, bool, Reach)],
+    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, Error> {
+    let found: Vec<_> = lendable
+        .iter()
+        .filter_map(|&(index, mutable, reach)| lent_value(arguments, index).map(|lent| (index, mutable, lent, reach)))
+        .collect();
+    nest_lent(arguments, &found, &mut Vec::new(), body)
+}
+
+#[allow(dead_code)]
+fn nest_lent(
+    arguments: &mut Arguments<'_, '_, '_>,
+    found: &[(usize, bool, __rawr_internal::scope::Lent, Reach)],
+    reached: &mut Vec<(usize, Option<Reached<'_>>)>,
+    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, Error> {
+    let Some((&(index, mutable, lent, reach), rest)) = found.split_first() else {
+        return body(arguments, reached);
+    };
+    let mut result = None;
+    reach(lent, mutable, &mut |value| {
+        let mut inner: Vec<(usize, Option<Reached<'_>>)> = reached
+            .iter_mut()
+            .map(|(index, value)| (*index, value.as_mut().map(Reached::reborrow)))
+            .collect();
+        inner.push((index, Some(value)));
+        result = Some(nest_lent(arguments, rest, &mut inner, body));
+    })?;
+    result.unwrap_or(Err(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy)))
+}
+
+/// The lent value at argument `index`, once: the call's borrow of it.
+#[allow(dead_code)]
+fn lent_argument<'r>(lent: &mut LentArguments<'r>, index: usize) -> Option<Reached<'r>> {
+    lent.iter_mut().find(|(at, _)| *at == index).and_then(|(_, value)| value.take())
+}
+
 fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
@@ -4964,15 +5066,190 @@ fn render_adapter(
     facade: Option<&crate::surface::facade::Plan>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    writeln!(
-        output,
-        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
-        adapter_name(plan)
-    )
-    .map_err(|_| request::Error::Encoding)?;
+    let encoding = |_| request::Error::Encoding;
+    let name = adapter_name(plan);
+    let plain = method_message(plan, cohort, profile, facade)?.is_none()
+        && replay(plan, profile)?.is_none();
+    let lent = if plain {
+        lent_inputs(plan)?
+    } else {
+        Vec::new()
+    };
+    let region = if plain {
+        region_inputs(plan)?
+    } else {
+        Vec::new()
+    };
+    let _lent = LentArguments::enter(!lent.is_empty());
+    if lent.is_empty() {
+        writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
+        )
+        .map_err(encoding)?;
+    } else {
+        // Each argument native code lent (D558.3) is reached for the call
+        // through its accessor, and the call runs inside them all.
+        let reach = lent
+            .iter()
+            .map(|(index, mutable, rust)| {
+                format!("({index}, {mutable}, reach_lent::<{rust}> as Reach)")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    with_lent_arguments(arguments, &[{reach}], {name}_lent)
+}}
+
+fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>) -> Result<Dynamic, Error> {{
+    let _ = &mut *lent;"
+        )
+        .map_err(encoding)?;
+    }
     output
         .write_all(b"    let _ = &mut *arguments;\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(encoding)?;
+    if !region.is_empty() {
+        // A value in a scope frame's region the call takes (D558 tier 1),
+        // as `push_html(&mut s, parser)` takes `Parser::new(&text)`'s: the
+        // call runs inside the region, which keeps what it makes that
+        // carries the region's lifetime.
+        let indices = region
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            output,
+            "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index)) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
+        )
+        .map_err(encoding)?;
+        {
+            let _region = InRegion::enter();
+            let _arguments = RegionArguments::enter();
+            render_adapter_body(plan, cohort, profile, facade, output)?;
+        }
+        output
+            .write_all(
+                b"        })
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }
+",
+            )
+            .map_err(encoding)?;
+    }
+    render_adapter_body(plan, cohort, profile, facade, output)?;
+    output.write_all(b"}\n\n").map_err(encoding)
+}
+
+/// The inputs of a call that are `&T` or `&mut T` of a `'static` type
+/// another crate declares, which native code may have lent a marked
+/// function (D558.3), as ratatui's `render_stateful_widget` takes `&mut
+/// ListState`: each one's argument index, whether it is `&mut`, and its
+/// Rust type.
+fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error> {
+    let Some((signature, substitutions, offset)) = call_signature(plan) else {
+        return Ok(Vec::new());
+    };
+    // A scope frame's call takes what it borrows into the frame.
+    if signature.scope().is_some() {
+        return Ok(Vec::new());
+    }
+    let mut lent = Vec::new();
+    for (index, input) in runtime_inputs(signature, offset) {
+        let convert::Type::Borrowed { mutable, ty } = input else {
+            continue;
+        };
+        if is_copied(ty) {
+            continue;
+        }
+        let ty = substituted(ty, signature, substitutions)?;
+        if !matches!(ty, convert::Type::Nominal { .. }) || carries_lifetime(&ty) || is_value(&ty) {
+            continue;
+        }
+        if let Some(rust) = concrete_type(&ty) {
+            lent.push((index, *mutable, rust));
+        }
+    }
+    Ok(lent)
+}
+
+/// The inputs a call takes by value whose type carries a lifetime, so a
+/// value in a scope frame's region may fill them (D558 tier 1), as
+/// `push_html`'s `I` is a `Parser`: each one's argument index.
+fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
+    let Some((signature, substitutions, offset)) = call_signature(plan) else {
+        return Ok(Vec::new());
+    };
+    if signature.scope().is_some() {
+        return Ok(Vec::new());
+    }
+    let mut region = Vec::new();
+    for (index, input) in runtime_inputs(signature, offset) {
+        if matches!(input, convert::Type::Borrowed { .. }) {
+            continue;
+        }
+        let ty = substituted(input, signature, substitutions)?;
+        if family_of(&ty).is_some() {
+            region.push(index);
+        }
+    }
+    Ok(region)
+}
+
+/// The signature, substitutions and argument offset of a call: a
+/// function's, or a method's after its receiver.
+fn call_signature(
+    plan: &Plan,
+) -> Option<(
+    &crate::classify::representability::signature::Signature,
+    &[convert::Type],
+    usize,
+)> {
+    match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            mappers,
+            call: None,
+            ..
+        } if mappers.is_empty() => Some((signature, substitutions, 0)),
+        Operation::Method {
+            signature,
+            substitutions,
+            call: None,
+            ..
+        } => Some((signature, substitutions, 1)),
+        _ => None,
+    }
+}
+
+/// Each input a call takes at run time, with its argument index: a static
+/// function item takes none.
+fn runtime_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+    offset: usize,
+) -> impl Iterator<Item = (usize, &convert::Type)> {
+    signature
+        .inputs()
+        .iter()
+        .filter(|input| !matches!(input, convert::Type::FunctionItem { .. }))
+        .enumerate()
+        .map(move |(index, input)| (index + offset, input))
+}
+
+/// The body of `plan`'s adapter, which takes its arguments, calls, and
+/// gives the output.
+fn render_adapter_body(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
     let path = rust_path(plan);
     let continuation = method_message(plan, cohort, profile, facade)?;
     let replay = match continuation {
@@ -5502,9 +5779,7 @@ fn render_adapter(
             }
         }
     }
-    output
-        .write_all(b"}\n\n")
-        .map_err(|_| request::Error::Encoding)
+    Ok(())
 }
 
 /// A call whose output borrows its `&str` inputs (D558 tier 1), as
@@ -5880,6 +6155,20 @@ fn render_scoped_receiver(
         render_to_dynamic(&returned, "output", 0, &mut converted)?;
         converted
     };
+    // In the region the adapter's body already runs in, which an argument
+    // of the call is in too.
+    if REGION_ARGUMENTS.get() {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        #[allow(unused_mut)]
+        let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+        let output = {call};
+        return {converted};
+    }}"
+        )
+        .map_err(encoding);
+    }
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, 0) {{
@@ -7797,13 +8086,13 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    // `&mut Vec<T>` of scalars: a copy of Rawr's array the call changes,
-    // which goes back after it (D558 slice 2).
+    // `&mut Vec<T>` of scalars, or `&mut String`: a copy of Rawr's array or
+    // string the call changes, which goes back after it (D558 slice 2).
     if let convert::Type::Borrowed {
         mutable: true,
         ty: element,
     } = ty
-        && matches!(**element, convert::Type::Sequence { .. })
+        && is_copied(element)
     {
         let mut converted = String::new();
         render_from_dynamic(element, "value", 0, &mut converted)?;
@@ -7820,6 +8109,17 @@ fn render_take_input(
             &substituted(ty, signature, substitutions)?,
             output,
         );
+    }
+    // A value of a scope frame's region, moved out of it into the call
+    // (D558 tier 1), as `push_html` takes a `Parser`.
+    if REGION_ARGUMENTS.get()
+        && let Some(family) = family_of(&substituted(ty, signature, substitutions)?)
+    {
+        return writeln!(
+            output,
+            "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? }};"
+        )
+        .map_err(|_| request::Error::Encoding);
     }
     let generic = matches!(ty, convert::Type::Parameter(_));
     let ty = substitute(ty, signature, substitutions)?;
@@ -7868,6 +8168,28 @@ fn render_lease(
         field: "borrowed input type",
     })?;
     let borrow = if *mutable { "" } else { "&*" };
+    if LENT_ARGUMENTS.get() && !carries_lifetime(ty) {
+        // Or a value native code lent a marked function (D558.3), reached
+        // through its accessor, which the call runs inside.
+        let (reference, reach) = if *mutable {
+            ("&mut ", "mutable")
+        } else {
+            ("&", "shared")
+        };
+        return writeln!(
+            output,
+            "    #[allow(unused_mut)]
+    let mut argument_{local}_held: Held<{rust}>;
+    let argument_{local}: {reference}{rust} = match lent_argument(lent, {index}) {{
+        Some(value) => value.{reach}::<{rust}>().ok_or(Error::Lent({rust:?}, __rawr_internal::scope::Error::Mismatch))?,
+        None => {{
+            argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};
+            {borrow}argument_{local}_held.get_mut()
+        }}
+    }};"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     writeln!(
         output,
         "    let mut argument_{local}_held: Held<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
@@ -8054,6 +8376,17 @@ fn render_give(
     match ty {
         ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
+        // A value that carries the lifetime of the scope frame's region the
+        // call runs in stays there (D558 tier 1).
+        convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
+            let family = family_of(ty).ok_or(request::Error::Drift {
+                field: "a scoped value's family",
+            })?;
+            writeln!(
+                output,
+                "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
+            )
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -8518,8 +8851,9 @@ fn render_give_with(
     .map_err(|_| request::Error::Encoding)
 }
 
-/// Each input `&mut Vec<T>` a call takes as a copy of Rawr's array, by
-/// position, with the `Vec<T>` it converts as (D558 slice 2).
+/// Each input `&mut Vec<T>` or `&mut String` a call takes as a copy of
+/// Rawr's array or string, by position, with the type it converts as
+/// (D558 slice 2).
 fn copied_inputs(
     signature: &crate::classify::representability::signature::Signature,
 ) -> Vec<(usize, convert::Type)> {
@@ -8531,12 +8865,20 @@ fn copied_inputs(
             convert::Type::Borrowed {
                 mutable: true,
                 ty: element,
-            } if matches!(**element, convert::Type::Sequence { .. }) => {
-                Some((position, (**element).clone()))
-            }
+            } if is_copied(element) => Some((position, (**element).clone())),
             _ => None,
         })
         .collect()
+}
+
+/// Whether a `&mut` input of `ty` is a copy of Rawr's value the call
+/// changes and gives back: an array, as `&mut Vec<u8>`, or a string, as
+/// `&mut String`.
+fn is_copied(ty: &convert::Type) -> bool {
+    matches!(
+        ty,
+        convert::Type::Sequence { .. } | convert::Type::Builtin(convert::Builtin::String)
+    )
 }
 
 /// `ty` with every type parameter the signature declares replaced by its
@@ -8806,6 +9148,44 @@ thread_local! {
     /// Whether a Rust value being converted lives in a scope frame's
     /// region, the local `region`, when its type carries a lifetime.
     static IN_REGION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter's body takes its arguments that carry a lifetime
+    /// from the scope frame's region `region` it runs in.
+    static REGION_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter's body has the arguments native code lent it as
+    /// `lent` (`with_lent_arguments`).
+    static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes an adapter's arguments that carry a lifetime from the region its
+/// body runs in, while it lives.
+struct RegionArguments(bool);
+
+impl RegionArguments {
+    fn enter() -> Self {
+        Self(REGION_ARGUMENTS.replace(true))
+    }
+}
+
+impl Drop for RegionArguments {
+    fn drop(&mut self) {
+        REGION_ARGUMENTS.set(self.0);
+    }
+}
+
+/// Reaches an adapter's `&T` and `&mut T` arguments in `lent` first, while
+/// it lives, when `on`.
+struct LentArguments(bool);
+
+impl LentArguments {
+    fn enter(on: bool) -> Self {
+        Self(LENT_ARGUMENTS.replace(on))
+    }
+}
+
+impl Drop for LentArguments {
+    fn drop(&mut self) {
+        LENT_ARGUMENTS.set(self.0);
+    }
 }
 
 /// What a generated scope family needs of an imported type that carries

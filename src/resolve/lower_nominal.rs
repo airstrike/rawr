@@ -6306,9 +6306,10 @@ impl ExecutableOp {
     }
 }
 
-/// The `&mut` arrays a host call copies in and back out (D558 slice 2), as
-/// quick-xml's `read_event_into(&mut buf)` takes its buffer: the arguments
-/// whose input is `&mut [T]` or `&mut Vec<T>`, in order.
+/// The `&mut` arrays and strings a host call copies in and back out (D558
+/// slice 2), as quick-xml's `read_event_into(&mut buf)` takes its buffer
+/// and pulldown-cmark's `push_html(&mut s, ..)` its string: the arguments
+/// whose input is `&mut [T]`, `&mut Vec<T>` or `&mut String`, in order.
 fn copied_places(
     inference: &Inference,
     inputs: &[Ty],
@@ -6317,14 +6318,19 @@ fn copied_places(
     inputs
         .iter()
         .zip(arguments)
-        .filter(|(input, _)| {
-            matches!(
-                inference.resolve(input),
-                Ty::Reference { mutable: true, target } if matches!(*target, Ty::Array { .. })
-            )
-        })
+        .filter(|(input, _)| copied_input(inference, input))
         .map(|(_, argument)| argument.clone())
         .collect()
+}
+
+/// Whether a host call copies an input of `ty` in and back out
+/// (`copied_places`): a `&mut` array or string.
+fn copied_input(inference: &Inference, ty: &Ty) -> bool {
+    matches!(
+        inference.resolve(ty),
+        Ty::Reference { mutable: true, target }
+            if matches!(*target, Ty::Array { .. } | Ty::String)
+    )
 }
 
 fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models: &Shared<Models>) {
@@ -14389,6 +14395,18 @@ impl<'a> Parser<'a> {
                 }
                 let item_path = item.path();
                 let output = self.proven_type(&output, &item_path, span)?;
+                // An imported call gives back each `&mut` array and string
+                // it copies in after its value (`copied_places`).
+                let copies = if item.imported_identity().is_some() {
+                    operands
+                        .iter()
+                        .filter(|(ty, _, receiver)| !receiver && copied_input(&self.inference, ty))
+                        .count()
+                        .try_into()
+                        .unwrap_or(u8::MAX)
+                } else {
+                    0
+                };
                 let operands = operands
                     .iter()
                     .filter(|(ty, _, _)| !ty.is_imported_static_operand())
@@ -14404,7 +14422,8 @@ impl<'a> Parser<'a> {
                 let instance = None;
                 ExecutableOp::Intrinsic {
                     proof: intrinsic::Proof::new(facade, owner, &item, operands, output, span)
-                        .with_instance(instance),
+                        .with_instance(instance)
+                        .with_copies(copies),
                 }
             }
             Op::Perform {
@@ -16718,7 +16737,19 @@ impl<'a> Parser<'a> {
             });
         }
         self.hint_closures(&items, None);
-        let (mut arguments, end) = self.parse_call_arguments("host function arguments")?;
+        // An imported function that borrows a value mutably takes `&mut
+        // place`, as pulldown-cmark's `push_html(&mut s, ..)` does.
+        let borrowing = item.signature().parameters().iter().any(|parameter| {
+            matches!(
+                parameter.shape(),
+                crate::host::type_ref::Shape::Reference { mutable: true, .. }
+            )
+        });
+        let (mut arguments, end) = if borrowing {
+            self.parse_borrowing_arguments("host function arguments")?
+        } else {
+            self.parse_call_arguments("host function arguments")?
+        };
         // The written arguments move into the call, as Rust's do.
         for argument in &mut arguments {
             self.move_local(argument)?;
