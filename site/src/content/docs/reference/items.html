@@ -77,6 +77,32 @@ let p = Point::origin().shifted(2.5);
 println!("{} {}", p.x, p.y);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-impl" data-out="out-impl" aria-label="Run impl.rs" hidden></button><b>rawr run impl.rs</b><span id="out-impl" aria-live="polite">2.5 0</span></div>
 </div>
+<p>A method can return <code>&amp;mut T</code> or <code>Option&lt;&amp;mut T&gt;</code> borrowed from its <code>&amp;mut self</code>. A free function can return one borrowed from its first <code>&amp;mut</code> parameter. A write through the reference changes the place it names, and the reference can be kept in a local.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="mut-ref.rs" id="src-mut-ref">struct Counter {
+    counts: Vec&lt;u32&gt;,
+}
+
+impl Counter {
+    fn slot(&amp;mut self, i: usize) -&gt; &amp;mut u32 {
+        &amp;mut self.counts[i]
+    }
+
+    fn last(&amp;mut self) -&gt; Option&lt;&amp;mut u32&gt; {
+        self.counts.last_mut()
+    }
+}
+
+let mut c = Counter { counts: vec![0, 0, 0] };
+*c.slot(1) += 5;
+let first = c.slot(0);
+*first = 2;
+if let Some(n) = c.last() {
+    *n = 9;
+}
+println!("{:?}", c.counts);</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-mut-ref" data-out="out-mut-ref" aria-label="Run mut-ref.rs" hidden></button><b>rawr run mut-ref.rs</b><span id="out-mut-ref" aria-live="polite">[2, 5, 9]</span></div>
+</div>
 <h2 id="trait"><code>trait</code></h2>
 <p>Default methods, associated types and static functions. A trait can be implemented for your own types and for built-in types such as <code>i64</code>.</p>
 <p>A type can have an inherent method and a trait method of the same name. A call reaches the trait method before the inherent one only where the trait is declared or imported, as in rustc.</p>

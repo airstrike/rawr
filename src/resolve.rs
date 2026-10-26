@@ -4936,24 +4936,83 @@ fn validate_method_signature(
     // A `const` of a reference type (`const ALL: &[T] = &[..]`) is its
     // value, as references are at runtime; so is a shared reference a
     // function returns (`fn name(&self) -> &String`, `Index::index`). A
-    // returned `&mut` would be a copy, which Rust's aliasing would not be.
-    if !function.body.constant
-        && function
-            .output
-            .as_ref()
-            .is_some_and(|output| matches!(output, type_ref::Type::Reference { mutable: true, .. }))
-        // `IndexMut::index_mut` is declared; changing through it is not.
-        && function.name.text != "index_mut"
-    {
-        let output = function.output.as_ref().expect("checked output exists");
+    // returned `&mut T` or `Option<&mut T>` borrows the `&mut self`
+    // receiver, or a free function's first `&mut` parameter: the function
+    // gives the path to the place below it (`lower_nominal::places`).
+    // Another `&mut` in an output would be a copy, which Rust's aliasing
+    // would not be.
+    // `IndexMut::index_mut` is declared; changing through it is inlined.
+    if function.body.constant || function.name.text == "index_mut" {
+        return Ok(());
+    }
+    let Some(output) = function.output.as_ref() else {
+        return Ok(());
+    };
+    let borrowed = match output {
+        type_ref::Type::Reference { mutable: true, .. } => true,
+        type_ref::Type::Path(path) if path.name == "Option" => matches!(
+            path.arguments.as_ref(),
+            [type_ref::Argument::Type(type_ref::Type::Reference {
+                mutable: true,
+                ..
+            })]
+        ),
+        _ => false,
+    };
+    let receiver = if owner == "<module>" {
+        function.parameters.iter().any(|parameter| {
+            matches!(
+                parameter.ty,
+                type_ref::Type::Reference { mutable: true, .. }
+            ) && !direct_mutable_invocation(&parameter.ty)
+        })
+    } else {
+        matches!(function.receiver, Some(crate::item::Receiver::Mutable(_)))
+    };
+    if borrowed && receiver {
+        return Ok(());
+    }
+    if borrowed || borrows_mutably(output) {
         return Err(Error::InvalidMethodSignature {
             owner: owner.into(),
             method: function.name.text.clone(),
-            reason: "method outputs cannot borrow values in this phase".into(),
+            reason: if borrowed {
+                "a `&mut` output borrows a `&mut self` receiver or a free function's `&mut` \
+                 parameter in Rawr; other borrowed outputs are not supported in Rawr yet"
+                    .into()
+            } else {
+                "outputs holding `&mut` other than `&mut T` and `Option<&mut T>` are not \
+                 supported in Rawr yet"
+                    .into()
+            },
             signature: type_span(output),
         });
     }
     Ok(())
+}
+
+/// Whether a value of type `ty` holds a `&mut` (a callable's inputs are
+/// its own).
+fn borrows_mutably(ty: &type_ref::Type) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Reference {
+            mutable, target, ..
+        } => *mutable || borrows_mutably(target),
+        type_ref::Type::Tuple { members, .. } => members.iter().any(borrows_mutably),
+        type_ref::Type::Path(path)
+            if matches!(
+                path.name.as_str(),
+                "Fn" | "FnMut" | "FnOnce" | crate::item::type_ref::FN_TYPE
+            ) =>
+        {
+            false
+        }
+        type_ref::Type::Path(path) => path.arguments.iter().any(|argument| match argument {
+            type_ref::Argument::Type(ty) => borrows_mutably(ty),
+            type_ref::Argument::Lifetime(_) => false,
+        }),
+    }
 }
 
 /// A type as Rust spells it, generic arguments included.
