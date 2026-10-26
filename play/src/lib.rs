@@ -1185,6 +1185,35 @@ fn view() -> impl Widget<()> {
     }
 
     #[test]
+    fn an_array_index_panics_at_the_expression_start_and_a_vec_index_at_its_bracket() {
+        // An index rustc can't see at compile time, which it would refuse.
+        let i = "let i: usize = \"5\".parse().unwrap(); ";
+        // Each line with the column `cargo run` prints for it.
+        let cases = [
+            ("let a = [1, 2, 3]; a[i]", 57),
+            ("let a = [1, 2, 3]; let r = &a; r[i]", 69),
+            ("let mut a = [1, 2, 3]; a[i] = 0;", 61),
+            ("let mut a = [1, 2, 3]; a[i] += 1;", 61),
+            ("let g = [[1, 2, 3]; 3]; g[1][i]", 62),
+            ("let v = vec![[1, 2, 3]]; v[0][i]", 63),
+            ("let v = vec![1, 2, 3]; v[i]", 62),
+            ("let mut v = vec![1, 2, 3]; v[i] = 0;", 66),
+        ];
+        let shown = cases
+            .iter()
+            .map(|(line, _)| {
+                let text = text(&format!("{i}{line}")).text().to_owned();
+                text.lines().next().unwrap_or_default().to_owned()
+            })
+            .collect::<Vec<_>>();
+        let expected = cases
+            .iter()
+            .map(|(_, column)| format!("thread 'main' panicked at play.rs:1:{column}:"))
+            .collect::<Vec<_>>();
+        assert_eq!(shown, expected);
+    }
+
+    #[test]
     fn run_plain_expression_prints_its_value() {
         assert_eq!(text("1 + 2").text(), "3\n");
         assert_eq!(text("vec![1, 2, 3].iter().sum::<i64>()").text(), "6\n");

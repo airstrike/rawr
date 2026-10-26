@@ -31587,10 +31587,10 @@ impl<'a> Parser<'a> {
             return self.keyed_index(value, keyed, index, end);
         }
         self.require_type(&Ty::Int(Int::Usize), &index.ty, index.span)?;
-        let element = match self.inference.resolve(&value.ty) {
-            Ty::Array { element, .. } => *element,
+        let (element, length) = match self.inference.resolve(&value.ty) {
+            Ty::Array { element, length } => (*element, length),
             Ty::Reference { target, .. } => match *target {
-                Ty::Array { element, .. } => *element,
+                Ty::Array { element, length } => (*element, length),
                 ty => {
                     return Err(Error::TypeMismatch {
                         expected: "an array, Vec or slice".into(),
@@ -31607,19 +31607,27 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        // Rust panics on a negative or out-of-range index.
-        let mut source = value.rendered_source().surrounded("(", ")");
-        source.push_text("[");
+        // Rust panics on a negative or out-of-range index. The index is a
+        // block, so the evaluator places that panic at the block, which
+        // stands for the whole expression, whose `[` a `Vec`'s panic names,
+        // or for an array's start alone, where rustc places its panic.
+        // Rawr types a slice as a `Vec`.
         let mut checked = origin::Fragment::plain("{ let i = ");
         checked.push(index.rendered_source());
         checked.push_text("; if i < 0 { throw \"index out of bounds\" } i }");
-        source.push(checked);
+        checked.cover(match length {
+            Some(_) => point_span(value.span.start()),
+            None => span(value.span.start(), end),
+        });
+        let mut source = value.rendered_source().surrounded("(", ")");
+        source.push_text("[");
+        source.push(checked.clone());
         source.push_text("]");
         let lvalue = match &value.lvalue {
             Some(Lvalue::Binding { binding, .. }) => {
                 let mut place = origin::Fragment::plain(binding.to_string());
                 place.push_text("[");
-                place.push(index.rendered_source());
+                place.push(checked.clone());
                 place.push_text("]");
                 Some(Lvalue::Place {
                     binding: binding.clone(),
@@ -31631,7 +31639,7 @@ impl<'a> Parser<'a> {
             Some(Lvalue::Place { binding, place, .. }) => {
                 let mut place = place.clone();
                 place.push_text("[");
-                place.push(index.rendered_source());
+                place.push(checked.clone());
                 place.push_text("]");
                 Some(Lvalue::Place {
                     binding: binding.clone(),
@@ -31642,7 +31650,7 @@ impl<'a> Parser<'a> {
             // `s.cells[i]`, `s.grid[r][c]`, `v[0].cells[j]`: below a field.
             Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) => Some(nested_step(
                 lvalue,
-                PlaceStep::Index(index.rendered_source()),
+                PlaceStep::Index(checked),
                 element.clone(),
             )),
             _ => None,
