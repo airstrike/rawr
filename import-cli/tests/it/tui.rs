@@ -203,6 +203,55 @@ fn a_lent_frame_draws_the_example_ui_as_cargo_run_does_and_a_body_edit_repaints(
     );
 }
 
+const STATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-state");
+
+/// A value native code lent a marked function goes on to a native call as
+/// an argument, as it does as a receiver: `main` keeps a `ListState` and
+/// passes `&mut state` with the frame to a marked `ui::draw`, which hands
+/// it to `render_stateful_widget`. The frames and the state the draws
+/// leave are what `cargo run` prints.
+#[test]
+fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tui-state");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(STATE), &root);
+    let native = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    assert!(native.status.success(), "{}", text(&native.stderr));
+    let expected = text(&native.stdout);
+    assert!(expected.contains("|│> delta       │|"), "{expected}");
+    assert!(expected.contains("selected Some(4) offset 2"), "{expected}");
+
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(
+        text(&run.stdout),
+        expected,
+        "stderr:\n{}",
+        text(&run.stderr)
+    );
+}
+
 /// What a terminal shows, from the bytes written to it: the alternate
 /// screen's cells, and the text written on the main screen.
 #[derive(Default)]

@@ -787,15 +787,14 @@ impl Current {
                     .map_err(malformed)?,
             );
         }
-        let mut result = catalog
-            .invoke_item(item, &mut values)
-            .map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
         // A function changes its first `&mut` parameter in place and copies
         // the others back out after its value, as `[value, ..copied]`; a
         // method or an associated function copies all but its receiver
         // (`resolve::lower_nominal::copied_parameters`). A lent `&mut` is
         // one of them, as `draw(frame: &mut Frame, app: &mut App)` changes
-        // `frame` in place and copies `app` out.
+        // `frame` in place and copies `app` out, and `draw(frame: &mut
+        // Frame, state: &mut ListState)` copies out the lent `state`. They
+        // are found before the call, which moves its arguments out.
         let references = values
             .iter()
             .enumerate()
@@ -807,6 +806,9 @@ impl Current {
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
+        let mut result = catalog
+            .invoke_item(item, &mut values)
+            .map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
         let copied = match item.kind() {
             item::Kind::Function => references.get(1..).unwrap_or_default(),
             item::Kind::Method => references

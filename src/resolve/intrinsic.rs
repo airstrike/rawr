@@ -27,6 +27,9 @@ pub(super) struct Proof {
     /// Whether the call gives a `DerefMut` borrow guard's place, which Rawr
     /// reads and stores as a `RefCell` borrow, in place of its `output`.
     place: bool,
+    /// How many `&mut` arrays and strings an imported call copies in and
+    /// gives back after its value, as `[value, copies..]` (D558 slice 2).
+    copies: u8,
 }
 
 impl Operand {
@@ -60,7 +63,15 @@ impl Proof {
             span,
             instance: None,
             place: item.guard() == Some(host::item::Guard::Mutable),
+            copies: 0,
         }
+    }
+
+    /// This call, which gives back `copies` `&mut` arrays and strings after
+    /// its value.
+    pub(super) const fn with_copies(mut self, copies: u8) -> Self {
+        self.copies = copies;
+        self
     }
 
     /// This call of one instance of a generic imported item.
@@ -221,12 +232,20 @@ impl Proof {
         if crate::scope::is_opening(&result) {
             return Ok(result);
         }
-        if let Err(error) = self.output.validate(&result, model, runtime) {
+        // `[value, copies..]`: the value is the call's output, and each copy
+        // goes back to the place it was taken from.
+        let value = match result.read_lock::<crate::Array>() {
+            Some(given) if self.copies != 0 && given.len() == usize::from(self.copies) + 1 => {
+                given[0].clone()
+            }
+            _ => result.clone(),
+        };
+        if let Err(error) = self.output.validate(&value, model, runtime) {
             return Err(EvalAltResult::ErrorRuntime(
                 format!(
                     "runtime binding for `{}` returned `{}`, expected `{}`: {error}",
                     self.path,
-                    result.type_name(),
+                    value.type_name(),
                     self.output
                 )
                 .into(),
