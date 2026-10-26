@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
 cases). For each `let mut x` in a program, and each later statement in its block
 that names `x`, it writes variants that move a borrow's use past that
 statement, into a branch, and across a loop's back edge, and variants
-where the borrow ends first. rustc decides which are errors: run
-`record.py` afterwards.
+where the borrow ends first. With `kept`, the borrow is one a call's value
+keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
+`kept-mutations`. rustc decides which are errors: run `record.py` on the
+folder afterwards.
 """
 
 import glob
@@ -20,16 +22,24 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-OUT = os.path.join(HERE, "mutations")
+KEPT = sys.argv[1:] == ["kept"]
+OUT = os.path.join(HERE, "kept-mutations" if KEPT else "mutations")
 SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
+    + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT else [])
 )
 HELPERS = """
 fn __touch<T>(_: &mut T) {}
 fn __see<T>(_: &T) {}
 fn __c() -> bool { false }
+"""
+KEPT_HELPERS = """
+fn __keep<T>(x: &T) -> &T { x }
+fn __see<T>(_: &T) {}
+fn __c() -> bool { false }
+struct __Hold<'a, T>(&'a T);
 """
 DECLARATION = re.compile(r"^(\s*)let mut (\w+)\b[^=]*=.*;\s*$")
 PER_LOCAL = 2
@@ -84,6 +94,37 @@ def variants(indent, name, statement):
     }
 
 
+def kept_variants(indent, name, statement):
+    """A borrow a call's value keeps, or a value holds, used past `statement`."""
+    i = indent
+    return {
+        "kept_across": [f"{i}let __k = __keep(&{name});", statement, f"{i}__see(__k);"],
+        "kept_ended": [f"{i}let __k = __keep(&{name});", f"{i}__see(__k);", statement],
+        "kept_into_branch": [
+            f"{i}let __k = __keep(&{name});",
+            statement,
+            f"{i}if __c() {{ __see(__k); }}",
+        ],
+        "kept_back_edge": [
+            f"{i}let __k = __keep(&{name});",
+            f"{i}for __i in 0..2 {{",
+            f"{i}    __see(__k);",
+            statement,
+            f"{i}}}",
+        ],
+        "held_across": [f"{i}let __h = __Hold(&{name});", statement, f"{i}__see(&__h);"],
+        "option_across": [f"{i}let __o = Some(&{name});", statement, f"{i}__see(&__o);"],
+        "vec_across": [f"{i}let __v = vec![&{name}];", statement, f"{i}__see(&__v);"],
+        "option_replaced": [
+            f"{i}let mut __o = Some(&{name});",
+            f"{i}__see(&__o);",
+            f"{i}__o = None;",
+            statement,
+            f"{i}__see(&__o);",
+        ],
+    }
+
+
 def main():
     out, sources = OUT, SOURCES
     if len(sys.argv) > 2:
@@ -101,11 +142,12 @@ def main():
                 continue
             indent, name = declared.group(1), declared.group(2)
             for target in list(statements(lines, start, indent, name))[:PER_LOCAL]:
-                for kind, replacement in variants(indent, name, lines[target]).items():
+                written = (kept_variants if KEPT else variants)(indent, name, lines[target])
+                for kind, replacement in written.items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
                     with open(path, "w", encoding="utf-8") as file:
-                        file.write("\n".join(mutated) + "\n" + HELPERS)
+                        file.write("\n".join(mutated) + "\n" + (KEPT_HELPERS if KEPT else HELPERS))
                     count += 1
     # As the repository's other Rust files are.
     written = sorted(glob.glob(os.path.join(out, "*.rs")))

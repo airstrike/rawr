@@ -4380,11 +4380,11 @@ impl<P: api::Phase> Context<'_, P> {
                     target
                 }
                 // A `&str` the method lends, as url's `Url::scheme(&self)`
-                // gives: script code sees the `&str` rustc sees (D568). The
-                // receiver is borrowed for the call only, and the text
-                // crosses as a copy made there, as Rawr's strings can't
-                // point into native memory. A use that conflicts with the
-                // borrow is rustc's to refuse, in `rawr check`.
+                // gives: script code sees the `&str` rustc sees (D568), and
+                // rawr's borrow checker keeps the receiver borrowed while
+                // the `&str` is used (D572). At run time the text crosses as
+                // a copy made at the call, as Rawr's strings can't point into
+                // native memory.
                 None if is_str_reference(signature.output()) => {
                     representability::convert::Type::Borrowed {
                         mutable: false,

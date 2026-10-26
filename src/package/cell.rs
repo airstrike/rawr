@@ -30,7 +30,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 7;
+const FORMAT: u32 = 8;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -465,19 +465,20 @@ record! {
     item::Use { header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default }
-    item::Struct { header, name, generics, fields, form, span }
+    item::Struct { header, name, generics, lifetimes, fields, form, span }
     item::Field { name, ty, span }
-    item::Enum { header, name, generics, variants, span }
+    item::Enum { header, name, generics, lifetimes, variants, span }
     item::Variant { name, payload, fields, default, discriminant, span }
-    item::Impl { header, generics, trait_, owner, functions, associated, span }
+    item::Impl { header, generics, lifetimes, trait_, owner, functions, associated, span }
     item::Trait {
         header, name, functions, provided, associated, associated_bounds,
         supertraits, generics, span,
     }
     item::Function {
-        header, name, generics, receiver, parameters, output, body_span,
-        body_syntax, constant, asynchronous, span,
+        header, name, generics, lifetimes, receiver_lifetime, receiver, parameters, output,
+        body_span, body_syntax, constant, asynchronous, span,
     }
+    item::Lifetimes { params, bounds }
     item::TypeAlias { header, name, generics, target, span }
     item::Parameter { name, ty, span, pattern }
     type_ref::Path { segments, span, global }

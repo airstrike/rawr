@@ -1,0 +1,28 @@
+fn main() {
+    let mut a = vec![1];
+    let mut b = vec![2];
+    let mut prev = &mut a;
+    let mut n = 0;
+    while n < 2 {
+        prev.push(n);
+        let r = &mut b;
+        r.push(n);
+        prev = r;
+        n += 1;
+    }
+    b.push(9);
+    let mut __o = Some(&b);
+    __see(&__o);
+    __o = None;
+    println!("{:?} {:?}", a, b);
+    __see(&__o);
+}
+
+fn __keep<T>(x: &T) -> &T {
+    x
+}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}
+struct __Hold<'a, T>(&'a T);

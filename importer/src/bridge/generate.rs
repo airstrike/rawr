@@ -9528,8 +9528,8 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
 /// Rawr's array is made of, before the borrow ends (D558 slice 2). And
 /// `.to_owned()` after one whose output is a `&str` it lends, as url's
 /// `Url::scheme`: Rawr's strings can't point into native memory, so the
-/// text is copied there, and the receiver is borrowed for the call only
-/// (D568).
+/// text is copied there (D568). The borrow checker keeps the receiver
+/// borrowed while the `&str` is used (D572).
 fn lent_copy(signature: &crate::classify::representability::signature::Signature) -> &'static str {
     match signature.output() {
         convert::Type::Borrowed { mutable: false, ty }

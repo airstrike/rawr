@@ -14,6 +14,7 @@
 
 pub(crate) mod nll;
 pub(crate) mod record;
+pub(crate) mod signature;
 
 #[cfg(test)]
 mod differential;
@@ -174,6 +175,12 @@ pub(crate) struct Body {
     /// What this body does that the facts do not model yet, with where:
     /// loans these touch are left to rustc.
     pub(crate) unmodeled: Vec<(&'static str, Span)>,
+    /// Locals whose region is every point: a loan flowing into one is
+    /// borrowed for `'static`.
+    pub(crate) everywhere: Vec<Local>,
+    /// The locals a function's returned value flows into: its output's
+    /// region, which is every point of the body.
+    pub(crate) returned: Vec<Local>,
 }
 
 impl Body {
@@ -274,16 +281,37 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             .or_default()
             .push(loan_index);
     }
+    let forever = reaches(body, &body.everywhere);
     for point in body.points() {
         let Some(Fact::Access {
             place,
             access,
             span,
-            ..
+            loan,
         }) = body.fact(point)
         else {
             continue;
         };
+        // A local borrowed for `'static` never lives long enough: it ends
+        // with the body, or when it unwinds.
+        if let Some(loan) = loan
+            && forever[loan.0 as usize]
+            && !body.loans[loan.0 as usize]
+                .place
+                .projection
+                .contains(&Projection::Deref)
+        {
+            let loan = &body.loans[loan.0 as usize];
+            return Some(Conflict {
+                code: "E0597",
+                message: format!(
+                    "`{}` does not live long enough",
+                    describe(body, &loan.place)
+                ),
+                access: loan.span,
+                borrow: loan.span,
+            });
+        }
         let Some(loans) = by_local.get(&place.local) else {
             continue;
         };
@@ -299,6 +327,39 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
         }
     }
     None
+}
+
+/// Whether each loan flows into one of `sinks` ([`Body::everywhere`]: it is
+/// borrowed for `'static`; [`Body::returned`]: the function returns it).
+pub(crate) fn reaches(body: &Body, sinks: &[Local]) -> Vec<bool> {
+    let mut reaches = vec![false; body.locals.len()];
+    for local in sinks {
+        reaches[local.0 as usize] = true;
+    }
+    // Backwards over the flows, until nothing changes.
+    let mut changed = !sinks.is_empty();
+    while changed {
+        changed = false;
+        for flow in &body.flows {
+            if let Origin::Local(from) = flow.from
+                && reaches[flow.into.0 as usize]
+                && !reaches[from.0 as usize]
+            {
+                reaches[from.0 as usize] = true;
+                changed = true;
+            }
+        }
+    }
+    body.loans
+        .iter()
+        .enumerate()
+        .map(|(index, loan)| {
+            reaches[loan.temporary.0 as usize]
+                || body.flows.iter().any(|flow| {
+                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
+                })
+        })
+        .collect()
 }
 
 /// The index of each point in a flat numbering of the body's points.

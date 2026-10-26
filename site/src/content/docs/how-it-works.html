@@ -29,8 +29,23 @@
     println!("{first}");
 }</code></pre>
 </div>
+<p>A borrow also flows through values. A call&rsquo;s result keeps what the function&rsquo;s signature says it keeps. rawr reads that from the lifetimes written in it, the outlives bounds such as <code>'b: 'a</code>, <code>'static</code>, the type parameters, and Rust&rsquo;s elision rules when no lifetime is written. std&rsquo;s methods, such as <code>v.first()</code> and <code>s.trim()</code>, keep what their signatures say too. A struct, a tuple, an array, a <code>Vec</code>, a map or an <code>Option</code> holds the borrows it is made of or is given, as <code>v.push(&amp;x)</code> gives one.</p>
+<div class="block">
+  <div class="file"><b>kept.rs</b></div>
+  <pre><code data-lang="rust">fn longest&lt;'a&gt;(a: &amp;'a str, b: &amp;'a str) -&gt; &amp;'a str {
+    if a.len() &gt; b.len() { a } else { b }
+}
+
+fn main() {
+    let mut x = String::from("long one");
+    let y = String::from("short");
+    let l = longest(&amp;x, &amp;y);
+    x.push_str("!"); // error[E0502]: `l` keeps `x` borrowed
+    println!("{l}");
+}</code></pre>
+</div>
 <p>A pattern borrows, reads or moves only the parts it binds and tests, as in rustc. A <code>ref</code> or <code>ref mut</code> binding is a borrow of its part. So is a binding in a <code>match</code> through <code>&amp;</code> or <code>&amp;mut</code>.</p>
-<p>The check looks at each function on its own. Some borrows are not checked yet: one that a call&rsquo;s result keeps, one stored in a struct or a collection, and one a closure keeps after its statement. rawr runs such a program, and the <code>cargo check</code> that <code>rawr run</code> keeps going in the background reports any error. The <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
+<p>The check looks at each function on its own. Some borrows are not checked yet: one a closure keeps after its statement, an item that a method gives from a container (<code>copied</code>, <code>collect</code>, <code>next</code>), a value with a <code>Drop</code> impl that holds a borrow, and a lifetime written in a type inside a function body. rawr runs such a program, and the <code>cargo check</code> that <code>rawr run</code> keeps going in the background reports any error. The <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
 <p>Values are reference-counted, so a program can&rsquo;t corrupt memory. At run time a shared borrow is a copy and a <code>&amp;mut</code> local is the place it borrows. A <code>&amp;mut</code> local that is given new borrows, as in <code>r = &amp;mut b;</code>, holds which local it borrows, and each use reaches that local. The checker is what makes that match Rust. Borrow checking only rejects programs. It never changes what a valid program does.</p>
 <p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/reference/overview#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
 <p>Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them too.</p>

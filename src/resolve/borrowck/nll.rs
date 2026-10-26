@@ -38,6 +38,21 @@ impl Rule for Nll {
                 }
             }
             let mut region = Points::new(count);
+            // Borrowed for `'static`, or returned through a reference the
+            // function was given (its output's region): every point. A
+            // returned borrow of a local is rustc's E0515, left to it.
+            let returned = loan.place.projection.contains(&Projection::Deref)
+                && body.returned.iter().any(|local| reached[local.0 as usize]);
+            if returned
+                || body
+                    .everywhere
+                    .iter()
+                    .any(|local| reached[local.0 as usize])
+            {
+                for point in 0..count {
+                    region.insert(point);
+                }
+            }
             for (local, _) in reached.iter().enumerate().filter(|(_, reached)| **reached) {
                 let live = live_cache[local].get_or_insert_with(|| {
                     liveness(
@@ -117,9 +132,24 @@ fn liveness(
     let mut live = Points::new(count);
     let mut stack = Vec::new();
     for &point in points {
-        if let Some(Fact::Use(used)) = body.fact(point)
-            && *used == local
-        {
+        // A read, a borrow or a move of a place is a use of its local, as
+        // rustc's liveness has it.
+        let used = match body.fact(point) {
+            Some(Fact::Use(used)) => *used == local,
+            Some(Fact::Access { place, access, .. }) => {
+                place.local == local
+                    && matches!(
+                        access,
+                        Access::Read
+                            | Access::Shared
+                            | Access::Reserve
+                            | Access::Mutable
+                            | Access::Move
+                    )
+            }
+            _ => false,
+        };
+        if used {
             stack.push(point);
         }
     }

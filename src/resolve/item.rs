@@ -148,6 +148,8 @@ pub(crate) struct Struct {
     pub key: type_def::Key,
     pub name: crate::item::Name,
     pub generics: Box<[Generic]>,
+    /// How many lifetime parameters it declares.
+    pub lifetimes: usize,
     pub fields: Box<[Field]>,
     pub form: crate::item::StructForm,
 }
@@ -169,6 +171,8 @@ pub(crate) struct Enum {
     pub key: type_def::Key,
     pub name: crate::item::Name,
     pub generics: Box<[Generic]>,
+    /// How many lifetime parameters it declares.
+    pub lifetimes: usize,
     pub variants: Box<[Variant]>,
 }
 
@@ -191,6 +195,9 @@ pub(crate) struct Impl {
     pub generics: Box<[Generic]>,
     pub trait_: Option<TraitImpl>,
     pub owner: type_ref::Type,
+    /// The owner is written with `'static` (`impl Copy for Foo<'static>`):
+    /// what the impl gives needs a value's borrows to be `'static`.
+    pub statics: bool,
     pub functions: Box<[Function]>,
     /// Associated types: `type Output = i64;`.
     pub associated: Box<[(crate::item::Name, type_ref::Type)]>,
@@ -214,10 +221,105 @@ pub(crate) struct Function {
     pub name: crate::item::Name,
     /// The function's own generic parameters; an impl's are on the impl.
     pub generics: Box<[Generic]>,
+    /// What the borrow checker reads of the signature's lifetimes.
+    pub lifetimes: Lifetimes,
     pub receiver: Option<crate::item::Receiver>,
     pub parameters: Box<[Parameter]>,
     pub output: Option<type_ref::Type>,
     pub body: Body,
+}
+
+/// What the borrow checker reads of a signature's lifetimes (D572.4): the
+/// name of each lifetime written in its types, by where it is written (a
+/// resolved type keeps only that), the receiver's, the outlives bounds, and
+/// for a method the impl's owner, which `self` is.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lifetimes {
+    pub names: std::collections::BTreeMap<Span, crate::ImmutableString>,
+    /// `'a` of `&'a self`.
+    pub receiver: Option<crate::ImmutableString>,
+    /// `('b, 'a)` for `'b: 'a`, and `(T, 'a)` for `T: 'a`.
+    pub bounds: Box<[(crate::ImmutableString, crate::ImmutableString)]>,
+    /// The impl's owner, for a method: `S<'a>` of `impl<'a> S<'a>`.
+    pub owner: Option<Box<type_ref::Type>>,
+}
+
+impl Lifetimes {
+    /// A function's, from its parsed signature.
+    pub(crate) fn of(function: &crate::item::Function) -> Self {
+        let mut lifetimes = Self {
+            receiver: function
+                .receiver_lifetime
+                .as_ref()
+                .map(|name| name.text.clone()),
+            ..Self::default()
+        };
+        for parameter in &function.parameters {
+            lifetimes.name(&parameter.ty);
+        }
+        if let Some(output) = &function.output {
+            lifetimes.name(output);
+        }
+        lifetimes.bound(&function.lifetimes);
+        lifetimes
+    }
+
+    /// The lifetimes written in `ty`.
+    pub(crate) fn of_type(ty: &crate::item::type_ref::Type) -> Self {
+        let mut lifetimes = Self::default();
+        lifetimes.name(ty);
+        lifetimes
+    }
+
+    /// A method's, with its impl's lifetimes and owner.
+    pub(crate) fn within(
+        &mut self,
+        lifetimes: &crate::item::Lifetimes,
+        written: &crate::item::type_ref::Type,
+        owner: &type_ref::Type,
+    ) {
+        self.name(written);
+        self.bound(lifetimes);
+        self.owner = Some(Box::new(owner.clone()));
+    }
+
+    fn bound(&mut self, lifetimes: &crate::item::Lifetimes) {
+        let mut bounds = self.bounds.to_vec();
+        bounds.extend(
+            lifetimes
+                .bounds
+                .iter()
+                .map(|(longer, shorter)| (longer.text.clone(), shorter.text.clone())),
+        );
+        self.bounds = bounds.into_boxed_slice();
+    }
+
+    /// Each lifetime written in `ty`, by its span.
+    fn name(&mut self, ty: &crate::item::type_ref::Type) {
+        use crate::item::type_ref::{Argument, Type};
+        match ty {
+            Type::Unit(_) => {}
+            Type::Tuple { members, .. } => members.iter().for_each(|member| self.name(member)),
+            Type::Reference {
+                lifetime, target, ..
+            } => {
+                if let Some(lifetime) = lifetime {
+                    self.names.insert(lifetime.span, lifetime.name.text.clone());
+                }
+                self.name(target);
+            }
+            Type::Path(path) => {
+                for argument in path.segments.iter().flat_map(|segment| &segment.arguments) {
+                    match argument {
+                        Argument::Type(ty) => self.name(ty),
+                        Argument::Lifetime(lifetime) => {
+                            self.names.insert(lifetime.span, lifetime.name.text.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

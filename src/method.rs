@@ -69,6 +69,8 @@ pub(crate) struct Definition {
     /// The text `body` spans when it is not its source's: the declaration
     /// of a facade trait (iced's `canvas::Program`) whose default body this is.
     body_text: Option<ImmutableString>,
+    /// What the borrow checker reads of the signature's lifetimes.
+    lifetimes: resolve::item::Lifetimes,
 }
 
 #[allow(dead_code)]
@@ -136,6 +138,7 @@ impl Definition {
             owner_arguments: Box::default(),
             builtin_owner: None,
             body_text: None,
+            lifetimes: function.lifetimes.clone(),
         }
     }
 
@@ -300,6 +303,11 @@ impl Definition {
 
     pub(crate) fn parameters(&self) -> &[resolve::item::Parameter] {
         &self.parameters
+    }
+
+    /// What the borrow checker reads of the signature's lifetimes.
+    pub(crate) const fn lifetimes(&self) -> &resolve::item::Lifetimes {
+        &self.lifetimes
     }
 
     pub(crate) const fn output(&self) -> &type_ref::Type {
