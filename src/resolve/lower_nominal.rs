@@ -9694,6 +9694,9 @@ struct Parser<'a> {
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
     aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
+    /// The declaration of the local each of `aliases` is a place in, by
+    /// the alias's declaration: a later local of its name shadows it.
+    alias_roots: BTreeMap<Span, Span>,
     /// The `&mut` locals given new borrows, by name: their declaration and
     /// whether they were declared `let mut` (`reborrow.rs`).
     reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
@@ -10014,6 +10017,7 @@ impl<'a> Parser<'a> {
             cell_guards: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
+            alias_roots: BTreeMap::new(),
             reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
             loop_entered: false,
@@ -20447,7 +20451,7 @@ impl<'a> Parser<'a> {
             // or `let s = r;` of such a local: a runtime local holding
             // which local it refers to (`reborrow.rs`).
             if let Some((source, selected)) = self.reborrow_source(&value)
-                && (selected || mutable && self.rebound_later(&name))
+                && (selected || mutable && self.rebound_later(&name) || self.shadowed_later(&value))
             {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
@@ -34737,6 +34741,7 @@ impl<'a> Parser<'a> {
             return Err(self.unknown_variable(&name, name_span));
         };
         let (declaration, ty) = (binding.declaration, binding.ty.clone());
+        self.reject_shadowed_root(&name, declaration, name_span)?;
         self.mention(&name, declaration, &ty, name_span);
         if let Some(element) = self.aliased_element(&name, declaration, &ty, name_span)? {
             return Ok(element);

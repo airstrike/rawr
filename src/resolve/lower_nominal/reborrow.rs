@@ -95,6 +95,85 @@ impl Parser<'_> {
         false
     }
 
+    /// Whether the whole local that `value` borrows `&mut` is shadowed
+    /// before the block ends: a `let` or a `for` ahead binds its name. A
+    /// `&mut` local that is the place it borrows names that local by name,
+    /// which would then reach the new one (T125), so it holds where the
+    /// local is instead, as one given new borrows does.
+    pub(super) fn shadowed_later(&self, value: &ParsedExpr) -> bool {
+        let root = match value.lvalue.as_ref() {
+            Some(Lvalue::Binding { binding, .. }) => binding,
+            Some(Lvalue::Place { binding, place, .. }) if place.as_str() == binding.as_str() => {
+                binding
+            }
+            _ => return false,
+        };
+        let mut ahead = self.input.clone();
+        let mut depth = 0usize;
+        // The depth of the pattern of a `let` or a `for` being read.
+        let mut pattern: Option<usize> = None;
+        let mut previous = Token::EOF;
+        while let Some((token, _)) = ahead.next() {
+            match &token {
+                Token::EOF => return false,
+                Token::Let | Token::For => pattern = Some(0),
+                Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket => {
+                    if let Some(inner) = pattern.as_mut() {
+                        *inner += 1;
+                    } else if !matches!(token, Token::LeftParen | Token::LeftBracket) {
+                        depth += 1;
+                    }
+                }
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    match pattern.as_mut() {
+                        Some(inner) if *inner > 0 => *inner -= 1,
+                        Some(_) => pattern = None,
+                        None if matches!(token, Token::RightBrace) => match depth.checked_sub(1) {
+                            Some(outer) => depth = outer,
+                            None => return false,
+                        },
+                        None => {}
+                    }
+                }
+                Token::Equals | Token::SemiColon | Token::In | Token::Else => pattern = None,
+                Token::Colon if pattern == Some(0) => pattern = None,
+                Token::Identifier(identifier)
+                    if identifier.as_str() == root.as_str()
+                        && !matches!(previous, Token::Period | Token::DoubleColon)
+                        && !matches!(
+                            ahead.peek(),
+                            Some((Token::DoubleColon | Token::LeftParen | Token::LeftBrace, _))
+                        )
+                        && (pattern.is_some() || Self::arm_pattern_ahead(ahead.clone())) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+            previous = token;
+        }
+        false
+    }
+
+    /// Whether the name just read may be in a match arm's pattern: a `=>`
+    /// follows before a `;`, a `=` or a block. A use in an arm's guard
+    /// counts too, which only makes the `&mut` local hold where its
+    /// referent is when it need not.
+    fn arm_pattern_ahead(mut ahead: impl Iterator<Item = (Token, Position)>) -> bool {
+        ahead
+            .find(|(token, _)| {
+                matches!(
+                    token,
+                    Token::DoubleArrow
+                        | Token::SemiColon
+                        | Token::Equals
+                        | Token::LeftBrace
+                        | Token::EOF
+                )
+            })
+            .is_some_and(|(token, _)| token == Token::DoubleArrow)
+    }
+
     /// `name` (declared at `declaration`, of the type `ty`, a `&mut`) is a
     /// `&mut` local given new borrows, whose runtime local of the same name
     /// holds where its referent is. `mutable` is whether it was declared
