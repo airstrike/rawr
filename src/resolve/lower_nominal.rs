@@ -21,6 +21,7 @@ mod language_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
 
+use super::borrowck::{record::Matched, Access as FactAccess, Projection as FactStep};
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
@@ -9470,6 +9471,8 @@ struct ResolvedRootPattern {
     coverage: CoveragePattern,
     span: Span,
     bindings: Vec<PatternBinding>,
+    /// What the pattern does to its subject's parts (`borrows.rs`).
+    trace: borrows::PatternTrace,
 }
 
 #[cfg(feature = "rust-import")]
@@ -9680,6 +9683,9 @@ struct Parser<'a> {
     loop_element: Option<(super::borrowck::Local, super::borrowck::Local)>,
     /// The local whose place a `let` pattern with `ref mut` destructures.
     place_root: Option<ImmutableString>,
+    /// What the pattern being resolved does to its subject's parts, for
+    /// the borrow facts (`borrows.rs`).
+    pattern_trace: std::cell::RefCell<Option<borrows::PatternTrace>>,
     /// The expected type of each argument of the call being parsed.
     argument_hints: Vec<Option<Ty>>,
     /// Arguments already parsed for the next call, as for a builder chain.
@@ -9984,6 +9990,7 @@ impl<'a> Parser<'a> {
             loop_iterator: None,
             loop_element: None,
             place_root: None,
+            pattern_trace: std::cell::RefCell::new(None),
             argument_hints: Vec::new(),
             pending_arguments: None,
             frames: Vec::new(),
@@ -19858,8 +19865,6 @@ impl<'a> Parser<'a> {
             .filter(|(_, ty, member)| binds_by_value(member) && self.moves_by_value(ty))
             .map(|(field, ..)| field)
             .collect();
-        self.flow()
-            .moved_parts(value.span.start(), &moved, value.span);
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             for field in moved {
                 binding.moved_fields.insert(field, value.span);
@@ -20947,7 +20952,7 @@ impl<'a> Parser<'a> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
-        let subject = self.parse_subject()?;
+        let (subject, parts) = self.parse_subject()?;
         self.expect(Token::Else, "`else` after a `let` value")?;
         if !matches!(self.peek(), Token::LeftBrace) {
             return Err(self.unsupported("`let ... else` without a block"));
@@ -20971,7 +20976,15 @@ impl<'a> Parser<'a> {
         }
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
-        self.bind_let_pattern(start, &syntax, subject, Some(otherwise), end, pending)
+        self.bind_let_pattern(
+            start,
+            &syntax,
+            subject,
+            Some(parts),
+            Some(otherwise),
+            end,
+            pending,
+        )
     }
 
     /// The bindings of `let pattern = subject`, after the statement. Without
@@ -20983,13 +20996,21 @@ impl<'a> Parser<'a> {
         start: Position,
         syntax: &PatternSyntax,
         subject: ParsedExpr,
+        matched: Option<Matched>,
         otherwise: Option<Branch>,
         end: Position,
         pending: usize,
     ) -> Result<(), Error> {
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = self.referenced(&written_ty);
-        let resolved = self.resolve_root_pattern(syntax, &written_ty)?;
+        let mut resolved = self.resolve_root_pattern(syntax, &written_ty)?;
+        let trace = std::mem::take(&mut resolved.trace);
+        match matched {
+            Some(matched) => {
+                self.pattern_facts(trace, &matched, subject.span, &resolved.bindings);
+            }
+            None => self.pattern_unrecorded(&resolved.bindings, resolved.span),
+        }
         if otherwise.is_none() {
             let rows = resolved
                 .coverage
@@ -21139,10 +21160,13 @@ impl<'a> Parser<'a> {
             _ => None,
         });
         let dereferenced = matches!(self.peek(), Token::Multiply);
+        let value_start = self.flow().value_start();
         let value = self.parse_expr_expecting(expected.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
         self.subject_deref = dereferenced;
+        // The pattern reads, moves and borrows the parts it binds.
+        let matched = self.matched(&value, value_start);
         self.move_pattern_parts(&syntax, &value);
         // `let (a, b) = &mut pair;`: the bindings are the place's parts.
         if annotation.is_none()
@@ -21156,7 +21180,7 @@ impl<'a> Parser<'a> {
         {
             let end = value.span.end();
             self.consume_terminator(start)?;
-            return self.bind_let_pattern(start, &syntax, value, None, end, pending);
+            return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
         self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
         self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
@@ -21168,7 +21192,7 @@ impl<'a> Parser<'a> {
         if !syntax.has_ref_mut() && syntax.has_script_variant() {
             let end = value.span.end();
             self.consume_terminator(start)?;
-            return self.bind_let_pattern(start, &syntax, value, None, end, pending);
+            return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -21209,7 +21233,10 @@ impl<'a> Parser<'a> {
         } else {
             String::new()
         };
+        let traced = self.begin_trace();
         let destructured = self.destructure(&syntax, &whole, &ty);
+        let trace = self.end_trace(traced);
+        self.pattern_facts(trace, &matched, value.span, &[]);
         self.place_root = None;
         let destructured_at = rendered.len();
         rendered.push_text(destructured?);
@@ -21269,6 +21296,7 @@ impl<'a> Parser<'a> {
             let outer = entered.or(mode);
             entered = Some(outer.map_or(mutable, |outer| outer && mutable));
             ty = self.inference.resolve(&target);
+            self.trace_enter(FactStep::Deref);
         }
         match entered {
             Some(entered) => {
@@ -21309,6 +21337,7 @@ impl<'a> Parser<'a> {
                     },
                     (_, ty) => ty,
                 };
+                self.trace_bind(name, *span, &ty);
                 self.bindings.insert(
                     name.clone(),
                     Binding {
@@ -21331,6 +21360,12 @@ impl<'a> Parser<'a> {
             } => {
                 let _ = write!(statements, " const {name} = {path};");
                 let target = self.inference.resolve(ty);
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(target.clone()),
+                };
+                self.trace_ref(false);
+                self.trace_bind(name, *span, &ty);
                 self.bindings.insert(
                     name.clone(),
                     Binding {
@@ -21356,6 +21391,15 @@ impl<'a> Parser<'a> {
                     });
                 };
                 let target = self.inference.resolve(ty);
+                self.trace_ref(true);
+                self.trace_bind(
+                    name,
+                    *span,
+                    &Ty::Reference {
+                        mutable: true,
+                        target: Box::new(target.clone()),
+                    },
+                );
                 self.borrow_place(name.clone(), *span, target, path.into(), root);
                 Ok(())
             }
@@ -21383,9 +21427,18 @@ impl<'a> Parser<'a> {
                 members,
                 span,
             } => {
+                let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
                 // A field is read through its helper, not a place.
                 let root = self.place_root.take();
+                let names = match self.models.definition(definition.id()) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .map(|field| field.name.text.clone())
+                        .collect(),
+                    Nominal::Enum { .. } => Vec::new(),
+                };
                 let mut destructure = || {
                     self.require_type(pattern_ty, &target, *span)?;
                     for (slot, (member, ty)) in members.iter().zip(fields.iter()).enumerate() {
@@ -21394,7 +21447,13 @@ impl<'a> Parser<'a> {
                             slot,
                         });
                         let path = format!("{helper}({path})");
+                        let field = names
+                            .get(slot)
+                            .cloned()
+                            .unwrap_or_else(|| slot.to_string().into());
+                        let step = self.trace_enter(FactStep::Field(field));
                         self.destructure_into(member, &path, ty, statements)?;
+                        self.trace_leave(step);
                     }
                     Ok(())
                 };
@@ -21403,11 +21462,13 @@ impl<'a> Parser<'a> {
                 if let Some(mode) = mode {
                     self.binding_mode.set(mode);
                 }
+                self.trace_leave(traced);
                 destructured
             }
             PatternSyntax::Tuple { members, span } => {
                 // A tuple pattern also matches through `&(A, B)`, binding
                 // references to its members.
+                let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
                 let discard = PatternSyntax::Discard { span: *span };
                 let arity = match &target {
@@ -21420,6 +21481,7 @@ impl<'a> Parser<'a> {
                         if let Some(mode) = mode {
                             self.binding_mode.set(mode);
                         }
+                        self.trace_leave(traced);
                         return Err(error);
                     }
                 };
@@ -21429,7 +21491,9 @@ impl<'a> Parser<'a> {
                 let mut destructure = || {
                     self.require_type(&Ty::Tuple(types.clone()), &target, *span)?;
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
+                        let step = self.trace_enter(FactStep::Field(index.to_string().into()));
                         self.destructure_into(member, &format!("{path}[{index}]"), ty, statements)?;
+                        self.trace_leave(step);
                     }
                     Ok(())
                 };
@@ -21437,6 +21501,7 @@ impl<'a> Parser<'a> {
                 if let Some(mode) = mode {
                     self.binding_mode.set(mode);
                 }
+                self.trace_leave(traced);
                 destructured
             }
             PatternSyntax::Slice {
@@ -21445,6 +21510,7 @@ impl<'a> Parser<'a> {
                 after,
                 span,
             } => {
+                let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
                 let destructured = self.destructure_array(
                     before,
@@ -21458,6 +21524,7 @@ impl<'a> Parser<'a> {
                 if let Some(mode) = mode {
                     self.binding_mode.set(mode);
                 }
+                self.trace_leave(traced);
                 destructured
             }
             PatternSyntax::Reference {
@@ -21484,7 +21551,9 @@ impl<'a> Parser<'a> {
                     Ty::Reference { target: inner, .. } => {
                         // `&pat` matches the reference and binds by move.
                         let mode = self.binding_mode.replace(None);
+                        let step = self.trace_enter(FactStep::Deref);
                         let destructured = self.destructure_into(pattern, path, &inner, statements);
+                        self.trace_leave(step);
                         self.binding_mode.set(mode);
                         return destructured;
                     }
@@ -21493,7 +21562,9 @@ impl<'a> Parser<'a> {
                 self.require_type(&expected, ty, *span)?;
                 // References are the referenced value at runtime.
                 let mode = self.binding_mode.replace(None);
+                let step = self.trace_enter(FactStep::Deref);
                 let destructured = self.destructure_into(pattern, path, &target, statements);
+                self.trace_leave(step);
                 self.binding_mode.set(mode);
                 destructured
             }
@@ -21503,8 +21574,18 @@ impl<'a> Parser<'a> {
                 if pattern.host_struct && matches!(self.inference.resolve(ty), Ty::Host { .. }) =>
             {
                 let ty = self.inference.resolve(ty);
+                if !drops::pattern_names(syntax).is_empty() {
+                    self.trace_unmodeled(
+                        "a pattern binding a part of a facade value",
+                        syntax.span(),
+                    );
+                }
+                let traced = self.begin_trace();
                 let mut out = HostPattern::default();
-                self.host_pattern(syntax, origin::Fragment::plain(path), &ty, &mut out)?;
+                let hosted =
+                    self.host_pattern(syntax, origin::Fragment::plain(path), &ty, &mut out);
+                self.end_trace(traced);
+                hosted?;
                 if !out.tests.is_empty() {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: "a refutable pattern in a binding; use `if let` or `match`"
@@ -21585,13 +21666,21 @@ impl<'a> Parser<'a> {
                 .map(|(index, member)| (trailing + index, member)),
         );
         for (index, member) in members {
+            let step = self.trace_enter(FactStep::ConstantIndex {
+                offset: index as u32,
+                min_length: length as u32,
+                from_end: false,
+            });
             self.destructure_into(member, &format!("{path}[{index}]"), element, statements)?;
+            self.trace_leave(step);
         }
         if let Some(PatternSyntax::Rest {
             binding: Some((name, span)),
             ..
         }) = rest
         {
+            // A subslice is not a place these facts name.
+            self.trace_unmodeled("a slice pattern binding its middle", *span);
             let middle = Ty::Array {
                 element: element.clone(),
                 length: Some(length - fixed),
@@ -21603,7 +21692,10 @@ impl<'a> Parser<'a> {
             };
             let helper = self.push_op(Op::Prelude(PreludeOp::Slice));
             let path = format!("{helper}({path}, {}, {}, false)", before.len(), trailing);
-            self.destructure_into(&binding, &path, &middle, statements)?;
+            let traced = self.begin_trace();
+            let destructured = self.destructure_into(&binding, &path, &middle, statements);
+            self.end_trace(traced);
+            destructured?;
         }
         Ok(())
     }
@@ -22749,6 +22841,7 @@ impl<'a> Parser<'a> {
         binding_declarations: &mut Vec<PatternBinding>,
     ) -> Result<(NominalPattern, CoveragePattern), Error> {
         let expected = self.inference.resolve(expected);
+        let path = self.trace_length();
         // Matching a constructor, literal or tuple through `&T` matches the
         // referenced value, and the bindings below it are references: Rust's
         // default binding mode.
@@ -22765,6 +22858,7 @@ impl<'a> Parser<'a> {
                 // `&&T` matches the `T` below both, as rustc does.
                 let mut mutable = *mutable;
                 let mut target = self.inference.resolve(target);
+                self.trace_enter(FactStep::Deref);
                 while let Ty::Reference {
                     target: inner,
                     mutable: inner_mutable,
@@ -22772,6 +22866,7 @@ impl<'a> Parser<'a> {
                 {
                     mutable = mutable && inner_mutable;
                     target = self.inference.resolve(&inner);
+                    self.trace_enter(FactStep::Deref);
                 }
                 let mode = self.binding_mode.get();
                 self.binding_mode
@@ -22791,6 +22886,7 @@ impl<'a> Parser<'a> {
         if let Some(mode) = outer_mode {
             self.binding_mode.set(mode);
         }
+        self.trace_leave(path);
         resolved
     }
 
@@ -22816,6 +22912,12 @@ impl<'a> Parser<'a> {
                     | PatternSyntax::Reference { .. }
             )
         {
+            // The facade's tests read the part; what they bind is not in
+            // the borrow facts.
+            self.trace_test(FactAccess::Read, None);
+            if !drops::pattern_names(syntax).is_empty() {
+                self.trace_unmodeled("a pattern binding a part of a facade value", syntax.span());
+            }
             let mut checks = self.host_checks.borrow_mut();
             let name: ImmutableString = format!("__rawr_host_{}", checks.len()).into();
             checks.push((
@@ -22863,6 +22965,7 @@ impl<'a> Parser<'a> {
                     span: *span,
                     mutable: false,
                 };
+                self.trace_ref(*mutable);
                 let mode = self.binding_mode.replace(None);
                 let resolved = self.resolve_child_pattern_in_mode(
                     &binding,
@@ -22895,6 +22998,7 @@ impl<'a> Parser<'a> {
                         target: Box::new(expected.clone()),
                     },
                 };
+                self.trace_bind(name, *span, &ty);
                 binding_declarations.push(PatternBinding {
                     name: name.clone(),
                     span: *span,
@@ -22938,6 +23042,7 @@ impl<'a> Parser<'a> {
             }
             PatternSyntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
+                self.trace_test(FactAccess::Read, None);
                 Ok((
                     NominalPattern::Literal(literal.clone()),
                     CoveragePattern::Constructor {
@@ -22964,6 +23069,7 @@ impl<'a> Parser<'a> {
                     self.require_pattern_type(&expected, ty, *span)?;
                 }
                 reject_empty_range(low.as_ref(), high.as_ref(), *inclusive, owner, *span)?;
+                self.trace_test(FactAccess::Read, None);
                 Ok((
                     NominalPattern::Range {
                         low: low.as_ref().map(|(literal, _)| literal.clone()),
@@ -23009,7 +23115,8 @@ impl<'a> Parser<'a> {
                     .collect::<Vec<_>>();
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
-                for (member, ty) in members.iter().zip(fields.iter()) {
+                for ((member, ty), field) in members.iter().zip(fields.iter()).zip(&item.fields) {
+                    let path = self.trace_enter(FactStep::Field(field.name.text.clone()));
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23018,6 +23125,7 @@ impl<'a> Parser<'a> {
                         bound_names,
                         binding_declarations,
                     )?;
+                    self.trace_leave(path);
                     proofs.push(proof);
                     coverage.push(member_coverage);
                 }
@@ -23049,7 +23157,8 @@ impl<'a> Parser<'a> {
                 }
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
-                for (member, ty) in members.iter().zip(types.iter()) {
+                for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
+                    let path = self.trace_enter(FactStep::Field(index.to_string().into()));
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23058,6 +23167,7 @@ impl<'a> Parser<'a> {
                         bound_names,
                         binding_declarations,
                     )?;
+                    self.trace_leave(path);
                     proofs.push(proof);
                     coverage.push(member_coverage);
                 }
@@ -23096,6 +23206,7 @@ impl<'a> Parser<'a> {
                 // References are the referenced value at runtime; an explicit
                 // `&` pattern binds by value below it.
                 let mode = self.binding_mode.replace(None);
+                let path = self.trace_enter(FactStep::Deref);
                 let resolved = self.resolve_child_pattern(
                     pattern,
                     target,
@@ -23104,6 +23215,7 @@ impl<'a> Parser<'a> {
                     bound_names,
                     binding_declarations,
                 );
+                self.trace_leave(path);
                 self.binding_mode.set(mode);
                 resolved
             }
@@ -23128,6 +23240,7 @@ impl<'a> Parser<'a> {
                         target: Box::new(expected.clone()),
                     },
                 };
+                self.trace_bind(name, *name_span, &ty);
                 binding_declarations.push(PatternBinding {
                     name: name.clone(),
                     span: *name_span,
@@ -23207,10 +23320,17 @@ impl<'a> Parser<'a> {
                     }
                     _ => {}
                 }
-                let mut resolve = |members: &[PatternSyntax]| {
+                // A slice's length is tested; an array's is known.
+                if length.is_none() {
+                    self.trace_test(FactAccess::Length, Some(*span));
+                }
+                let mut resolve = |members: &[PatternSyntax], after: bool| {
                     let mut proofs = Vec::with_capacity(members.len());
                     let mut coverage = Vec::with_capacity(members.len());
-                    for member in members {
+                    for (index, member) in members.iter().enumerate() {
+                        let step =
+                            borrows::slice_element(index, members.len(), after, fixed, *length);
+                        let path = self.trace_enter(step);
                         let (proof, member_coverage) = self.resolve_child_pattern(
                             member,
                             element,
@@ -23219,13 +23339,14 @@ impl<'a> Parser<'a> {
                             bound_names,
                             binding_declarations,
                         )?;
+                        self.trace_leave(path);
                         proofs.push(proof);
                         coverage.push(member_coverage);
                     }
                     Ok::<_, Error>((proofs, coverage))
                 };
-                let (before_proofs, mut coverage) = resolve(before)?;
-                let (after_proofs, after_coverage) = resolve(after)?;
+                let (before_proofs, mut coverage) = resolve(before, false)?;
+                let (after_proofs, after_coverage) = resolve(after, true)?;
                 coverage.extend(after_coverage);
                 // `name @ ..` binds the middle: an array of the remaining
                 // length, or a slice.
@@ -23243,17 +23364,19 @@ impl<'a> Parser<'a> {
                             span: *name_span,
                             mutable: false,
                         };
-                        Some(Box::new(
-                            self.resolve_child_pattern_in_mode(
-                                &binding,
-                                &middle,
-                                owner,
-                                variant,
-                                bound_names,
-                                binding_declarations,
-                            )?
-                            .0,
-                        ))
+                        // A subslice is not a place these facts name.
+                        self.trace_unmodeled("a slice pattern binding its middle", *name_span);
+                        let traced = self.begin_trace();
+                        let resolved = self.resolve_child_pattern_in_mode(
+                            &binding,
+                            &middle,
+                            owner,
+                            variant,
+                            bound_names,
+                            binding_declarations,
+                        );
+                        self.end_trace(traced);
+                        Some(Box::new(resolved?.0))
                     }
                     Some(_) => Some(Box::new(NominalPattern::Discard {
                         expected: NominalPayloadType::Any,
@@ -23394,8 +23517,12 @@ impl<'a> Parser<'a> {
                 })
             }
         };
+        // The pattern tests the discriminant; its payload is below it.
+        self.trace_test(FactAccess::Read, None);
         let (child, coverage) = match (payload, element) {
             (Some(payload), Some(element)) => {
+                let path = self.trace_enter(FactStep::Downcast(variant.name().into()));
+                self.trace_enter(FactStep::Field("0".into()));
                 let (child, coverage) = self.resolve_child_pattern(
                     payload,
                     element,
@@ -23404,6 +23531,7 @@ impl<'a> Parser<'a> {
                     bound_names,
                     binding_declarations,
                 )?;
+                self.trace_leave(path);
                 (Some(Box::new(child)), vec![coverage])
             }
             _ => (None, Vec::new()),
@@ -23434,30 +23562,24 @@ impl<'a> Parser<'a> {
         let mut bound_names = BTreeMap::<ImmutableString, Span>::new();
         let mut bindings = Vec::new();
         let owner = subject.name(&self.models);
-        let (proof, coverage) = self.resolve_child_pattern(
+        // What the pattern does to its subject's parts, for the borrow facts.
+        let outer = self.begin_trace();
+        let resolved = self.resolve_child_pattern(
             syntax,
             subject,
             &owner,
             "the pattern",
             &mut bound_names,
             &mut bindings,
-        )?;
-        // A binding by reference (`ref x`, or through `&T`) borrows its
-        // part of the subject: not in the borrow facts yet.
-        if bindings
-            .iter()
-            .any(|binding| matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. }))
-        {
-            self.flow().unmodeled(
-                "a pattern binding a part of its subject by reference",
-                syntax.span(),
-            );
-        }
+        );
+        let trace = self.end_trace(outer);
+        let (proof, coverage) = resolved?;
         Ok(ResolvedRootPattern {
             proof,
             coverage,
             span: syntax.span(),
             bindings,
+            trace,
         })
     }
 
@@ -23603,7 +23725,20 @@ impl<'a> Parser<'a> {
         let substitution = self.nominal_substitution(definition.id(), &arguments);
         let mut payload = Vec::with_capacity(variant.payload.len());
         let mut coverage_payload = Vec::with_capacity(variant.payload.len());
-        for (child, expected) in children.into_iter().zip(variant.payload.iter()) {
+        // An enum of more than one variant is tested by its discriminant, and
+        // the payload is below the variant.
+        if item.variants.len() > 1 {
+            self.trace_test(FactAccess::Read, None);
+        }
+        let path = self.trace_enter(FactStep::Downcast(variant.name.text.clone()));
+        let names = variant.fields.as_deref().unwrap_or_default();
+        for (index, (child, expected)) in
+            children.into_iter().zip(variant.payload.iter()).enumerate()
+        {
+            let field = names
+                .get(index)
+                .map_or_else(|| index.to_string().into(), |name| name.text.clone());
+            let field_path = self.trace_enter(FactStep::Field(field));
             let (child, coverage) = self.resolve_child_pattern(
                 child,
                 &instantiate(&Ty::from_resolved(expected), &substitution),
@@ -23612,9 +23747,11 @@ impl<'a> Parser<'a> {
                 bound_names,
                 binding_declarations,
             )?;
+            self.trace_leave(field_path);
             payload.push(child);
             coverage_payload.push(coverage);
         }
+        self.trace_leave(path);
 
         let identity = type_def::Identity::Script(definition.key().clone());
         let variant_id = nominal::variant::Id::from_name(&variant.name);
@@ -23977,21 +24114,22 @@ impl<'a> Parser<'a> {
 
     fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
-        let subject = self.parse_subject()?;
+        let (subject, matched) = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
         let subject_ty = self.referenced(&subject.ty);
         if matches!(
             subject_ty,
             Ty::Int(_) | Ty::Char | Ty::String | Ty::Str | Ty::Bool | Ty::Float(_)
         ) {
-            return self.parse_literal_match(subject, subject_ty, match_span);
+            return self.parse_literal_match(subject, matched, subject_ty, match_span);
         }
         if let Some(variants) = self
             .host_variants(&subject_ty)
             .or_else(|| self.host_value_variants(&subject_ty))
         {
-            return self.parse_host_match(subject, subject_ty, variants, match_span);
+            return self.parse_host_match(subject, matched, subject_ty, variants, match_span);
         }
+        let subject_span = subject.span;
         let owner: ImmutableString = match &subject_ty {
             Ty::Script(definition_id, ..) => self.models.definition(*definition_id).name().into(),
             ty => ty.name(&self.models),
@@ -24007,6 +24145,8 @@ impl<'a> Parser<'a> {
         let subject = self.pattern_subject(subject, &subject_ty)?;
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let split = self.flow().split();
+        // Each arm's tests follow the tests of the arms before it.
+        let mut tested = split;
         let mut arm_ends = Vec::new();
         let mut arms = Vec::new();
         let coverage_types = vec![subject_ty.clone()];
@@ -24029,7 +24169,8 @@ impl<'a> Parser<'a> {
             }
 
             let arm_start = self.position();
-            self.flow().arm(split);
+            self.flow().arm(tested);
+            tested = self.flow().split();
             // The bindings a facade pattern in the arm makes, ahead of it.
             let mut arm_prefix = origin::Fragment::default();
             let mut write_back = None;
@@ -24042,6 +24183,7 @@ impl<'a> Parser<'a> {
             let catch_all = match self.peek() {
                 Token::Underscore => {
                     self.next();
+                    self.flow().arm(tested);
                     Some(None)
                 }
                 Token::Identifier(name)
@@ -24054,6 +24196,9 @@ impl<'a> Parser<'a> {
                         && !matches!(self.peek_second(), Token::Reserved(ref text) if text.as_str() == "@") =>
                 {
                     let (name, declaration) = self.expect_name("match binding")?;
+                    let trace = self.binding_trace(&name, declaration, &binding_ty);
+                    self.flow().arm(tested);
+                    self.pattern_binds(trace, &matched, &[]);
                     match_copies.push_str(&self.shadow_copies(std::slice::from_ref(&name))?);
                     // The binding takes the subject by value.
                     self.move_local(&mut place.clone())?;
@@ -24106,7 +24251,11 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
-                let resolved = self.resolve_root_pattern(&syntax, &binding_ty)?;
+                let mut resolved = self.resolve_root_pattern(&syntax, &binding_ty)?;
+                let trace = std::mem::take(&mut resolved.trace);
+                self.pattern_tests(&trace, &matched, subject_span);
+                self.flow().arm(tested);
+                self.pattern_binds(trace, &matched, &resolved.bindings);
                 match_copies.push_str(&self.shadow_copies(&drops::pattern_names(&syntax))?);
                 let host = self.take_host_checks()?;
                 let alternatives = resolved.coverage.alternatives();
@@ -24431,11 +24580,13 @@ impl<'a> Parser<'a> {
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
         let dereferenced = matches!(self.peek(), Token::Multiply);
-        let subject = self.parse_subject()?;
+        let (subject, matched) = self.parse_subject()?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = self.referenced(&written_ty);
-        let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let mut resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let trace = std::mem::take(&mut resolved.trace);
+        self.pattern_facts(trace, &matched, subject.span, &resolved.bindings);
         let write_back =
             self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
         // The condition's scope: the value made for it, then its bindings,
@@ -24510,7 +24661,7 @@ impl<'a> Parser<'a> {
 
     /// The subject of a `match`, `if let` or `while let`, which may be a
     /// `&mut` borrow of a place.
-    fn parse_subject(&mut self) -> Result<ParsedExpr, Error> {
+    fn parse_subject(&mut self) -> Result<(ParsedExpr, Matched), Error> {
         self.subject_deref = matches!(self.peek(), Token::Multiply);
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
@@ -24518,17 +24669,13 @@ impl<'a> Parser<'a> {
         if borrowing {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
         }
+        let start = self.flow().value_start();
         let subject = self.parse_head(Self::parse_expr);
         self.mutable_borrow = outer;
-        if let Ok(subject) = &subject
-            && (subject.lvalue.is_some() || self.flow().is_place(subject.span))
-        {
-            // A match reads its place's discriminant, and only what its
-            // patterns bind besides.
-            let discriminant = self.has_discriminant(&subject.ty);
-            self.flow().subject(subject.span.start(), discriminant);
-        }
-        subject
+        let subject = subject?;
+        // A match reads only what its patterns test and bind.
+        let matched = self.matched(&subject, start);
+        Ok((subject, matched))
     }
 
     fn next_after_else(&mut self) -> Token {
@@ -25583,12 +25730,15 @@ impl<'a> Parser<'a> {
     fn parse_literal_match(
         &mut self,
         subject: ParsedExpr,
+        matched: Matched,
         subject_ty: Ty,
         match_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        let written = self.inference.resolve(&subject.ty);
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
-        let split = self.flow().split();
+        // Each arm's tests follow the tests of the arms before it.
+        let mut tested = self.flow().split();
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
         let mut arms = Vec::new();
@@ -25596,7 +25746,8 @@ impl<'a> Parser<'a> {
         let (mut saw_true, mut saw_false) = (false, false);
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             let pattern_start = self.position();
-            self.flow().arm(split);
+            self.flow().arm(tested);
+            tested = self.flow().split();
             if exhaustive {
                 return Err(Error::InvalidMatch {
                     owner: subject_ty.name(&self.models),
@@ -25607,6 +25758,16 @@ impl<'a> Parser<'a> {
             let syntax = self.parse_pattern_syntax()?;
             let mut binding = None;
             let test = self.scalar_condition(&syntax, &subject_ty, &temporary, &mut binding)?;
+            let trace = self.scalar_trace(
+                test.is_some(),
+                binding
+                    .as_ref()
+                    .map(|(name, declaration, _)| (name, *declaration)),
+                &written,
+            );
+            self.pattern_tests(&trace, &matched, subject.span);
+            self.flow().arm(tested);
+            self.pattern_binds(trace, &matched, &[]);
             let catch_all = test.is_none();
             let tests = test.into_iter().collect::<Vec<_>>();
             let mut seen = [false; 2];
@@ -26466,6 +26627,7 @@ impl<'a> Parser<'a> {
     fn parse_host_match(
         &mut self,
         subject: ParsedExpr,
+        matched: Matched,
         subject_ty: Ty,
         variants: Vec<ImmutableString>,
         match_span: Span,
@@ -26485,7 +26647,8 @@ impl<'a> Parser<'a> {
         };
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
-        let split = self.flow().split();
+        // Each arm's tests follow the tests of the arms before it.
+        let mut tested = self.flow().split();
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
         let mut covered = Vec::<ImmutableString>::new();
@@ -26493,7 +26656,8 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             let pattern_start = self.position();
-            self.flow().arm(split);
+            self.flow().arm(tested);
+            tested = self.flow().split();
             let syntax = self.parse_pattern_syntax()?;
             let mut compiled = HostPattern::default();
             self.host_pattern(
@@ -26502,6 +26666,10 @@ impl<'a> Parser<'a> {
                 &written,
                 &mut compiled,
             )?;
+            let trace = self.host_trace(&compiled, &written, syntax.span());
+            self.pattern_tests(&trace, &matched, subject.span);
+            self.flow().arm(tested);
+            self.pattern_binds(trace, &matched, &[]);
             self.bind_host_pattern(&compiled);
             let binds = compiled.rendered_binds();
             let mut condition = compiled
@@ -36359,6 +36527,8 @@ impl<'a> Parser<'a> {
                         self.unsupported("`take` or `replace` on a value that is not a place")
                     );
                 };
+                // `Option::take(&mut self)` borrows its receiver for the call.
+                self.mutable_use(&value, member_span);
                 let replacement = match arguments.first_mut() {
                     Some(argument) => {
                         self.coerce_expr(&element, argument)?;

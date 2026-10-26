@@ -13,7 +13,9 @@ the rows instead (for picking cases). Builds go under `target/borrowck`.
 The corpus: `ui/` holds the cases of rustc 1.96.0's tests/ui/borrowck and
 tests/ui/nll that rawr's frontend lowers (rustc's tests, MIT OR Apache-2.0
 as rawr is), `slice1/` the cases written for borrows of locals, and
-`mutations/` what `mutate.py` writes from rawr's own programs. The harness
+`mutations/` what `mutate.py` writes from rawr's own programs, and
+`patterns/` the cases written for patterns' bindings and reads, with
+`patterns/mutations/` what `mutate.py` writes from them. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 
