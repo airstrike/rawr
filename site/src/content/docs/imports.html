@@ -74,6 +74,49 @@ fn main() {
 <p>One item rawr can&rsquo;t hold doesn&rsquo;t stop a <code>use krate::*</code>. rawr leaves that item out, and a call to it says why.</p>
 <p>A function or method can return <code>impl Trait</code> of a dependency&rsquo;s trait, as in Freya&rsquo;s <code>fn app() -&gt; impl IntoElement</code>. As in rustc, the type it stands for is the type the body returns. It may sit inside an <code>Option</code>, a <code>Result</code>, a <code>Vec</code>, a <code>Box</code>, a tuple or a reference. rawr doesn&rsquo;t check that the body&rsquo;s type implements the trait. <code>cargo check</code> reports it. A caller sees the body&rsquo;s type, so it can call more than the trait&rsquo;s methods. <code>cargo check</code> reports that as well.</p>
 
+<h2 id="borrowing">Values that borrow</h2>
+<p>Some crates give values that borrow what they were made from. pulldown-cmark&rsquo;s <code>Parser::new(&amp;text)</code> borrows <code>text</code>, and each <code>Event</code> it gives borrows it too. quick-xml&rsquo;s <code>read_event_into(&amp;mut buf)</code> gives an <code>Event</code> that borrows <code>buf</code>. You write such code as each crate&rsquo;s docs show it:</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b><span>pulldown-cmark&rsquo;s events example</span></div>
+  <pre><code data-lang="rust">// rawr
+use pulldown_cmark::{Event, Parser};
+
+fn main() {
+    let text = String::from("# Title\n\nSome *emphasis*.\n");
+    let mut width = 0;
+    for event in Parser::new(&amp;text) {
+        if let Event::End(_) = event {
+            width -= 2;
+        }
+        println!("  {:width$}{event:?}", "");
+        if let Event::Start(_) = event {
+            width += 2;
+        }
+    }
+}</code></pre>
+  <div class="run"><small>on your machine</small><b>rawr run</b><span>  Start(Heading { level: H1, id: None, classes: [], attrs: [] })
+    Text(Borrowed("Title"))
+  End(Heading(H1))
+  Start(Paragraph)
+    Text(Borrowed("Some "))
+    Start(Emphasis)
+      Text(Borrowed("emphasis"))
+    End(Emphasis)
+    Text(Borrowed("."))
+  End(Paragraph)</span></div>
+</div>
+<p>rawr can&rsquo;t keep a value that borrows, so a call that makes one opens a scope frame in native code. The frame owns a copy of each <code>&amp;str</code> or <code>&amp;mut Vec</code> the call borrows, and it keeps the value and everything made from it that carries the borrow. The rest of the value&rsquo;s Rust scope runs inside the frame, and the frame ends where that scope ends:</p>
+<ul>
+  <li>for a <code>let</code>, at the end of its block;</li>
+  <li>for a <code>for</code> loop over the value, at the end of the loop;</li>
+  <li>for any other use, as a <code>match</code> on the value or a method called on it, at the end of the statement.</li>
+</ul>
+<p><code>break</code>, <code>continue</code>, <code>return</code>, <code>?</code> and a panic leave the frame as they leave the scope. A value that borrows the frame&rsquo;s copy can&rsquo;t outlive it, as in Rust. A value that doesn&rsquo;t borrow, such as a number, a <code>String</code> or an owned value of the crate, lives on as usual.</p>
+<p>A method of a value that borrows can borrow it in turn, as quick-xml&rsquo;s <code>e.name()</code> borrows the event <code>e</code>. Its frame holds <code>e</code> borrowed until the end of the statement. A <code>&amp;mut T</code> a method gives, such as quick-xml&rsquo;s <code>reader.config_mut()</code>, is read and stored as a <a href="#values">borrow guard</a> is. So <code>reader.config_mut().trim_text(true)</code> changes the reader&rsquo;s own configuration.</p>
+<p>A <code>&amp;mut Vec</code> of numbers that the call fills, as <code>read_event_into(&amp;mut buf)</code> fills <code>buf</code>, gets the call&rsquo;s changes back when its frame ends. That is where Rust&rsquo;s borrow of it ends, so the statement after the <code>match</code>, such as <code>buf.clear()</code>, sees them. A <code>let</code> that binds such a value, as in <code>let event = reader.read_event_into(&amp;mut buf)?;</code>, isn&rsquo;t supported yet. Match on the call in a statement of its own, as quick-xml&rsquo;s README does.</p>
+<p>An imported type that implements <code>Iterator</code> is walked by a <code>for</code> loop, and the iterator methods work on it, as in <code>e.attributes().map(|a| a.unwrap().value).collect::&lt;Vec&lt;_&gt;&gt;()</code>. A <code>Cow&lt;str&gt;</code> a crate gives is a <code>String</code>, and a <code>Cow&lt;[u8]&gt;</code> or a <code>&amp;[u8]</code> is a copy of its bytes, which no longer borrows. A byte string pattern, as in <code>b"tag1" =&gt; ..</code>, matches a <code>&amp;[u8]</code>, as in Rust.</p>
+<p>A value in a frame is printed, cloned and matched as any imported value is. It stays in the frame until the frame ends, even after your code drops it.</p>
+
 <h2 id="generics">Generic items and your own types</h2>
 <p>A generic Rust function or method can take your own types, as <code>mpsc::channel::&lt;Job&gt;()</code> does with a struct from a marked file. rawr builds the item once in its runner at <code>rawr::Value</code>, which carries any of your values as they are. A value that comes back, as <code>recv</code> gives a <code>Job</code>, is checked against the type you named.</p>
 <p><code>rawr::Value</code> is <code>Send</code>, <code>Sync</code>, <code>Clone</code> and <code>Debug</code>. Its <code>Clone</code> and <code>Debug</code> are your type&rsquo;s own, derived or written by hand. A <code>T: Clone</code> or <code>T: Debug</code> bound is checked on your type, as rustc checks it, so a struct without <code>Clone</code> can&rsquo;t fill a <code>T: Clone</code>. A bound <code>rawr::Value</code> can&rsquo;t meet, such as <code>Default</code>, <code>Copy</code>, <code>Hash</code> or <code>Deserialize</code>, stops the build with an error that names the bound. Call such an item with a Rust type.</p>
@@ -91,5 +134,7 @@ fn main() {
   <li>A program with a marked <code>main</code> picks up a body edit when native code next calls back into it, as Freya does at its next event. A native <code>main</code> picks up a body edit at its next call. <a href="/docs/run#reload">Reload</a> says more.</li>
   <li>A guarded value without <code>Clone</code> stops the program where it is read. A guard of a <code>Vec</code> or a tuple can be read but not changed yet. A guard inside an <code>Option</code> or a <code>Result</code>, as <code>Mutex::lock</code> gives, isn&rsquo;t supported yet.</li>
   <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
+  <li>A <code>while let</code> whose subject borrows a <code>&amp;mut</code> buffer its call fills isn&rsquo;t supported yet. Match on the call in the loop&rsquo;s body, as quick-xml&rsquo;s README does.</li>
+  <li>A value that borrows can&rsquo;t be stored in a struct of yours, kept in a collection past its frame, or held across an <code>.await</code>.</li>
 </ul>
 </article>

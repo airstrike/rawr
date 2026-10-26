@@ -98,6 +98,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
 <ul>
   <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
+  <li>A <code>let</code> that binds a value borrowing a <code>&amp;mut</code> buffer its imported call fills, as <code>let event = reader.read_event_into(&amp;mut buf)?;</code>. rawr gives the buffer back when the value&rsquo;s frame ends, which for a <code>let</code> is the end of its block, where Rust&rsquo;s borrow ends at the value&rsquo;s last use. Match on the call in a statement of its own. <a href="/docs/imports#borrowing">Values that borrow</a> explains frames.</li>
   <li><code>capacity()</code> of a <code>Vec</code> in a field, in an element or behind a reference. It works on a local or a temporary <code>Vec</code>. It is also refused for a <code>Vec</code> of <code>u8</code>, <code>i8</code>, <code>bool</code> or <code>()</code>, whose growth rawr doesn&rsquo;t follow.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
@@ -117,5 +118,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>
   <li>Returning a field of <code>&amp;self</code> by value, as in <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507.</li>
+  <li>A method of an imported <code>impl</code> that fixes its type&rsquo;s arguments is accepted on every instance of the type. quick-xml&rsquo;s <code>read_event</code> belongs to <code>impl&lt;'a&gt; Reader&lt;&amp;'a [u8]&gt;</code>, and rawr accepts it on a <code>Reader&lt;String&gt;</code> too. Such a program stops with an error before the call runs, and <code>cargo check</code> reports rustc&rsquo;s E0599.</li>
+  <li><code>into_owned()</code> is accepted on any <code>String</code>, since rawr reads a crate&rsquo;s <code>Cow&lt;str&gt;</code> as a <code>String</code>.</li>
+  <li>A value that borrows an imported call&rsquo;s input, kept past the scope it was made in, is accepted by the check. Using it stops the program with an error that names rustc&rsquo;s E0597, where rustc rejects the program.</li>
 </ul>
 </article>
