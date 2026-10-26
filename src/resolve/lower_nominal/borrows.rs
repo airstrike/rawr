@@ -67,15 +67,11 @@ impl Parser<'_> {
         self.flow().mutable_call(at.start(), at);
     }
 
-    /// `r = ..` of a `&mut` local `r`, which is its place at run time: a
-    /// new borrow for it would write the place instead.
-    pub(super) fn refuse_rebound_alias(
-        &self,
-        target: Span,
-        ty: &Ty,
-        lvalue: &Lvalue,
-        replacement: &ParsedExpr,
-    ) -> Result<(), Error> {
+    /// `r = ..` of a `&mut` local `r` that is its place at run time, before
+    /// the value is read: one given new borrows is a runtime local of its
+    /// own (`reborrow.rs`), but not yet one that borrows a field or an
+    /// element, for which a new borrow would write the place instead.
+    pub(super) fn refuse_rebound_alias(&mut self, target: Span, ty: &Ty) -> Result<(), Error> {
         let Some((name, declaration)) = self.flow().mentioned_local(target.start()) else {
             return Ok(());
         };
@@ -84,24 +80,16 @@ impl Parser<'_> {
             .get(name.as_str())
             .is_some_and(|(aliased, _)| *aliased == declaration);
         // `r = r` keeps the place it is.
-        let same = |other: &Lvalue| match (lvalue, other) {
-            (
-                Lvalue::Place { binding, place, .. },
-                Lvalue::Place {
-                    binding: other,
-                    place: other_place,
-                    ..
-                },
-            ) => binding == other && place.as_str() == other_place.as_str(),
-            _ => false,
-        };
-        if alias
-            && matches!(self.inference.resolve(ty), Ty::Reference { .. })
-            && !replacement.lvalue.as_ref().is_some_and(same)
-        {
+        let same = matches!(self.peek(), Token::Identifier(ref other) if other.as_str() == name.as_str())
+            && matches!(
+                self.peek_second(),
+                Token::SemiColon | Token::Comma | Token::RightBrace
+            );
+        if alias && matches!(self.inference.resolve(ty), Ty::Reference { .. }) && !same {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "giving the `&mut` local `{name}` a new borrow: not supported in Rawr yet"
+                    "giving the `&mut` local `{name}` a new borrow when it borrows a field or \
+                     an element: not supported in Rawr yet"
                 )
                 .into(),
                 source: target,
