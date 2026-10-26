@@ -18,6 +18,11 @@ pub fn main() {
     let all = Parser::new(&text).count();
     println!("events: {all}, ends: {}", ends(&text));
 
+    // What comes after the borrowing call in its statement, or isn't a
+    // call, runs where Rust runs it.
+    let sizes = 1 + Parser::new(&text).count() + text.len();
+    println!("sizes: {sizes}");
+
     let words = |line: &str| {
         Parser::new(line)
             .filter(|event| matches!(event, Event::Text(_)))

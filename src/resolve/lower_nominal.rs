@@ -9634,6 +9634,16 @@ struct Parser<'a> {
     /// `let made = call(..);` for each call in it whose value borrows what
     /// it takes, which the statement then runs inside.
     frames: Vec<Vec<Frame>>,
+    /// For each of `frames`, where its statement starts and where each
+    /// call or assignment parsed in it so far starts: a frame is opened
+    /// ahead of its statement, so one written before the call that opens
+    /// it would run after it.
+    frame_effects: Vec<(Position, Vec<Position>)>,
+    /// For each `(` open, where the call it starts begins, if it is one.
+    call_parens: Vec<Option<Position>>,
+    /// Where the last token was, if a `(` after it calls something, and
+    /// whether it is a turbofish's `>`, which only `()` after it calls.
+    callee: Option<(Position, bool)>,
     temporaries: usize,
     /// `.into()` conversions, chosen once their target types are known.
     pending_conversions: Vec<PendingConversion>,
@@ -9921,6 +9931,9 @@ impl<'a> Parser<'a> {
             argument_hints: Vec::new(),
             pending_arguments: None,
             frames: Vec::new(),
+            frame_effects: Vec::new(),
+            call_parens: Vec::new(),
+            callee: None,
             temporaries: 0,
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
@@ -19276,6 +19289,26 @@ impl<'a> Parser<'a> {
                 self.unsupported("a call whose value borrows what it takes, outside a statement")
             );
         }
+        // The frame opens ahead of the statement: a call or assignment
+        // written before this call in it, outside it, would run after it.
+        let start = value.span.start();
+        if let Some((statement, effects)) = self.frame_effects.last_mut() {
+            effects.retain(|at| *at < start);
+            if let Some(&earlier) = effects.first() {
+                let line = statement.line().unwrap_or_default();
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "a call or assignment before a call whose value borrows what it \
+                         takes, in the statement at line {line}: Rawr opens the borrowing \
+                         call's scope frame ahead of the statement, so running what is \
+                         written before it first is not supported in Rawr yet; give the \
+                         earlier call its own statement"
+                    )
+                    .into(),
+                    source: point_span(earlier),
+                });
+            }
+        }
         let made = self.temporary("frame");
         let mut frame = Frame::default();
         let bound = if places.is_empty() {
@@ -19882,9 +19915,9 @@ impl<'a> Parser<'a> {
         let start = self.output.len();
         let depth = self.temporary_scopes.len();
         self.open_temporaries();
-        self.frames.push(Vec::new());
+        self.open_frames();
         let bound = self.parse_binding_statement(let_keyword);
-        let frames = self.frames.pop().unwrap_or_default();
+        let frames = self.close_frames();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.
         while self.temporary_scopes.len() > depth {
@@ -21313,9 +21346,9 @@ impl<'a> Parser<'a> {
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         self.open_temporaries();
-        self.frames.push(Vec::new());
+        self.open_frames();
         let parsed = self.parse_expression_statement(pending);
-        let frames = self.frames.pop().unwrap_or_default();
+        let frames = self.close_frames();
         let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
@@ -21795,6 +21828,7 @@ impl<'a> Parser<'a> {
             });
         }
         let mut replacement = self.parse_expr()?;
+        self.effect(value.span.start());
         let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
             let target = match &lvalue {
@@ -24238,9 +24272,9 @@ impl<'a> Parser<'a> {
                 let depth = self.drop_scopes.len();
                 // A subject that borrows what its call takes opens its frame
                 // in each iteration (D558 tier 1).
-                self.frames.push(Vec::new());
+                self.open_frames();
                 let parsed = self.parse_let_condition(&scrutinee);
-                let frames = self.frames.pop().unwrap_or_default();
+                let frames = self.close_frames();
                 let (subject, arm, binds, write_back, condition) = parsed?;
                 if frames.iter().any(|frame| !frame.after.is_empty()) {
                     return Err(self.unsupported(
@@ -24297,9 +24331,9 @@ impl<'a> Parser<'a> {
             }
             Token::While => {
                 self.open_temporaries();
-                self.frames.push(Vec::new());
+                self.open_frames();
                 let condition = self.parse_head(Self::parse_expr);
-                let frames = self.frames.pop().unwrap_or_default();
+                let frames = self.close_frames();
                 let temporaries = self.close_temporaries();
                 let mut condition = condition?;
                 if !temporaries.is_empty() {
@@ -26643,9 +26677,9 @@ impl<'a> Parser<'a> {
         let block_like = self.peek_block_like();
         // An arm is a temporary scope, and opens its own scope frames.
         self.open_temporaries();
-        self.frames.push(Vec::new());
+        self.open_frames();
         let value = self.parse_expr();
-        let frames = self.frames.pop().unwrap_or_default();
+        let frames = self.close_frames();
         let temporaries = self.close_temporaries();
         let mut value = value?;
         if !frames.is_empty() {
@@ -26720,6 +26754,7 @@ impl<'a> Parser<'a> {
             });
         }
         let mut replacement = self.parse_expr()?;
+        self.effect(value.span.start());
         let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
             let target = match &lvalue {
@@ -27150,11 +27185,11 @@ impl<'a> Parser<'a> {
             let lazy = matches!(operator, Token::And | Token::Or);
             if lazy {
                 self.open_temporaries();
-                self.frames.push(Vec::new());
+                self.open_frames();
             }
             let rhs = self.parse_binary(precedence + 1);
             let (temporaries, frames) = if lazy {
-                let frames = self.frames.pop().unwrap_or_default();
+                let frames = self.close_frames();
                 (self.close_temporaries(), frames)
             } else {
                 (Vec::new(), Vec::new())
@@ -37958,9 +37993,9 @@ impl<'a> Parser<'a> {
         } else {
             self.open_temporaries();
             // A closure's body opens its own scope frames (D558 tier 1).
-            self.frames.push(Vec::new());
+            self.open_frames();
             let body = self.parse_expr();
-            let frames = self.frames.pop().unwrap_or_default();
+            let frames = self.close_frames();
             let temporaries = self.close_temporaries();
             body.and_then(|mut value| {
                 if !temporaries.is_empty() {
@@ -44810,12 +44845,67 @@ impl<'a> Parser<'a> {
     }
 
     fn next(&mut self) -> (Token, Position) {
-        if let Some(position) = self.split_angle.take() {
-            return (Token::GreaterThan, position);
+        let (token, position) = match self.split_angle.take() {
+            Some(position) => (Token::GreaterThan, position),
+            None => self
+                .input
+                .next()
+                .expect("token streams always end with EOF"),
+        };
+        self.track_calls(&token, position);
+        (token, position)
+    }
+
+    /// Notes each call as its arguments close, for `frame_effects`: a `(`
+    /// or `()` after a name that is not a type's or a variant's, after a
+    /// `)` or `]`, or `()` after a turbofish.
+    fn track_calls(&mut self, token: &Token, position: Position) {
+        let callee = self.callee.take();
+        match token {
+            Token::LeftParen => self
+                .call_parens
+                .push(callee.filter(|(_, turbofish)| !turbofish).map(|(at, _)| at)),
+            Token::RightParen => {
+                if let Some(Some(at)) = self.call_parens.pop() {
+                    self.effect(at);
+                }
+            }
+            Token::Unit => {
+                if let Some((at, _)) = callee {
+                    self.effect(at);
+                }
+            }
+            _ => {}
         }
-        self.input
-            .next()
-            .expect("token streams always end with EOF")
+        self.callee = match token {
+            Token::Identifier(name) if !name.starts_with(char::is_uppercase) => {
+                Some((position, false))
+            }
+            Token::RightParen | Token::RightBracket | Token::Unit => Some((position, false)),
+            Token::GreaterThan => Some((position, true)),
+            _ => None,
+        };
+    }
+
+    /// A call or assignment starting at `at`, in each statement being
+    /// parsed.
+    fn effect(&mut self, at: Position) {
+        for (_, effects) in &mut self.frame_effects {
+            effects.push(at);
+        }
+    }
+
+    /// Starts collecting the scope frames of a statement.
+    fn open_frames(&mut self) {
+        self.frames.push(Vec::new());
+        let start = self.position();
+        self.frame_effects.push((start, Vec::new()));
+    }
+
+    /// The scope frames the statement since `open_frames` opens.
+    fn close_frames(&mut self) -> Vec<Frame> {
+        self.frame_effects.pop();
+        self.frames.pop().unwrap_or_default()
     }
 }
 

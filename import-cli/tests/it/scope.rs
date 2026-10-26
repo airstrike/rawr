@@ -100,3 +100,32 @@ fn a_member_of_one_instance_on_another_fails_loudly() {
     let all = format!("{stdout}{stderr}");
     assert!(all.contains("E0599"), "{all}");
 }
+
+/// A frame opens ahead of its statement, so a call written before the
+/// borrowing call in the same statement would run after it. Rawr refuses
+/// the statement, naming its line, rather than run them out of order.
+#[test]
+fn a_call_before_a_frame_in_its_statement_is_refused() {
+    let root = fixture("scope-parsers-order");
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse pulldown_cmark::Parser;\n\nfn note(text: &str) -> usize {\n    println!(\"note\");\n    text.len()\n}\n\nfn main() {\n    let text = String::from(\"*a*\");\n    let total = note(&text) + Parser::new(&text).count();\n    println!(\"total {total}\");\n}\n",
+    )
+    .unwrap();
+    for module in ["buffer.rs", "events.rs", "frames.rs", "reader.rs"] {
+        fs::remove_file(root.join("src").join(module)).unwrap();
+    }
+    let run = rawr_import(&root);
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("note"), "{stdout}");
+    assert!(
+        stderr.contains("in the statement at line 11")
+            && stderr.contains("not supported in Rawr yet"),
+        "{stderr}"
+    );
+}
