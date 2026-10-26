@@ -8,7 +8,7 @@
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
-  <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value. It <a href="#lenient">accepts some code rustc rejects</a>, so <code>rawr check</code> also runs <code>cargo check</code>.</li>
+  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them. Borrows kept through calls, structs, closures and reference patterns <a href="#lenient">aren&rsquo;t checked yet</a>, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
 </ul>
 
 <h2 id="overview">How a program runs</h2>
@@ -67,6 +67,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A range of floats that excludes its end, as in <code>0.5..1.0</code>. <code>0.5..=1.0</code> works.</li>
   <li>Returning a <code>&amp;mut</code> to a map&rsquo;s entry, as in <code>self.counts.entry(k).or_insert(0)</code>.</li>
   <li>Returning a <code>&amp;mut</code> borrowed from a parameter other than <code>&amp;mut self</code> or a free function&rsquo;s first <code>&amp;mut</code> parameter.</li>
+  <li>Giving a <code>&amp;mut</code> local a new borrow, as in <code>let mut r = &amp;mut a; r = &amp;mut b;</code>. A <code>&amp;mut</code> local is the place it borrows at run time.</li>
   <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
@@ -105,9 +106,10 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
 <ul>
-  <li>There is no borrow checker beyond the two rules above. A shared borrow held across a mutation is accepted. So is returning a reference to a local.</li>
+  <li>A borrow that a call&rsquo;s result keeps isn&rsquo;t checked. <code>let first = v.first(); v.push(1); println!("{first:?}");</code> is accepted.</li>
+  <li>A borrow stored in a struct, a collection or an <code>Option</code>, kept by a closure past its statement, or bound by a pattern by reference (<code>ref x</code>, or a match through <code>&amp;T</code>) isn&rsquo;t checked.</li>
+  <li>Lifetimes in signatures and in type annotations aren&rsquo;t checked. <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted. So are returning a reference to a local and <code>let x: &amp;'static i32 = &amp;n;</code>.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
-  <li>Lifetimes are not checked. <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>

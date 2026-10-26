@@ -57,7 +57,6 @@ impl Parser<'_> {
         ty: Ty,
         lvalue: Lvalue,
     ) {
-        let root = lvalue.binding().clone();
         self.bindings.insert(
             name.clone(),
             Binding {
@@ -70,14 +69,12 @@ impl Parser<'_> {
             },
         );
         self.aliases.insert(name, (declaration, lvalue));
-        self.borrows.entry(root).or_default().push(declaration);
     }
 
     /// `name` (declared at `declaration`) is a `&mut` borrow of `place` in
     /// the local `root`: `let r = &mut v;`, `let ref mut r = v;`. Rawr has
-    /// no references at runtime, so each use of `name` is the place; a
-    /// direct use of `root` ends the borrow, as Rust's non-lexical
-    /// lifetimes do.
+    /// no references at runtime, so each use of `name` is the place; the
+    /// borrow checker (`borrows.rs`) ends the borrow where rustc does.
     pub(super) fn borrow_place(
         &mut self,
         name: ImmutableString,
@@ -90,17 +87,7 @@ impl Parser<'_> {
             mutable: true,
             target: Box::new(target),
         };
-        self.alias_element(name, declaration, ty, place, root.clone());
-        self.borrows.entry(root).or_default().push(declaration);
-    }
-
-    /// A direct use of the local `name` ends the `&mut` borrows of it.
-    pub(super) fn end_borrows(&mut self, name: &ImmutableString) {
-        if let Some(borrows) = self.borrows.remove(name) {
-            for declaration in borrows {
-                self.ended.insert(declaration, name.clone());
-            }
-        }
+        self.alias_element(name, declaration, ty, place, root);
     }
 
     /// A use of a loop element bound to its place, or `None`.
@@ -117,16 +104,6 @@ impl Parser<'_> {
         let root = lvalue.binding().clone();
         if aliased != declaration {
             return Ok(None);
-        }
-        if let Some(root) = self.ended.get(&declaration) {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
-                    "cannot use `{name}`, a `&mut` borrow of `{root}`, after `{root}` is used \
-                     directly (E0499/E0502)"
-                )
-                .into(),
-                source: span,
-            });
         }
         if self
             .closures

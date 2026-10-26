@@ -1645,6 +1645,7 @@ impl Parser<'_> {
                                     declaration: local.declaration,
                                 });
                             }
+                            self.mutable_use(&value, value.span);
                             let mut source =
                                 origin::Fragment::plain(format!("if {binding}.len() == 0 {{ "));
                             let empty = none(self);

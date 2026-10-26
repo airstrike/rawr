@@ -12,8 +12,25 @@
 <p>In RawrGallery, an edit to a marked file was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
 
 <h2 id="borrowing">How does rawr handle borrow checking?</h2>
-<p>rawr doesn&rsquo;t have a full borrow checker. It rejects a use after a move, as rustc&rsquo;s E0382 does. It also rejects two live <code>&amp;mut</code> borrows of one value. It accepts some programs that rustc rejects, and the <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
-<p>Values are reference-counted, so a program can&rsquo;t corrupt memory. Borrow checking only rejects programs. It never changes what a valid program does.</p>
+<p>rawr checks the borrows of a function&rsquo;s locals as rustc does. A borrow ends at its last use along the function&rsquo;s control flow, through branches, loops, <code>break</code>, <code>continue</code>, <code>return</code> and <code>?</code>. rustc calls this rule non-lexical lifetimes (NLL). A conflict is reported with rustc&rsquo;s code: E0499, E0502, E0503, E0505, E0506 or E0597. rawr also rejects a use after a move, as rustc&rsquo;s E0382 does.</p>
+<div class="block">
+  <div class="file"><b>borrow.rs</b></div>
+  <pre><code data-lang="rust">fn main() {
+    let mut v = vec![1];
+    let big = v.len() &gt; 5;
+    let r = &amp;mut v;
+    if big {
+        v.push(2); // fine: `r` isn't used on this path
+    } else {
+        r.push(3);
+    }
+    let first = &amp;v[0];
+    v.push(4); // error[E0502]: `first` is used below
+    println!("{first}");
+}</code></pre>
+</div>
+<p>The check looks at each function on its own. Some borrows are not checked yet: one that a call&rsquo;s result keeps, one stored in a struct or a collection, one a closure keeps after its statement, and one a pattern binds by reference. rawr runs such a program, and the <code>cargo check</code> that <code>rawr run</code> keeps going in the background reports any error. The <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
+<p>Values are reference-counted, so a program can&rsquo;t corrupt memory. At run time a shared borrow is a copy and a <code>&amp;mut</code> local is the place it borrows. The checker is what makes that match Rust. Borrow checking only rejects programs. It never changes what a valid program does.</p>
 <p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/reference/overview#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
 <p>Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them too.</p>
 

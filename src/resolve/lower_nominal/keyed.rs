@@ -255,6 +255,7 @@ impl Parser<'_> {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
         if binding.mutable {
+            self.mutable_binding_use(mutation);
             return Ok(());
         }
         Err(match &binding.kind {
@@ -278,6 +279,7 @@ impl Parser<'_> {
         &mut self,
         value: &ParsedExpr,
     ) -> Result<Option<origin::Fragment>, Error> {
+        self.mutable_use(value, value.span);
         if let Ty::Reference { mutable: false, .. } = self.inference.resolve(&value.ty) {
             return Err(Error::TypeMismatch {
                 expected: "a mutable collection (`&mut`, or a `mut` binding)".into(),

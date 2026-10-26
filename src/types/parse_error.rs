@@ -371,6 +371,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownVariable { name, .. } => {
                     write!(f, "Unknown variable '{name}'")
                 }
+                crate::resolve::Error::BorrowConflict { message, code, .. } => {
+                    write!(f, "{message} ({code})")
+                }
                 crate::resolve::Error::MovedValue { name, moved, .. } => {
                     write!(f, "Use of moved value '{name}'; it was already moved at {moved}")
                 }
