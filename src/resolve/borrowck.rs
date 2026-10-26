@@ -185,6 +185,21 @@ pub(crate) struct Body {
     /// value it returns, declared where that value is: its output's region,
     /// which is every point of the body.
     pub(crate) returned: Vec<Local>,
+    /// The function's own signature, which what it returns is checked
+    /// against.
+    pub(crate) own: Option<OwnSignature>,
+}
+
+/// A function's own signature, as its body is checked against it.
+#[derive(Clone, Debug)]
+pub(crate) struct OwnSignature {
+    /// Each parameter, `self` first, with the lifetimes of its borrows and
+    /// whether it is `self`.
+    pub(crate) parameters: Vec<(Local, signature::Borrows, bool)>,
+    /// The lifetimes of the output's borrows.
+    pub(crate) output: signature::Borrows,
+    /// `('b, 'a)` for `'b: 'a`.
+    pub(crate) bounds: Box<[(ImmutableString, ImmutableString)]>,
 }
 
 impl Body {
@@ -273,11 +288,11 @@ pub(crate) struct Conflict {
 /// The first borrow error in `body` under `rule`, in the order the body
 /// runs, as rustc reports the first of a place's conflicts at one access.
 pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
+    if let Some(returned) = returned_local(body).or_else(|| returned_parameter(body)) {
+        return Some(returned);
+    }
     if body.loans.is_empty() {
         return None;
-    }
-    if let Some(returned) = returned_local(body) {
-        return Some(returned);
     }
     let in_scope = rule.loans_in_scope(body);
     let index = point_index(body);
@@ -378,6 +393,56 @@ fn returned_local(body: &Body) -> Option<Conflict> {
     None
 }
 
+/// A parameter's borrow that the function returns, whose lifetime does not
+/// outlive the one its signature gives the output: rustc's E0621 for a
+/// parameter whose lifetime is elided where the output's is named, and its
+/// "lifetime may not live long enough" otherwise.
+fn returned_parameter(body: &Body) -> Option<Conflict> {
+    use signature::{Borrows, Lifetime};
+    let own = body.own.as_ref()?;
+    let Borrows::One(output) = &own.output else {
+        return None;
+    };
+    for &returned in &body.returned {
+        let reached = reaching(body, &[returned]);
+        for (local, borrows, receiver) in &own.parameters {
+            let Borrows::One(lifetime) = borrows else {
+                continue;
+            };
+            if !reached[local.0 as usize]
+                || signature::outlives_lifetime(&own.bounds, lifetime, output)
+            {
+                continue;
+            }
+            let info = &body.locals[local.0 as usize];
+            let value = body.locals[returned.0 as usize].declaration;
+            let explicit = !receiver
+                && matches!(lifetime, Lifetime::Elided(_))
+                && matches!(output, Lifetime::Named(_));
+            return Some(if explicit {
+                Conflict {
+                    code: "E0621",
+                    message: format!("explicit lifetime required in the type of `{}`", info.name),
+                    access: value,
+                    borrow: info.declaration,
+                }
+            } else {
+                Conflict {
+                    code: LIFETIME,
+                    message: "lifetime may not live long enough".to_string(),
+                    access: value,
+                    borrow: info.declaration,
+                }
+            });
+        }
+    }
+    None
+}
+
+/// The code of rustc's "lifetime may not live long enough", which rustc
+/// gives none.
+pub(crate) const LIFETIME: &str = "lifetime";
+
 /// Whether `local` holds a temporary value an expression made.
 pub(crate) fn is_temporary(body: &Body, local: Local) -> bool {
     body.locals[local.0 as usize].name == TEMPORARY
@@ -389,6 +454,21 @@ pub(crate) const TEMPORARY: &str = "<temporary>";
 /// Whether each loan flows into one of `sinks` ([`Body::everywhere`]: it is
 /// borrowed for `'static`; [`Body::returned`]: the function returns it).
 pub(crate) fn reaches(body: &Body, sinks: &[Local]) -> Vec<bool> {
+    let reaches = reaching(body, sinks);
+    body.loans
+        .iter()
+        .enumerate()
+        .map(|(index, loan)| {
+            reaches[loan.temporary.0 as usize]
+                || body.flows.iter().any(|flow| {
+                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
+                })
+        })
+        .collect()
+}
+
+/// Whether each local's borrows flow into one of `sinks`.
+pub(crate) fn reaching(body: &Body, sinks: &[Local]) -> Vec<bool> {
     let mut reaches = vec![false; body.locals.len()];
     for local in sinks {
         reaches[local.0 as usize] = true;
@@ -407,16 +487,7 @@ pub(crate) fn reaches(body: &Body, sinks: &[Local]) -> Vec<bool> {
             }
         }
     }
-    body.loans
-        .iter()
-        .enumerate()
-        .map(|(index, loan)| {
-            reaches[loan.temporary.0 as usize]
-                || body.flows.iter().any(|flow| {
-                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
-                })
-        })
-        .collect()
+    reaches
 }
 
 /// The index of each point in a flat numbering of the body's points.

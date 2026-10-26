@@ -424,6 +424,23 @@ impl Recorder {
         {
             self.unmodeled("a borrow of a reference that a function returns", span);
         }
+        // A parameter's borrows returned where the signature's lifetimes
+        // are several, which these facts do not tell apart.
+        if let Some(own) = &self.body.own {
+            use super::signature::Borrows;
+            let reached = super::reaching(&self.body, &[local]);
+            let several = own.parameters.iter().any(|(parameter, borrows, _)| {
+                reached[parameter.0 as usize]
+                    && (*borrows == Borrows::Several
+                        || *borrows != Borrows::None && own.output == Borrows::Several)
+            });
+            if several {
+                self.unmodeled(
+                    "a returned borrow whose lifetimes these facts do not tell apart",
+                    span,
+                );
+            }
+        }
     }
 
     /// `origins` are borrowed for `'static` here: their region is every
@@ -1208,6 +1225,29 @@ impl Recorder {
     /// borrows are promoted to `'static`.
     pub(crate) fn constant(&mut self) {
         self.constant = true;
+    }
+
+    /// The body is a function's whose own signature says `parameters`
+    /// (each one's name, declaration, borrows' lifetimes, and whether it is
+    /// `self`), `output` and `bounds`: what it returns is checked against
+    /// them.
+    pub(crate) fn own_signature(
+        &mut self,
+        parameters: &[(ImmutableString, Span, super::signature::Borrows, bool)],
+        output: super::signature::Borrows,
+        bounds: &[(ImmutableString, ImmutableString)],
+    ) {
+        let parameters = parameters
+            .iter()
+            .map(|(name, declaration, borrows, receiver)| {
+                (self.local(name, *declaration), borrows.clone(), *receiver)
+            })
+            .collect();
+        self.body.own = Some(super::OwnSignature {
+            parameters,
+            output,
+            bounds: bounds.into(),
+        });
     }
 
     /// A temporary scope starts here: a statement, a match arm, a

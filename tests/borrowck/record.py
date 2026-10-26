@@ -5,7 +5,8 @@
 
 With folders, or with none for every folder, it records each `.rs` under a
 corpus folder and writes that folder's `rustc.tsv`: one row per program, its
-path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`), or `ok`
+path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`,
+`lifetime:3` for "lifetime may not live long enough", which has no code), or `ok`
 followed by what the program's binary printed (escaped), which the
 differential harness compares with rawr's run. With `.rs` files, it prints
 the rows instead (for picking cases). Builds go under `target/borrowck`.
@@ -56,6 +57,9 @@ def verdict(path):
         if message.get("level") != "error" or message.get("message", "").startswith("aborting"):
             continue
         code = (message.get("code") or {}).get("code") or "error"
+        # rustc gives this region error no code: `lifetime` names it here.
+        if code == "error" and message.get("message") == "lifetime may not live long enough":
+            code = "lifetime"
         spans = [span for span in message.get("spans", []) if span.get("is_primary")]
         line = spans[0]["line_start"] if spans else 0
         codes.append(f"{code}:{line}")

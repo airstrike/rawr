@@ -1,7 +1,10 @@
 # rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
 signatures/elided_hidden_input_ok.rs	ok	0	"4 Some(\"b\") n 4\n"
+signatures/elided_input_named_output.rs	E0621:2
+signatures/elided_input_static_output.rs	lifetime:2
 signatures/elided_lifetime_ok.rs	ok	0	"n ab\n"
 signatures/elided_static_input.rs	ok	0	"a\n"
+signatures/method_other_input.rs	lifetime:7
 signatures/missing_lifetime_associated.rs	E0106:4
 signatures/missing_lifetime_field.rs	E0106:2
 signatures/missing_lifetime_generic.rs	E0106:1
@@ -11,6 +14,20 @@ signatures/missing_lifetime_owned_input.rs	E0106:1
 signatures/missing_lifetime_struct_output.rs	E0106:5
 signatures/missing_lifetime_two.rs	E0106:1
 signatures/missing_lifetime_variant.rs	E0106:2
+signatures/other_named_lifetime.rs	lifetime:2
+signatures/other_named_lifetime_bound_ok.rs	ok	0	"b\n"
+signatures/outlives_call_keeps_ok.rs	ok	0	"a\n"
+signatures/outlives_call_keeps_other.rs	lifetime:6
+signatures/outlives_elided_input_i32.rs	E0621:2
+signatures/outlives_method_named_ok.rs	ok	0	" n  n ab\n"
+signatures/outlives_reborrow.rs	lifetime:2
+signatures/outlives_self_into_named.rs	lifetime:7
+signatures/outlives_self_output_named_input.rs	lifetime:7
+signatures/outlives_some.rs	lifetime:2
+signatures/outlives_static_output.rs	lifetime:2
+signatures/outlives_through_let.rs	lifetime:4
+signatures/outlives_through_struct.rs	lifetime:6
+signatures/outlives_where_bound_ok.rs	ok	0	"2\n"
 signatures/return_local_as_str.rs	E0515:3
 signatures/return_local_ref.rs	E0515:3
 signatures/return_local_through_let.rs	E0515:4

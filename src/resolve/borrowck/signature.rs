@@ -454,6 +454,97 @@ pub(crate) fn missing_lifetime(
     })
 }
 
+/// A lifetime a function's own signature names or elides, as its body is
+/// checked against it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Lifetime {
+    Named(ImmutableString),
+    /// An elided input lifetime, numbered in the signature.
+    Elided(usize),
+    Static,
+}
+
+/// The lifetimes of the borrows an input or the output of a function's own
+/// signature holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Borrows {
+    /// It holds no borrow.
+    None,
+    /// All its borrows have this one lifetime.
+    One(Lifetime),
+    /// Several lifetimes, or ones the signature does not say, which these
+    /// facts do not tell apart.
+    Several,
+}
+
+/// A function's own signature, as its body is checked against it: the
+/// lifetimes of the borrows its receiver, each parameter and its output
+/// hold, the output's elided ones given by elision.
+pub(crate) struct Own {
+    pub(crate) receiver: Borrows,
+    pub(crate) parameters: Vec<Borrows>,
+    pub(crate) output: Borrows,
+}
+
+/// `signature` as its function's body is checked against it.
+pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) -> Own {
+    let read = read(signature, declared);
+    let output: Vec<Region> = read
+        .output
+        .iter()
+        .map(|region| match region {
+            Region::Elided(_) => read.elided_to.clone().unwrap_or(Region::Unknown),
+            region => region.clone(),
+        })
+        .collect();
+    Own {
+        receiver: read
+            .receiver
+            .as_ref()
+            .map_or(Borrows::None, |shape| borrows(shape.all())),
+        parameters: read
+            .parameters
+            .iter()
+            .map(|shape| borrows(shape.all()))
+            .collect(),
+        output: borrows(output.iter()),
+    }
+}
+
+/// The one lifetime `regions` all are.
+fn borrows<'a>(regions: impl Iterator<Item = &'a Region>) -> Borrows {
+    let mut found = None;
+    for region in regions {
+        let lifetime = match region {
+            Region::Named(name) => Lifetime::Named(name.clone()),
+            Region::Elided(number) => Lifetime::Elided(*number),
+            Region::Static => Lifetime::Static,
+            Region::Parameter(_) | Region::Captures | Region::Unknown => return Borrows::Several,
+        };
+        match &found {
+            None => found = Some(lifetime),
+            Some(one) if *one == lifetime => {}
+            Some(_) => return Borrows::Several,
+        }
+    }
+    found.map_or(Borrows::None, Borrows::One)
+}
+
+/// Whether `longer: shorter` by the signature's outlives `bounds`.
+pub(crate) fn outlives_lifetime(
+    bounds: &[(ImmutableString, ImmutableString)],
+    longer: &Lifetime,
+    shorter: &Lifetime,
+) -> bool {
+    match (longer, shorter) {
+        (Lifetime::Static, _) => true,
+        (longer, shorter) if longer == shorter => true,
+        (Lifetime::Named(longer), Lifetime::Named(shorter)) => outlives(bounds, longer, shorter),
+        (Lifetime::Named(longer), Lifetime::Static) => outlives(bounds, longer, "static"),
+        _ => false,
+    }
+}
+
 /// What a call of `signature` keeps of each of its inputs. `declared` says
 /// how many lifetime parameters a crate type has.
 pub(crate) fn summary(

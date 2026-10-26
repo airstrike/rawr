@@ -473,20 +473,25 @@ impl Parser<'_> {
         if definition.constant() {
             return Ok(());
         }
-        self.check_signature(&signature::Signature {
-            receiver: definition.receiver().map(|mode| match mode {
-                receiver::Mode::Shared => signature::Receiver::Shared,
-                receiver::Mode::Mutable => signature::Receiver::Mutable,
-                receiver::Mode::Owned => signature::Receiver::Owned,
-            }),
-            parameters: definition
-                .parameters()
-                .iter()
-                .map(|parameter| &parameter.ty)
-                .collect(),
-            output: definition.output(),
-            lifetimes: definition.lifetimes(),
-        })
+        let receiver = definition.receiver().map(|mode| match mode {
+            receiver::Mode::Shared => signature::Receiver::Shared,
+            receiver::Mode::Mutable => signature::Receiver::Mutable,
+            receiver::Mode::Owned => signature::Receiver::Owned,
+        });
+        self.check_signature(
+            &signature::Signature {
+                receiver,
+                parameters: definition
+                    .parameters()
+                    .iter()
+                    .map(|parameter| &parameter.ty)
+                    .collect(),
+                output: definition.output(),
+                lifetimes: definition.lifetimes(),
+            },
+            receiver.and(definition.receiver_span()),
+            definition.parameters(),
+        )
     }
 
     /// The function's own signature, checked as rustc checks it before its
@@ -496,30 +501,63 @@ impl Parser<'_> {
         let (Some(output), false) = (&function.output, function.body.constant) else {
             return Ok(());
         };
-        self.check_signature(&signature::Signature {
-            receiver: None,
-            parameters: function
-                .parameters
-                .iter()
-                .map(|parameter| &parameter.ty)
-                .collect(),
-            output,
-            lifetimes: &function.lifetimes,
-        })
+        self.check_signature(
+            &signature::Signature {
+                receiver: None,
+                parameters: function
+                    .parameters
+                    .iter()
+                    .map(|parameter| &parameter.ty)
+                    .collect(),
+                output,
+                lifetimes: &function.lifetimes,
+            },
+            None,
+            &function.parameters,
+        )
     }
 
     /// A lifetime of the output that elision gives no input lifetime to is
-    /// rustc's E0106.
-    fn check_signature(&self, signature: &signature::Signature<'_>) -> Result<(), Error> {
-        match signature::missing_lifetime(signature, &|target| self.declared_lifetimes(target)) {
-            Some(at) => Err(Error::BorrowConflict {
+    /// rustc's E0106. What the body returns is checked against the rest
+    /// (`borrowck::check`): `self`, declared at `receiver`, and the
+    /// `parameters`, and the output.
+    fn check_signature(
+        &self,
+        signature: &signature::Signature<'_>,
+        receiver: Option<Span>,
+        parameters: &[item::Parameter],
+    ) -> Result<(), Error> {
+        let declared = |target: &type_ref::Target| self.declared_lifetimes(target);
+        if let Some(at) = signature::missing_lifetime(signature, &declared) {
+            return Err(Error::BorrowConflict {
                 code: "E0106",
                 message: "missing lifetime specifier".into(),
                 access: at,
                 borrow: Span::NONE,
-            }),
-            None => Ok(()),
+            });
         }
+        let own = signature::own(signature, &declared);
+        // A parameter a pattern destructures is not one local.
+        let named = parameters
+            .iter()
+            .zip(own.parameters)
+            .filter(|(parameter, _)| parameter.pattern.is_none())
+            .map(|(parameter, borrows)| {
+                (
+                    parameter.name.text.clone(),
+                    parameter.name.span,
+                    borrows,
+                    false,
+                )
+            });
+        let parameters: Vec<_> = receiver
+            .map(|span| (ImmutableString::from("this"), span, own.receiver, true))
+            .into_iter()
+            .chain(named)
+            .collect();
+        self.flow()
+            .own_signature(&parameters, own.output, &signature.lifetimes.bounds);
+        Ok(())
     }
 
     /// What a call of the crate function `function` keeps of its inputs.
