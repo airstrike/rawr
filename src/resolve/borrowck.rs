@@ -50,6 +50,18 @@ pub(crate) enum Projection {
     /// An element (`v[i]`): every element overlaps every other, as rustc
     /// has it for borrows.
     Index,
+    /// An element a slice pattern names by its position (`[a, .., z]`):
+    /// `offset` from the start, or from the end when `from_end`, of a
+    /// value at least `min_length` long. Two of them are apart when they
+    /// cannot be the same element, as rustc has it.
+    ConstantIndex {
+        offset: u32,
+        min_length: u32,
+        from_end: bool,
+    },
+    /// The payload of an enum's variant, by its name: a pattern's parts
+    /// below it. Different variants' payloads are apart.
+    Downcast(ImmutableString),
     /// Through a reference.
     Deref,
 }
@@ -66,6 +78,9 @@ pub(crate) struct Place {
 pub(crate) enum Access {
     /// A copy or a use that reads the place.
     Read,
+    /// A slice pattern's test of a slice's length, which reads no element:
+    /// only a `&mut` loan of the place or of a place above it conflicts.
+    Length,
     /// A shared borrow, as `&place` or an autoref'd `&self` call.
     Shared,
     /// A two-phase `&mut` borrow's reservation (`v.push(v.len())`): it
@@ -163,6 +178,9 @@ pub(crate) struct Body {
     /// Locals whose region is every point: a loan flowing into one is
     /// borrowed for `'static`.
     pub(crate) everywhere: Vec<Local>,
+    /// The locals a function's returned value flows into: its output's
+    /// region, which is every point of the body.
+    pub(crate) returned: Vec<Local>,
 }
 
 impl Body {
@@ -263,7 +281,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             .or_default()
             .push(loan_index);
     }
-    let forever = forever(body);
+    let forever = reaches(body, &body.everywhere);
     for point in body.points() {
         let Some(Fact::Access {
             place,
@@ -311,15 +329,15 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     None
 }
 
-/// Whether each loan flows into a local of [`Body::everywhere`]: whether it
-/// is borrowed for `'static`.
-fn forever(body: &Body) -> Vec<bool> {
+/// Whether each loan flows into one of `sinks` ([`Body::everywhere`]: it is
+/// borrowed for `'static`; [`Body::returned`]: the function returns it).
+pub(crate) fn reaches(body: &Body, sinks: &[Local]) -> Vec<bool> {
     let mut reaches = vec![false; body.locals.len()];
-    for local in &body.everywhere {
+    for local in sinks {
         reaches[local.0 as usize] = true;
     }
     // Backwards over the flows, until nothing changes.
-    let mut changed = !body.everywhere.is_empty();
+    let mut changed = !sinks.is_empty();
     while changed {
         changed = false;
         for flow in &body.flows {
@@ -373,9 +391,41 @@ fn overlap<'a>(accessed: &Place, borrowed: &'a Place) -> Option<&'a [Projection]
         .enumerate()
     {
         match (a, b) {
-            (Projection::Field(a), Projection::Field(b)) if a != b => return None,
+            (Projection::Field(a), Projection::Field(b))
+            | (Projection::Downcast(a), Projection::Downcast(b))
+                if a != b =>
+            {
+                return None
+            }
+            (
+                Projection::ConstantIndex {
+                    offset: a,
+                    from_end: a_end,
+                    min_length: a_length,
+                },
+                Projection::ConstantIndex {
+                    offset: b,
+                    from_end: b_end,
+                    min_length: b_length,
+                },
+            ) => {
+                let apart = match (a_end, b_end) {
+                    (false, false) | (true, true) => a != b,
+                    // rustc's rule: the element `begin` from the start and
+                    // the one `end` from the end of a value at least
+                    // `length` long are apart when `begin < length - end`.
+                    (false, true) => a < &b_length.saturating_sub(*b),
+                    (true, false) => b < &a_length.saturating_sub(*a),
+                };
+                if apart {
+                    return None;
+                }
+            }
             (Projection::Field(_), Projection::Field(_))
+            | (Projection::Downcast(_), Projection::Downcast(_))
             | (Projection::Index, Projection::Index)
+            | (Projection::Index, Projection::ConstantIndex { .. })
+            | (Projection::ConstantIndex { .. }, Projection::Index)
             | (Projection::Deref, Projection::Deref) => {}
             // Different kinds of step below one place: rustc treats them
             // as overlapping, as a field of an indexed element does.
@@ -400,6 +450,10 @@ fn conflict(
     if shallow && below.contains(&Projection::Deref) {
         return None;
     }
+    // A length reads no element: a loan of one does not conflict.
+    if access == Access::Length && !below.is_empty() {
+        return None;
+    }
     let name = describe(body, place);
     // A reservation conflicts as a shared borrow does, and is reported as
     // the `&mut` borrow it becomes.
@@ -410,7 +464,7 @@ fn conflict(
             "E0499",
             format!("cannot borrow `{name}` as mutable more than once at a time"),
         ),
-        Access::Read if loan.mutable => (
+        Access::Read | Access::Length if loan.mutable => (
             "E0503",
             format!("cannot use `{name}` because it was mutably borrowed"),
         ),
@@ -418,7 +472,9 @@ fn conflict(
             "E0502",
             format!("cannot borrow `{name}` as immutable because it is also borrowed as mutable"),
         ),
-        Access::Read | Access::Shared | Access::Reserve if !loan.mutable => return None,
+        Access::Read | Access::Length | Access::Shared | Access::Reserve if !loan.mutable => {
+            return None
+        }
         Access::Reserve | Access::Mutable if loan.mutable => (
             "E0499",
             format!("cannot borrow `{name}` as mutable more than once at a time"),
@@ -444,7 +500,9 @@ fn conflict(
                 borrow: span,
             });
         }
-        Access::Read | Access::Shared | Access::Reserve => unreachable!("matched above"),
+        Access::Read | Access::Length | Access::Shared | Access::Reserve => {
+            unreachable!("matched above")
+        }
     };
     Some(Conflict {
         code,
@@ -463,7 +521,9 @@ pub(crate) fn describe(body: &Body, place: &Place) -> String {
                 text.push('.');
                 text.push_str(field);
             }
-            Projection::Index => text.push_str("[_]"),
+            Projection::Index | Projection::ConstantIndex { .. } => text.push_str("[_]"),
+            // rustc names `(o as Some).0` as `o.0`.
+            Projection::Downcast(_) => {}
             Projection::Deref if place.projection.len() == index + 1 => {
                 text = format!("*{text}");
             }

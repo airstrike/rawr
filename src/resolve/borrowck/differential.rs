@@ -34,8 +34,25 @@ pub(super) enum Verdict {
 }
 
 /// Programs both accept that rawr runs differently from rustc's build for
-/// reasons other than borrow checking, each an open item.
+/// reasons other than borrow checking, each an open item, by the start of
+/// their path (a case's mutations share its name).
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
+    (
+        "patterns/holder_subject_disjoint",
+        "a binding in the default mode of a match on a `&mut` local is not written back",
+    ),
+    (
+        "patterns/mutations/holder_subject_disjoint_",
+        "a binding in the default mode of a match on a `&mut` local is not written back",
+    ),
+    (
+        "patterns/nested_option_ref",
+        "a `ref mut` binding below a tuple member in `if let` is not written back",
+    ),
+    (
+        "patterns/mutations/nested_option_ref_",
+        "a `ref mut` binding below a tuple member in `if let` is not written back",
+    ),
     (
         "ui/nll/issue-54556-niconii.rs",
         "a field holding `&T` of a type with `Drop` drops a copy of the value with its struct",
@@ -228,7 +245,10 @@ fn borrowck_differential() {
             (Verdict::Accepted, Recorded::Accepted(None)) => "both accept (not run)",
             (Verdict::Accepted, Recorded::Accepted(Some(expected))) => match run(&file) {
                 Ok(printed) if *expected == printed => "both accept, same output",
-                _ if KNOWN_DIFFERENCES.iter().any(|(known, _)| *known == path) => {
+                _ if KNOWN_DIFFERENCES
+                    .iter()
+                    .any(|(known, _)| path.starts_with(known)) =>
+                {
                     "both accept, different output for a known reason"
                 }
                 printed => {

@@ -1,0 +1,19 @@
+fn main() {
+    let mut o = Some(vec![1]);
+    let Some(ref mut x) = o else {
+        return;
+    };
+    let c = o.is_some();
+    x.push(2);
+    let __b = &mut o;
+    for __i in 0..2 {
+        __touch(__b);
+        println!("{:?} {}", o, c);
+    }
+}
+
+fn __touch<T>(_: &mut T) {}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}
