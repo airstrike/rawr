@@ -6274,9 +6274,11 @@ impl ExecutableOp {
             }
             Self::Restore(restore) => {
                 // `[restored, place]`: the place with the bindings written
-                // back, unless it changed since it was matched (it was
-                // assigned another value, which the bindings no longer name).
-                let unchanged = same_value(args[0], args[1]);
+                // back, unless a part they bind changed since it was matched
+                // (it was assigned another value, which the bindings no
+                // longer name).
+                let unchanged =
+                    same_bound_parts(args[0], args[1], &restore.pattern, &restore.names);
                 let mut place = args[0].clone();
                 let values = args[2].as_array_ref().map(|values| values.to_vec());
                 let restored = unchanged
@@ -9692,6 +9694,9 @@ struct Parser<'a> {
     /// The elements of mutable loops by name: their declaration, their
     /// place (`v[i]`) and the local holding it (`places.rs`).
     aliases: BTreeMap<ImmutableString, (Span, Lvalue)>,
+    /// The declaration of the local each of `aliases` is a place in, by
+    /// the alias's declaration: a later local of its name shadows it.
+    alias_roots: BTreeMap<Span, Span>,
     /// The `&mut` locals given new borrows, by name: their declaration and
     /// whether they were declared `let mut` (`reborrow.rs`).
     reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
@@ -10012,6 +10017,7 @@ impl<'a> Parser<'a> {
             cell_guards: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
+            alias_roots: BTreeMap::new(),
             reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
             loop_entered: false,
@@ -20445,7 +20451,7 @@ impl<'a> Parser<'a> {
             // or `let s = r;` of such a local: a runtime local holding
             // which local it refers to (`reborrow.rs`).
             if let Some((source, selected)) = self.reborrow_source(&value)
-                && (selected || mutable && self.rebound_later(&name))
+                && (selected || mutable && self.rebound_later(&name) || self.shadowed_later(&value))
             {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
@@ -34792,6 +34798,7 @@ impl<'a> Parser<'a> {
             return Err(self.unknown_variable(&name, name_span));
         };
         let (declaration, ty) = (binding.declaration, binding.ty.clone());
+        self.reject_shadowed_root(&name, declaration, name_span)?;
         self.mention(&name, declaration, &ty, name_span);
         if let Some(element) = self.aliased_element(&name, declaration, &ty, name_span)? {
             return Ok(element);
@@ -47138,6 +47145,90 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
 /// body assigned.
 pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
     value_matches(lhs, rhs, true)
+}
+
+/// Whether the parts of `place` that `pattern` binds by `&mut` (`names`)
+/// are still what they were in `matched`, the place as last written back.
+/// Only those bindings change those parts, so a part that differs was
+/// given a new value with its place, and the bindings no longer name it.
+/// The other parts may differ: the body changes them beside the bindings,
+/// as Rust lets it (`r.other = 3` while `field` borrows `r.field`). The
+/// parts are compared where they are, not copied.
+fn same_bound_parts(
+    place: &Dynamic,
+    matched: &Dynamic,
+    pattern: &NominalPattern,
+    names: &[ImmutableString],
+) -> bool {
+    let each = |places: &[Dynamic], matched: &[Dynamic], patterns: &[NominalPattern]| {
+        places.len() == matched.len()
+            && places
+                .iter()
+                .zip(matched)
+                .zip(patterns)
+                .all(|((place, matched), pattern)| same_bound_parts(place, matched, pattern, names))
+    };
+    match pattern {
+        NominalPattern::Binding { name, .. } => !names.contains(name) || same_value(place, matched),
+        NominalPattern::Discard { .. }
+        | NominalPattern::Literal(_)
+        | NominalPattern::Range { .. }
+        | NominalPattern::Option(None) => true,
+        NominalPattern::At { name, pattern } => {
+            if names.contains(name) {
+                same_value(place, matched)
+            } else {
+                same_bound_parts(place, matched, pattern, names)
+            }
+        }
+        NominalPattern::Option(Some(child)) => {
+            match (
+                place.read_lock::<crate::option::Value>(),
+                matched.read_lock::<crate::option::Value>(),
+            ) {
+                (Some(place), Some(matched)) => match (&*place, &*matched) {
+                    (Some(place), Some(matched)) => same_bound_parts(place, matched, child, names),
+                    _ => false,
+                },
+                _ => false,
+            }
+        }
+        NominalPattern::Result(variant) => {
+            match (
+                place.read_lock::<crate::result::Value>(),
+                matched.read_lock::<crate::result::Value>(),
+            ) {
+                (Some(place), Some(matched)) => match (&*place, &*matched, variant) {
+                    (Ok(place), Ok(matched), Ok(child))
+                    | (Err(place), Err(matched), Err(child)) => {
+                        same_bound_parts(place, matched, child, names)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            }
+        }
+        NominalPattern::Enum(child) => match (&place.0, &matched.0) {
+            (Union::Enum(place, ..), Union::Enum(matched, ..)) => {
+                place.variant() == matched.variant()
+                    && each(place.payload(), matched.payload(), &child.payload)
+            }
+            _ => same_value(place, matched),
+        },
+        NominalPattern::Struct(members) => match (&place.0, &matched.0) {
+            (Union::Struct(place, ..), Union::Struct(matched, ..)) => {
+                each(place.fields(), matched.fields(), members)
+            }
+            _ => same_value(place, matched),
+        },
+        NominalPattern::Tuple(members) => match (place.as_array_ref(), matched.as_array_ref()) {
+            (Ok(place), Ok(matched)) => each(&place, &matched, members),
+            _ => same_value(place, matched),
+        },
+        // A slice's parts move with its length, and an alternative is
+        // picked by the value: the whole place is compared.
+        NominalPattern::Slice { .. } | NominalPattern::Or(_) => same_value(place, matched),
+    }
 }
 
 fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
