@@ -189,3 +189,28 @@ fn a_call_before_a_frame_in_its_statement_is_refused() {
         "{stderr}"
     );
 }
+
+/// The frame owns a copy of `text`, but the parser still borrows it in
+/// Rust: rawr's own borrow check refuses a change to `text` while the
+/// parser is used, with rustc's E0502, before anything runs (D572).
+#[test]
+fn a_parser_keeps_its_text_borrowed() {
+    let root = fixture("scope-parsers-borrowed");
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse pulldown_cmark::Parser;\n\nfn main() {\n    let mut text = String::from(\"*a*\");\n    println!(\"start\");\n    let parser = Parser::new(&text);\n    text.push_str(\"b\");\n    println!(\"events {}\", parser.count());\n}\n",
+    )
+    .unwrap();
+    for module in MODULES {
+        fs::remove_file(root.join("src").join(module)).unwrap();
+    }
+    let run = rawr_import(&root);
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(stderr.contains("E0502"), "{stderr}");
+}
