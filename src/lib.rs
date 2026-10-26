@@ -126,11 +126,6 @@ pub mod host;
 #[cfg(feature = "rust-import")]
 #[doc(hidden)]
 pub mod island;
-/// A borrow guard's place: an imported method's, or a facade method's that
-/// lends what it gives, which a build without the importer has too.
-#[cfg(feature = "rust-import")]
-#[doc(hidden)]
-pub use island::place;
 pub mod item;
 pub mod layer;
 /// Resolved inherent method metadata.
@@ -145,10 +140,6 @@ pub mod packages;
 /// Parsed Rawr compilation units.
 pub mod parse;
 mod parser;
-#[cfg(not(feature = "rust-import"))]
-#[doc(hidden)]
-#[path = "island/place.rs"]
-pub mod place;
 /// Compiler-validated local preview metadata.
 pub mod preview;
 /// Opaque data retained by resolved programs.

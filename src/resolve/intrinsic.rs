@@ -226,14 +226,17 @@ impl Proof {
 
         let result = result?;
 
-        if self.place && result.is::<crate::place::Place>() {
+        #[cfg(feature = "rust-import")]
+        if self.place && result.is::<crate::island::place::Place>() {
             return Ok(result);
         }
         // `Some` of a place, or `None`, of an `Option<&mut T>` the method
         // lends.
+        #[cfg(feature = "rust-import")]
         if self.place
-            && crate::option::read(&result)
-                .is_some_and(|option| option.is_none_or(|inner| inner.is::<crate::place::Place>()))
+            && crate::option::read(&result).is_some_and(|option| {
+                option.is_none_or(|inner| inner.is::<crate::island::place::Place>())
+            })
         {
             return Ok(result);
         }

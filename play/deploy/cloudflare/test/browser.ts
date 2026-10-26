@@ -6,8 +6,7 @@
 // /web is rawr-web from WEB_DIR (default target/wasm/site). On the
 // playground's island it runs the Counter in the browser (the default),
 // clicks Increment three times, edits it in the editor and keeps the count,
-// runs the Stopwatch and edits it while it runs, runs iced's solar_system,
-// splits, pins, maximizes, resizes and drags iced's pane_grid, switches the theme from the site's header and sees the app follow, runs a
+// runs the Stopwatch and edits it while it runs, runs iced's solar_system, switches the theme from the site's header and sees the app follow, runs a
 // plain program, an iced app whose task sleeps, the "Async tasks" example
 // from its #async-tasks address on the page's real clock, picks an example
 // from the menu, runs a program on a stand-in server, and checks the phone
@@ -32,7 +31,6 @@ const channel = readFileSync(join(repo, "play/tests/fixtures/channel.rs"), "utf8
 const histogram = readFileSync(join(repo, "play/tests/fixtures/rust/histogram.rs"), "utf8");
 const stopwatch = readFileSync(join(repo, "play/tests/fixtures/stopwatch.rs"), "utf8");
 const solar = readFileSync(join(repo, "play/tests/fixtures/iced/solar_system.rs"), "utf8");
-const paneGrid = readFileSync(join(repo, "play/tests/fixtures/iced/pane_grid.rs"), "utf8");
 mkdirSync(shots, { recursive: true });
 
 // The site's build, served as the Worker's assets serve it.
@@ -45,7 +43,6 @@ const examples = [
   { name: "Counter", code: counter, messages: ["Message::Increment", "Message::Increment"], group: "iced" },
   { name: "Stopwatch", code: stopwatch, messages: ["Message::Toggle"], group: "iced" },
   { name: "Solar system", code: solar, group: "iced" },
-  { name: "Pane grid", code: paneGrid, group: "iced" },
 ];
 const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
   snippet: { code: counter, theme: "dark", size: "", messages: [] }, examples, sitekey: null, shared: null, og,
@@ -356,61 +353,6 @@ try {
   console.log(`solar_system: ${sun} orange pixels`);
   check(sun > 2000, "the sun is drawn from its shipped PNG");
   check(orbit !== later, "and the system moves on the page's clock");
-  check(!(await evaluate(`!!document.querySelector("#out pre.error")`)), "with no error under it");
-
-  // iced's pane_grid, unchanged. Its one pane fills the canvas: the pin
-  // sits in the title bar and Split vertically under the size, so after a
-  // split the pane on the left keeps its pin where it was.
-  count = swaps();
-  await pick("Pane grid");
-  await swapped(count);
-  await sleep(500);
-  const grid = await evaluate(`(() => { const r = document.querySelector("#out .live canvas").getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
-  const at = (x: number, y: number) => click(grid.x + x, grid.y + y);
-  const panes = await out();
-  await shot("pane-grid.png");
-  await at(grid.w / 2, grid.h / 2 + 50);
-  await sleep(300);
-  const split = await out();
-  await shot("pane-grid-split.png");
-  check(split !== panes, "Split vertically splits the pane");
-  await at(33, 32);
-  await sleep(300);
-  const pinned = await out();
-  await shot("pane-grid-pinned.png");
-  check(pinned !== split, "Pin pins the left pane, which focuses it");
-  // The controls show while the pointer is over the title bar.
-  await on("Input.dispatchMouseEvent", { type: "mouseMoved", x: grid.x + 150, y: grid.y + 32 });
-  await sleep(200);
-  await at(grid.w / 2 - 92, 32);
-  await sleep(300);
-  const maximized = await out();
-  await shot("pane-grid-maximized.png");
-  check(maximized !== pinned, "Maximize fills the canvas with the pinned pane");
-  await on("Input.dispatchMouseEvent", { type: "mouseMoved", x: grid.x + grid.w - 150, y: grid.y + 32 });
-  await sleep(200);
-  await at(grid.w - 93, 32);
-  await sleep(300);
-  check((await out()) !== maximized, "Restore brings the other pane back");
-  /** Drags with the left button held from (x0, y0) to (x1, y1) on the canvas. */
-  const drag = async (x0: number, y0: number, x1: number, y1: number) => {
-    await on("Input.dispatchMouseEvent", { type: "mouseMoved", x: grid.x + x0, y: grid.y + y0 });
-    await on("Input.dispatchMouseEvent", { type: "mousePressed", x: grid.x + x0, y: grid.y + y0, button: "left", clickCount: 1 });
-    for (let i = 1; i <= 10; i++) {
-      await on("Input.dispatchMouseEvent", { type: "mouseMoved", x: grid.x + x0 + ((x1 - x0) * i) / 10, y: grid.y + y0 + ((y1 - y0) * i) / 10, button: "left", buttons: 1 });
-      await sleep(30);
-    }
-    await on("Input.dispatchMouseEvent", { type: "mouseReleased", x: grid.x + x1, y: grid.y + y1, button: "left", clickCount: 1 });
-    await sleep(300);
-  };
-  const restored = await out();
-  await drag(grid.w / 2, grid.h / 2, 150, grid.h / 2);
-  const resized = await out();
-  await shot("pane-grid-resized.png");
-  check(resized !== restored, "dragging the split resizes the panes");
-  await drag(260, 32, 40, grid.h / 2);
-  await shot("pane-grid-dragged.png");
-  check((await out()) !== resized, "dragging a pane's title bar onto the other's edge moves it");
   check(!(await evaluate(`!!document.querySelector("#out pre.error")`)), "with no error under it");
 
   // A broken edit keeps the app and shows the report under it.

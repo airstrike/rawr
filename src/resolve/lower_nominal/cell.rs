@@ -123,9 +123,10 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     // An imported method's borrow guard: each read and store reaches the
     // native target through one call of its own, so there is no borrow to
     // release.
+    #[cfg(feature = "rust-import")]
     {
         let place = args[0]
-            .read_lock::<crate::place::Place>()
+            .read_lock::<crate::island::place::Place>()
             .map(|place| place.clone());
         if let Some(place) = place {
             return match op {
@@ -199,9 +200,10 @@ pub(super) fn update(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
         let rhs = rhs.take().unwrap_or(Dynamic::UNIT);
         apply.call_raw(context, None, [value, rhs])
     };
+    #[cfg(feature = "rust-import")]
     {
         let place = args[0]
-            .read_lock::<crate::place::Place>()
+            .read_lock::<crate::island::place::Place>()
             .map(|place| place.clone());
         if let Some(place) = place {
             return place.update(&mut call).map(|_| Dynamic::UNIT);

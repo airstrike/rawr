@@ -54,9 +54,6 @@ thread_local! {
 #[wasm_bindgen(start)]
 fn main() {
     console_error_panic_hook::set_once();
-    // The iced items a snippet can't import, as `pane_grid`, as the server
-    // declares them.
-    rawr_iced::features::playground();
 }
 
 /// The built-in sample snippet.

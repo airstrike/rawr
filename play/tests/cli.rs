@@ -564,28 +564,3 @@ fn cli_steps_click_the_counter_as_its_messages_do() {
     assert!(clicked.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(clicked == messaged, "+ + - gives the PNG the messages give");
 }
-
-#[test]
-fn cli_steps_split_and_pin_iced_pane_grid_example() {
-    // iced's pane_grid example, as written: Split vertically makes a second
-    // pane, and Pin on the first, through `get_mut`, hides its Close.
-    let (png, lines) =
-        render_to_stdout("iced/pane_grid", &["--still", "--step", "2", "--step", "0"]);
-    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
-    assert_eq!(
-        lines,
-        [
-            "action: Unpin",
-            "action: Pin",
-            "action: Maximize",
-            "action: Close (1)",
-            "action: Split horizontally (1)",
-            "action: Split horizontally (2)",
-            "action: Split vertically (1)",
-            "action: Split vertically (2)",
-            "action: Close (2)",
-            "click: Split vertically",
-            "click: Pin (1)",
-        ]
-    );
-}
