@@ -524,12 +524,16 @@ impl Parser<'_> {
 
     /// The function returns the value spanning `value`, of type `ty`: its
     /// borrows flow into the output's region, every point of the body. A
-    /// closure's return is its own, which these facts leave to T105.
+    /// closure's return is its own: what a call of it keeps.
     pub(super) fn returned(&self, value: Span, ty: &Ty) {
-        if !self.closures.is_empty() || !self.may_hold_borrow(ty) {
+        if !self.may_hold_borrow(ty) {
             return;
         }
         let origins = self.flow().origins(value).map(<[Origin]>::to_vec);
+        if !self.closures.is_empty() {
+            self.flow().closure_return(origins);
+            return;
+        }
         match origins {
             Some(origins) => self.flow().give_back(&origins, value),
             None => self.flow().unmodeled(
@@ -653,8 +657,8 @@ impl Parser<'_> {
     ) {
         let arguments = self.flow().arguments(call.end()).unwrap_or_default();
         let holds = self.may_hold_borrow(ty);
-        // An argument that may hold borrows these facts don't follow (a
-        // closure that captured, T105) may be kept in ways they can't see.
+        // An argument that may hold borrows these facts don't follow may be
+        // kept in ways they can't see.
         let mut known = !arguments
             .iter()
             .any(|argument| argument.holds && self.flow().origins(argument.span).is_none());
@@ -1086,7 +1090,9 @@ fn builtin_summary(receiver: &Ty, member: &str, arguments: usize) -> Option<Summ
             "and" => entry(Owned, Nothing, &[All], &[]),
             "as_ref" | "as_deref" | "iter" => entry(Shared, All, &[], &[]),
             "as_mut" | "as_deref_mut" | "iter_mut" => entry(Mutable, All, &[], &[]),
-            "get_or_insert" | "get_or_insert_with" | "insert" => entry(Mutable, All, &[], &[All]),
+            "get_or_insert" | "insert" => entry(Mutable, All, &[], &[All]),
+            // What it stores is its closure's value, not the closure.
+            "get_or_insert_with" => entry(Mutable, All, &[], &[Keeps::Unknown]),
             "take" => entry(Mutable, Inner, &[], &[]),
             "replace" => entry(Mutable, Inner, &[], &[All]),
             _ => None,
