@@ -17909,6 +17909,7 @@ impl<'a> Parser<'a> {
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
+        let guard = item.guard();
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -17961,7 +17962,7 @@ impl<'a> Parser<'a> {
         }
         let (prelude, source) =
             self.private_call(&helper, std::iter::once(receiver).chain(arguments));
-        Ok(ParsedExpr {
+        let value = ParsedExpr {
             prelude,
             source,
             ty,
@@ -17970,7 +17971,70 @@ impl<'a> Parser<'a> {
             outcome,
             evaluation,
         }
-        .retain_origin())
+        .retain_origin();
+        match guard {
+            None => Ok(value),
+            Some(guard) => Ok(self.guarded_output(value, guard)),
+        }
+    }
+
+    /// An imported method's borrow guard output, as `state.read()` and
+    /// `state.write()` give: `&T` of the copy a `Deref` guard's call gives,
+    /// or `&mut T` of the place a `DerefMut` guard's call gives, read and
+    /// stored as a `RefCell`'s `borrow_mut()` is. So `*state.write() += 1`
+    /// reads the target and stores it back in one statement, and `let mut
+    /// v = state.write();` keeps the place for `v`'s block.
+    fn guarded_output(
+        &mut self,
+        mut value: ParsedExpr,
+        guard: crate::host::item::Guard,
+    ) -> ParsedExpr {
+        let inner = value.ty.clone();
+        if guard == crate::host::item::Guard::Shared {
+            value.ty = Ty::Reference {
+                mutable: false,
+                target: Box::new(inner),
+            };
+            return value;
+        }
+        let call = value.span;
+        let borrow = value.rendered_source();
+        let source = self.prelude_op(PreludeOp::CellGet, [borrow.clone()]);
+        let mut expression = self.operator_expr(
+            source,
+            Ty::Reference {
+                mutable: true,
+                target: Box::new(inner.clone()),
+            },
+            call,
+        );
+        expression.outcome = value.outcome;
+        expression.evaluation = value.evaluation;
+        let place = self.temporary("cell");
+        self.bindings.insert(
+            place.as_str().into(),
+            Binding {
+                ty: Ty::Unknown,
+                mutable: true,
+                available: true,
+                moved_fields: Default::default(),
+                declaration: call,
+                kind: BindingKind::Local,
+            },
+        );
+        expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            binding: place.as_str().into(),
+            base: borrow.clone(),
+            steps: vec![PlaceStep::Cell { release: true }],
+            ty: inner.clone(),
+        })));
+        self.last_cell_borrow = Some(cell::CellBorrow {
+            span: call,
+            borrow,
+            mutable: true,
+            inner,
+        });
+        expression
     }
 
     /// `stdin.read_line(&mut buf)`, a std reader that appends to a
@@ -20285,8 +20349,24 @@ impl<'a> Parser<'a> {
             });
         }
         let mut replacement = self.parse_expr()?;
+        // `*cell.borrow_mut() += 1` and `*state.write() += 1`: the place's
+        // own read gives the value the operator changes, so a borrow
+        // guard's method is called once to read it and once to store it.
+        let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
-            let target = self.operator_expr(value.source, lvalue.ty().clone(), value.span);
+            let target = match &lvalue {
+                Lvalue::Nested(nested)
+                    if nested
+                        .steps
+                        .iter()
+                        .any(|step| matches!(step, PlaceStep::Cell { .. })) =>
+                {
+                    let (read, place, store) = self.nested_parts(nested);
+                    opened = Some((read, place.clone(), store));
+                    self.operator_expr(place, lvalue.ty().clone(), value.span)
+                }
+                _ => self.operator_expr(value.source, lvalue.ty().clone(), value.span),
+            };
             replacement = self.compound_assignment(operator, target, replacement)?;
         }
         self.reject_signature_support(
@@ -20332,7 +20412,20 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
-            Lvalue::Nested(nested) => self.store_nested(&nested, replacement.rendered_source()),
+            Lvalue::Nested(nested) => match opened {
+                Some((read, place, store)) => {
+                    let mut rendered = origin::Fragment::plain("{ ");
+                    rendered.push(read);
+                    rendered.push(place);
+                    rendered.push_text(" = ");
+                    rendered.push(replacement.rendered_source());
+                    rendered.push_text("; ");
+                    rendered.push(store);
+                    rendered.push_text("}");
+                    rendered
+                }
+                None => self.store_nested(&nested, replacement.rendered_source()),
+            },
         };
         Ok((rendered, replacement.span))
     }
@@ -25374,7 +25467,7 @@ impl<'a> Parser<'a> {
         nested: &NestedLvalue,
         replacement: origin::Fragment,
     ) -> origin::Fragment {
-        let (read, place, store) = self.nested_parts(nested);
+        let (read, place, store) = self.nested_parts_with(nested, true);
         let mut rendered = origin::Fragment::plain("{ ");
         rendered.push(read);
         rendered.push(place);
@@ -25393,10 +25486,22 @@ impl<'a> Parser<'a> {
         &mut self,
         nested: &NestedLvalue,
     ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
+        self.nested_parts_with(nested, false)
+    }
+
+    /// [`Self::nested_parts`] of a place the statement `overwrite`s: a
+    /// cell's or a borrow guard's value at the leaf is stored without being
+    /// read first, so `*state.write() = v` calls the guard's method once.
+    fn nested_parts_with(
+        &mut self,
+        nested: &NestedLvalue,
+        overwrite: bool,
+    ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
         let mut place = nested.base.clone();
         let mut read = origin::Fragment::default();
         let mut stores = Vec::new();
-        for step in &nested.steps {
+        let leaf = nested.steps.len().saturating_sub(1);
+        for (index, step) in nested.steps.iter().enumerate() {
             match step {
                 PlaceStep::Index(index) => {
                     place.push_text("[");
@@ -25424,7 +25529,8 @@ impl<'a> Parser<'a> {
                     place = origin::Fragment::plain(local);
                 }
                 PlaceStep::Cell { release } => {
-                    let (cell_read, cell_store, local) = self.cell_step(&place, *release);
+                    let reads = !(overwrite && index == leaf);
+                    let (cell_read, cell_store, local) = self.cell_step(&place, *release, reads);
                     read.push(cell_read);
                     stores.push(cell_store);
                     place = origin::Fragment::plain(local);

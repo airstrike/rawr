@@ -251,6 +251,10 @@ pub struct Signature {
     /// (`representability::signature::Relation`).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     relations: Box<[Relation]>,
+    /// How the item's borrow guard output is reached, when the Rust output
+    /// is one (`representability::signature::Guard`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard: Option<representability::signature::Guard>,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -1915,6 +1919,12 @@ impl Signature {
     pub const fn relations(&self) -> &[Relation] {
         &self.relations
     }
+
+    /// How the item's borrow guard output is reached, when it gives one.
+    #[must_use]
+    pub const fn guard(&self) -> Option<representability::signature::Guard> {
+        self.guard
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -2051,6 +2061,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 inputs: Box::default(),
                 output: ty(plan.ty(), &[])?,
                 relations: Box::default(),
+                guard: None,
             },
         ),
         Representability::Value(_)
@@ -2139,6 +2150,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), source.parameters())?,
         relations: relations(source)?,
+        guard: source.guard(),
     })
 }
 
@@ -2267,6 +2279,7 @@ fn callable_signature(
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), all)?,
         relations: Box::default(),
+        guard: source.guard(),
     })
 }
 

@@ -61,6 +61,20 @@ pub struct Signature {
     /// selection reads them.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     relations: Box<[Relation]>,
+    /// A method whose Rust output is a borrow guard: `output` is the type
+    /// the guard dereferences to, which each call reaches only while the
+    /// guard lives inside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard: Option<Guard>,
+}
+
+/// How a method's guard output is reached: read through `Deref`, as
+/// `State::read` gives, or also written through `DerefMut`, as
+/// `State::write` and `RefCell::borrow_mut` give.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Guard {
+    Shared,
+    Mutable,
 }
 
 /// The bit that marks a pattern variable of a [`Case`]: the impl's own
@@ -216,7 +230,19 @@ impl Signature {
             inputs,
             output,
             relations: Box::new([]),
+            guard: None,
         }
+    }
+
+    pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {
+        self.guard = guard;
+        self
+    }
+
+    /// How the output is reached when the Rust output is a borrow guard.
+    #[must_use]
+    pub const fn guard(&self) -> Option<Guard> {
+        self.guard
     }
 
     pub(crate) fn with_relations(mut self, relations: Box<[Relation]>) -> Self {

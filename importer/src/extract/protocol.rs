@@ -393,6 +393,17 @@ pub(crate) struct Signature {
     pub(crate) receiver: Receiver,
     pub(crate) inputs: Vec<Type>,
     pub(crate) output: Type,
+    #[serde(default)]
+    pub(crate) guard: Option<Guard>,
+}
+
+/// A borrowing method's guard output: its `Deref::Target`, and whether it
+/// is `DerefMut`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Guard {
+    pub(crate) target: Type,
+    pub(crate) mutable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]

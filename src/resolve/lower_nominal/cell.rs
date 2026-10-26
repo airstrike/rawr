@@ -107,6 +107,23 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             borrows: crate::Locked::new(Vec::new()),
         }))));
     }
+    // An imported method's borrow guard: each read and store reaches the
+    // native target through one call of its own, so there is no borrow to
+    // release.
+    #[cfg(feature = "rust-import")]
+    {
+        let place = args[0]
+            .read_lock::<crate::island::place::Place>()
+            .map(|place| place.clone());
+        if let Some(place) = place {
+            return match op {
+                PreludeOp::CellGet => place.get(),
+                PreludeOp::CellSet => place.set(args[1].take()).map(|_| Dynamic::UNIT),
+                PreludeOp::CellRelease => Ok(Dynamic::UNIT),
+                _ => Err(invariant("a borrow guard's place is read and stored only")),
+            };
+        }
+    }
     let inner = cell(args[0]).ok_or_else(|| invariant("a `RefCell` is not one at runtime"))?;
     match op {
         PreludeOp::CellBorrow => {
@@ -460,19 +477,25 @@ impl Parser<'_> {
     }
 
     /// One cell step of a nested place: the statements reading the
-    /// borrowed value into `local` and storing it back.
+    /// borrowed value into `local` (when `reads`) and storing it back.
     pub(super) fn cell_step(
         &mut self,
         place: &origin::Fragment,
         release: bool,
+        reads: bool,
     ) -> (origin::Fragment, origin::Fragment, String) {
         let guard = self.temporary("guard");
         let local = self.temporary("cellvalue");
-        let get = self.push_op(Op::Prelude(PreludeOp::CellGet));
         let set = self.push_op(Op::Prelude(PreludeOp::CellSet));
         let mut read = origin::Fragment::plain(format!("let {guard} = "));
         read.push(place.clone());
-        read.push_text(format!("; let {local} = {get}({guard}); "));
+        if reads {
+            let get = self.push_op(Op::Prelude(PreludeOp::CellGet));
+            read.push_text(format!("; let {local} = {get}({guard}); "));
+        } else {
+            // The statement overwrites the value, so it isn't read.
+            read.push_text(format!("; let {local} = (); "));
+        }
         let mut store = origin::Fragment::plain(format!("{set}({guard}, {local}); "));
         if release {
             let release = self.push_op(Op::Prelude(PreludeOp::CellRelease));

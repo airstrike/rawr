@@ -791,6 +791,19 @@ struct Signature {
     receiver: Receiver,
     inputs: Vec<Type>,
     output: Type,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guard: Option<Guard>,
+}
+
+/// A method's output that borrows what it reaches through `Deref`, as
+/// `RefCell::borrow_mut` and Freya's `State::write` give: rustc's
+/// normalized `<Output as Deref>::Target`, and whether the output is also
+/// `DerefMut`.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Guard {
+    target: Type,
+    mutable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -4386,6 +4399,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         } else {
             Receiver::None
         };
+        let guard = if method && matches!(receiver, Receiver::Reference { .. }) {
+            self.guard(poly, owner)?
+        } else {
+            None
+        };
         Ok(Signature {
             safety: if signature.safety().is_safe() {
                 Safety::Safe
@@ -4400,7 +4418,71 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             receiver,
             inputs,
             output: self.type_of(signature.output(), owner, 0)?,
+            guard,
         })
+    }
+
+    /// A borrowing method's output that is a guard: a nominal type holding
+    /// a lifetime, not a reference, that implements `Deref`. rustc
+    /// normalizes the output and its `Deref::Target` in the method's own
+    /// environment, so `ReadRef<'_, T>`, Freya's projection through
+    /// generational-box's `AnyStorage`, gives `T`. A target that still
+    /// holds a lifetime or an alias is none.
+    fn guard(&mut self, poly: ty::PolyFnSig<'tcx>, owner: DefId) -> Result<Option<Guard>, String> {
+        let tcx = self.tcx;
+        let output = poly.skip_binder().output();
+        let holds_lifetime = output
+            .walk()
+            .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)));
+        if matches!(output.kind(), ty::Ref(..)) || !holds_lifetime {
+            return Ok(None);
+        }
+        let lang = tcx.lang_items();
+        let (Some(deref), Some(deref_mut), Some(target)) = (
+            lang.deref_trait(),
+            lang.deref_mut_trait(),
+            lang.deref_target(),
+        ) else {
+            return Ok(None);
+        };
+        let typing_env = ty::TypingEnv::non_body_analysis(tcx, owner);
+        let output = tcx.instantiate_bound_regions_with_erased(poly.output());
+        let Ok(output) =
+            tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new(output))
+        else {
+            return Ok(None);
+        };
+        if !matches!(output.kind(), ty::Adt(..)) {
+            return Ok(None);
+        }
+        let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+        if !infcx
+            .type_implements_trait(deref, [output], typing_env.param_env)
+            .must_apply_modulo_regions()
+        {
+            return Ok(None);
+        }
+        let mutable = infcx
+            .type_implements_trait(deref_mut, [output], typing_env.param_env)
+            .must_apply_modulo_regions();
+        let projection = Ty::new_projection(tcx, ty::IsRigid::No, target, [output]);
+        let Ok(target) =
+            tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new(projection))
+        else {
+            return Ok(None);
+        };
+        if target.has_aliases()
+            || target
+                .walk()
+                .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)))
+        {
+            return Ok(None);
+        }
+        self.budget.items(1)?;
+        Ok(Some(Guard {
+            target: self.type_of(target, owner, 0)?,
+            mutable,
+        }))
     }
 
     fn type_of(&mut self, ty: Ty<'tcx>, owner: DefId, depth: usize) -> Result<Type, String> {

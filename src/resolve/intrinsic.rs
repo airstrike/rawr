@@ -24,6 +24,9 @@ pub(super) struct Proof {
     span: Span,
     /// The instance of a generic imported item this call uses.
     instance: Option<[u8; 32]>,
+    /// Whether the call gives a `DerefMut` borrow guard's place, which Rawr
+    /// reads and stores as a `RefCell` borrow, in place of its `output`.
+    place: bool,
 }
 
 impl Operand {
@@ -56,6 +59,7 @@ impl Proof {
             output,
             span,
             instance: None,
+            place: item.guard() == Some(host::item::Guard::Mutable),
         }
     }
 
@@ -208,6 +212,10 @@ impl Proof {
 
         let result = result?;
 
+        #[cfg(feature = "rust-import")]
+        if self.place && result.is::<crate::island::place::Place>() {
+            return Ok(result);
+        }
         if let Err(error) = self.output.validate(&result, model, runtime) {
             return Err(EvalAltResult::ErrorRuntime(
                 format!(

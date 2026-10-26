@@ -270,6 +270,30 @@ macro_rules! insert_native {
     }};
 }
 
+/// A copy of what a borrow guard dereferences to, made inside the call that
+/// holds the guard: its `Clone`, or an error naming the type when it has
+/// none, so a target without `Clone` fails where it is read and not where
+/// the runner compiles.
+#[allow(unused_macros)]
+macro_rules! guard_copy {
+    ($target:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{ViaClone as _, WithoutClone as _};
+        let target = $target;
+        $crate::copied(target, (&$crate::debug_probe(target)).native_clone())
+    }};
+}
+
+/// `target` copied by `clone`, the `Clone` of its type when it has one.
+#[allow(dead_code)]
+fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error> {
+    let clone = clone.ok_or(Error::NotClone(std::any::type_name::<T>()))?;
+    clone(target as &dyn Any)
+        .and_then(|value| value.downcast::<T>().ok())
+        .map(|value| *value)
+        .ok_or(Error::TypeMismatch)
+}
+
 /// `to_string()` and `{}` of an imported value print its Rust `Display`
 /// text.
 impl std::fmt::Display for NativeHandle {
@@ -331,6 +355,8 @@ enum Error {
     Leased,
     /// A script value an erased generic gave back is not of its type.
     Value(String),
+    /// A borrow guard's target read without `Clone`, by its type's name.
+    NotClone(&'static str),
 }
 
 impl std::fmt::Debug for Error {
@@ -350,6 +376,10 @@ impl std::fmt::Debug for Error {
                 "cannot borrow this value: a future that borrows it mutably is still running (E0499)",
             ),
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
+            Self::NotClone(ty) => write!(
+                f,
+                "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
+            ),
         }
     }
 }
@@ -369,6 +399,7 @@ impl Error {
             Self::OutOfRange { .. } => 10,
             Self::Leased => 11,
             Self::Value(_) => 12,
+            Self::NotClone(_) => 13,
         }
     }
 }
@@ -4557,8 +4588,13 @@ fn returns_values(plan: &Plan) -> bool {
             signature,
             substitutions,
             ..
-        } => substituted(signature.output(), signature, substitutions).ok(),
+        } if signature.guard()
+            != Some(crate::classify::representability::signature::Guard::Mutable) =>
+        {
+            substituted(signature.output(), signature, substitutions).ok()
+        }
         Operation::StructField { field, .. } => Some(field.ty().clone()),
+        // A `DerefMut` guard's call gives its place, not its target.
         _ => None,
     };
     output.is_some_and(|output| !is_future(&output) && holds_value(&output))
@@ -5131,6 +5167,20 @@ fn render_adapter(
                         field: "borrowed async method output",
                     })?;
                 render_give_task(element, "output", output)?;
+            } else if let Some(guard) = signature.guard()
+                && !matches!(receiver, Receiver::Owned)
+            {
+                render_guard(
+                    plan,
+                    &path,
+                    *receiver,
+                    guard,
+                    signature,
+                    substitutions,
+                    constants,
+                    *container_parameters,
+                    output,
+                )?;
             } else {
                 match receiver {
                     Receiver::Owned => {
@@ -5247,6 +5297,131 @@ fn render_adapter(
     output
         .write_all(b"}\n\n")
         .map_err(|_| request::Error::Encoding)
+}
+
+/// A method whose Rust output is a borrow guard, as Freya's `State::read`
+/// and `State::write` give. The guard borrows the receiver, which lives in
+/// the arena, so it never leaves the one call that holds the receiver.
+/// A `Deref` guard gives a copy of its target. A `DerefMut` guard gives a
+/// place (`island::place::Place`) whose reads and stores each call the
+/// method again, read the target or assign it through the guard, and drop
+/// the guard before they return. The method's inputs are taken first, so
+/// they are owned values the call borrows.
+#[allow(clippy::too_many_arguments)]
+fn render_guard(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    guard: crate::classify::representability::signature::Guard,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use crate::classify::representability::signature::Guard;
+    let encoding = |_| request::Error::Encoding;
+    let borrow = if matches!(receiver, Receiver::Mutable) {
+        "mutable"
+    } else {
+        "shared"
+    };
+    let target = substituted(signature.output(), signature, substitutions)?;
+    // `arena.shared::<Receiver, _>(handle, |receiver| receiver.method(..)`.
+    let call = |handle: &str, output: &mut Vec<u8>| -> Result<(), request::Error> {
+        write!(output, "arguments.arena.{borrow}::<").map_err(encoding)?;
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            output,
+        )?;
+        write!(
+            output,
+            ", _>({handle}, |receiver| {{ let mut guard = receiver.{}",
+            plan.name()
+        )
+        .map_err(encoding)?;
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            output,
+        )?;
+        output.write_all(b"(").map_err(encoding)?;
+        argument_list(signature.inputs().len(), 1, output)?;
+        output
+            .write_all(b"); let _ = &mut guard; ")
+            .map_err(encoding)
+    };
+    writeln!(
+        output,
+        "    let receiver = native_handle(arguments, 0, false)?;"
+    )
+    .map_err(encoding)?;
+    match guard {
+        Guard::Shared => {
+            output.write_all(b"    let output = ").map_err(encoding)?;
+            call("receiver", output)?;
+            output
+                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .map_err(encoding)?;
+            render_give(&target, "output", output)
+        }
+        Guard::Mutable => {
+            if !signature.inputs().is_empty() {
+                return Err(request::Error::Drift {
+                    field: "a mutable borrow guard's method takes inputs",
+                });
+            }
+            output
+                .write_all(
+                    b"    let place = __rawr_internal::island::place::Place::new(move |stored: Option<Dynamic>| {
+        with_arena(|arena| {
+            let mut stored = stored;
+            let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
+            let arguments = &mut Arguments { values: values.as_mut_slice(), arena };
+            if arguments.values.is_empty() {
+                let output = ",
+                )
+                .map_err(encoding)?;
+            call("receiver.clone()", output)?;
+            output
+                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .map_err(encoding)?;
+            let mut give = Vec::new();
+            render_give(&target, "output", &mut give)?;
+            for line in String::from_utf8_lossy(&give).lines() {
+                writeln!(output, "            {line}").map_err(encoding)?;
+            }
+            output
+                .write_all(b"            } else {\n")
+                .map_err(encoding)?;
+            let mut take = Vec::new();
+            render_take(0, 0, &target, &mut take)?;
+            for line in String::from_utf8_lossy(&take).lines() {
+                writeln!(output, "            {line}").map_err(encoding)?;
+            }
+            output.write_all(b"                ").map_err(encoding)?;
+            call("receiver.clone()", output)?;
+            output
+                .write_all(
+                    b"*guard = argument_0; })?;
+                Ok(Dynamic::UNIT)
+            }
+        })
+        .map_err(runtime_error)
+    });
+    Ok(Dynamic::from(place))
+",
+                )
+                .map_err(encoding)
+        }
+    }
 }
 
 fn arguments(plan: &Plan) -> Result<u32, request::Error> {

@@ -52,6 +52,19 @@ pub struct Definition {
     evaluation: host::usage::Evaluation,
     stream_identity: Option<host::stream::Version>,
     imported: Option<ImportedSelector>,
+    guard: Option<Guard>,
+}
+
+/// How an imported method's borrow guard output is reached: Rawr types the
+/// call `&T` for a `Deref` guard and `&mut T` for a `DerefMut` one, whose
+/// value at runtime is a place each read and store of calls the method
+/// again (`crate::island::place`).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Guard {
+    /// Read through `Deref`: the call gives a copy of the target.
+    Shared,
+    /// Read and stored through `DerefMut`: the call gives a place.
+    Mutable,
 }
 
 /// A deterministic proof of a host item's complete callable contract.
@@ -65,6 +78,7 @@ pub struct Fingerprint {
     evaluation: host::usage::Evaluation,
     stream_identity: Option<host::stream::Version>,
     imported: Option<[u8; 32]>,
+    guard: Option<Guard>,
 }
 
 impl Definition {
@@ -77,6 +91,7 @@ impl Definition {
             && self.outcome == other.outcome
             && self.evaluation == other.evaluation
             && self.stream_identity == other.stream_identity
+            && self.guard == other.guard
     }
 
     #[cfg(feature = "rust-import")]
@@ -125,6 +140,7 @@ impl Definition {
                 .as_ref()
                 .map(ImportedSelector::try_clone)
                 .transpose()?,
+            guard: self.guard,
         })
     }
 
@@ -144,6 +160,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -163,6 +180,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -180,6 +198,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -197,6 +216,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -215,6 +235,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: Some(identity),
             imported: None,
+            guard: None,
         })
     }
 
@@ -232,6 +253,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -252,6 +274,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -269,6 +292,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -287,6 +311,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -305,6 +330,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             stream_identity: None,
             imported: None,
+            guard: None,
         })
     }
 
@@ -374,6 +400,18 @@ impl Definition {
         self.imported.as_ref()
     }
 
+    /// The item's output is a borrow guard reached as `guard` says.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn guarded(mut self, guard: Option<Guard>) -> Self {
+        self.guard = guard;
+        self
+    }
+
+    /// How the item's borrow guard output is reached, when it gives one.
+    pub(crate) const fn guard(&self) -> Option<Guard> {
+        self.guard
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_path_len(&self) -> Option<usize> {
         self.imported.as_ref()?;
@@ -399,6 +437,7 @@ impl Definition {
             evaluation: self.evaluation,
             stream_identity: self.stream_identity,
             imported,
+            guard: self.guard,
         }
     }
 
@@ -413,6 +452,7 @@ impl Definition {
             evaluation: self.evaluation,
             stream_identity: self.stream_identity,
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
+            guard: self.guard,
         })
     }
 
@@ -506,6 +546,7 @@ impl Definition {
                 .map_err(|_| host::Error::Allocation)?,
             #[cfg(not(feature = "rust-import"))]
             imported: self.imported.clone(),
+            guard: self.guard,
         })
     }
 
@@ -667,6 +708,15 @@ impl crate::preview::digest::Write for Fingerprint {
                 writer.bytes(&identity);
             }
             None => writer.tag(0x2552),
+        }
+        // A borrow guard's output, only when there is one, so other items
+        // keep their digests.
+        if let Some(guard) = self.guard {
+            writer.tag(0x2509);
+            writer.tag(match guard {
+                Guard::Shared => 0x2561,
+                Guard::Mutable => 0x2562,
+            });
         }
         Ok(())
     }

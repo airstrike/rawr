@@ -30,6 +30,7 @@ use crate::reload::installation::Bootstrap;
 use crate::{item, program, type_def, Dynamic, ImmutableString};
 
 pub mod lend;
+pub mod place;
 
 /// The native `main` the program registered, until the runner starts it.
 static START: Mutex<Option<fn() -> i32>> = Mutex::new(None);

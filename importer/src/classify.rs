@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 19;
+const CLASSIFIER_VERSION: u32 = 20;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3847,11 +3847,22 @@ impl<P: api::Phase> Context<'_, P> {
             }
             _ => self.convert_value(&rewritten),
         };
+        let mut guard = None;
         let output = match output {
             Ok(output) => output,
-            // An output Rawr cannot hold whose type implements `Display`,
-            // as `DelayedFormat<StrftimeItems<'a>>`, is its text.
-            Err(error) => self.display_output(signature.output()).ok_or(error)?,
+            // A borrow guard a method gives, as `RefCell::borrow_mut` and
+            // Freya's `State::write` do, is the type it dereferences to,
+            // reached only inside each call while the guard lives.
+            Err(error) => match self.guard_output(signature, &inputs)? {
+                Some((target, mode)) => {
+                    guard = Some(mode);
+                    target
+                }
+                // An output Rawr cannot hold whose type implements
+                // `Display`, as `DelayedFormat<StrftimeItems<'a>>`, is its
+                // text.
+                None => self.display_output(signature.output()).ok_or(error)?,
+            },
         };
         // A script future fills `F` as a type Rawr has no name for, so a
         // signature can name `F` only as the input that takes the future
@@ -3885,7 +3896,8 @@ impl<P: api::Phase> Context<'_, P> {
             inputs.into_boxed_slice(),
             output,
         )
-        .with_relations(relations);
+        .with_relations(relations)
+        .with_guard(guard);
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
             model::Receiver::Value { .. } => Some(ownership::Receiver::Owned),
@@ -4326,6 +4338,55 @@ impl<P: api::Phase> Context<'_, P> {
                 .definition_index(id)
                 .and_then(|index| self.graph.definitions().nth(index))
                 .is_some_and(|definition| definition.display_path().last() == Some(name))
+    }
+
+    /// The type a borrowing method's guard output dereferences to, and how
+    /// it is reached, from rustc's evidence (`model::Guard`): `None` when
+    /// the output is no guard or Rawr can't hold its target. A `DerefMut`
+    /// guard is a place each read and store reaches by calling the method
+    /// again, so only a method with no inputs besides its receiver is one;
+    /// with inputs it is read through `Deref` alone.
+    fn guard_output(
+        &self,
+        signature: &model::Signature,
+        inputs: &[representability::convert::Type],
+    ) -> Result<
+        Option<(
+            representability::convert::Type,
+            representability::signature::Guard,
+        )>,
+        Failure,
+    > {
+        let Some(evidence) = signature.guard() else {
+            return Ok(None);
+        };
+        if !matches!(signature.receiver(), model::Receiver::Reference { .. }) {
+            return Ok(None);
+        }
+        use representability::convert::{Builtin, Type};
+        let target = match self.convert_value(evidence.target()) {
+            Ok(target) => target,
+            Err(Failure::Reject(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // A copy of the target crosses as a value, so a `str` has none.
+        if matches!(
+            target,
+            Type::Builtin(Builtin::Str | Builtin::Text)
+                | Type::FunctionItem { .. }
+                | Type::ProfileMessage { .. }
+        ) {
+            return Ok(None);
+        }
+        // A store crosses the other way, which a sequence or a tuple
+        // doesn't yet.
+        let stored = !matches!(target, Type::Sequence { .. } | Type::Tuple(_));
+        let mode = if evidence.mutable() && inputs.is_empty() && stored {
+            representability::signature::Guard::Mutable
+        } else {
+            representability::signature::Guard::Shared
+        };
+        Ok(Some((target, mode)))
     }
 
     /// `Text` for an output of a crate type that implements `Display`.

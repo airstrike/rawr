@@ -852,7 +852,8 @@ fn clone_signature(source: &signature::Signature) -> Result<signature::Signature
         clone_parameters(source.parameters())?,
         clone_types(source.inputs())?,
         clone_type(source.output())?,
-    ))
+    )
+    .with_guard(source.guard()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {

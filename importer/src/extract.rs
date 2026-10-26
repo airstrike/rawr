@@ -5806,6 +5806,16 @@ fn signature_of(
             ty: type_of(ty, catalog, limits, allocation)?,
         },
     };
+    let guard = match signature.guard {
+        Some(guard) => {
+            allocation.items(1)?;
+            Some(model::Guard::new(
+                type_of(guard.target, catalog, limits, allocation)?,
+                guard.mutable,
+            ))
+        }
+        None => None,
+    };
     allocation.items(1)?;
     Ok(model::Signature::new(
         safety(signature.safety),
@@ -5817,7 +5827,8 @@ fn signature_of(
         receiver,
         types(signature.inputs, catalog, limits, allocation)?,
         type_of(signature.output, catalog, limits, allocation)?,
-    ))
+    )
+    .with_guard(guard))
 }
 
 fn bound_of(

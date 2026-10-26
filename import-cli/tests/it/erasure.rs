@@ -17,6 +17,12 @@ use crate::support::copy;
 /// whether it succeeded, its stdout and its stderr. The cases share one
 /// root, so the native crate builds once.
 fn run(main: &str) -> (bool, String, String) {
+    run_at("erasure", main)
+}
+
+/// [`run`] in its own root, `name`, so a test of its own doesn't share the
+/// one the cases above run in one after another.
+fn run_at(name: &str, main: &str) -> (bool, String, String) {
     let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
         "rawr-import-driver{}",
         std::env::consts::EXE_SUFFIX
@@ -27,7 +33,7 @@ fn run(main: &str) -> (bool, String, String) {
         driver.display()
     );
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let root = directory.join("erasure");
+    let root = directory.join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/erasure"),
@@ -386,5 +392,64 @@ fn main() {
         test.status.success() && stdout.contains("6 passed"),
         "stdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&test.stderr)
+    );
+}
+
+/// A method whose Rust output is a borrow guard: std's `Ref` and `RefMut`,
+/// the crate's own `DerefMut` guard, and a projection through a storage
+/// trait's generic associated types, as Freya's `State::read` and
+/// `State::write` give. `*guard` reads a copy of the target and `*guard
+/// op= v` stores the result back, each inside a call that drops the guard
+/// before it returns, so the borrow the guard holds never reaches Rawr.
+#[test]
+fn a_method_that_gives_a_borrow_guard_is_read_and_written_through_it() {
+    let (success, stdout, stderr) = run_at(
+        "guards",
+        "
+use natives::*;
+
+struct Point {
+    x: i64,
+}
+
+fn main() {
+    let meter = Meter::new(1);
+    *meter.borrow_mut() += 2;
+    println!(\"meter {}\", *meter.borrow());
+
+    let mut tally = Tally::new();
+    *tally.lock() = 10;
+    *tally.lock() += 5;
+    let total = *tally.lock();
+    println!(\"tally {} after {} guards\", total, tally.guards());
+
+    let mut count = Signal::new(0_i64);
+    *count.write() += 1;
+    *count.write() *= 7;
+    println!(\"count {}\", count.read());
+    {
+        let mut held = count.write();
+        *held -= 2;
+    }
+    let shown = count.clone();
+    let mut bump = move || *count.write() += 10;
+    bump();
+    bump();
+    println!(\"bumped {}\", *shown.read());
+
+    let mut text = Signal::new(String::from(\"a\"));
+    text.write().push_str(\"b\");
+    println!(\"text {} {}\", *text.read(), text.read().len());
+
+    let mut point = Signal::new(Point { x: 1 });
+    point.write().x += 2;
+    println!(\"point {}\", point.read().x);
+}
+",
+    );
+    assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(
+        stdout, "meter 3\ntally 15 after 4 guards\ncount 7\nbumped 25\ntext ab 2\npoint 3\n",
+        "stderr:\n{stderr}"
     );
 }
