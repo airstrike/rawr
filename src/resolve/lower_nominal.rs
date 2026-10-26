@@ -1417,7 +1417,13 @@ fn write_trait_dispatchers(
     models: &Models,
     ops: &mut Vec<ExecutableOp>,
 ) {
-    if models.traits.is_empty() {
+    // A trait without methods, such as std's `Error`, which every program
+    // knows, needs no dispatcher and so no type index.
+    if models
+        .traits
+        .values()
+        .all(|(_, declared)| declared.functions.is_empty())
+    {
         return;
     }
     let type_index = format!("{SENTINEL}{}", ops.len());
