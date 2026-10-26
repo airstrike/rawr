@@ -10916,3 +10916,32 @@ main();
         .iter_functions()
         .all(|function| function.name != super::drops::GLUE));
 }
+
+/// A byte-string literal pattern, `b"tag1"`, matches a `&[u8]` with exactly
+/// those bytes, as rustc's does (D558 slice 2, quick-xml's README).
+#[test]
+fn language_byte_string_patterns() {
+    let value = run_string(
+        r#"
+        fn kind(name: &[u8]) -> i64 {
+            match name {
+                b"tag1" => 1,
+                b"tag2" => 2,
+                b"" => 3,
+                _ => 0,
+            }
+        }
+        pub fn run() -> String {
+            let v: Vec<u8> = "tag2".as_bytes().to_vec();
+            let mut count = 0;
+            match v.as_slice() {
+                b"tag2" => count += 1,
+                _ => (),
+            }
+            format!("{} {} {} {} {}", kind(b"tag1"), kind(&v), kind(b""), kind(b"tag"), count)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "1 2 3 0 1");
+}

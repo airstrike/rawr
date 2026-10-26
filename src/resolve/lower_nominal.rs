@@ -21820,6 +21820,27 @@ impl<'a> Parser<'a> {
                 span: span(start, end),
             });
         }
+        // `b"tag1"` on a `&[u8]`: the slice pattern of its bytes, as rustc
+        // matches it.
+        if let Token::ByteStringConstant(bytes) = self.peek() {
+            let bytes = bytes.clone();
+            let (token, at) = self.next();
+            let span = Span::new(at, text_end(at, &token.to_string()));
+            let before = bytes
+                .iter()
+                .map(|byte| PatternSyntax::Literal {
+                    literal: ast::NominalLiteral::Int(i64::from(*byte)),
+                    ty: Ty::Int(Int::U8),
+                    span,
+                })
+                .collect();
+            return Ok(PatternSyntax::Slice {
+                before,
+                rest: None,
+                after: Box::default(),
+                span,
+            });
+        }
         if let Some((low, low_ty, low_span)) = self.parse_pattern_literal()? {
             let inclusive = match self.peek() {
                 Token::InclusiveRange => true,
