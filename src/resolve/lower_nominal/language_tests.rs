@@ -10884,9 +10884,15 @@ fn language_drop_refuses_what_it_cannot_drop_exactly() {
     assert!(error.contains("inside an `Rc`"), "{error}");
     assert!(error.contains("not supported in Rawr yet"), "{error}");
     let error = drop_refused(
-        "fn main() { let n = Noisy(\"n\"); let f = move || println!(\"{}\", n.0); f(); }",
+        "fn main() { let n = Noisy(\"n\"); let f = move || { let m = &n; println!(\"{}\", m.0); }; f(); }",
     );
     assert!(error.contains("by move"), "{error}");
+    // A `move` closure that uses only a `Copy` field copies that field,
+    // and the value drops with its local, as rustc has it (T145).
+    assert_eq!(
+        dropped("fn main() { let n = Noisy(\"n\"); let f = move || println!(\"{}\", n.0); f(); }"),
+        "n\ndrop n\n"
+    );
     // rustc's E0040 and E0509.
     let error = drop_refused("fn main() { let mut n = Noisy(\"n\"); n.drop(); }");
     assert!(error.contains("E0040"), "{error}");
