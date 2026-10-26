@@ -1,5 +1,6 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
+mod cargo_env;
 pub(crate) mod cell;
 mod error_object;
 mod fmt_write;
@@ -2527,6 +2528,8 @@ struct Tables {
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
     sources: crate::program::source::Table,
+    /// The program's root file: the crate root Cargo built the target from.
+    entry: crate::program::source::Id,
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
     boot: Option<crate::item::Key>,
@@ -3005,6 +3008,7 @@ impl Models {
             functions_by_key,
             widgets,
             sources: program.source.table().clone(),
+            entry: program.source.entry(),
             application_runtime,
             boot: program
                 .application
@@ -3536,6 +3540,12 @@ enum PreludeOp {
     GenericEqual,
     /// `{:?}` of a value of a generic type, by its runtime value.
     GenericDebug,
+    /// A number's, `bool`'s or `()`'s `Debug` under a `{:?}` spec
+    /// (`DebugSpec`): `leaf(value, spec, code)` (`DebugLeaf::from_code`).
+    FormatDebugLeaf,
+    /// A derived `Debug` under a `{:?}` spec, which it passes to each
+    /// field: `debug(value, spec)`.
+    FormatSpecDebug,
     /// `a.partial_cmp(&b)` by the runtime values (`compare_value`): an
     /// `Option` of `Ordering`'s discriminant.
     Compare,
@@ -3662,6 +3672,8 @@ enum PreludeOp {
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
+    /// `v.capacity()`: the runtime `Vec`'s own capacity, read by reference.
+    VecCapacity,
     /// A set's `union`, `intersection`, `difference`,
     /// `symmetric_difference` (the keys, in order), `is_subset`,
     /// `is_superset` or `is_disjoint` with another, by code
@@ -3689,7 +3701,9 @@ enum PreludeOp {
     StrChange,
     /// A string's pieces or bytes (`STR_PIECES`): `pieces(text, code, a, b)`.
     StrPieces,
-    /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
+    /// `v.chunks(n)`, `windows(n)`, `chunks_exact(n)`, `rchunks(n)` or
+    /// `rchunks_exact(n)`, by its code in `SLICE_CHUNKS`: the array of its
+    /// slices.
     SliceChunks,
     /// The value at a path below a place, and the value stored there,
     /// called as methods on the place (`places::path_invoke`): how a
@@ -3715,6 +3729,8 @@ impl PreludeOp {
             Self::ExpectErr => "result.expect-err",
             Self::GenericEqual => "generic.eq",
             Self::GenericDebug => "generic.debug",
+            Self::FormatDebugLeaf => "format.debug-leaf",
+            Self::FormatSpecDebug => "format.spec-debug",
             Self::Compare => "generic.partial-cmp",
             Self::TypeIndex => "generic.type-index",
             Self::Discriminant => "enum.discriminant",
@@ -3772,6 +3788,7 @@ impl PreludeOp {
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
             Self::VecMethod => "vec.method",
+            Self::VecCapacity => "vec.capacity",
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
@@ -3805,6 +3822,7 @@ impl PreludeOp {
             | Self::MapSlot
             | Self::SetContains
             | Self::SetAlgebra
+            | Self::VecCapacity
             | Self::KeyedRange
             | Self::PathGet => Some(false),
             _ => None,
@@ -3848,6 +3866,12 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
             ],
             Self::FormatRadix => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::FormatDebugLeaf => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::FormatSpecDebug => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
             Self::FormatBits => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
@@ -3903,7 +3927,7 @@ impl PreludeOp {
             Self::SliceChunks => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
-                TypeId::of::<bool>(),
+                TypeId::of::<crate::INT>(),
             ],
             Self::PathGet => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
             Self::PathSet => vec![
@@ -3948,6 +3972,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::VecCapacity => vec![TypeId::of::<crate::Array>()],
             Self::VecMethod => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
@@ -4008,6 +4033,17 @@ impl PreludeOp {
             Self::Err => return Ok(crate::result::err(args[0].take())),
             Self::GenericEqual => return Ok(comparison.equal(args[0], args[1])?.into()),
             Self::GenericDebug => return Ok(debug_value(args[0], models).into()),
+            Self::FormatDebugLeaf => {
+                let spec = DebugSpec::read(args[1]);
+                let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
+                return Ok(ImmutableString::from(spec.leaf(args[0], leaf)).into());
+            }
+            Self::FormatSpecDebug => {
+                let spec = DebugSpec::read(args[1]);
+                return Ok(
+                    ImmutableString::from(debug_value_spec(args[0], models, Some(&spec))).into(),
+                );
+            }
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -4204,14 +4240,19 @@ impl PreludeOp {
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
+            Self::VecCapacity => {
+                let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
+                return Ok(Dynamic::from(capacity as crate::INT));
+            }
             Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
                 let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
-                let windows = args[2].as_bool().unwrap_or(false);
+                let code = usize::try_from(args[2].as_int().unwrap_or(0)).unwrap_or(0);
+                let name = SLICE_CHUNKS.get(code).copied().unwrap_or_default();
                 if size == 0 {
-                    return panic(if windows {
+                    return panic(if name == "windows" {
                         "window size must be non-zero".into()
                     } else {
                         "chunk size must be non-zero".into()
@@ -4220,16 +4261,13 @@ impl PreludeOp {
                 let array = args[0]
                     .as_array_ref()
                     .map_err(|_| invariant("a slice is not an array at runtime"))?;
-                let slices: crate::Array = if windows {
-                    array
-                        .windows(size)
-                        .map(|window| Dynamic::from_array(window.to_vec()))
-                        .collect()
-                } else {
-                    array
-                        .chunks(size)
-                        .map(|chunk| Dynamic::from_array(chunk.to_vec()))
-                        .collect()
+                let slice = |items: &[Dynamic]| Dynamic::from_array(items.to_vec());
+                let slices: crate::Array = match name {
+                    "windows" => array.windows(size).map(slice).collect(),
+                    "chunks_exact" => array.chunks_exact(size).map(slice).collect(),
+                    "rchunks" => array.rchunks(size).map(slice).collect(),
+                    "rchunks_exact" => array.rchunks_exact(size).map(slice).collect(),
+                    _ => array.chunks(size).map(slice).collect(),
                 };
                 return Ok(Dynamic::from_array(slices));
             }
@@ -4733,11 +4771,14 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "into_bytes"
                 | "char_indices"
                 | "splitn"
+                | "rsplitn"
+                | "retain"
         ),
         Ty::Array { .. } => matches!(
             member,
             "len"
                 | "is_empty"
+                | "capacity"
                 | "iter"
                 | "clone"
                 | "to_vec"
@@ -4854,7 +4895,7 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         Ty::Float(_) => 0,
         Ty::String | Ty::Str | Ty::Array { .. } => match member {
             "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
-            | "truncate" | "split_off" => 2,
+            | "truncate" | "split_off" | "retain" => 2,
             _ => 1,
         },
         Ty::Option(_) => match member {
@@ -6171,7 +6212,10 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
-    let op_is_print = matches!(op, ExecutableOp::Prelude(PreludeOp::Print));
+    let op_is_print = matches!(
+        op,
+        ExecutableOp::Prelude(PreludeOp::Print | PreludeOp::Time)
+    );
     let func: Shared<crate::func::native::FnAny> =
         Shared::new(move |context, args| op.invoke(context, args, &models, requirement.as_ref()));
     let func = match by_reference {
@@ -9324,6 +9368,9 @@ struct Parser<'a> {
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
     closure_hints: Vec<Option<Box<[Ty]>>>,
+    /// The local holding a `{:?}` spec (`DebugSpec`) that `debug_source`
+    /// passes down to each leaf, as Rust's `Formatter` does.
+    debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
@@ -9628,6 +9675,7 @@ impl<'a> Parser<'a> {
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
+            debug_spec: None,
             closure_hint: None,
             closure_outputs: Vec::new(),
             closure_output: None,
@@ -23931,6 +23979,32 @@ impl<'a> Parser<'a> {
         };
         self.next();
         let rhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // `for c in 'a'..='e'`: the chars between, as a chain of one loop.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            let range = self.range_iterator(&lhs, Some(&rhs), Ty::Char, operator == "..=");
+            let Some((pipeline, item)) = self.for_pipeline(&range) else {
+                return Err(self.unsupported("`for` over this `char` range"));
+            };
+            let (setup, header, entry, exit) = Self::for_parts(pipeline, &name);
+            let mut looped = self.parse_for_body(
+                name,
+                declaration,
+                mutable,
+                item,
+                header,
+                start,
+                label,
+                pattern.as_ref(),
+                Some((entry, exit)),
+            )?;
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(setup);
+            source.push(looped.source);
+            source.push_text(" }");
+            looped.source = source;
+            return Ok(looped);
+        }
         let item = self.integer_bounds(&lhs, Some(&rhs))?;
         let mut source = origin::Fragment::plain(format!("for {name} in "));
         source.push(lhs.rendered_source());
@@ -25708,6 +25782,13 @@ impl<'a> Parser<'a> {
             let element = Box::new(lhs.ty.clone());
             return Ok(self.binary(lhs, "..", rhs.clone(), Ty::Range(element)));
         }
+        // `'a'..='e'`: an iterator over the chars between.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            if let Some(rhs) = &rhs {
+                self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            }
+            return Ok(self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive));
+        }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
         let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
         self.last_range = Some((lhs, rhs, inclusive, range.span));
@@ -27421,78 +27502,143 @@ impl<'a> Parser<'a> {
             } else {
                 0
             };
-            let value = match spec.kind {
-                FormatKind::Exp { upper } => {
-                    if !number {
-                        return Err(mismatch("a number for `{:e}`"));
-                    }
-                    let unsigned = int.is_some_and(|kind| !kind.signed());
-                    let mode = i64::from(upper)
-                        + f32_mode
-                        + if int.is_some() { 4 } else { 0 }
-                        + if unsigned { 8 } else { 0 };
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatExp,
-                        [name, precision.into(), mode.to_string().into()],
-                    )
+            // A spec on `{:?}` of a value other than a number, which Rust's
+            // `Formatter` passes down to each leaf, as in `Some(       1)`.
+            let hex = match spec.kind {
+                FormatKind::HexDebug(radix) => Some(radix),
+                _ => None,
+            };
+            let spread = matches!(spec.kind, FormatKind::Debug | FormatKind::HexDebug(_))
+                && !number
+                && !matches!(ty, Ty::Infer(_))
+                && (hex.is_some()
+                    || width.is_some()
+                    || precision.is_some()
+                    || spec.sign
+                    || spec.zero);
+            let value = if spread {
+                // `pretty_debug` reads brackets, commas and quotes, so a fill
+                // of one would be read as structure.
+                if spec.alternate && width.is_some() && "{}[](),'\"".contains(spec.fill) {
+                    return Err(self.unsupported("a bracket, comma or quote fill in `{:#?}`"));
                 }
-                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
-                    let Some(kind) = int else {
-                        return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
-                            "an integer for this `format!` spec"
+                let parts = self.temporary("spec");
+                let align = spec
+                    .align
+                    .map_or_else(|| "()".to_string(), |align| format!("{align:?}"));
+                let flags =
+                    i64::from(spec.sign) + 2 * i64::from(spec.alternate) + 4 * i64::from(spec.zero);
+                source.push_text(format!(
+                    "let {parts} = [{}, {:?}, {align}, {flags}, {}, {}];\n",
+                    hex.unwrap_or(0),
+                    spec.fill,
+                    width.as_deref().unwrap_or("-1"),
+                    precision.as_deref().unwrap_or("-1"),
+                ));
+                self.debug_spec = Some(parts);
+                let rendered = self.debug_source(&ty, name, at);
+                self.debug_spec = None;
+                let rendered = rendered?;
+                if spec.alternate {
+                    self.prelude_op(PreludeOp::PrettyDebug, [rendered])
+                } else {
+                    rendered
+                }
+            } else {
+                match spec.kind {
+                    FormatKind::Exp { upper } => {
+                        if !number {
+                            return Err(mismatch("a number for `{:e}`"));
+                        }
+                        let unsigned = int.is_some_and(|kind| !kind.signed());
+                        let mode = i64::from(upper)
+                            + f32_mode
+                            + if int.is_some() { 4 } else { 0 }
+                            + if unsigned { 8 } else { 0 };
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatExp,
+                            [name, precision.into(), mode.to_string().into()],
+                        )
+                    }
+                    FormatKind::HexDebug(_) if float => {
+                        let debug = 1 + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
+                        let Some(kind) = int else {
+                            return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
+                                "an integer for this `format!` spec"
+                            } else {
+                                "an integer for `{:x?}`"
+                            }));
+                        };
+                        self.prelude_op(
+                            PreludeOp::FormatBits,
+                            [
+                                name,
+                                radix.to_string().into(),
+                                (if matches!(kind, Int::Var(_)) {
+                                    32
+                                } else {
+                                    kind.bits()
+                                })
+                                .to_string()
+                                .into(),
+                            ],
+                        )
+                    }
+                    FormatKind::Debug | FormatKind::Display if float => {
+                        let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Debug => {
+                        if spec.width.is_some()
+                            && !matches!(
+                                ty,
+                                Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool
+                            )
+                        {
+                            return Err(self.unsupported("a `{:?}` width on a compound value"));
+                        }
+                        let rendered = self.debug_source(&ty, name, at)?;
+                        if spec.alternate {
+                            self.prelude_op(PreludeOp::PrettyDebug, [rendered])
                         } else {
-                            "an integer for `{:x?}`"
-                        }));
-                    };
-                    self.prelude_op(
-                        PreludeOp::FormatBits,
-                        [
-                            name,
-                            radix.to_string().into(),
-                            kind.bits().to_string().into(),
-                        ],
-                    )
-                }
-                FormatKind::Debug | FormatKind::Display if float => {
-                    let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatFloat,
-                        [name, precision.into(), debug.to_string().into()],
-                    )
-                }
-                FormatKind::Debug => {
-                    if spec.width.is_some()
-                        && !matches!(ty, Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool)
-                    {
-                        return Err(self.unsupported("a `{:?}` width on a compound value"));
+                            rendered
+                        }
                     }
-                    let rendered = self.debug_source(&ty, name, at)?;
-                    if spec.alternate {
-                        self.prelude_op(PreludeOp::PrettyDebug, [rendered])
-                    } else {
-                        rendered
-                    }
+                    FormatKind::Display => match self.display_piece(&ty, name) {
+                        Some(text) => text,
+                        None => {
+                            return Err(Error::TypeMismatch {
+                                expected: "a type with `Display` in `format!`".into(),
+                                actual: ty.name(&self.models),
+                                expression: at,
+                            });
+                        }
+                    },
                 }
-                FormatKind::Display => match self.display_piece(&ty, name) {
-                    Some(text) => text,
-                    None => {
-                        return Err(Error::TypeMismatch {
-                            expected: "a type with `Display` in `format!`".into(),
-                            actual: ty.name(&self.models),
-                            expression: at,
-                        });
-                    }
-                },
             };
             let prefixed = spec.alternate
+                && int.is_some()
                 && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));
             let truncated = precision.is_some() && !number && spec.kind == FormatKind::Display;
             // `str`'s and `char`'s `Debug` ignore width and precision.
             let quoted =
                 spec.kind == FormatKind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
-            if !quoted && (width.is_some() || spec.sign && number || prefixed || truncated) {
+            if !quoted
+                && !spread
+                && (width.is_some() || spec.sign && number || prefixed || truncated)
+            {
                 let temporary = self.temporary("format");
                 source.push_text(format!("let {temporary} = "));
                 source.push(value);
@@ -28562,12 +28708,39 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
-        let (mut arguments, end) = self.parse_call_arguments("string method arguments")?;
+        // `retain`'s closure takes each `char`.
+        if member.as_str() == "retain" {
+            self.closure_hints = vec![Some(Box::new([Ty::Char]))];
+        }
+        let arguments = self.parse_call_arguments("string method arguments");
+        self.closure_hints = Vec::new();
+        let (mut arguments, end) = arguments?;
         for argument in &mut arguments {
             self.strip_string_reference(argument);
         }
         let receiver = value.rendered_source().surrounded("(", ")");
         let expression = span(value.span.start(), end);
+        // `s.retain(f)`: the chars `f` keeps, in order, stored back as `s`.
+        if let ("retain", [filter]) = (member.as_str(), arguments.as_mut_slice()) {
+            let expected = Ty::Fn {
+                inputs: Box::new([Ty::Char]),
+                output: Box::new(Ty::Bool),
+            };
+            self.coerce_expr(&expected, filter)?;
+            let (keep, kept, c) = (
+                self.temporary("keep"),
+                self.temporary("kept"),
+                self.temporary("char"),
+            );
+            let mut source = origin::Fragment::plain(format!("{{ let {keep} = "));
+            source.push(filter.rendered_source());
+            source.push_text(format!("; let {kept} = \"\"; for {c} in "));
+            source.push(receiver.clone());
+            source.push_text(format!(" {{ if {keep}.call({c}) {{ {kept} += {c}; }} }} "));
+            source.push(self.store_into(&value, &kept)?);
+            source.push_text(" }");
+            return Ok(self.operator_expr(source, Ty::Unit, expression));
+        }
         if let ("split_at", [mid]) = (member.as_str(), arguments.as_mut_slice()) {
             self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
             let source = self.prelude_op(PreludeOp::SplitAt, [receiver, mid.rendered_source()]);
@@ -28712,10 +28885,11 @@ impl<'a> Parser<'a> {
                 };
                 (source, ty)
             }
-            // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
+            // `bytes()`, `char_indices()`, `splitn(n, pattern)` and `rsplitn(n, pattern)`: iterators
             // over the string's pieces; `as_bytes()` a `&[u8]` and
             // `into_bytes()` a `Vec<u8>`.
-            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", []) | ("splitn", [_, _]) => {
+            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", [])
+            | ("splitn" | "rsplitn", [_, _]) => {
                 let code = STR_PIECES
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -30814,7 +30988,16 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Bang)
             && matches!(
                 name.as_str(),
-                "concat" | "env" | "include_str" | "include_bytes" | "stringify"
+                "concat"
+                    | "env"
+                    | "option_env"
+                    | "include_str"
+                    | "include_bytes"
+                    | "stringify"
+                    | "line"
+                    | "column"
+                    | "file"
+                    | "module_path"
             )
             && self.models.import(&name).is_none()
         {
@@ -30873,10 +31056,36 @@ impl<'a> Parser<'a> {
             }
             return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
+        // `std::thread::sleep(duration)`, `thread::sleep`, `sleep`.
+        if let Some(skip) = self.sleep_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            let (mut arguments, end) = self.parse_call_arguments("`sleep` arguments")?;
+            let call = span(name_span.start(), end);
+            let [duration] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: "std::thread".into(),
+                    method: "sleep".into(),
+                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    call,
+                });
+            };
+            self.coerce_expr(&Ty::Time(Time::Duration), duration)?;
+            let code = time_code("sleep").to_string();
+            let source = self.prelude_op(
+                PreludeOp::Time,
+                ["()".into(), code.into(), duration.rendered_source()],
+            );
+            return Ok(self.operator_expr(source, Ty::Unit, call));
+        }
         // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
         if let Some((function, skip)) = self.mem_path(&name) {
             for _ in 0..skip {
                 self.next();
+            }
+            if function.starts_with("size_of") {
+                return self.parse_size_of(function, name_span);
             }
             return self.parse_mem_call(function, name_span);
         }
@@ -30918,12 +31127,25 @@ impl<'a> Parser<'a> {
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
             let mut arguments = arguments;
-            // `Vec::with_capacity(n)`: an empty `Vec`.
+            // `Vec::with_capacity(n)`: an empty `Vec` with room for `n`.
             if member.as_str() == "with_capacity"
                 && let [capacity] = arguments.as_mut_slice()
             {
                 self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
-                arguments.clear();
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let code = vec_method_code("with_capacity");
+                let mut source = origin::Fragment::plain(format!("{helper}([], {code}, "));
+                source.push(capacity.rendered_source());
+                source.push_text(", (), false)");
+                let element = Box::new(self.inference.fresh());
+                return Ok(self.operator_expr(
+                    source,
+                    Ty::Array {
+                        element,
+                        length: None,
+                    },
+                    span(name_span.start(), end),
+                ));
             } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
@@ -30968,6 +31190,24 @@ impl<'a> Parser<'a> {
                     ty,
                     span(name_span.start(), member_span.end()),
                 ));
+            }
+            // An `Rc` or `Arc` is its value at runtime (D492.3), so nothing
+            // counts its clones.
+            if pointer != Pointer::Box
+                && matches!(
+                    member.as_str(),
+                    "strong_count" | "weak_count" | "ptr_eq" | "downgrade"
+                )
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "`{}::{member}`: an `{0}` is its value in Rawr, without a count or an \
+                         address",
+                        pointer.name()
+                    )
+                    .into(),
+                    source: member_span,
+                });
             }
             let (arguments, end) =
                 self.parse_call_arguments(&format!("`{}` arguments", pointer.name()))?;
@@ -31225,7 +31465,7 @@ impl<'a> Parser<'a> {
             .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
             .collect();
         let function = |token: &Token| match token {
-            Token::Identifier(name) => ["swap", "replace", "take"]
+            Token::Identifier(name) => ["swap", "replace", "take", "size_of", "size_of_val"]
                 .into_iter()
                 .find(|function| *function == name.as_str()),
             _ => None,
@@ -31259,7 +31499,111 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         };
-        matches!(tokens[skip], Token::LeftParen).then_some((function, skip))
+        let next = if function == "size_of" {
+            Token::DoubleColon
+        } else {
+            Token::LeftParen
+        };
+        (tokens[skip] == next).then_some((function, skip))
+    }
+
+    /// A call of `std::thread::sleep` at `name`, by its path or imported
+    /// (`use std::thread;`, `use std::thread::sleep;`): the tokens before
+    /// its name.
+    #[inline(never)]
+    fn sleep_path(&mut self, name: &str) -> Option<usize> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..5)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let named = |token: &Token, wanted: &str| matches!(token, Token::Identifier(name) if name.as_str() == wanted);
+        // Imported from `std::thread`, and not a local item or binding.
+        let imported = |this: &Self, name: &str, from: &[&str]| {
+            this.models.get(name).is_none()
+                && this.models.function(name).is_none()
+                && !this.bindings.contains_key(name)
+                && this.models.import(name).is_some_and(|binding| {
+                    let path = binding.qualified.as_str();
+                    from.contains(&path.strip_suffix(name).unwrap_or(path))
+                })
+        };
+        let skip = match name {
+            "std" | "core"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "thread")
+                    && tokens[2] == Token::DoubleColon
+                    && named(&tokens[3], "sleep") =>
+            {
+                4
+            }
+            "thread"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "sleep")
+                    && imported(self, name, &["std::", "core::"]) =>
+            {
+                2
+            }
+            "sleep" if imported(self, name, &["std::thread::", "core::thread::"]) => 0,
+            _ => return None,
+        };
+        matches!(tokens[skip], Token::LeftParen).then_some(skip)
+    }
+
+    /// `size_of::<T>()` and `size_of_val(&value)`: rustc's size in bytes of
+    /// a number, `bool`, `char`, `()` or an array of them. Another type's
+    /// layout is rustc's own choice, so it is refused.
+    #[inline(never)]
+    fn parse_size_of(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let ty = if function == "size_of" {
+            self.expect(Token::DoubleColon, "'::' after `size_of`")?;
+            self.expect(Token::LessThan, "'<' after `size_of::`")?;
+            let ty = self.parse_local_type()?;
+            self.expect_close_angle("'>' after `size_of`'s type")?;
+            ty
+        } else {
+            self.inference.fresh()
+        };
+        let (mut arguments, end) = self.parse_call_arguments("`std::mem` arguments")?;
+        let call = span(name_span.start(), end);
+        let count = usize::from(function == "size_of_val");
+        if arguments.len() != count {
+            return Err(Error::InvalidMethodCall {
+                owner: "std::mem".into(),
+                method: function.into(),
+                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+                call,
+            });
+        }
+        let ty = match arguments.first_mut() {
+            Some(argument) => {
+                let expected = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(ty.clone()),
+                };
+                self.coerce_expr(&expected, argument)?;
+                self.inference.resolve(&ty)
+            }
+            None => self.inference.resolve(&ty),
+        };
+        let Some(size) = primitive_size(&ty) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`std::mem::{function}` of `{}`, whose layout is rustc's own; only numbers, \
+                     `bool`, `char`, `()` and arrays of them have a size in Rawr",
+                    ty.name(&self.models)
+                )
+                .into(),
+                source: call,
+            });
+        };
+        // The argument is still evaluated, for its effects.
+        let mut source = origin::Fragment::plain("{ ");
+        if let Some(argument) = arguments.first() {
+            source.push(argument.rendered_source());
+            source.push_text("; ");
+        }
+        source.push_text(format!("{size} }}"));
+        Ok(self.operator_expr(source, Ty::Int(Int::Usize), call))
     }
 
     /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
@@ -34496,6 +34840,52 @@ impl<'a> Parser<'a> {
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
         }
+        if let Some(spec) = self.debug_spec.clone() {
+            // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
+            let leaf = match &ty {
+                // An integer literal's type defaults to `i32`.
+                Ty::Int(Int::Var(_)) => Some(1032),
+                Ty::Int(kind) => {
+                    Some(i64::from(kind.bits()) + if kind.signed() { 1000 } else { 2000 })
+                }
+                Ty::Float(Float::F32) => Some(1),
+                Ty::Float(_) => Some(2),
+                Ty::Bool => Some(3),
+                Ty::Unit => Some(4),
+                _ => None,
+            };
+            if let Some(code) = leaf {
+                return Ok(self.prelude_op(
+                    PreludeOp::FormatDebugLeaf,
+                    [value, spec.as_str().into(), code.to_string().into()],
+                ));
+            }
+            match &ty {
+                Ty::Script(id, ..) if self.models.std_impl(*id, "Debug", "fmt").is_none() => {
+                    let model = self.models.definition(*id).clone();
+                    self.require_capability(&model, capability::Kind::Debug, span)?;
+                    return Ok(
+                        self.prelude_op(PreludeOp::FormatSpecDebug, [value, spec.as_str().into()])
+                    );
+                }
+                Ty::Script(..)
+                | Ty::Param(_)
+                | Ty::Projection(..)
+                | Ty::Time(_)
+                | Ty::Host { .. } => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "a width, precision, sign or `x?` in `{{:?}}` of `{}`, whose `Debug` \
+                             is its own or generic",
+                            ty.name(&self.models)
+                        )
+                        .into(),
+                        source: span,
+                    });
+                }
+                _ => {}
+            }
+        }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
                 self.debug_source(target, value, span)?
@@ -34519,7 +34909,11 @@ impl<'a> Parser<'a> {
             Ty::Int(Int::U64 | Int::Usize) => {
                 self.prelude_op(PreludeOp::FormatRadix, [value, "10".into()])
             }
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) => value.surrounded("(\"\" + ", ")"),
+            Ty::Float(kind) => {
+                let mode = if *kind == Float::F32 { "3" } else { "1" };
+                self.prelude_op(PreludeOp::FormatFloat, [value, "-1".into(), mode.into()])
+            }
+            Ty::Bool | Ty::Int(_) => value.surrounded("(\"\" + ", ")"),
             // A `ParseIntError` and kin: its `Debug` by its message.
             Ty::ParseError(error) => {
                 let message = self.temporary("debug");
@@ -34889,6 +35283,33 @@ impl<'a> Parser<'a> {
         let (source, ty) = match (member.as_str(), arguments.as_mut_slice()) {
             ("len", []) => (receiver.surrounded("", ".len()"), Ty::Int(Int::Usize)),
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
+            // `v.capacity()` of a local or a temporary: the runtime `Vec`'s.
+            // A field, an element or a borrowed `Vec` is read through a
+            // copy, whose capacity is its length. Rust grows a `Vec` of
+            // one-byte items from 8, not 4, and gives a `Vec` of zero-size
+            // items `usize::MAX`.
+            ("capacity", []) => {
+                if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. })
+                    || !matches!(value.lvalue, None | Some(Lvalue::Binding { .. }))
+                    || matches!(
+                        self.inference.resolve(&element),
+                        Ty::Int(Int::U8 | Int::I8) | Ty::Bool | Ty::Unit
+                    )
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct:
+                            "`capacity()` of a `Vec` of one-byte or zero-size items, or of one \
+                                    other than a local or a temporary"
+                                .into(),
+                        source: member_span,
+                    });
+                }
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecCapacity));
+                (
+                    receiver.surrounded("", &format!(".{helper}()")),
+                    Ty::Int(Int::Usize),
+                )
+            }
             // `v.iter()` borrows the elements, through any reference to
             // `v`; `v.into_iter()` takes them, or borrows them through `&v`.
             ("iter", []) => {
@@ -34960,13 +35381,15 @@ impl<'a> Parser<'a> {
                     }),
                 },
             ),
-            // `windows(n)` and `chunks(n)`: an iterator over `&[T]` slices.
-            ("windows" | "chunks", [size]) => {
+            // `windows(n)`, `chunks(n)` and the other `SLICE_CHUNKS`: an
+            // iterator over `&[T]` slices.
+            (name, [size]) if SLICE_CHUNKS.contains(&name) => {
                 self.coerce_expr(&Ty::Int(Int::Usize), size)?;
-                let windows = (member.as_str() == "windows").to_string();
+                let code = SLICE_CHUNKS.iter().position(|chunks| *chunks == name);
+                let code = code.unwrap_or_default().to_string();
                 let slices = self.prelude_op(
                     PreludeOp::SliceChunks,
-                    [receiver, size.rendered_source(), windows.into()],
+                    [receiver, size.rendered_source(), code.into()],
                 );
                 let slice = Ty::Array {
                     element: Box::new(element),
@@ -37164,6 +37587,23 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
+        if matches!(name, "line" | "column") {
+            return Ok(self.literal(text, Ty::Int(Int::U32), at));
+        }
+        // `option_env!("NAME")`: `Some` of its value at compile time, or
+        // `None`; ?play's snippets have no environment.
+        if name == "option_env" {
+            let value = crate::resolve::files_denied()
+                .is_none()
+                .then(|| self.environment_variable(&text))
+                .flatten();
+            let ty = Ty::Option(Box::new(Ty::Str));
+            let source = match value {
+                Some(value) => self.prelude_op(PreludeOp::Some, [format!("{value:?}").into()]),
+                None => self.prelude_op(PreludeOp::None, []),
+            };
+            return Ok(self.operator_expr(source, ty, at));
+        }
         if name == "include_bytes" {
             // A file the host ships is read from its bundle's module, as the
             // constant the host built once: its bytes are the program's, as
@@ -37211,6 +37651,36 @@ impl<'a> Parser<'a> {
         name: &str,
         name_span: Span,
     ) -> Result<(String, Position), Error> {
+        // `line!()`, `column!()`, `file!()` and `module_path!()`: where the
+        // macro is written.
+        if matches!(name, "line" | "column" | "file" | "module_path") {
+            let end = match self.next() {
+                (Token::Unit, position) => position,
+                (Token::LeftParen, _) => self.expect(Token::RightParen, "`)` after `(`")?,
+                (_, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!("`{name}!` without `()`").into(),
+                        source: point_span(position),
+                    })
+                }
+            };
+            let at = name_span.start();
+            let text = match name {
+                "line" => at.line().unwrap_or_default().to_string(),
+                "column" => at.position().unwrap_or_default().to_string(),
+                "file" => match self.source_file() {
+                    Some(file) => cargo_env::file_path(&file),
+                    None => self.source_identity(),
+                },
+                _ => self.module_path(),
+            };
+            return Ok((text, end));
+        }
+        // `stringify!()` and `concat!()`: an empty string.
+        if matches!(name, "stringify" | "concat") && matches!(self.peek(), Token::Unit) {
+            let (_, position) = self.next();
+            return Ok((String::new(), position));
+        }
         let open = match self.next() {
             (Token::LeftParen | Token::LeftBracket | Token::LeftBrace, position) => position,
             (_, position) => {
@@ -37223,21 +37693,21 @@ impl<'a> Parser<'a> {
         if name == "stringify" {
             // The tokens as written, between the delimiters.
             let mut depth = 0usize;
-            let mut pieces = Vec::new();
+            let mut tokens = Vec::new();
             let end = loop {
                 match self.next() {
-                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), _) => {
+                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), at) => {
                         depth += 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::RightParen | Token::RightBracket | Token::RightBrace, position)
                         if depth == 0 =>
                     {
                         break position;
                     }
-                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), _) => {
+                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), at) => {
                         depth -= 1;
-                        pieces.push(token.to_string());
+                        tokens.push((token, at));
                     }
                     (Token::EOF, position) => {
                         return Err(Error::UnsupportedNominalSyntax {
@@ -37245,10 +37715,22 @@ impl<'a> Parser<'a> {
                             source: span(open, position),
                         })
                     }
-                    (token, _) => pieces.push(token.to_string()),
+                    (token, at) => tokens.push((token, at)),
                 }
             };
-            return Ok((pieces.join(" "), end));
+            let key = self.models.sources.key(self.models.context.index());
+            let text = self
+                .models
+                .sources
+                .resolve(key)
+                .ok()
+                .and_then(|source| stringify_tokens(source.text(), &tokens, end));
+            let text = text.unwrap_or_else(|| {
+                let pieces: Vec<String> =
+                    tokens.iter().map(|(token, _)| token.to_string()).collect();
+                pieces.join(" ")
+            });
+            return Ok((text, end));
         }
         let mut arguments = Vec::new();
         let end = loop {
@@ -37342,7 +37824,15 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let sign = if negative { "-" } else { "" };
-        Ok(match self.next() {
+        let text = self.next();
+        // `1u8`: `concat!` writes the number without its suffix.
+        if matches!(text.0, Token::IntegerConstant(_) | Token::FloatConstant(_))
+            && let Token::Identifier(suffix) = self.peek()
+            && numeric_type(suffix.as_str()).is_some()
+        {
+            self.next();
+        }
+        Ok(match text {
             (Token::StringConstant(text), _) if !negative => text.to_string(),
             (Token::IntegerConstant(value), _) => format!("{sign}{value}"),
             (Token::FloatConstant(value), _) => format!("{sign}{}", value.1),
@@ -37353,7 +37843,14 @@ impl<'a> Parser<'a> {
                 if !negative
                     && matches!(
                         name.as_str(),
-                        "concat" | "env" | "include_str" | "stringify"
+                        "concat"
+                            | "env"
+                            | "include_str"
+                            | "stringify"
+                            | "line"
+                            | "column"
+                            | "file"
+                            | "module_path"
                     )
                     && matches!(self.peek(), Token::Bang) =>
             {
@@ -37370,6 +37867,46 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The name of the file this code is in, as its source names it.
+    fn source_identity(&self) -> String {
+        let key = self.models.sources.key(self.models.context.index());
+        self.models
+            .sources
+            .resolve(key)
+            .map(|source| source.identity().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The program's root file, when it is a file on disk.
+    fn entry_file(&self) -> Option<std::path::PathBuf> {
+        let key = self.models.sources.key(self.models.entry.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let path = std::path::PathBuf::from(source.identity());
+        path.is_file().then_some(path)
+    }
+
+    /// `module_path!()`: the crate's name and the modules of the item
+    /// being read, as `app::geometry`.
+    fn module_path(&self) -> String {
+        let root = match self.entry_file() {
+            Some(entry) => cargo_env::crate_name(&entry),
+            None => std::path::Path::new(&self.source_identity())
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .replace('-', "_"),
+        };
+        let modules = self
+            .callable
+            .as_ref()
+            .map(|key| key.modules())
+            .unwrap_or_default();
+        std::iter::once(root.as_str())
+            .chain(modules.iter().map(ImmutableString::as_str))
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
     /// The file this code is in, when it is a file on disk.
     fn source_file(&self) -> Option<std::path::PathBuf> {
         let key = self.models.sources.key(self.models.context.index());
@@ -37383,6 +37920,13 @@ impl<'a> Parser<'a> {
     /// environment's.
     fn environment_variable(&self, name: &str) -> Option<String> {
         {
+            // What Cargo sets for the crate this file is in.
+            if name.starts_with("CARGO_")
+                && let (Some(file), Some(entry)) = (self.source_file(), self.entry_file())
+                && let Some(value) = cargo_env::variable(&file, &entry, name)
+            {
+                return value;
+            }
             if name == "CARGO_MANIFEST_DIR" {
                 let file = self.source_file()?;
                 let manifest = file
@@ -37488,8 +38032,18 @@ impl<'a> Parser<'a> {
                 (Ty::Int(kind), "MIN") => kind.range().0.to_string(),
                 (Ty::Float(Float::F32), "MAX") => format!("{:?}", f64::from(f32::MAX)),
                 (Ty::Float(Float::F32), "MIN") => format!("{:?}", f64::from(f32::MIN)),
+                (Ty::Float(Float::F32), "MIN_POSITIVE") => {
+                    format!("{:?}", f64::from(f32::MIN_POSITIVE))
+                }
+                (Ty::Float(Float::F32), "EPSILON") => format!("{:?}", f64::from(f32::EPSILON)),
                 (Ty::Float(_), "MAX") => format!("{:?}", f64::MAX),
                 (Ty::Float(_), "MIN") => format!("{:?}", f64::MIN),
+                (Ty::Float(_), "MIN_POSITIVE") => format!("{:?}", f64::MIN_POSITIVE),
+                (Ty::Float(_), "EPSILON") => format!("{:?}", f64::EPSILON),
+                // IEEE division by zero, as rustc folds these.
+                (Ty::Float(_), "INFINITY") => "(1.0 / 0.0)".into(),
+                (Ty::Float(_), "NEG_INFINITY") => "(-1.0 / 0.0)".into(),
+                (Ty::Float(_), "NAN") => "(0.0 / 0.0)".into(),
                 // `String::from`, `f64::sqrt`, `char::is_alphanumeric`: a
                 // function as a value.
                 (_, "from" | "try_from") => {
@@ -42791,14 +43345,17 @@ fn default_value(
 }
 
 /// Rust's `{:#?}` from the one-line `Debug` text: a `{`, `[` or `(` with
-/// members opens an indented line per member, each ending in `,`.
+/// members opens an indented line per member, each ending in `,`. Only the
+/// one space the one-line text writes after a `{` or a `,` goes, so a
+/// member's padding (`{:#6?}`) stays.
 fn pretty_debug(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let skip_spaces = |mut at: usize| {
-        while chars.get(at) == Some(&' ') {
-            at += 1;
+    let skip_spaces = |at: usize| {
+        if chars.get(at) == Some(&' ') {
+            at + 1
+        } else {
+            at
         }
-        at
     };
     let newline = |out: &mut String, depth: usize| {
         out.push('\n');
@@ -42807,6 +43364,8 @@ fn pretty_debug(text: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
     let mut at = 0;
+    // Whether each open bracket is a struct's `{ `.
+    let mut open = Vec::new();
     while let Some(&character) = chars.get(at) {
         match character {
             // A string or char literal, with its escapes, as it is.
@@ -42830,12 +43389,19 @@ fn pretty_debug(text: &str) -> String {
                     '[' => ']',
                     _ => ')',
                 };
-                let next = skip_spaces(at + 1);
+                // A struct's `S { a: 1 }` writes a space after its `{`; a
+                // map's or set's `{1: 2}` does not.
+                let named = at >= 2
+                    && chars[at - 1] == ' '
+                    && (chars[at - 2].is_alphanumeric() || chars[at - 2] == '_');
+                let named = character == '{' && named;
+                let next = if named { skip_spaces(at + 1) } else { at + 1 };
                 out.push(character);
                 if chars.get(next) == Some(&close) {
                     out.push(close);
                     at = next;
                 } else {
+                    open.push(named);
                     depth += 1;
                     newline(&mut out, depth);
                     at = next;
@@ -42853,8 +43419,9 @@ fn pretty_debug(text: &str) -> String {
                 }
                 continue;
             }
-            ' ' if chars.get(at + 1) == Some(&'}') => {}
+            ' ' if chars.get(at + 1) == Some(&'}') && open.last() == Some(&true) => {}
             '}' | ']' | ')' => {
+                open.pop();
                 out.push(',');
                 depth = depth.saturating_sub(1);
                 newline(&mut out, depth);
@@ -42870,7 +43437,14 @@ fn pretty_debug(text: &str) -> String {
 /// `value`'s `Debug` text, names Rawr keeps under another spelling written
 /// as Rust's (`demangle_names`).
 fn debug_value(value: &Dynamic, models: &Models) -> String {
-    let text = debug_text(value, models);
+    debug_value_spec(value, models, None)
+}
+
+/// `value`'s `Debug` text under a `{:?}` spec (`DebugSpec`), which Rust's
+/// derives pass down to each field: a width pads each number, as in
+/// `Some(       1)`, and `{:x?}` writes each integer in hexadecimal.
+fn debug_value_spec(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    let text = debug_text(value, models, spec);
     if text.contains("__rawr_") {
         crate::tokenizer::demangle_names(&text).into_owned()
     } else {
@@ -42878,23 +43452,26 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
     }
 }
 
-fn debug_text(value: &Dynamic, models: &Models) -> String {
+fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
     if let Some((name, inner)) = cell::named_value(value) {
-        return format!("{name} {{ value: {} }}", debug_value(&inner, models));
+        return format!(
+            "{name} {{ value: {} }}",
+            debug_value_spec(&inner, models, spec)
+        );
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
-        return format!("Reverse({})", debug_value(&reverse.0, models));
+        return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
     }
     if let Some(option) = crate::option::read(value) {
         return match option {
-            Some(inner) => format!("Some({})", debug_value(&inner, models)),
+            Some(inner) => format!("Some({})", debug_value_spec(&inner, models, spec)),
             None => "None".to_string(),
         };
     }
     if let Some(result) = crate::result::read(value) {
         return match result {
-            Ok(inner) => format!("Ok({})", debug_value(&inner, models)),
-            Err(inner) => format!("Err({})", debug_value(&inner, models)),
+            Ok(inner) => format!("Ok({})", debug_value_spec(&inner, models, spec)),
+            Err(inner) => format!("Err({})", debug_value_spec(&inner, models, spec)),
         };
     }
     match &value.0 {
@@ -42910,7 +43487,8 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
             // `W(1, "a")`, as Rust's `debug_tuple`.
             if item.form == crate::item::StructForm::Tuple {
                 let fields = item.fields.iter().zip(value.fields());
-                let fields = fields.map(|(field, value)| debug_typed(value, &field.ty, models));
+                let fields =
+                    fields.map(|(field, value)| debug_typed(value, &field.ty, models, spec));
                 return format!(
                     "{}({})",
                     item.name.text,
@@ -42926,7 +43504,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     output,
                     "{}: {}",
                     field.name.text,
-                    debug_typed(value, &field.ty, models)
+                    debug_typed(value, &field.ty, models, spec)
                 )
                 .expect("writing debug output into String cannot fail");
             }
@@ -42954,7 +43532,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .iter()
                     .zip(value.payload().iter().zip(variant.payload.iter()))
                     .map(|(field, (value, ty))| {
-                        format!("{}: {}", field.text, debug_typed(value, ty, models))
+                        format!("{}: {}", field.text, debug_typed(value, ty, models, spec))
                     });
                 return format!(
                     "{} {{ {} }}",
@@ -42969,25 +43547,33 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .payload()
                     .iter()
                     .zip(variant.payload.iter())
-                    .map(|(value, ty)| debug_typed(value, ty, models))
+                    .map(|(value, ty)| debug_typed(value, ty, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         }
-        _ => format!("{value:?}"),
+        _ => match spec {
+            Some(spec) => spec.leaf(value, DebugLeaf::of_value(value)),
+            None => format!("{value:?}"),
+        },
     }
 }
 
 /// `{:?}` of a field or payload of declared type `ty`: an `Ordering`,
 /// an integer at runtime, prints its variant, also inside an `Option`,
-/// `Vec`, `Box` or tuple.
-fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String {
+/// `Vec`, `Box` or tuple; a builtin number prints as its declared type.
+fn debug_typed(
+    value: &Dynamic,
+    ty: &type_ref::Type,
+    models: &Models,
+    spec: Option<&DebugSpec>,
+) -> String {
     match (ty, &value.0) {
-        (type_ref::Type::Path(path), Union::Int(value, ..))
+        (type_ref::Type::Path(path), Union::Int(..) | Union::Float(..))
             if path.target == type_ref::Target::Builtin
-                && matches!(path.name.as_str(), "u64" | "usize") =>
+                && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>
         {
-            (*value as u64).to_string()
+            spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
         }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>
@@ -43005,7 +43591,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             let members = values
                 .iter()
                 .zip(members.iter())
-                .map(|(value, ty)| debug_typed(value, ty, models))
+                .map(|(value, ty)| debug_typed(value, ty, models, spec))
                 .collect::<Vec<_>>();
             if members.len() == 1 {
                 format!("({},)", members[0])
@@ -43017,18 +43603,18 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             if let Some(inner) = ty.reverse_element()
                 && let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() =>
         {
-            format!("Reverse({})", debug_typed(&reverse.0, inner, models))
+            format!("Reverse({})", debug_typed(&reverse.0, inner, models, spec))
         }
         // `{k: v}` and `{k}`, as Rust's maps and sets print.
         (_, Union::Array(values, ..)) if let Some((_, arguments)) = ty.keyed_arguments() => {
             let entries = values.iter().map(|entry| match (&arguments[..], &entry.0) {
                 ([key, value], Union::Array(pair, ..)) if pair.len() == 2 => format!(
                     "{}: {}",
-                    debug_typed(&pair[0], key, models),
-                    debug_typed(&pair[1], value, models)
+                    debug_typed(&pair[0], key, models, spec),
+                    debug_typed(&pair[1], value, models, spec)
                 ),
-                ([key], _) => debug_typed(entry, key, models),
-                _ => debug_value(entry, models),
+                ([key], _) => debug_typed(entry, key, models, spec),
+                _ => debug_value_spec(entry, models, spec),
             });
             format!("{{{}}}", entries.collect::<Vec<_>>().join(", "))
         }
@@ -43041,7 +43627,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
                 "[{}]",
                 values
                     .iter()
-                    .map(|value| debug_typed(value, element, models))
+                    .map(|value| debug_typed(value, element, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -43049,10 +43635,227 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
         _ if let Some(element) = ty.option_element()
             && let Some(Some(inner)) = crate::option::read(value) =>
         {
-            format!("Some({})", debug_typed(&inner, element, models))
+            format!("Some({})", debug_typed(&inner, element, models, spec))
         }
-        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models),
-        _ => debug_value(value, models),
+        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models, spec),
+        _ => debug_value_spec(value, models, spec),
+    }
+}
+
+/// A builtin leaf of a `Debug` text, which a `{:?}` spec formats.
+#[derive(Clone, Copy)]
+enum DebugLeaf {
+    /// An integer of `bits` bits, signed or not.
+    Int {
+        bits: u32,
+        signed: bool,
+    },
+    Float {
+        single: bool,
+    },
+    Bool,
+    Unit,
+    /// A string, a char or another value, which ignore the spec.
+    Other,
+}
+
+impl DebugLeaf {
+    /// The leaf of a builtin type's name, for a declared field type.
+    fn of_name(name: &str) -> Option<Self> {
+        let int = |bits, signed| Some(Self::Int { bits, signed });
+        match name {
+            "i8" => int(8, true),
+            "u8" => int(8, false),
+            "i16" => int(16, true),
+            "u16" => int(16, false),
+            "i32" => int(32, true),
+            "u32" => int(32, false),
+            "i64" | "isize" => int(64, true),
+            "u64" | "usize" => int(64, false),
+            "f32" => Some(Self::Float { single: true }),
+            "f64" => Some(Self::Float { single: false }),
+            _ => None,
+        }
+    }
+
+    /// The leaf of a runtime value of unknown declared type.
+    fn of_value(value: &Dynamic) -> Self {
+        match &value.0 {
+            Union::Int(..) => Self::Int {
+                bits: 64,
+                signed: true,
+            },
+            Union::Float(..) => Self::Float { single: false },
+            Union::Bool(..) => Self::Bool,
+            Union::Unit(..) => Self::Unit,
+            _ => Self::Other,
+        }
+    }
+
+    /// A leaf by the code `PreludeOp::DebugLeaf` takes: 1 an `f32`, 2 an
+    /// `f64`, 3 a `bool`, 4 `()`, and 1000 plus the bits for a signed
+    /// integer or 2000 plus the bits for an unsigned one.
+    fn from_code(code: INT) -> Self {
+        match code {
+            1 => Self::Float { single: true },
+            2 => Self::Float { single: false },
+            3 => Self::Bool,
+            4 => Self::Unit,
+            1000.. => Self::Int {
+                bits: u32::try_from(code % 1000).unwrap_or(64),
+                signed: code < 2000,
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A `{:?}` spec as Rust's `Formatter` carries it through a derived
+/// `Debug`: `[hex, fill, align, flags, width, precision]` at runtime, with
+/// `hex` 16 or -16 for `{:x?}` or `{:X?}`, `align` a char or `()`, `flags`
+/// 1 for `+`, 2 for `#` and 4 for `0`, and -1 for no width or precision.
+struct DebugSpec {
+    hex: Option<bool>,
+    fill: char,
+    align: Option<char>,
+    sign: bool,
+    alternate: bool,
+    zero: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+}
+
+impl DebugSpec {
+    const PLAIN: Self = Self {
+        hex: None,
+        fill: ' ',
+        align: None,
+        sign: false,
+        alternate: false,
+        zero: false,
+        width: None,
+        precision: None,
+    };
+
+    fn read(spec: &Dynamic) -> Self {
+        let Ok(parts) = spec.as_array_ref() else {
+            return Self::PLAIN;
+        };
+        let int = |at: usize| parts.get(at).and_then(|part| part.as_int().ok());
+        let count = |at: usize| int(at).and_then(|value| usize::try_from(value).ok());
+        let flags = int(3).unwrap_or_default();
+        Self {
+            hex: match int(0) {
+                Some(16) => Some(false),
+                Some(-16) => Some(true),
+                _ => None,
+            },
+            fill: parts
+                .get(1)
+                .and_then(|fill| fill.as_char().ok())
+                .unwrap_or(' '),
+            align: parts.get(2).and_then(|align| align.as_char().ok()),
+            sign: flags & 1 != 0,
+            alternate: flags & 2 != 0,
+            zero: flags & 4 != 0,
+            width: count(4),
+            precision: count(5),
+        }
+    }
+
+    /// `text` cut to the precision and padded to the width, as
+    /// `Formatter::pad` does, aligned left by default.
+    fn pad(&self, text: &str) -> String {
+        let text: String = match self.precision {
+            Some(precision) => text.chars().take(precision).collect(),
+            None => text.to_string(),
+        };
+        self.align_text(&text, '<')
+    }
+
+    fn align_text(&self, text: &str, default: char) -> String {
+        let length = text.chars().count();
+        let Some(width) = self.width.filter(|width| *width > length) else {
+            return text.to_string();
+        };
+        let padding = width - length;
+        let (before, after) = match self.align.unwrap_or(default) {
+            '<' => (0, padding),
+            '^' => (padding / 2, padding - padding / 2),
+            _ => (padding, 0),
+        };
+        let fill = |count: usize| std::iter::repeat_n(self.fill, count).collect::<String>();
+        format!("{}{text}{}", fill(before), fill(after))
+    }
+
+    /// A number's sign, prefix and digits, padded as
+    /// `Formatter::pad_integral` does: `0` pads between the sign and the
+    /// digits.
+    fn pad_number(&self, negative: bool, prefix: &str, digits: &str) -> String {
+        let mut head = if negative {
+            "-".to_string()
+        } else if self.sign {
+            "+".to_string()
+        } else {
+            String::new()
+        };
+        head.push_str(prefix);
+        if self.zero
+            && let Some(width) = self.width
+        {
+            let length = head.chars().count() + digits.chars().count();
+            let zeros = "0".repeat(width.saturating_sub(length));
+            return format!("{head}{zeros}{digits}");
+        }
+        self.align_text(&format!("{head}{digits}"), '>')
+    }
+
+    /// `value`'s `Debug` text as a leaf of kind `leaf`.
+    fn leaf(&self, value: &Dynamic, leaf: DebugLeaf) -> String {
+        match (leaf, &value.0) {
+            (DebugLeaf::Int { bits, signed }, Union::Int(value, ..)) => {
+                let value = *value;
+                if let Some(upper) = self.hex {
+                    let all = value as u64;
+                    let masked = if bits >= 64 {
+                        all
+                    } else {
+                        all & ((1 << bits) - 1)
+                    };
+                    let digits = if upper {
+                        format!("{masked:X}")
+                    } else {
+                        format!("{masked:x}")
+                    };
+                    let prefix = if self.alternate { "0x" } else { "" };
+                    return self.pad_number(false, prefix, &digits);
+                }
+                if signed {
+                    self.pad_number(value < 0, "", &value.unsigned_abs().to_string())
+                } else {
+                    self.pad_number(false, "", &(value as u64).to_string())
+                }
+            }
+            (DebugLeaf::Float { single }, Union::Float(value, ..)) => {
+                let value = **value;
+                let text = match (self.precision, single) {
+                    (Some(precision), true) => format!("{:.precision$}", value as f32),
+                    (Some(precision), false) => format!("{value:.precision$}"),
+                    (None, true) => format!("{:?}", value as f32),
+                    (None, false) => format!("{value:?}"),
+                };
+                if value.is_nan() {
+                    return self.align_text(&text, '>');
+                }
+                match text.strip_prefix('-') {
+                    Some(digits) => self.pad_number(true, "", digits),
+                    None => self.pad_number(false, "", &text),
+                }
+            }
+            (DebugLeaf::Bool, Union::Bool(value, ..)) => self.pad(&value.to_string()),
+            (DebugLeaf::Unit, Union::Unit(..)) => self.pad("()"),
+            _ => format!("{value:?}"),
+        }
     }
 }
 
@@ -43949,6 +44752,149 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult 
     }
 }
 
+/// `stringify!`'s text of `tokens` (each with where it starts in `text`),
+/// which end where `end` closes the macro, as rustc's `print_tts` prints
+/// them: each token as written, and a space after one that the source
+/// spaces from the next unless `space_between` says no. `None` when a
+/// position is not in `text`.
+fn stringify_tokens(text: &str, tokens: &[(Token, Position)], end: Position) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut lines = vec![0usize];
+    for (index, c) in chars.iter().enumerate() {
+        if *c == '\n' {
+            lines.push(index + 1);
+        }
+    }
+    let offset = |at: Position| -> Option<usize> {
+        let line = *lines.get(at.line()?.checked_sub(1)?)?;
+        let index = line + at.position()?.checked_sub(1)?;
+        (index <= chars.len()).then_some(index)
+    };
+    let starts = tokens
+        .iter()
+        .map(|(_, at)| offset(*at))
+        .chain(std::iter::once(offset(end)))
+        .collect::<Option<Vec<usize>>>()?;
+    let pieces: Vec<String> = starts
+        .windows(2)
+        .map(|pair| {
+            chars[pair[0]..pair[1].max(pair[0])]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    // Rust's keywords, which an `(` after them is spaced from.
+    const KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "for",
+        "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "ref", "return", "self",
+        "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+        "async", "await", "dyn",
+    ];
+    let word = |piece: &str| {
+        piece
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '"' | '\''))
+    };
+    let opens = |token: &Token| {
+        matches!(
+            token,
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+        )
+    };
+    let closes = |token: &Token| {
+        matches!(
+            token,
+            Token::RightParen | Token::RightBracket | Token::RightBrace
+        )
+    };
+    let mut out = String::new();
+    for (index, (token, _)) in tokens.iter().enumerate() {
+        let piece = if matches!(token, Token::Unit) {
+            "()"
+        } else {
+            pieces[index].as_str()
+        };
+        out.push_str(piece);
+        let Some((next, _)) = tokens.get(index + 1) else {
+            break;
+        };
+        let next_piece = pieces[index + 1].as_str();
+        // Joint in the source: no space.
+        let spaced = chars
+            .get(starts[index + 1].wrapping_sub(1))
+            .is_some_and(|c| c.is_whitespace());
+        if !spaced {
+            continue;
+        }
+        // `{ b }` keeps its spaces inside; `(x)` and `[0]` have none.
+        if matches!(token, Token::LeftBrace) || matches!(next, Token::RightBrace) {
+            out.push(' ');
+            continue;
+        }
+        if opens(token) || closes(next) {
+            continue;
+        }
+        // A group, a word or a literal is not punctuation.
+        let punct = |token: &Token, piece: &str| {
+            !word(piece) && !opens(token) && !closes(token) && !matches!(token, Token::Unit)
+        };
+        let (left, right) = (punct(token, piece), punct(next, next_piece));
+        let space = match () {
+            // `x.y`, `tup.0`
+            () if piece == "." && !right => false,
+            // `foo,`, `x = 3;`, `x.y`
+            () if !left && matches!(next_piece, "," | ";" | ".") => false,
+            // `f(3)`, `fn(x: u8)`, `Self()`, `pub(crate)`
+            () if word(piece)
+                && !piece.starts_with(['"', '\''])
+                && (!KEYWORDS.contains(&piece) || matches!(piece, "fn" | "Self" | "pub"))
+                && matches!(next, Token::LeftParen | Token::Unit) =>
+            {
+                false
+            }
+            // `#[attr]`
+            () if piece == "#" && matches!(next, Token::LeftBracket) => false,
+            () => true,
+        };
+        if space {
+            out.push(' ');
+        }
+    }
+    Some(out)
+}
+
+/// rustc's size in bytes of a value of `ty`, for a type whose layout Rust
+/// fixes: a number, `bool`, `char`, `()` or an array of them.
+fn primitive_size(ty: &Ty) -> Option<u64> {
+    Some(match ty {
+        Ty::Unit => 0,
+        Ty::Bool => 1,
+        Ty::Char => 4,
+        // An integer literal's type defaults to `i32`.
+        Ty::Int(Int::Var(_)) => 4,
+        Ty::Int(kind) => u64::from(kind.bits() / 8),
+        Ty::Float(Float::F32) => 4,
+        Ty::Float(_) => 8,
+        Ty::Array {
+            element,
+            length: Some(length),
+        } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
+        _ => return None,
+    })
+}
+
+/// The slice methods `SliceChunks` runs, by code: each gives the slices.
+const SLICE_CHUNKS: &[&str] = &[
+    "chunks",
+    "windows",
+    "chunks_exact",
+    "rchunks",
+    "rchunks_exact",
+];
+
 /// The `Vec` methods `VecMethod` runs in place, by code.
 const VEC_METHODS: &[&str] = &[
     "insert",
@@ -43963,6 +44909,7 @@ const VEC_METHODS: &[&str] = &[
     "split_off",
     "swap_remove",
     "pop_front",
+    "with_capacity",
 ];
 
 /// `std::collections::VecDeque` in a body, by its path or as imported
@@ -44064,6 +45011,8 @@ const TIME_METHODS: &[&str] = &[
     "compare",
     "from_secs_f32",
     "as_secs_f32",
+    // `std::thread::sleep(duration)`.
+    "sleep",
 ];
 
 fn time_code(name: &str) -> usize {
@@ -44103,6 +45052,12 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
     Ok(match name {
         "from_secs" => Dynamic::from(Duration::from_secs(unsigned(operand))),
         "from_millis" => Dynamic::from(Duration::from_millis(unsigned(operand))),
+        "sleep" => {
+            if let Some(duration) = duration(operand) {
+                std::thread::sleep(duration);
+            }
+            Dynamic::UNIT
+        }
         "from_micros" => Dynamic::from(Duration::from_micros(unsigned(operand))),
         "from_nanos" => Dynamic::from(Duration::from_nanos(unsigned(operand))),
         "from_secs_f64" | "from_secs_f32" => Dynamic::from(float(number(operand))?),
@@ -44258,6 +45213,9 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             "swap_remove index (is {a}) should be < len (is {len})"
         )),
         Some("swap_remove") => Ok(array.swap_remove(a)),
+        // A new `Vec` with room for `a` items, as `VecCapacity` reads it
+        // back; it grows by doubling from 4, as Rust's does.
+        Some("with_capacity") => Ok(Dynamic::from_array(crate::Array::with_capacity(a))),
         Some("swap") => match [a, b].into_iter().find(|index| *index >= len) {
             Some(index) => fail(format!(
                 "index out of bounds: the len is {len} but the index is {index}"
@@ -44447,6 +45405,7 @@ const STR_PIECES: &[&str] = &[
     "from_utf8",
     "debug",
     "utf8_display",
+    "rsplitn",
 ];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
@@ -44509,6 +45468,16 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
                 Err(_) => {
                     let pattern = args[3].clone_cast::<ImmutableString>();
                     text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        "rsplitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.rsplitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.rsplitn(count, pattern.as_str()).map(string).collect()
                 }
             }
         }
@@ -45410,6 +46379,16 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
         10 => Dynamic::from_float(integer as f32 as crate::FLOAT),
         11 => Dynamic::from_float(integer as crate::FLOAT),
         12 => Dynamic::from(char::from(integer as u8)),
+        // A char range's item by its code point (`iterator::CHAR_OF_CODE`).
+        15 => {
+            match u32::try_from(integer).ok().and_then(char::from_u32) {
+                Some(c) => Dynamic::from(c),
+                None => return fail(
+                    "a `char` range across the surrogates U+D800 to U+DFFF is not supported in \
+                     Rawr yet",
+                ),
+            }
+        }
         // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
         13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
         14 => Dynamic::from_float(integer as u64 as crate::FLOAT),

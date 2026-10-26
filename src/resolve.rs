@@ -1447,6 +1447,10 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "mem::swap"
                 | "mem::replace"
                 | "mem::take"
+                | "mem::size_of"
+                | "mem::size_of_val"
+                | "thread"
+                | "thread::sleep"
                 | "iter"
                 | "iter::once"
                 | "iter::empty"
@@ -1508,6 +1512,8 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
         "swap",
         "replace",
         "take",
+        "size_of",
+        "size_of_val",
         "Duration",
         "Instant",
     ];

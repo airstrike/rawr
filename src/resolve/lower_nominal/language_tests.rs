@@ -10384,3 +10384,167 @@ fn language_mut_borrows_of_a_tuples_members_are_apart() {
     );
     assert!(error.contains("E0499"), "{error}");
 }
+
+#[test]
+fn language_circle_std_string_and_vec_methods() {
+    // `rsplitn`, `String::retain`, `Vec::capacity` and the chunk methods
+    // give rustc's results.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let parts: Vec<&str> = "a,b,c,d".rsplitn(2, ',').collect();
+            let mut s = String::from("héllo wörld");
+            s.retain(|c| c.is_ascii() && c != 'l');
+            let mut v: Vec<i32> = Vec::with_capacity(3);
+            let reserved = v.capacity();
+            for i in 0..4 { v.push(i); }
+            let exact: Vec<&[i32]> = v.chunks_exact(3).collect();
+            let back: Vec<&[i32]> = v.rchunks(3).collect();
+            format!("{:?} {s} {reserved} {} {:?} {:?}", parts, v.capacity(), exact, back)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        r#"["d", "a,b,c"] ho wrd 3 6 [[0, 1, 2]] [[1, 2, 3], [0]]"#
+    );
+    let refused =
+        rejected("fn cap(v: &Vec<i64>) -> usize { v.capacity() } pub fn run() -> i64 { 0 } run()");
+    assert!(refused.contains("`capacity()`"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_debug_specs_reach_each_leaf() {
+    // A `{:?}` width, precision, sign or `x?` applies to each number
+    // inside, as Rust's derives pass the formatter down; strings ignore it.
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct P { a: i32, b: &'static str, f: f32 }
+        pub fn run() -> String {
+            let p = P { a: -1, b: "q", f: 0.1 };
+            format!(
+                "[{:>8?}] [{:<5?}] [{:x?}] [{:X?}] [{:4?}] [{:.2?}] [{:#6?}] {:?}",
+                Some(1), (1, "ab"), vec![10, 255], p, p, Some(1.5), Some(1), vec![0.1f32]
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "[Some(       1)] [(1    , \"ab\")] [[a, ff]] [P { a: FFFFFFFF, b: \"q\", f: 0.1 }] \
+         [P { a:   -1, b: \"q\", f:  0.1 }] [Some(1.50)] [Some(\n         1,\n)] [0.1]"
+    );
+}
+
+#[test]
+fn language_circle_std_float_constants_and_rc_counts() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            format!(
+                "{} {} {:?} {} {} {} {}",
+                f64::MIN_POSITIVE, f32::EPSILON, f64::EPSILON, f64::INFINITY,
+                f32::NEG_INFINITY, f64::NAN.is_nan(), f32::MAX
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        format!(
+            "{} {} {:?} {} {} {} {}",
+            f64::MIN_POSITIVE,
+            f32::EPSILON,
+            f64::EPSILON,
+            f64::INFINITY,
+            f32::NEG_INFINITY,
+            f64::NAN.is_nan(),
+            f32::MAX
+        )
+    );
+    let refused = rejected(
+        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); Rc::strong_count(&a) as i64 } run()",
+    );
+    assert!(refused.contains("Rc::strong_count"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_size_of_and_sleep() {
+    let value = run(r#"
+        use std::thread;
+        use std::time::Duration;
+        pub fn run() -> i64 {
+            let x = 5;
+            let c = 'c';
+            thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::ZERO);
+            (std::mem::size_of_val(&x) * 1000 + size_of::<[u16; 3]>() * 100
+                + std::mem::size_of_val(&c) * 10 + std::mem::size_of::<()>()) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 4640);
+    let refused = rejected(
+        "pub fn run() -> i64 { let s = String::new(); std::mem::size_of_val(&s) as i64 } run()",
+    );
+    assert!(refused.contains("size_of_val"), "{refused}");
+}
+
+#[test]
+fn language_circle_std_char_ranges_iterate() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let letters: String = ('a'..='e').collect();
+            let back: String = ('x'..'z').rev().collect();
+            let mut looped = String::new();
+            for c in 'p'..='r' { looped.push(c); }
+            let c = 'm';
+            format!(
+                "{letters} {back} {looped} {} {} {} {}",
+                ('a'..='z').contains(&c), ('a'..'m').contains(&c),
+                ('a'..='z').count(), (0..10).contains(&10)
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "abcde yx pqr true false 26 false");
+}
+
+#[test]
+fn language_circle_std_nul_escapes() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let s = "a\0b";
+            format!("{:?} {} {:?} {:?} {}", s, s.len(), '\0', "\u{0}", '\0' as u32)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, r#""a\0b" 3 '\0' "\0" 0"#);
+}
+
+#[test]
+fn language_circle_std_source_macros() {
+    let value = run_string(
+        r#"pub fn run() -> String {
+    let at = (line!(), column!());
+    format!(
+        "{:?} {:?} {} {} {}",
+        at,
+        option_env!("RAWR_SURELY_UNSET_VAR"),
+        stringify!(Vec<i32>, x  .  len(), a + b),
+        concat!("x", 1u8, -2, stringify!()),
+        line!()
+    )
+}
+run()"#,
+    );
+    assert_eq!(value, "(2, 24) None Vec<i32>, x.len(), a + b x1-2 9");
+}

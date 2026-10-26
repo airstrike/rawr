@@ -52,7 +52,6 @@ Error: "\"forty\": invalid digit found in string"
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
   <li>A <code>static mut</code>.</li>
-  <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
   <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code> or under a runtime&rsquo;s attribute in a crate.</li>
@@ -73,14 +72,14 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><code>Weak</code> and <code>Mutex</code>.</li>
   <li>Cloning a struct, enum or <code>Vec</code> that holds a <code>Cell</code> or <code>RefCell</code> outside an <code>Rc</code>.</li>
+  <li><code>Rc::strong_count</code>, <code>Rc::weak_count</code> and <code>Rc::ptr_eq</code>, and the same for <code>Arc</code>. An <code>Rc</code> is its value in rawr, so it has no count.</li>
   <li><code>std::fs</code>, and <code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>.</li>
   <li><code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code>.</li>
   <li><code>Formatter::pad</code>.</li>
-  <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
   <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
   <li><code>Vec::binary_search</code>.</li>
-  <li><code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code>.</li>
+  <li><code>dbg!</code>.</li>
 </ul>
 
 <h2 id="differences">Differences from <code>cargo run</code></h2>
@@ -95,6 +94,7 @@ Error: "\"forty\": invalid digit found in string"
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
 <ul>
   <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
+  <li><code>capacity()</code> of a <code>Vec</code> in a field, in an element or behind a reference. It works on a local or a temporary <code>Vec</code>. It is also refused for a <code>Vec</code> of <code>u8</code>, <code>i8</code>, <code>bool</code> or <code>()</code>, whose growth rawr doesn&rsquo;t follow.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
