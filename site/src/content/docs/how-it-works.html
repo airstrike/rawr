@@ -12,7 +12,7 @@
 <p>In RawrGallery, an edit to a marked file was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
 
 <h2 id="borrowing">How does rawr handle borrow checking?</h2>
-<p>rawr checks the borrows of a function&rsquo;s locals as rustc does. A borrow ends at its last use along the function&rsquo;s control flow, through branches, loops, <code>break</code>, <code>continue</code>, <code>return</code> and <code>?</code>. rustc calls this rule non-lexical lifetimes (NLL). A conflict is reported with rustc&rsquo;s code: E0499, E0502, E0503, E0505, E0506 or E0597. rawr also rejects a use after a move, as rustc&rsquo;s E0382 does.</p>
+<p>rawr checks the borrows of a function&rsquo;s locals as rustc does. A borrow ends at its last use along the function&rsquo;s control flow, through branches, loops, <code>break</code>, <code>continue</code>, <code>return</code> and <code>?</code>. rustc calls this rule non-lexical lifetimes (NLL). A conflict is reported with rustc&rsquo;s code: E0499, E0502, E0503, E0505, E0506, E0597 or E0716. rawr also rejects a use after a move, as rustc&rsquo;s E0382 does.</p>
 <div class="block">
   <div class="file"><b>borrow.rs</b></div>
   <pre><code data-lang="rust">fn main() {
@@ -44,8 +44,23 @@ fn main() {
     println!("{l}");
 }</code></pre>
 </div>
+<p>A function&rsquo;s body is checked against its own signature. A returned borrow of one of its locals or of a temporary is rustc&rsquo;s E0515. A returned borrow of a parameter must outlive the lifetime the signature gives the output. Where it doesn&rsquo;t, rawr reports rustc&rsquo;s E0621 or its &ldquo;lifetime may not live long enough&rdquo;. An output lifetime that elision can&rsquo;t fill is E0106, and so is a reference without a lifetime in a struct&rsquo;s field.</p>
+<p>A temporary lives to the end of its statement. A <code>let</code> keeps a temporary it borrows with <code>&amp;</code> to the end of its block, as rustc&rsquo;s temporary lifetime extension does. That covers <code>let r = &amp;String::from("a");</code> and the same borrow inside a struct, a tuple, <code>Some</code>, a block&rsquo;s tail or a branch. A temporary that a method borrows, as in <code>String::from("a").as_str()</code>, isn&rsquo;t extended. Using its value after the statement is E0716. A constant such as <code>&amp;5</code> or <code>&amp;[1, 2]</code> is promoted to <code>'static</code> and borrows nothing.</p>
+<div class="block">
+  <div class="file"><b>temporary.rs</b></div>
+  <pre><code data-lang="rust">fn name() -&gt; &amp;'static str {
+    let s = String::from("rawr");
+    &amp;s // error[E0515]: returns a borrow of `s`
+}
+
+fn main() {
+    let kept = &amp;String::from("kept"); // fine: the `let` extends it
+    let lost = String::from("lost").as_str(); // error[E0716]
+    println!("{kept} {lost} {}", name());
+}</code></pre>
+</div>
 <p>A pattern borrows, reads or moves only the parts it binds and tests, as in rustc. A <code>ref</code> or <code>ref mut</code> binding is a borrow of its part. So is a binding in a <code>match</code> through <code>&amp;</code> or <code>&amp;mut</code>.</p>
-<p>The check looks at each function on its own. Some borrows are not checked yet: one a closure keeps after its statement, an item that a method gives from a container (<code>copied</code>, <code>collect</code>, <code>next</code>), a value with a <code>Drop</code> impl that holds a borrow, and a lifetime written in a type inside a function body. rawr runs such a program, and the <code>cargo check</code> that <code>rawr run</code> keeps going in the background reports any error. The <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
+<p>The check looks at each function on its own. Some borrows are not checked yet: one a closure keeps after its statement, an item that a method gives from a container (<code>copied</code>, <code>collect</code>, <code>next</code>), a value with a <code>Drop</code> impl that holds a borrow, a lifetime written in a type inside a function body, and a returned parameter whose type has several lifetimes. rawr runs such a program, and the <code>cargo check</code> that <code>rawr run</code> keeps going in the background reports any error. The <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
 <p>Values are reference-counted, so a program can&rsquo;t corrupt memory. At run time a shared borrow is a copy and a <code>&amp;mut</code> local is the place it borrows. A <code>&amp;mut</code> local that is given new borrows, as in <code>r = &amp;mut b;</code>, holds which local it borrows, and each use reaches that local. The checker is what makes that match Rust. Borrow checking only rejects programs. It never changes what a valid program does.</p>
 <p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/reference/overview#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
 <p>Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them too.</p>

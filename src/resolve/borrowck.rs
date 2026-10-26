@@ -270,6 +270,12 @@ impl Points {
             *word |= other;
         }
     }
+
+    pub(crate) fn intersect(&mut self, other: &Self) {
+        for (word, other) in self.0.iter_mut().zip(&other.0) {
+            *word &= other;
+        }
+    }
 }
 
 /// A borrow error, as rustc reports it.
@@ -410,7 +416,7 @@ fn returned_parameter(body: &Body) -> Option<Conflict> {
                 continue;
             };
             if !reached[local.0 as usize]
-                || signature::outlives_lifetime(&own.bounds, lifetime, output)
+                || borrows.outlive(&own.output, &own.bounds) != Some(false)
             {
                 continue;
             }

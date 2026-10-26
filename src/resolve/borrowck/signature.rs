@@ -472,9 +472,35 @@ pub(crate) enum Borrows {
     None,
     /// All its borrows have this one lifetime.
     One(Lifetime),
+    /// A reference of this lifetime to what holds borrows of others, which
+    /// outlive it: each borrow it holds outlives this one.
+    AtLeast(Lifetime),
     /// Several lifetimes, or ones the signature does not say, which these
     /// facts do not tell apart.
     Several,
+}
+
+impl Borrows {
+    /// Whether each borrow it holds outlives every one `output` holds, by
+    /// the signature's `bounds`: `None` when these facts can't tell.
+    pub(crate) fn outlive(
+        &self,
+        output: &Borrows,
+        bounds: &[(ImmutableString, ImmutableString)],
+    ) -> Option<bool> {
+        match (self, output) {
+            (Borrows::None, _) | (_, Borrows::None) => Some(true),
+            (Borrows::One(lifetime), Borrows::One(output)) => {
+                Some(outlives_lifetime(bounds, lifetime, output))
+            }
+            (Borrows::AtLeast(lifetime), Borrows::One(output))
+                if outlives_lifetime(bounds, lifetime, output) =>
+            {
+                Some(true)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A function's own signature, as its body is checked against it: the
@@ -497,22 +523,33 @@ pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Optio
             region => region.clone(),
         })
         .collect();
+    // A type parameter the output has is the same on both sides: its
+    // regions are the caller's, whatever they are.
+    let generic: Vec<&Region> = output
+        .iter()
+        .filter(|region| matches!(region, Region::Parameter(_)))
+        .collect();
+    let input = |shape: &Shape| {
+        let regions = shape.all().filter(|region| !generic.contains(region));
+        match (one(regions), &shape.outer) {
+            (Borrows::Several, Some(outer)) => match one(std::iter::once(outer)) {
+                Borrows::One(outer) => Borrows::AtLeast(outer),
+                _ => Borrows::Several,
+            },
+            (borrows, _) => borrows,
+        }
+    };
     Own {
-        receiver: read
-            .receiver
-            .as_ref()
-            .map_or(Borrows::None, |shape| borrows(shape.all())),
-        parameters: read
-            .parameters
+        receiver: read.receiver.as_ref().map_or(Borrows::None, input),
+        parameters: read.parameters.iter().map(input).collect(),
+        output: one(output
             .iter()
-            .map(|shape| borrows(shape.all()))
-            .collect(),
-        output: borrows(output.iter()),
+            .filter(|region| !matches!(region, Region::Parameter(_)))),
     }
 }
 
 /// The one lifetime `regions` all are.
-fn borrows<'a>(regions: impl Iterator<Item = &'a Region>) -> Borrows {
+fn one<'a>(regions: impl Iterator<Item = &'a Region>) -> Borrows {
     let mut found = None;
     for region in regions {
         let lifetime = match region {

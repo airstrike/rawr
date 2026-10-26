@@ -427,12 +427,9 @@ impl Recorder {
         // A parameter's borrows returned where the signature's lifetimes
         // are several, which these facts do not tell apart.
         if let Some(own) = &self.body.own {
-            use super::signature::Borrows;
             let reached = super::reaching(&self.body, &[local]);
             let several = own.parameters.iter().any(|(parameter, borrows, _)| {
-                reached[parameter.0 as usize]
-                    && (*borrows == Borrows::Several
-                        || *borrows != Borrows::None && own.output == Borrows::Several)
+                reached[parameter.0 as usize] && borrows.outlive(&own.output, &own.bounds).is_none()
             });
             if several {
                 self.unmodeled(
