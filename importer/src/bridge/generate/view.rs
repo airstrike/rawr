@@ -164,6 +164,26 @@ pub(super) fn render_families(output: &mut Vec<u8>) -> Result<(), request::Error
         )
         .map_err(|_| request::Error::Encoding)?;
     }
+    // A native value a view borrows lives in the home, which its arena slot
+    // reaches (D568).
+    if VIEW_TYPES.with_borrow(|types| !types.is_empty()) {
+        writeln!(
+            output,
+            "impl<T: std::any::Any + Send> Homed for {RECIPE}::Native<T> {{
+    fn shared(&self, call: &mut dyn FnMut(&dyn std::any::Any)) -> Result<(), Error> {{
+        self.read(|value| call(value)).map_err(Error::Home)
+    }}
+    fn mutable(&self, call: &mut dyn FnMut(&mut dyn std::any::Any)) -> Result<(), Error> {{
+        self.write(|value| call(value)).map_err(Error::Home)
+    }}
+    fn as_any(&self) -> &dyn std::any::Any {{
+        self
+    }}
+}}
+"
+        )
+        .map_err(|_| request::Error::Encoding)?;
+    }
     Ok(())
 }
 
@@ -406,7 +426,7 @@ pub(super) fn render(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::E
             let rust = concrete_type(target).ok_or(drift("a view call's borrowed input"))?;
             writeln!(
                 output,
-                "    let argument_{position}_copy: {rust} = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.shared::<{rust}, _>(handle, |value| Clone::clone(value))? }};"
+                "    let argument_{position}: {RECIPE}::Native<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.home::<{rust}, {RECIPE}::Native<{rust}>>(handle, |value| {RECIPE}::Native::keep(value).map_err(Error::Home))? }};"
             )
             .map_err(encoding)?;
             operands.push(Operand::Borrowed);
@@ -475,7 +495,7 @@ pub(super) fn render(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::E
                     parameters.join(", "),
                     values.join(", ")
                 ),
-                Operand::Borrowed => format!("&argument_{position}_copy"),
+                Operand::Borrowed => format!("argument_{position}_borrowed"),
                 _ => format!("Clone::clone(&argument_{position})"),
             })
             .collect::<Vec<_>>();
@@ -487,35 +507,36 @@ pub(super) fn render(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::E
         {
             return Err(drift("a view constructor's operands"));
         }
+        // The dry run borrows each native value the call borrows where it
+        // lives, in the home.
+        let mut ran = format!(
+            "lend(arguments.arena, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
+        let _ = {path}({});
+    }})))",
+            dry_arguments.join(", ")
+        );
+        for (position, operand) in operands.iter().enumerate().rev() {
+            if matches!(operand, Operand::Borrowed) {
+                ran = format!(
+                    "argument_{position}.read(|argument_{position}_borrowed| {ran}).map_err(Error::Home)?"
+                );
+            }
+        }
         writeln!(
             output,
             "    let dry = {RECIPE}::dry_context();
     let recorded = std::cell::RefCell::new(Vec::new());
     let failure = std::cell::RefCell::new(None::<Error>);
-    let ran = lend(arguments.arena, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
-        let _ = {path}({});
-    }})));
+    let ran = {ran};
     if let Some(error) = failure.into_inner() {{
         return Err(error);
     }}
     if let Err(panic) = ran {{
         std::panic::resume_unwind(panic);
     }}
-    let argument_{made_position} = std::sync::Arc::new(recorded.into_inner());",
-            dry_arguments.join(", ")
+    let argument_{made_position} = std::sync::Arc::new(recorded.into_inner());"
         )
         .map_err(encoding)?;
-    }
-    // Each value a native call borrows goes into the home, which each
-    // lowering lends.
-    for (position, operand) in operands.iter().enumerate() {
-        if matches!(operand, Operand::Borrowed) {
-            writeln!(
-                output,
-                "    let argument_{position} = {RECIPE}::Native::keep(argument_{position}_copy).map_err(Error::Value)?;"
-            )
-            .map_err(encoding)?;
-        }
     }
     let replayed = operands
         .iter()
