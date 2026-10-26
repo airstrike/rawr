@@ -96,12 +96,13 @@ input = '''{"type": "object", "properties": {
 
 [[tool]]
 name = "do"
-description = "Run a sequence of inputs in the running iced window, each seeing the state the last left: `actions` of click (text, id, or x and y), type (text) and key (key)."
+description = "Run a sequence of inputs in the running iced window, each seeing the state the last left: `actions` of click (text, id, or x and y), type (text), key (key) and drag (from x and y to to_x and to_y; release false leaves the button down)."
 input = '''{"type": "object", "properties": {
     "actions": {"type": "array", "items": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["click", "type", "key"]},
+        "action": {"type": "string", "enum": ["click", "type", "key", "drag"]},
         "text": {"type": "string"}, "id": {"type": "string"}, "key": {"type": "string"},
-        "x": {"type": "number"}, "y": {"type": "number"}
+        "x": {"type": "number"}, "y": {"type": "number"},
+        "to_x": {"type": "number"}, "to_y": {"type": "number"}, "release": {"type": "boolean"}
     }, "required": ["action"]}},
     "screenshot": {"type": "boolean", "description": "Return a screenshot of the window after the inputs"}
 }, "required": ["actions"]}'''

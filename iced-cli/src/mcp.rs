@@ -212,6 +212,24 @@ fn input(tool: &str, arguments: &Value) -> Result<String, String> {
             "key" | "press_key" => text("key")
                 .map(|key| format!("key {}\n", single(key)))
                 .ok_or_else(|| "`key` needs `key`".to_owned()),
+            // `release: false` leaves the button down, so a screenshot
+            // shows the drag under way.
+            "drag" => match (
+                step.get("x").and_then(Value::as_f64),
+                step.get("y").and_then(Value::as_f64),
+                step.get("to_x").and_then(Value::as_f64),
+                step.get("to_y").and_then(Value::as_f64),
+            ) {
+                (Some(x), Some(y), Some(to_x), Some(to_y)) => {
+                    let command = if step.get("release").and_then(Value::as_bool) == Some(false) {
+                        "hold"
+                    } else {
+                        "drag"
+                    };
+                    Ok(format!("{command} {x} {y} {to_x} {to_y}\n"))
+                }
+                _ => Err("`drag` needs `x`, `y`, `to_x` and `to_y`".to_owned()),
+            },
             "reset" => Ok("reset\n".to_owned()),
             other => Err(format!("unknown action `{other}`")),
         }
@@ -388,6 +406,17 @@ mod tests {
             )
             .unwrap(),
             "click-id name\nkey cmd+a\n"
+        );
+        assert_eq!(
+            input(
+                "do",
+                json!({ "actions": [
+                    { "action": "drag", "x": 1, "y": 2, "to_x": 3, "to_y": 4 },
+                    { "action": "drag", "x": 1, "y": 2, "to_x": 3, "to_y": 4, "release": false },
+                ] })
+            )
+            .unwrap(),
+            "drag 1 2 3 4\nhold 1 2 3 4\n"
         );
         assert_eq!(input("reset", json!({})).unwrap(), "reset\n");
     }
