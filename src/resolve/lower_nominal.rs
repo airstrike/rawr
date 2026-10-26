@@ -31829,6 +31829,12 @@ impl<'a> Parser<'a> {
         {
             return self.parse_print(stream, name_span);
         }
+        if matches!(self.peek(), Token::Bang)
+            && name.as_str() == "dbg"
+            && self.models.import(&name).is_none()
+        {
+            return self.parse_dbg(name_span);
+        }
         // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
         // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
         if matches!(self.peek(), Token::Bang)
@@ -32646,6 +32652,71 @@ impl<'a> Parser<'a> {
         let stderr = origin::Fragment::plain(if stderr { "true" } else { "false" });
         let source = self.prelude_op(PreludeOp::Print, [text, stderr]);
         Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)))
+    }
+
+    /// `dbg!(value)`: `[file:line:column] value = {value:#?}` on stderr, as
+    /// std's `dbg!` writes it, and the value itself. `dbg!()` writes only
+    /// where it is.
+    fn parse_dbg(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
+        self.next();
+        let at = name_span.start();
+        let file = match self.source_file() {
+            Some(file) => cargo_env::file_path(&file),
+            None => self.source_identity(),
+        };
+        let place = format!(
+            "[{file}:{}:{}]",
+            at.line().unwrap_or_default(),
+            at.position().unwrap_or_default()
+        );
+        if matches!(self.peek(), Token::Unit) {
+            let (_, end) = self.next();
+            let text = origin::Fragment::plain(format!("{:?}", format!("{place}\n")));
+            let source = self.prelude_op(PreludeOp::Print, [text, "true".into()]);
+            return Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)));
+        }
+        self.expect(Token::LeftParen, "'(' after `dbg!`")?;
+        let tokens = self.input.clone();
+        let mut value = self.parse_expr()?;
+        let stop = self.position();
+        if matches!(self.peek(), Token::Comma) {
+            self.next();
+        }
+        if !matches!(self.peek(), Token::RightParen) {
+            return Err(self.unsupported("`dbg!` of more than one value"));
+        }
+        let end = self.expect(Token::RightParen, "')' after `dbg!`")?;
+        let tokens = tokens
+            .take_while(|(_, position)| *position != stop)
+            .collect::<Vec<_>>();
+        let key = self.models.sources.key(self.models.context.index());
+        let written = self
+            .models
+            .sources
+            .resolve(key)
+            .ok()
+            .and_then(|source| stringify_tokens(source.text(), &tokens, stop))
+            .unwrap_or_else(|| {
+                tokens
+                    .iter()
+                    .map(|(token, _)| token.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+        self.move_local(&mut value)?;
+        let held = self.temporary("dbg");
+        let debug = self.debug_source(&value.ty, held.as_str().into(), value.span)?;
+        let pretty = self.prelude_op(PreludeOp::PrettyDebug, [debug]);
+        let mut text = origin::Fragment::plain(format!("{:?} + ", format!("{place} {written} = ")));
+        text.push(pretty);
+        text.push_text(" + \"\\n\"");
+        let print = self.prelude_op(PreludeOp::Print, [text, "true".into()]);
+        let mut source = origin::Fragment::plain(format!("{{ let {held} = "));
+        source.push(value.rendered_source());
+        source.push_text("; ");
+        source.push(print);
+        source.push_text(format!("; {held} }}"));
+        Ok(self.operator_expr(source, value.ty, span(name_span.start(), end)))
     }
 
     /// The rest of [`Self::parse_name_primary`], kept out of its frame: a

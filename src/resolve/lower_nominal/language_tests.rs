@@ -298,6 +298,53 @@ fn language_print_macros_format_like_format() {
     rejected(r#"pub fn run() -> i64 { println!("{}", 1, 2); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!("{}"); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { eprintln!("{:x}", "x"); 0 } run()"#);
+}
+
+#[test]
+fn language_dbg_writes_the_value_where_it_is_and_returns_it() {
+    use std::sync::{Arc, Mutex};
+    let written = Arc::new(Mutex::new(Vec::<(crate::Output, String)>::new()));
+    let mut engine = Engine::new();
+    let log = written.clone();
+    engine.on_output(move |output, text| log.lock().unwrap().push((output, text.to_owned())));
+    let value = engine
+        .eval::<i64>(
+            r#"
+            #[derive(Debug)]
+            struct Tick { n: i64 }
+            fn main() -> i64 {
+                let a = 2;
+                let doubled = dbg!(a * 2);
+                dbg!(Tick { n: doubled });
+                dbg!();
+                dbg!(Some("x"),).map_or(0, |s| s.len() as i64) + doubled
+            }
+            main()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 5);
+    let written = written.lock().unwrap();
+    assert!(written
+        .iter()
+        .all(|(output, _)| *output == crate::Output::Stderr));
+    // Each line starts with where the macro is: `[file:line:column]`.
+    let texts = written
+        .iter()
+        .map(|(_, text)| {
+            assert!(text.starts_with('['), "{text}");
+            &text[text.find(']').unwrap() + 1..]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            " a * 2 = 4\n",
+            " Tick { n: doubled } = Tick {\n    n: 4,\n}\n",
+            "\n",
+            " Some(\"x\") = Some(\n    \"x\",\n)\n",
+        ]
+    );
     rejected(r#"pub fn run() -> i64 { print!(); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { let x: i64 = println!("a"); x } run()"#);
 }

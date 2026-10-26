@@ -7,6 +7,7 @@
   <tr><th>Macro</th><th>Notes</th></tr>
   <tr><td><code>println!</code> <code>print!</code></td><td>Write to stdout.</td></tr>
   <tr><td><code>eprintln!</code> <code>eprint!</code></td><td>Write to stderr.</td></tr>
+  <tr><td><code>dbg!</code></td><td>Writes <code>[file:line:column] expression = value</code> to stderr, with the value&rsquo;s pretty <code>{:#?}</code>, and returns the value, as in a Rust debug build. <code>dbg!()</code> writes only where it is.</td></tr>
   <tr><td><code>format!</code></td><td>Builds a <code>String</code>.</td></tr>
   <tr><td><code>write!</code> <code>writeln!</code></td><td>Write to a <code>Formatter</code> in a <code>Display</code> or <code>Debug</code> impl. After <code>use std::fmt::Write;</code> they also write to a <code>String</code>. Each returns a <code>fmt::Result</code>.</td></tr>
   <tr><td><code>panic!</code></td><td>Exits with status 101.</td></tr>
