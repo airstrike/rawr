@@ -5,7 +5,9 @@
 //! `&mut self` method on a field of `self`, struct patterns of imported
 //! structs and struct variants, and `get` and `get_mut`, whose `Option<&T>`
 //! and `Option<&mut T>` a pattern reads and writes back. A method's lent
-//! `&str` is a `&str` borrowed for the call (D568). Build the driver
+//! `&str` is a `&str` borrowed for the call (D568). A type alias of a
+//! builtin, as iced's `markdown::Uri` is `String`, names the builtin
+//! through its module. Build the driver
 //! first, as for `plain`.
 
 use std::fs;
@@ -36,7 +38,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
     let expected = text(&native.stdout);
     assert!(
         expected.contains("Some(Pane { id: 1, is_pinned: true })")
-            && expected.starts_with("left true\n5\n"),
+            && expected.starts_with("TOP!\nmid\nleft true\n5\n"),
         "{expected}"
     );
 

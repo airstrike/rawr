@@ -1541,8 +1541,16 @@ fn build(
                     false,
                 ]),
             ),
-            Representability::Value(_)
-            | Representability::Function(_)
+            // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
+            Representability::Value(plan) => {
+                if plan.parameters().is_empty()
+                    && let Some(builtin) = rawr_import::surface::facade::builtin_alias(plan.ty())
+                {
+                    builder.builtin_alias(entry.relative.as_ref(), builtin)?;
+                }
+                continue;
+            }
+            Representability::Function(_)
             | Representability::Method(_)
             | Representability::Constant(_)
             | Representability::FunctionItem(_)

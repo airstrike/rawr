@@ -1952,6 +1952,9 @@ fn host_target(
             definition: definition.clone(),
             owner: host.type_owner(&qualified).cloned(),
         })),
+        Some(host::Entry::Builtin(builtin)) => Ok(Target::Type(type_ref::Target::Alias(
+            type_ref::Alias::builtin(builtin, reference),
+        ))),
         Some(host::Entry::Item(definitions)) => Ok(Target::HostItem {
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),

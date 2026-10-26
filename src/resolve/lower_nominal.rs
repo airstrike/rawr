@@ -42124,6 +42124,13 @@ impl<'a> Parser<'a> {
                 }
                 _ => name.clone(),
             };
+            // A crate's alias of a builtin, as iced's `markdown::Uri` is
+            // `String`.
+            if let Some(crate::host::Entry::Builtin(builtin)) = self.models.host.entry(&path)
+                && let Some(ty) = builtin_path_type(builtin)
+            {
+                return Ok(ty);
+            }
             let Some(definition) = self.models.host.source_type(&path).cloned() else {
                 return Err(Error::UnknownType {
                     name,
@@ -42580,6 +42587,16 @@ impl<'a> Parser<'a> {
             "char" => Ty::Char,
             "String" => Ty::String,
             name if let Some(ty) = numeric_type(name) => ty,
+            // `use iced::widget::markdown::Uri;`: a crate's alias of a
+            // builtin.
+            name if let Some(binding) = self.models.import(name)
+                && matches!(binding.target, item::Import::Alias)
+                && let Some(crate::host::Entry::Builtin(builtin)) =
+                    self.models.host.entry(&binding.qualified)
+                && let Some(ty) = builtin_path_type(builtin) =>
+            {
+                ty
+            }
             _ => {
                 #[cfg(feature = "rust-import")]
                 if let Some(binding) = self.models.import(name).cloned()

@@ -35,6 +35,12 @@ const BUILTIN_TYPES: &[&str] = &[
     "usize", "f32", "i128", "u128",
 ];
 
+/// Whether a re-export's `target` is a builtin type, as a facade's
+/// `builtin_alias` names one: a single segment such as `String`.
+pub(crate) fn is_builtin_alias_target(target: &path::Path) -> bool {
+    matches!(target.segments(), [name] if BUILTIN_TYPES.contains(&name.as_str()))
+}
+
 /// The runtime builtin a Rust numeric type is: every integer kind up to 64
 /// bits an `i64`, `f32` an `f64` (the checker keeps the kinds apart), and
 /// `i128` and `u128` an `i64` or, past its range, a boxed `i128` or `u128`.
@@ -171,6 +177,9 @@ pub(crate) enum Entry<'a> {
     Type(&'a type_def::Definition),
     Item(&'a [item::Definition]),
     Endpoint(&'a endpoint::Contract),
+    /// A facade's alias of a builtin type, as iced's `markdown::Uri` is
+    /// `String`: the builtin's name.
+    Builtin(&'a str),
 }
 
 #[cfg(feature = "rust-import")]
@@ -777,6 +786,8 @@ impl Registry {
             })
         } else if let Some(ty) = self.type_by_path(&path) {
             (ty.visibility() == type_def::Visibility::Public).then_some(Entry::Type(ty))
+        } else if let Some(builtin) = self.builtin_alias(&path) {
+            Some(Entry::Builtin(builtin))
         } else {
             if let Some((endpoint, _)) = self.operation_endpoint(qualified) {
                 return Some(Entry::Endpoint(endpoint));
@@ -807,6 +818,12 @@ impl Registry {
             .iter()
             .chain(self.types.iter().map(type_def::Definition::path_ref))
             .chain(self.items.iter().map(item::Definition::path_ref))
+            .chain(
+                self.aliases
+                    .iter()
+                    .filter(|(_, target)| is_builtin_alias_target(target))
+                    .map(|(alias, _)| alias),
+            )
             .filter(|path| inside(path))
             .filter(|path| self.entry(&path.segments().join("::")).is_some())
             .map(|path| ImmutableString::from(path.name()))
@@ -1004,11 +1021,20 @@ impl Registry {
         found(path).or_else(|| found(&self.canonical(path)?))
     }
 
+    /// The builtin a facade names at `path` (`Entry::Builtin`).
+    pub(crate) fn builtin_alias(&self, path: &path::Path) -> Option<&str> {
+        self.aliases.iter().find_map(|(alias, target)| {
+            (alias == path && is_builtin_alias_target(target))
+                .then(|| target.segments()[0].as_str())
+        })
+    }
+
     /// The canonical spelling of a path through a facade re-export:
     /// `iced::event::Event::Keyboard` is `iced::Event::Keyboard`.
     pub(crate) fn canonical(&self, path: &path::Path) -> Option<path::Path> {
         self.aliases
             .iter()
+            .filter(|(_, target)| !is_builtin_alias_target(target))
             .find_map(|(alias, target)| path.rebase(alias, target))
     }
 

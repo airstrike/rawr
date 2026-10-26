@@ -66,6 +66,20 @@ pub(crate) struct Alias {
 }
 
 impl Alias {
+    /// A facade's alias of the builtin `name`, as iced's `markdown::Uri` is
+    /// `String` (`host::Entry::Builtin`).
+    pub(crate) fn builtin(name: &str, span: Span) -> Self {
+        Self {
+            params: Box::default(),
+            target: Some(Box::new(Type::Path(Path {
+                name: name.into(),
+                target: Target::Builtin,
+                arguments: Box::default(),
+                span,
+            }))),
+        }
+    }
+
     /// The alias's target with `arguments` for its parameters, written at
     /// `span`.
     pub(crate) fn expand(&self, arguments: &[Type], span: Span) -> Option<Type> {

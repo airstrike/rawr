@@ -342,6 +342,38 @@ impl Builder {
         Ok(self)
     }
 
+    /// Name the builtin type `builtin` at `path`, as Rust's `pub type Uri =
+    /// String;` in iced's `markdown` names `String`. `path` is relative.
+    #[cfg(feature = "rust-import")]
+    pub fn builtin_alias(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        builtin: &str,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        let target = host::path::Path::parse(builtin)?;
+        if !host::is_builtin_alias_target(&target) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export of an unknown builtin",
+                incoming: "re-export",
+            });
+        }
+        self.ensure_vacant(&path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path, target));
+        Ok(self)
+    }
+
     /// Declare a host type with explicit structural parameters and capabilities.
     pub fn type_<T: 'static>(
         &mut self,
@@ -1219,12 +1251,14 @@ impl Builder {
         #[cfg(feature = "rust-import")]
         append_profile_items(&mut items, self.profile_items)?;
         let items = items.into_boxed_slice();
-        // A re-export names one of this facade's types at another path.
+        // A re-export names one of this facade's types at another path, or a
+        // builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
-            if self
-                .types
-                .binary_search_by(|definition| definition.path_ref().cmp(target))
-                .is_err()
+            if !host::is_builtin_alias_target(target)
+                && self
+                    .types
+                    .binary_search_by(|definition| definition.path_ref().cmp(target))
+                    .is_err()
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),
@@ -1331,12 +1365,14 @@ impl Builder {
             .retain_checked(Some(fingerprint_items), Some(fingerprint_bytes))
             .map_err(|_| host::Error::Allocation)?;
         let items = items.into_boxed_slice();
-        // A carried re-export names one of this facade's types at another path.
+        // A carried re-export names one of this facade's types at another
+        // path, or a builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
-            if self
-                .types
-                .binary_search_by(|definition| definition.path_ref().cmp(target))
-                .is_err()
+            if !host::is_builtin_alias_target(target)
+                && self
+                    .types
+                    .binary_search_by(|definition| definition.path_ref().cmp(target))
+                    .is_err()
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),
