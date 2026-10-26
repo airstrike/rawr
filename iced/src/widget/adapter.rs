@@ -2424,7 +2424,7 @@ mod tests {
         }
 
         pub(super) fn failing() -> String {
-            source("value: i64", "throw \"state failed\"", false)
+            source("value: i64", "panic!(\"state failed\")", false)
         }
 
         pub(super) fn ready(value: i64, schema: bool, update: bool) -> String {
@@ -2787,46 +2787,46 @@ mod tests {
                 #[widget]
                 impl Dial {
                     fn state(&self) -> State { State { value: 0 } }
-                    fn children(&self) -> List<Message> { throw "children"; }
-                    fn diff(&mut self, state: &mut State) { throw "diff"; }
-                    fn size(&self) -> Size { throw "size"; }
+                    fn children(&self) -> List<Message> { panic!("children"); }
+                    fn diff(&mut self, state: &mut State) { panic!("diff"); }
+                    fn size(&self) -> Size { panic!("size"); }
 
                     fn layout(
                         &mut self,
                         state: &mut State,
                         input: rawr_iced::widget::layout::Input,
-                    ) -> rawr_iced::widget::layout::Node { throw "layout"; }
+                    ) -> rawr_iced::widget::layout::Node { panic!("layout"); }
 
                     fn update(
                         &mut self,
                         state: &mut State,
                         input: rawr_iced::widget::event::Input,
-                    ) -> rawr_iced::widget::event::Outcome<Message> { throw "update"; }
+                    ) -> rawr_iced::widget::event::Outcome<Message> { panic!("update"); }
 
                     fn draw(
                         &self,
                         state: &State,
                         renderer: &mut rawr_iced::Renderer,
                         input: rawr_iced::widget::draw::Input,
-                    ) { throw "draw"; }
+                    ) { panic!("draw"); }
 
                     fn mouse_interaction(
                         &self,
                         state: &State,
                         input: rawr_iced::widget::mouse::Input,
-                    ) -> Interaction { throw "mouse"; }
+                    ) -> Interaction { panic!("mouse"); }
 
                     fn operate(
                         &mut self,
                         state: &mut State,
                         input: rawr_iced::widget::operation::Input,
-                    ) -> rawr_iced::widget::operation::Outcome { throw "operate"; }
+                    ) -> rawr_iced::widget::operation::Outcome { panic!("operate"); }
 
                     fn overlay(
                         &mut self,
                         state: &mut State,
                         input: rawr_iced::widget::overlay::Input,
-                    ) -> rawr_iced::widget::overlay::Value<Message> { throw "overlay"; }
+                    ) -> rawr_iced::widget::overlay::Value<Message> { panic!("overlay"); }
                 }
 
                 impl App {
@@ -3129,7 +3129,7 @@ mod tests {
                 3 => "list![first(), duplicate()]",
                 4 => "list![second(), third(), first()]",
                 5 => "list![second()]",
-                _ => "throw \"children\"",
+                _ => "panic!(\"children\")",
             };
             let children = format!("{children:<48}");
             format!(

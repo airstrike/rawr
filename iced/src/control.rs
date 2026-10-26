@@ -434,7 +434,7 @@ impl State {
     fn view(&self) -> Element<'_, Message> { text("primary") }
 
     #[preview(name = "Broken")]
-    fn broken(&self) -> Element<'_, Message> { throw "broken candidate" }
+    fn broken(&self) -> Element<'_, Message> { panic!("broken candidate") }
 }
 
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
@@ -447,7 +447,7 @@ use iced::Element;
 use iced::widget::text;
 
 #[preview(name = "Broken")]
-fn broken() -> Element<'_, ()> { throw "broken standalone" }
+fn broken() -> Element<'_, ()> { panic!("broken standalone") }
 
 #[preview(name = "Healthy")]
 fn healthy() -> Element<'_, ()> { text("healthy standalone") }

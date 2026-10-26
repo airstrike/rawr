@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn failed_compile_retains_only_started_phases_and_the_exact_failure() {
         let compiler = Compiler::new().unwrap();
-        let parse_failure = compiler.check_source_observed("fn");
+        let parse_failure = compiler.check_source_observed("fn f(");
         assert!(parse_failure.outcome().is_err());
         assert_eq!(parse_failure.timing().attempts().len(), 1);
         assert_eq!(

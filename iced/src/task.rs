@@ -2462,7 +2462,7 @@ mod tests {
         let effects = effects_facade();
         let starts = Arc::new(AtomicUsize::new(0));
         let mut adapter = adapter(
-            &nested_source("throw \"intermediate mapper failed\""),
+            &nested_source("panic!(\"intermediate mapper failed\")"),
             effects,
             starts.clone(),
         );

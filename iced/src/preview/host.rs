@@ -3228,7 +3228,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let preview = host.preview.as_ref().unwrap().instance;
         project.write(
             "src/main.rs",
-            &added_application_source("throw \"added application boot failed\""),
+            &added_application_source("panic!(\"added application boot failed\")"),
         );
         let replacement = host
             .plan_for_test(reload_candidate(&engine, &project))
@@ -3338,7 +3338,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
 
         project.write(
             "src/main.rs",
-            &owners_source("i64", "i64", "throw \"app failed\"", ""),
+            &owners_source("i64", "i64", "panic!(\"app failed\")", ""),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, reload_registry())
@@ -3350,7 +3350,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
 
         project.write(
             "src/main.rs",
-            &owners_source("i64", "i64", "", "throw \"preview failed\""),
+            &owners_source("i64", "i64", "", "panic!(\"preview failed\")"),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, reload_registry())
@@ -4187,7 +4187,7 @@ impl State {
     }
 
     fn dark(&self) -> Theme { Theme::Dark }
-    fn broken_theme(&self) -> Theme { throw "broken theme" }
+    fn broken_theme(&self) -> Theme { panic!("broken theme") }
 
     #[preview(name = "Default", group = "counter", themes = [State::dark, State::broken_theme])]
     #[preview(name = "Compact", group = "counter", themes = [State::dark, State::broken_theme])]
@@ -4198,7 +4198,7 @@ impl State {
     }
 
     #[preview(name = "Broken", group = "counter")]
-    fn broken(&self) -> Element<'_, Message> { throw "broken subject" }
+    fn broken(&self) -> Element<'_, Message> { panic!("broken subject") }
 }
 
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
@@ -4238,7 +4238,7 @@ impl State {
             checkbox(self.toggled)
                 .label("Preview toggle")
                 .on_toggle(Message::Toggle),
-            text(self.value),
+            text(&self.value),
             text(self.toggled),
         ]
     }
@@ -4282,7 +4282,7 @@ use iced::widget::{{column, text, text_input}};
 #[derive(Debug, Clone)] enum Message {{ Input(String) }}
 
 impl Message {{
-    fn map_input(value: String) -> Message {{ throw "retained mapper failed" }}
+    fn map_input(value: String) -> Message {{ panic!("retained mapper failed") }}
 }}
 
 impl State {{
@@ -4310,7 +4310,7 @@ use iced::widget::{{column, slider, text}};
 #[derive(Debug, Clone)] enum Message {{ Changed(i64) }}
 
 impl Message {{
-    fn map_slider(value: i64) -> Message {{ throw "retained slider mapper failed" }}
+    fn map_slider(value: i64) -> Message {{ panic!("retained slider mapper failed") }}
 }}
 
 impl State {{
@@ -4551,7 +4551,7 @@ use iced::widget::text;
 #[derive(Debug, Clone, Copy)] enum Message { Tick }
 
 impl State {
-    fn new() -> State { throw "broken application boot" }
+    fn new() -> State { panic!("broken application boot") }
     fn update(&mut self, message: Message) {}
     fn view(&self) -> Element<'_, Message> { text("application") }
 }
@@ -4575,7 +4575,7 @@ use iced::widget::text;
 
 impl State {
     fn update(&mut self, message: Message) {}
-    fn view(&self) -> Element<'_, Message> { throw "broken application view" }
+    fn view(&self) -> Element<'_, Message> { panic!("broken application view") }
 }
 
 #[preview(name = "Healthy")]
@@ -4598,7 +4598,7 @@ impl State {
     fn new() -> State { State {} }
     fn update(&mut self, message: Message) {}
     fn view(&self) -> Element<'_, Message> { text("application") }
-    fn theme(&self) -> Theme { throw "broken application theme" }
+    fn theme(&self) -> Theme { panic!("broken application theme") }
 
 }
 
@@ -4627,7 +4627,7 @@ impl State {
         (State {}, Task::done(Message::Tick))
     }
     fn update(&mut self, message: Message) {}
-    fn view(&self) -> Element<'_, Message> { throw "broken view with work" }
+    fn view(&self) -> Element<'_, Message> { panic!("broken view with work") }
 }
 
 #[preview(name = "Healthy")]
@@ -4784,7 +4784,7 @@ use iced::widget::{button, column, text};
 impl State {
     fn update(&mut self, message: Message) -> Task<Message> {
         self.value += 1;
-        throw "invalid Task"
+        panic!("invalid Task")
     }
     #[preview]
     fn view(&self) -> Element<'_, Message> {
@@ -4801,7 +4801,7 @@ impl State {
 use iced::Element;
 
 #[preview(name = "Broken standalone")]
-fn broken() -> Element<'_, ()> { throw "broken standalone subject" }
+fn broken() -> Element<'_, ()> { panic!("broken standalone subject") }
 "#
     }
 
@@ -4825,22 +4825,22 @@ pub fn main() -> iced::Result {
 
     fn child_application(failure: &str) -> String {
         let boot = if failure == "boot" {
-            "throw \"broken child boot\""
+            "panic!(\"broken child boot\")"
         } else {
             "State {}"
         };
         let update = if failure == "update" {
-            "throw \"broken child update\""
+            "panic!(\"broken child update\")"
         } else {
             ""
         };
         let view = if failure == "view" {
-            "throw \"broken child view\""
+            "panic!(\"broken child view\")"
         } else {
             "button(\"Trigger\").on_press(Message::Tick)"
         };
         let theme = if failure == "theme" {
-            "throw \"broken child theme\""
+            "panic!(\"broken child theme\")"
         } else {
             "Theme::Light"
         };

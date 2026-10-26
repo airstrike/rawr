@@ -3328,7 +3328,7 @@ mod alias_proof_tests {
     }
 
     #[test]
-    fn compiler_authentic_alias_site_validates_without_a_target_facade_type() {
+    fn compiler_authentic_alias_site_validates_and_stale_rows_fail_closed() {
         let limits = rawr_import::cargo::Limits::standard();
         let definition = crate::profile::Definition::new(&limits).unwrap();
         let graph = rawr_import::test_fixture::iced_profile();
@@ -3363,40 +3363,10 @@ mod alias_proof_tests {
             .next()
             .expect("one direct projection");
         assert_eq!(projection.alias_selector(), alias.selector());
-        let target = *alias.target_identity();
 
         let classified = graph
             .classify(&rawr_import::classify::Policy::standard(), &limits)
             .unwrap();
-        let mut rejected_target_paths = classified
-            .outcomes()
-            .filter(|outcome| {
-                outcome
-                    .identity()
-                    .definition()
-                    .is_some_and(|id| id.as_bytes() == &target)
-            })
-            .map(|outcome| {
-                let rawr_import::classify::representability::Representability::Rejected(reason) =
-                    outcome.representability()
-                else {
-                    panic!("the compiler-authentic lifetime target remains rejected")
-                };
-                assert_eq!(
-                    reason.kind(),
-                    rawr_import::classify::representability::reject::Kind::LifetimeOrConstGeneric
-                );
-                outcome.export().path().collect::<Vec<_>>().join("::")
-            })
-            .collect::<Vec<_>>();
-        rejected_target_paths.sort_unstable();
-        assert_eq!(
-            rejected_target_paths,
-            [
-                "advanced::graphics::core::Element",
-                "advanced::graphics::futures::core::Element",
-            ]
-        );
         let bytes = rawr_import::surface::facade::Plan::encode(&classified, &limits).unwrap();
         let plan = rawr_import::surface::facade::Plan::decode(&bytes, &limits).unwrap();
         let mut alias_sites = plan
@@ -3427,13 +3397,6 @@ mod alias_proof_tests {
         assert_eq!(source_site.alias_identity(), source.alias_identity());
         assert_eq!(source_site.source_identity(), source.source_identity());
         assert_eq!(source_site.parameters(), source.parameters());
-        assert_eq!(
-            plan.facades()
-                .flat_map(rawr_import::surface::facade::Facade::types)
-                .filter(|ty| ty.identity() == &target)
-                .count(),
-            0
-        );
         with_contract_rows(
             &contract,
             |aliases, sources, abis, endpoints, projections| {

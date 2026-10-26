@@ -59,7 +59,7 @@ fn emit_live_runner_for_real_api_typecheck() {
     snapshot
         .file(
             "/generated-fixture/main.rs",
-            b"#[preview] pub fn sample() -> iced::Element<()> { throw \"compile-only fixture\" }",
+            b"#[preview] pub fn sample() -> iced::Element<()> { panic!(\"compile-only fixture\") }",
         )
         .unwrap();
     let demand = contract

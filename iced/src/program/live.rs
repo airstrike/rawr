@@ -1283,8 +1283,8 @@ impl State {
     fn view(&self) -> Element<'_, Message> {
         column![
             slider(0..=100, self.slider, Message::Slide).step(5),
-            text_input("Burst input", self.value).on_input(Message::Input),
-            text(self.value),
+            text_input("Burst input", &self.value).on_input(Message::Input),
+            text(&self.value),
             text(self.deliveries),
             text(self.slider),
             text(self.slider_deliveries),
@@ -1326,7 +1326,7 @@ use iced::widget::text;
 #[derive(Debug, Clone, Copy)] enum Message {{ Tick }}
 impl State {{
     fn update(&mut self, message: Message) {{}}
-    fn view(&self) -> Element<Message> {{ throw "{message}" }}
+    fn view(&self) -> Element<Message> {{ panic!("{message}") }}
 }}
 pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 "#

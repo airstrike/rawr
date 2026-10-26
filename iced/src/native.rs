@@ -128,9 +128,9 @@ mod tests {
         let manifest = include_str!("../Cargo.toml");
 
         assert!(manifest.contains(&format!("rev = \"{}\"", super::ICED_REVISION)));
-        assert!(manifest.contains("\"tiny-skia\""));
-        assert!(manifest.contains("\"wgpu\""));
-        assert!(manifest.contains("[target.'cfg(target_os = \"linux\")'.dependencies]"));
-        assert!(manifest.contains("features = [\"x11\", \"wayland\"]"));
+        // The standalone build links both renderers and Linux's window systems.
+        assert!(manifest.contains("\"iced/tiny-skia\""));
+        assert!(manifest.contains("\"iced/wgpu\""));
+        assert!(manifest.contains("\"iced/x11\", \"iced/wayland\""));
     }
 }

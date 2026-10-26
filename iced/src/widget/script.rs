@@ -355,7 +355,7 @@ mod tests {
 
                 #[widget]
                 impl Dial {{
-                    fn size(&self) -> rawr_iced::widget::layout::Size {{ throw "{hook}" }}
+                    fn size(&self) -> rawr_iced::widget::layout::Size {{ panic!("{hook}") }}
                 }}
 
                 impl Dial {{
@@ -389,7 +389,7 @@ mod tests {
             impl Dial {
                 fn draw(&self, renderer: &mut rawr_iced::Renderer, input: rawr_iced::widget::draw::Input) {
                     renderer.fill_quad(input.bounds(), Color::BLACK);
-                    throw "after fill";
+                    panic!("after fill");
                 }
             }
 
