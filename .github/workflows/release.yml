@@ -1,10 +1,12 @@
 # Release the ?play bot: build the image, push it to Cloudflare's registry,
 # deploy the Worker and site, then wait for the bot and run the site's snippets.
 # The `web` job builds rawr-web, the playground's "Run in browser" module, on a
-# runner of its own while `image` builds and pushes the image. `deploy` waits
-# for both and puts rawr-web in the Worker's assets as /web.
-# It needs the CLOUDFLARE_API_TOKEN secret and the CLOUDFLARE_ACCOUNT_ID
-# variable (see "Release from GitHub Actions" in play/README.md). The image tag is the commit;
+# runner of its own while `image` builds and pushes the image. `image` then
+# waits for rawr-web, puts it in the Worker's assets as /web and deploys, on
+# the same runner, so the deploy needs no second checkout and npm install.
+# It needs the CLOUDFLARE_API_TOKEN and PLAY_SMOKE_TOKEN secrets and the
+# CLOUDFLARE_ACCOUNT_ID variable (see "Release from GitHub Actions" in
+# play/README.md). The image tag is the commit;
 # the committed wrangler.jsonc is rewritten in the job only, never pushed.
 name: Release ?play
 
@@ -41,6 +43,8 @@ concurrency:
 
 permissions:
   contents: read
+  # `image` reads this run's artifacts and jobs while it waits for rawr-web.
+  actions: read
 
 jobs:
   # rawr-web for wasm32 (web/build.sh): the module, its JS glue and the fonts
@@ -86,9 +90,6 @@ jobs:
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    outputs:
-      sha: ${{ steps.image.outputs.sha }}
-      ref: ${{ steps.image.outputs.ref }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -166,28 +167,30 @@ jobs:
           printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
           docker push "$IMAGE"
 
-  deploy:
-    needs: [image, web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      - name: Install the Worker's dependencies
-        working-directory: play/deploy/cloudflare
-        run: npm install --no-audit --no-fund
-
       # build.mjs builds the site (an Astro package with its own lock file).
       - name: Install the site's dependencies
         working-directory: site
         run: npm ci --no-audit --no-fund
+
+      # The `web` job usually finishes first. If not, wait for its artifact,
+      # and stop if the job ended without one.
+      - name: Wait for rawr-web
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          for _ in $(seq 1 180); do
+            found="$(gh api "$run/artifacts" --jq '[.artifacts[] | select(.name == "web")] | length')"
+            [ "$found" -gt 0 ] && exit 0
+            ended="$(gh api "$run/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "web") | .conclusion // empty')"
+            case "$ended" in
+              "" | success) ;;
+              *) echo "the web job ended ($ended) without rawr-web" >&2; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "rawr-web did not arrive within an hour" >&2
+          exit 1
 
       # build.mjs merges public/, with web/ in it, into the Worker's assets.
       - uses: actions/download-artifact@v4
@@ -200,16 +203,19 @@ jobs:
       - name: Point wrangler.jsonc at the image
         working-directory: play/deploy/cloudflare
         env:
-          IMAGE: ${{ needs.image.outputs.ref }}
-          SHA: ${{ needs.image.outputs.sha }}
+          IMAGE: ${{ steps.image.outputs.ref }}
+          SHA: ${{ steps.image.outputs.sha }}
         run: |
           sed -i -E "s|\"image\": \"[^\"]*\"|\"image\": \"$IMAGE\"|" wrangler.jsonc
           sed -i -E "s|\"PLAY_VERSION\": \"[^\"]*\"|\"PLAY_VERSION\": \"$SHA\"|" wrangler.jsonc
           grep -F -e "$IMAGE" wrangler.jsonc
           grep -F -e "\"PLAY_VERSION\": \"$SHA\"" wrangler.jsonc
 
+      # PLAY_SMOKE_TOKEN lets the smoke test skip /play/run's per-IP limit.
       - name: Test, deploy and check the site
         working-directory: play/deploy/cloudflare
+        env:
+          PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}
         run: ./deploy.sh
 
       - name: Show the logs

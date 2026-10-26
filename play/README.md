@@ -456,6 +456,9 @@ It never commits, so the committed `wrangler.jsonc` keeps the last image
 image, so release from one place at a time. The job never sees the Discord
 token, which stays among the Worker's secrets.
 
+The job waits for the `web` job's rawr-web artifact before it deploys, so
+the deploy runs on the same runner as the image build.
+
 The repository needs two secrets and one variable, under Settings → Secrets
 and variables → Actions:
 
