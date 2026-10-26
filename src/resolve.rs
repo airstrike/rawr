@@ -1368,6 +1368,8 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "cell"
                 | "cell::RefCell"
                 | "cell::Cell"
+                | "error"
+                | "error::Error"
                 | "rc"
                 | "rc::Rc"
                 | "sync::Arc"
@@ -3074,7 +3076,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
     "Clone",
     "Hash",
     "Copy",
@@ -3114,6 +3116,7 @@ pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
     "Index",
     "IndexMut",
     "FromIterator",
+    "Error",
 ];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
@@ -3165,6 +3168,7 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
                         | "iter"
                         | "ops"
                         | "hash"
+                        | "error"
                 )
         }))
     .then(|| last.name.clone())
@@ -3275,7 +3279,8 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
                 Some(output),
             )]
         }
-        "Copy" | "Eq" | "Hash" | "IntoFragment" => Vec::new(),
+        // `std::error::Error`'s methods all have defaults.
+        "Copy" | "Eq" | "Hash" | "IntoFragment" | "Error" => Vec::new(),
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.

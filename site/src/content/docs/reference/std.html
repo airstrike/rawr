@@ -1,4 +1,4 @@
-<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, path and io.">
+<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, errors, path and io.">
 <article>
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
@@ -157,6 +157,44 @@ let byte = u8::try_from(300_i64); // Err
 let degrees: f64 = Celsius(21.5).into();
 println!("{names:?} {parsed:?} {} {degrees}", byte.is_err());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-conversions" data-out="out-conversions" aria-label="Run conversions.rs" hidden></button><b>rawr run conversions.rs</b><span id="out-conversions" aria-live="polite">["a", "b"] [1] true 21.5</span></div>
+</div>
+<h2 id="errors"><code>std::error::Error</code></h2>
+<p>Your own error type implements <code>Error</code> with an empty <code>impl Error for MyErr {}</code> beside its <code>Display</code> and <code>Debug</code>. <code>Box&lt;dyn Error&gt;</code> holds your error, a std error such as <code>ParseIntError</code>, or a message. <code>Box&lt;dyn Error + Send + Sync&gt;</code> works the same way.</p>
+<p><code>?</code> boxes the error in a function that returns <code>Result&lt;T, Box&lt;dyn Error&gt;&gt;</code>. So do <code>Err(Box::new(e))</code> and <code>Err("text".into())</code>. <code>{e}</code>, <code>{e:?}</code> and <code>e.to_string()</code> print what Rust prints, and <code>e.source()</code> is <code>None</code>. A <code>main</code> that returns <code>Err</code> prints <code>Error: </code> and the error&rsquo;s <code>Debug</code> to stderr and exits with status 1.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="errors.rs" id="src-errors">use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct Negative(i64);
+
+impl fmt::Display for Negative {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter) -&gt; fmt::Result {
+        write!(f, "{} is negative", self.0)
+    }
+}
+
+impl Error for Negative {}
+
+fn parse(s: &amp;str) -&gt; Result&lt;i64, Box&lt;dyn Error&gt;&gt; {
+    let n: i64 = s.parse()?;
+    if n &lt; 0 {
+        return Err(Box::new(Negative(n)));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for s in ["4", "x", "-2"] {
+        match parse(s) {
+            Ok(n) =&gt; println!("{n}"),
+            Err(e) =&gt; println!("{e} | {e:?}"),
+        }
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-errors" data-out="out-errors" aria-label="Run errors.rs" hidden></button><b>rawr run errors.rs</b><span id="out-errors" aria-live="polite">4
+invalid digit found in string | ParseIntError { kind: InvalidDigit }
+-2 is negative | Negative(-2)</span></div>
 </div>
 <h2 id="path-io"><code>path</code>, <code>ffi</code>, <code>io</code>, <code>env</code> and <code>fs</code></h2>
 <p><code>std::path</code> and <code>std::ffi</code> work in every program. <code>PathBuf</code>, <code>Path</code>, <code>OsString</code> and <code>OsStr</code> are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function doesn&rsquo;t take one yet.</p>

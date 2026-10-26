@@ -1,6 +1,7 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
 pub(crate) mod cell;
+mod error_object;
 mod fmt_write;
 mod iterator;
 mod keyed;
@@ -2655,6 +2656,8 @@ impl Models {
         if used.contains("Ord") {
             used.insert("PartialOrd".into());
         }
+        // std's `Error`, which `Box<dyn Error>` names without an impl.
+        used.insert("Error".into());
         for trait_name in &used {
             if !traits.contains_key(trait_name)
                 && let Some(declared) = crate::resolve::builtin_trait(trait_name)
@@ -3533,6 +3536,13 @@ enum PreludeOp {
     CellNew,
     /// `Cell::new(value)`.
     PlainCellNew,
+    /// A `Box<dyn Error>` of its `Display` and `Debug` text, and one of
+    /// those texts (`error_object.rs`).
+    ErrorNew,
+    ErrorText,
+    /// A `parse` error, whose kind its target's kind code gives, boxed as
+    /// `dyn Error` by `?`.
+    ErrorParse,
     CellBorrow,
     CellGet,
     CellSet,
@@ -3656,6 +3666,9 @@ impl PreludeOp {
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
             Self::PlainCellNew => "cell.new_plain",
+            Self::ErrorNew => "error.new",
+            Self::ErrorText => "error.text",
+            Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
             Self::CellSet => "cell.set",
@@ -3734,7 +3747,11 @@ impl PreludeOp {
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
-            Self::CellBorrow | Self::CellSet | Self::CellReplace => {
+            Self::CellBorrow
+            | Self::CellSet
+            | Self::CellReplace
+            | Self::ErrorNew
+            | Self::ErrorText => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
@@ -3777,7 +3794,7 @@ impl PreludeOp {
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::RoundF32 | Self::Unsigned => vec![TypeId::of::<Dynamic>()],
             Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
-            Self::Parse => vec![TypeId::of::<ImmutableString>()],
+            Self::Parse | Self::ErrorParse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
                 TypeId::of::<ImmutableString>(),
@@ -4135,6 +4152,13 @@ impl PreludeOp {
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
+            Self::ErrorNew | Self::ErrorText => return error_object::invoke(self, args),
+            Self::ErrorParse => {
+                return Ok(error_object::parsed(
+                    &args[0].clone_cast::<ImmutableString>(),
+                    3,
+                ));
+            }
             Self::Join => {
                 let array = args[0]
                     .as_array_ref()
@@ -5967,6 +5991,13 @@ impl ExecutableOp {
                 &args[0].clone_cast::<ImmutableString>(),
                 kinds[0],
             )),
+            Self::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds,
+            } => Ok(error_object::parsed(
+                &args[0].clone_cast::<ImmutableString>(),
+                kinds[0],
+            )),
             Self::Kinded { kinds, .. } => int_method(*kinds, args),
         }
     }
@@ -7013,6 +7044,12 @@ impl Ty {
                 Nominal::Struct { .. } => TypeId::of::<nominal::Struct>(),
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
             }),
+            // std's `dyn Error` is the error object `?` and `Box::new` make.
+            Self::Dyn(name, bindings)
+                if name.as_str() == "Error" && bindings.is_empty() && models.std_error_trait() =>
+            {
+                Some(TypeId::of::<error_object::ErrorObject>())
+            }
             Self::Param(_)
             | Self::Projection(..)
             | Self::Dyn(..)
@@ -9161,6 +9198,9 @@ struct Parser<'a> {
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span)>,
+    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
+    /// Error` (`error_object.rs`).
+    text_into: Vec<Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -9396,6 +9436,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
             host_turbofish: None,
@@ -11168,6 +11209,9 @@ impl<'a> Parser<'a> {
     }
 
     fn display_text(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+        if self.std_error(ty, true) {
+            return Some(self.error_text(value, false));
+        }
         match ty {
             Ty::Script(id, _) => self
                 .models
@@ -14111,8 +14155,11 @@ impl<'a> Parser<'a> {
                 (Pointer::Rc | Pointer::Arc, capability::Kind::Clone) => true,
                 _ => self.type_provides(&target, capability),
             },
-            // A trait object has only its trait's methods.
-            Ty::Dyn(..) => false,
+            // A trait object has only its trait's methods; std's `dyn Error`
+            // is `Debug`, its supertrait.
+            dynamic @ Ty::Dyn(..) => {
+                capability == capability::Kind::Debug && self.std_error(&dynamic, false)
+            }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
             Ty::Support(_) => false,
             Ty::Endpoint(_) => false,
@@ -28699,6 +28746,13 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
+            // std's `dyn Error`: its text and its `source`.
+            if self.std_error(&builtin, true)
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                value = self.parse_error_member(value, member, member_span)?;
+                continue;
+            }
             // A trait object has only its trait's methods, dispatched by
             // the value's runtime type.
             let object = match &builtin {
@@ -32488,6 +32542,7 @@ impl<'a> Parser<'a> {
         start: Span,
     ) -> Result<ParsedExpr, Error> {
         let turbofish = self.parse_prelude_turbofish(variant)?;
+        let inferred = turbofish.is_none();
         let (ok, err) = match turbofish {
             Some(types) => {
                 let mut types = types.into_iter();
@@ -32528,6 +32583,9 @@ impl<'a> Parser<'a> {
             Prelude::Err => err.clone(),
             _ => ok.clone(),
         };
+        if variant == Prelude::Err && inferred {
+            self.box_returned_error(value)?;
+        }
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
@@ -32571,6 +32629,77 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
+        // `?` in a body returning `Result<_, Box<dyn Error>>` boxes an
+        // error, a `&str` or a `String` as `dyn Error`, as its `From` impls do.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && !matches!(*error, Ty::Infer(_))
+            && self.boxed_std_error(&returned)
+            && !self.boxed_std_error(&error)
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let Some(converted) = self.error_object(&error, unwrapped_error, true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `s.parse()?` there, whose error is known once the parse's target
+        // is: boxed by the target's kind.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && matches!(*error, Ty::Infer(_))
+            && self.boxed_std_error(&returned)
+            && let Some(target) = self
+                .pending_parses
+                .iter()
+                .find(|(_, pending, _)| self.inference.resolve(pending) == *error)
+                .map(|(target, ..)| target.clone())
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(" } else { return ");
+            let unwrapped_error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let helper = self.push_op(Op::Kinded {
+                op: PreludeOp::ErrorParse,
+                kinds: [target.clone(), target],
+            });
+            let converted = origin::Fragment::call(&helper, [unwrapped_error]);
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
         // `?` converts the error through `From`, as in Rust: `Err(e)?` in a
         // body returning `Result<_, F>` returns `Err(F::from(e))`.
         if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
@@ -33703,6 +33832,9 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
+        if self.std_error(&ty, false) {
+            return Ok(self.error_text(value, true));
+        }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
                 self.debug_source(target, value, span)?
@@ -38224,7 +38356,13 @@ impl<'a> Parser<'a> {
                 self.next();
                 return self.parse_local_fn_type();
             }
-            let (trait_name, trait_span) = self.expect_name("trait object type")?;
+            // `dyn std::error::Error`: traits are crate-wide by name, as in
+            // item headers.
+            let (mut trait_name, mut trait_span) = self.expect_name("trait object type")?;
+            while matches!(self.peek(), Token::DoubleColon) {
+                self.next();
+                (trait_name, trait_span) = self.expect_name("trait object type")?;
+            }
             let ty = self.dyn_type(&trait_name, trait_span)?;
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
@@ -39069,6 +39207,52 @@ impl<'a> Parser<'a> {
             };
             value.ty = source.clone();
         }
+        // `Err(Box::new(e))` or `Err("text".into())` where a `Result<T,
+        // Box<dyn Error>>` is expected: its error boxed as below.
+        if let (Ty::Result(to_ok, to_error), Ty::Result(from_ok, from_error)) = (&target, &source)
+            && self.boxed_std_error(to_error)
+            && !self.boxed_std_error(from_error)
+            && !matches!(self.inference.resolve(from_error), Ty::Infer(_) | Ty::Never)
+        {
+            self.require_type(to_ok, from_ok, value.span)?;
+            let result = self.temporary("result");
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [result.as_str().into()]);
+            let Some(object) = self.error_object(from_error, error, true, value.span)? else {
+                return Err(Error::MissingCapability {
+                    owner: from_error.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
+            boxed.push(value.rendered_source());
+            boxed.push_text("; if ");
+            boxed.push(self.prelude_op(PreludeOp::IsOk, [result.as_str().into()]));
+            boxed.push_text(format!(" {{ {result} }} else {{ "));
+            boxed.push(self.prelude_op(PreludeOp::Err, [object]));
+            boxed.push_text(" } }");
+            *value = self.operator_expr(boxed, target, value.span);
+            return Ok(None);
+        }
+        // An error, a box of one, a `&str` or a `String` where a `Box<dyn
+        // Error>` is expected: boxed as std's `dyn Error`, as its `From`
+        // impls and `Box`'s unsizing make one (`error_object.rs`).
+        if self.boxed_std_error(&target)
+            && !self.boxed_std_error(&source)
+            && !matches!(source, Ty::Infer(_) | Ty::Never)
+        {
+            let Some(object) =
+                self.error_object(&source, value.rendered_source(), true, value.span)?
+            else {
+                return Err(Error::MissingCapability {
+                    owner: source.name(&self.models),
+                    capability: "std::error::Error".into(),
+                    operation: value.span,
+                });
+            };
+            *value = self.operator_expr(object, target, value.span);
+            return Ok(None);
+        }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
         let unsizing = match (&target, &source) {
@@ -39656,6 +39840,9 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        if source.is_text() {
+            self.text_into.push(value.span);
+        }
         Ok(value.retain_origin())
     }
 

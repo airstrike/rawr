@@ -10029,3 +10029,58 @@ main();
         "[0, 2, 4, 6] 200\nSome(5)\nrest 6\nrest 7\nSome(2) Some(3) None\n"
     );
 }
+
+/// `Box<dyn std::error::Error>`: `?` boxes a crate error, a std parse error
+/// and a `String`, as do `Err(Box::new(e))` and `Err("text".into())` in
+/// either arm of an `if`; `{e}`, `{e:?}`, `to_string` and `source` print
+/// and answer as Rust's.
+#[test]
+fn language_box_dyn_error_holds_any_error() {
+    assert_eq!(
+        printed(
+            r#"
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+enum AppErr { Bad(u8), Worse { code: i32 } }
+impl fmt::Display for AppErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AppErr::Bad(n) => write!(f, "bad {n}"),
+            AppErr::Worse { code } => write!(f, "worse {code}"),
+        }
+    }
+}
+impl Error for AppErr {}
+fn check(n: i32) -> Result<i32, AppErr> {
+    if n > 10 { Err(AppErr::Worse { code: n }) } else if n < 0 { Err(AppErr::Bad(1)) } else { Ok(n) }
+}
+fn run(s: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    let x: f64 = s.parse()?;
+    let n = check(x as i32)?;
+    let words: Result<i32, String> = if n == 4 { Err("four".to_string()) } else { Ok(n) };
+    Ok(words? * 2)
+}
+fn boxed(n: i32) -> Result<(), Box<dyn std::error::Error>> {
+    if n == 0 { Err(Box::new(AppErr::Bad(0))) } else { Err("plain".into()) }
+}
+fn main() {
+    for s in ["2", "x", "11", "4"] {
+        match run(s) {
+            Ok(v) => println!("ok {v}"),
+            Err(e) => println!("{e} | {e:?} | {} | {}", e.to_string(), e.source().is_none()),
+        }
+    }
+    let e = boxed(0).unwrap_err();
+    println!("{e} {e:?} {:?}", boxed(1).map_err(|e| e.to_string()));
+}
+main();
+"#
+        ),
+        "ok 4\n\
+         invalid float literal | ParseFloatError { kind: Invalid } | invalid float literal | true\n\
+         worse 11 | Worse { code: 11 } | worse 11 | true\n\
+         four | \"four\" | four | true\n\
+         bad 0 Bad(0) Err(\"plain\")\n"
+    );
+}

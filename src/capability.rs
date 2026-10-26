@@ -674,6 +674,8 @@ pub(crate) fn type_supports(
                     || type_supports(element, Kind::Copy, resolved))
                 && type_supports(element, capability, resolved)
         }
+        // std's `dyn Error` is `Debug`, its supertrait.
+        type_ref::Type::Path(_) if ty.dyn_trait() == Some("Error") => capability == Kind::Debug,
         // `Reverse<T>` derives everything from `T`.
         type_ref::Type::Path(_) if let Some(element) = ty.reverse_element() => {
             type_supports(element, capability, resolved)
