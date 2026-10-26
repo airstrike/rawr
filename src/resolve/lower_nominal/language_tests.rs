@@ -9947,3 +9947,54 @@ main();
         "\"1-2 end\\n   7.\"\nn=1\ntrue \"x[03]\\n\"\n[\"9\"]\n"
     );
 }
+
+/// `std::cell::Cell`: a value copied in and out through `&self`, as a field
+/// too, with `Debug` naming it `Cell`. Cloning a struct that holds a cell
+/// is refused, since the copy would share the cell.
+#[test]
+fn language_cell_changes_through_a_shared_reference() {
+    assert_eq!(
+        printed(
+            r#"
+use std::cell::Cell;
+#[derive(Debug, Default)]
+struct Counter { hits: Cell<u32>, name: String }
+impl Counter {
+    fn hit(&self) { self.hits.set(self.hits.get() + 1); }
+}
+fn bump(c: &Cell<i32>) { c.set(c.get() * 2); }
+fn main() {
+    let c = Counter { hits: Cell::new(0), name: "x".to_string() };
+    c.hit();
+    c.hit();
+    println!("{} {:?}", c.hits.get(), c);
+    let t: Cell<i32> = Cell::new(4);
+    bump(&t);
+    println!("{} {}", t.take(), t.get());
+    let a = Cell::new(1);
+    let b = Cell::new(2);
+    a.swap(&b);
+    let d = a.clone();
+    d.set(5);
+    println!("{} {} {} {}", a.get(), b.get(), d.get(), a == Cell::new(2));
+    let s = std::cell::Cell::new(String::from("hi"));
+    let old = s.replace(String::from("yo"));
+    println!("{} {}", old, s.into_inner());
+}
+main();
+"#
+        ),
+        "2 Counter { hits: Cell { value: 2 }, name: \"x\" }\n8 0\n2 1 5 true\nhi yo\n"
+    );
+    let error = rejected(
+        r#"
+use std::cell::Cell;
+#[derive(Clone)]
+struct Pair { a: Cell<i32> }
+fn main() { let p = Pair { a: Cell::new(1) }; let q = p.clone(); }
+main();
+0
+"#,
+    );
+    assert!(error.contains("holds a `Cell` or `RefCell`"), "{error}");
+}

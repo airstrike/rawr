@@ -808,7 +808,7 @@ fn erased(ty: &Ty) -> bool {
             | Ty::Keyed(..)
             | Ty::Boxed(..)
             | Ty::Reverse(_)
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Ordering
             | Ty::Time(Time::Instant)
     )
@@ -3046,7 +3046,7 @@ impl Models {
             Ty::Boxed(_, inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
             // A cell is made where its default is used, so copies share
             // no cell.
-            Ty::Cell(_) => false,
+            Ty::Cell(..) => false,
             Ty::Array {
                 element,
                 length: Some(_),
@@ -3074,6 +3074,50 @@ impl Models {
                 folds
             }
             _ => true,
+        }
+    }
+
+    /// Whether a value of `ty` holds a `Cell` or `RefCell` of its own, not
+    /// behind an `Rc` or `Arc`. Its runtime copy would share the cell,
+    /// while Rust's `clone` makes a new one.
+    fn holds_cell(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
+        match ty {
+            Ty::Cell(..) => true,
+            Ty::Boxed(Pointer::Box, inner)
+            | Ty::Reverse(inner)
+            | Ty::Option(inner)
+            | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
+            Ty::Result(ok, err) => self.holds_cell(ok, visiting) || self.holds_cell(err, visiting),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => members
+                .iter()
+                .any(|member| self.holds_cell(member, visiting)),
+            Ty::Script(id, arguments) => {
+                if visiting.contains(id) || self.std_impl(*id, "Clone", "clone").is_some() {
+                    return false;
+                }
+                if arguments
+                    .iter()
+                    .any(|argument| self.holds_cell(argument, visiting))
+                {
+                    return true;
+                }
+                visiting.push(*id);
+                let holds = match self.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .any(|field| self.holds_cell(&Ty::from_resolved(&field.ty), visiting)),
+                    Nominal::Enum { item, .. } => item.variants.iter().any(|variant| {
+                        variant
+                            .payload
+                            .iter()
+                            .any(|ty| self.holds_cell(&Ty::from_resolved(ty), visiting))
+                    }),
+                };
+                visiting.pop();
+                holds
+            }
+            _ => false,
         }
     }
 
@@ -3188,7 +3232,7 @@ impl Models {
             | Ty::Time(_)
             | Ty::ParseError(_)
             | Ty::Reference { .. }
-            | Ty::Cell(_)
+            | Ty::Cell(..)
             | Ty::Boxed(..)
             | Ty::Iter(_)
             | Ty::Keyed(..)
@@ -3487,6 +3531,8 @@ enum PreludeOp {
     /// An imported value's Rust `Display` text, kept by the bridge.
     DisplayText,
     CellNew,
+    /// `Cell::new(value)`.
+    PlainCellNew,
     CellBorrow,
     CellGet,
     CellSet,
@@ -3609,6 +3655,7 @@ impl PreludeOp {
             Self::ReverseWrap => "reverse.new",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
+            Self::PlainCellNew => "cell.new_plain",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
             Self::CellSet => "cell.set",
@@ -3683,6 +3730,7 @@ impl PreludeOp {
             | Self::ReverseWrap
             | Self::DisplayText
             | Self::CellNew
+            | Self::PlainCellNew
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
@@ -4080,6 +4128,7 @@ impl PreludeOp {
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
             Self::DisplayText => return Ok(args[0].to_string().into()),
             Self::CellNew
+            | Self::PlainCellNew
             | Self::CellBorrow
             | Self::CellGet
             | Self::CellSet
@@ -6319,6 +6368,40 @@ impl Time {
     }
 }
 
+/// Which of std's cells a `Ty::Cell` is: `RefCell`, whose value is
+/// borrowed, or `Cell`, whose value is copied in and out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CellKind {
+    RefCell,
+    Cell,
+}
+
+impl CellKind {
+    /// The cell `name` is, as `type_ref::Type::cell_element` names it.
+    fn named(name: &str) -> Self {
+        if name == "Cell" {
+            Self::Cell
+        } else {
+            Self::RefCell
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::RefCell => "RefCell",
+            Self::Cell => "Cell",
+        }
+    }
+
+    /// The op that makes a new cell of this kind.
+    const fn new_op(self) -> PreludeOp {
+        match self {
+            Self::RefCell => PreludeOp::CellNew,
+            Self::Cell => PreludeOp::PlainCellNew,
+        }
+    }
+}
+
 /// The pointer a `Ty::Boxed` is: `Box`, `std::rc::Rc` or `std::sync::Arc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Pointer {
@@ -6463,9 +6546,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
-    /// `std::cell::RefCell<T>`: a `cell::Cell` at runtime, which every
-    /// copy of it shares (`cell.rs`).
-    Cell(Box<Ty>),
+    /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
+    /// runtime, which every copy of it shares (`cell.rs`).
+    Cell(CellKind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
     /// items at runtime.
@@ -6528,7 +6611,7 @@ impl Ty {
             | Self::Iter(target)
             | Self::Reverse(target)
             | Self::Range(target)
-            | Self::Cell(target)
+            | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -6647,8 +6730,8 @@ impl Ty {
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
         }
-        if let Some(inner) = ty.cell_element() {
-            return Self::Cell(Box::new(Self::from_resolved(inner)));
+        if let Some((kind, inner)) = ty.cell_element() {
+            return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -6815,7 +6898,7 @@ impl Ty {
             }
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
-            Self::Cell(inner) => format!("RefCell<{}>", inner.name(models)).into(),
+            Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -6899,7 +6982,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
-            Self::Cell(_) => Some(TypeId::of::<cell::Cell>()),
+            Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -7054,7 +7137,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
-            | Self::Cell(_)
+            | Self::Cell(..)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -7233,8 +7316,10 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
-            | (Ty::Range(left), Ty::Range(right))
-            | (Ty::Cell(left), Ty::Cell(right)) => compare(left, right, forward, reverse),
+            | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
+            (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
+                left_kind == right_kind && compare(left, right, forward, reverse)
+            }
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
                     && left.len() == right.len()
@@ -7472,7 +7557,7 @@ impl Inference {
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
-            Ty::Cell(inner) => Ty::Cell(Box::new(self.resolve(inner))),
+            Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -8467,7 +8552,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
-        Ty::Cell(inner) => Ty::Cell(Box::new(instantiate(inner, substitution))),
+        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -13998,10 +14083,20 @@ impl<'a> Parser<'a> {
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
             // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
-            // `Eq` when `T` is, and never `Copy`.
-            Ty::Cell(inner) => {
+            // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
+            // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
+            // need `T: Copy`.
+            Ty::Cell(kind, inner) => {
                 capability != capability::Kind::Copy
                     && capability != capability::Kind::Hash
+                    && (kind == CellKind::RefCell
+                        || matches!(
+                            capability,
+                            capability::Kind::Default
+                                | capability::Kind::Send
+                                | capability::Kind::Static
+                        )
+                        || self.type_provides(&inner, capability::Kind::Copy))
                     && self.type_provides(&inner, capability)
             }
             // Rawr's iterators are `Clone` when their items are.
@@ -14102,7 +14197,7 @@ impl<'a> Parser<'a> {
             }
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
-            Ty::Cell(_) => intrinsic::Type::builtin("RefCell", TypeId::of::<cell::Cell>()),
+            Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -26905,6 +27000,7 @@ impl<'a> Parser<'a> {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Reverse(_)
+            | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
             | Ty::Param(_)
@@ -28824,14 +28920,18 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let cell = match &builtin {
-                Ty::Cell(inner) => Some((**inner).clone()),
+                Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                 Ty::Reference { target, .. } => match &**target {
-                    Ty::Cell(inner) => Some((**inner).clone()),
+                    Ty::Cell(kind, inner) => Some((*kind, (**inner).clone())),
                     _ => None,
                 },
                 _ => None,
             };
-            if let Some(inner) = cell {
+            if let Some((CellKind::Cell, inner)) = cell {
+                value = self.parse_plain_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            if let Some((_, inner)) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
@@ -29111,6 +29211,9 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.require_capability(&model, capability, member_span)?;
+                if capability == capability::Kind::Clone {
+                    self.refuse_cell_clone(&value.ty, member_span)?;
+                }
                 let (op, ty) = if capability == capability::Kind::Debug {
                     (
                         Op::Debug {
@@ -30074,12 +30177,12 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_matches(name_span);
         }
-        // `RefCell::new(value)` and `RefCell::default()`.
-        if let Some(skip) = self.cell_path(&name) {
+        // `RefCell::new(value)` and `RefCell::default()`, and `Cell`'s.
+        if let Some((skip, kind)) = self.cell_path(&name) {
             for _ in 0..skip {
                 self.next();
             }
-            return self.parse_cell_constructor(name_span);
+            return self.parse_cell_constructor(name_span, kind);
         }
         // `PhantomData`, also `PhantomData::<T>` or in full: a value that is
         // nothing at run time.
@@ -33368,9 +33471,9 @@ impl<'a> Parser<'a> {
                 let value = self.default_source(inner, span)?;
                 self.prelude_op(PreludeOp::ReverseWrap, [value])
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let value = self.default_source(inner, span)?;
-                self.prelude_op(PreludeOp::CellNew, [value])
+                self.prelude_op(kind.new_op(), [value])
             }
             Ty::Tuple(members) => {
                 let members = members
@@ -33536,9 +33639,9 @@ impl<'a> Parser<'a> {
                 });
                 origin::Fragment::call(&helper, [lhs, rhs])
             }
-            // Maps and sets compare their sorted entries; `Reverse` its value;
-            // a host value by its type's own `PartialEq`.
-            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Time(_) | Ty::Host { .. } => {
+            // Maps and sets compare their sorted entries; `Reverse` and a
+            // cell their value; a host value by its type's own `PartialEq`.
+            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Cell(..) | Ty::Time(_) | Ty::Host { .. } => {
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),
@@ -33734,10 +33837,11 @@ impl<'a> Parser<'a> {
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
             }
-            Ty::Cell(inner) => {
+            Ty::Cell(kind, inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                let open = format!("(\"{} {{ value: \" + ", kind.name());
                 self.debug_source(inner, unwrapped, span)?
-                    .surrounded("(\"RefCell { value: \" + ", " + \" }\")")
+                    .surrounded(&open, " + \" }\")")
             }
             // `{1: "a", 2: "b"}` and `{1, 2}`, in key order.
             Ty::Keyed(kind, arguments) => {
@@ -33979,10 +34083,13 @@ impl<'a> Parser<'a> {
                 };
                 return Ok(self.array_iterator(&value, item, end));
             }
-            ("clone", []) => match self.inference.resolve(&value.ty) {
-                Ty::Reference { target, .. } => (receiver, *target),
-                ty => (receiver, ty),
-            },
+            ("clone", []) => {
+                self.refuse_cell_clone(&value.ty, member_span)?;
+                match self.inference.resolve(&value.ty) {
+                    Ty::Reference { target, .. } => (receiver, *target),
+                    ty => (receiver, ty),
+                }
+            }
             ("to_vec", []) => (
                 receiver,
                 Ty::Array {
@@ -38221,8 +38328,8 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
                 return self.parse_phantom_type();
             }
-            if crate::resolve::std_cell(&name) && self.models.get("RefCell").is_none() {
-                return self.parse_cell_type();
+            if let Some(kind) = self.cell_named(&name) {
+                return self.parse_cell_type(kind);
             }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
@@ -38305,12 +38412,11 @@ impl<'a> Parser<'a> {
         {
             return self.parse_phantom_type();
         }
-        if name.as_str() == "RefCell"
-            && matches!(self.peek(), Token::LessThan)
+        if matches!(self.peek(), Token::LessThan)
             && qualified.is_none()
-            && self.models.get(&name).is_none()
+            && let Some(kind) = self.cell_named(&name)
         {
-            return self.parse_cell_type();
+            return self.parse_cell_type(kind);
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
@@ -40305,9 +40411,11 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
-            | (Ty::Range(expected_element), Ty::Range(actual_element))
-            | (Ty::Cell(expected_element), Ty::Cell(actual_element)) => {
+            | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
+            }
+            (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
+                expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
                 self.unify_type(expected_ok, actual_ok) && self.unify_type(expected_err, actual_err)
@@ -41262,7 +41370,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Iter(target)
         | Ty::Reverse(target)
         | Ty::Range(target)
-        | Ty::Cell(target) => contains_inference(target),
+        | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
         Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(contains_inference),
@@ -41694,8 +41802,8 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
 }
 
 fn debug_text(value: &Dynamic, models: &Models) -> String {
-    if let Some(inner) = cell::value(value) {
-        return format!("RefCell {{ value: {} }}", debug_value(&inner, models));
+    if let Some((name, inner)) = cell::named_value(value) {
+        return format!("{name} {{ value: {} }}", debug_value(&inner, models));
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value(&reverse.0, models));
@@ -41904,6 +42012,9 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return Some(lhs.cmp(&rhs));
     }
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // `Reverse(a) < Reverse(b)` when `b < a`.
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
@@ -42013,6 +42124,9 @@ pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
 }
 
 fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return value_matches(&lhs, &rhs, same);
+    }
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::time::Duration>(),
         rhs.read_lock::<std::time::Duration>(),

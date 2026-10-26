@@ -1367,6 +1367,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "marker::PhantomData"
                 | "cell"
                 | "cell::RefCell"
+                | "cell::Cell"
                 | "rc"
                 | "rc::Rc"
                 | "sync::Arc"
@@ -1561,6 +1562,11 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     ["Duration", "Instant"]
         .into_iter()
         .find(|time| *time == name)
+}
+
+/// `std::cell::Cell` as a path is written with its module.
+pub(crate) fn std_plain_cell(path: &str) -> bool {
+    matches!(path, "cell::Cell" | "std::cell::Cell" | "core::cell::Cell")
 }
 
 /// `std::cell::RefCell` as a path is written.

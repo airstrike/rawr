@@ -1,4 +1,4 @@
-<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell, mem, conversions, path and io.">
+<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, path and io.">
 <article>
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
@@ -91,8 +91,10 @@ for word in "a b a".split(' ') {
 println!("a: {}, b: {}", counts["a"], counts["b"]);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-hashmap" data-out="out-hashmap" aria-label="Run hashmap.rs" hidden></button><b>rawr run hashmap.rs</b><span id="out-hashmap" aria-live="polite">a: 2, b: 1</span></div>
 </div>
-<h2 id="refcell"><code>RefCell</code></h2>
-<p><code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
+<h2 id="refcell"><code>RefCell</code> and <code>Cell</code></h2>
+<p><code>RefCell</code> has <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
+<p><code>Cell</code> has <code>new</code>, <code>default</code>, <code>get</code>, <code>set</code>, <code>replace</code>, <code>take</code>, <code>swap</code>, <code>into_inner</code> and <code>clone</code>. A <code>Cell</code> field changes through <code>&amp;self</code>.</p>
+<p>A cell&rsquo;s own <code>clone</code> makes a new cell. Cloning a struct, enum or <code>Vec</code> that holds a cell outside an <code>Rc</code> isn&rsquo;t supported yet, and rawr says so.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="refcell.rs" id="src-refcell">use std::cell::RefCell;
 
@@ -101,6 +103,22 @@ cell.borrow_mut().push(2);
 let len = cell.borrow().len(); // 2
 println!("{len}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite">2</span></div>
+</div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="cell.rs" id="src-cell">use std::cell::Cell;
+
+struct Counter { hits: Cell&lt;u32&gt; }
+impl Counter {
+    fn hit(&amp;self) { self.hits.set(self.hits.get() + 1); }
+}
+
+fn main() {
+    let c = Counter { hits: Cell::new(0) };
+    c.hit();
+    c.hit();
+    println!("{} {:?}", c.hits.get(), c.hits); // 2 Cell { value: 2 }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cell" data-out="out-cell" aria-label="Run cell.rs" hidden></button><b>rawr run cell.rs</b><span id="out-cell" aria-live="polite">2 Cell { value: 2 }</span></div>
 </div>
 <h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
 <p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>.</p>
