@@ -48553,9 +48553,26 @@ pub fn run() {
                 ["aliases::make"]
             );
 
+            // A field reads the same through every alias of one type, as a
+            // method does, so a pathless return's field resolves (D561).
             let program = imported_program(&engine, "use aliases::make; make().value");
+            let uses = symbolic_imported(&engine, &program).unwrap_or_else(|failure| {
+                panic!(
+                    "a pathless return's field resolves: {}",
+                    failure.into_error()
+                )
+            });
+            assert_eq!(
+                uses.iter()
+                    .map(|used| used.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["aliases::First", "aliases::make"]
+            );
+
+            // A member no alias has still names every alias it could be.
+            let program = imported_program(&engine, "use aliases::make; make().missing");
             let error = symbolic_imported(&engine, &program)
-                .expect_err("a member operation must select one exact alias")
+                .expect_err("a member no alias has selects no exact alias")
                 .into_error();
             let ParseErrorType::Resolution(crate::resolve::Error::InvalidHostOperation {
                 item,
