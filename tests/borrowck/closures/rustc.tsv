@@ -43,6 +43,7 @@ closures/move_while_borrowed.rs	E0505:4
 closures/mut_reference_declared_mut.rs	E0502:6
 closures/nested_closure.rs	E0502:7
 closures/nested_closure_ok.rs	ok	0	"[1, 2, 1, 1]\n"
+closures/option_get_or_insert_with.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
 closures/option_pattern_in_body.rs	E0506:4
 closures/outlives_scope.rs	E0597:5
 closures/parameter_borrow.rs	ok	0	"[1, 2, 1]\n"
@@ -80,6 +81,7 @@ closures/unique_two_closures.rs	E0524:5
 closures/unique_while_borrowed.rs	E0500:5
 closures/use_after_mut_capture_ended.rs	ok	0	"3\n"
 closures/use_while_mut_captured.rs	E0503:4
+closures/vec_of_closures.rs	E0502:5
 closures/while_condition.rs	E0503:4
 closures/mutations/array_index_captures_whole_a_6_closure_back_edge.rs	E0503:4 E0502:9
 closures/mutations/array_index_captures_whole_a_6_closure_into_branch.rs	E0503:4 E0502:7
