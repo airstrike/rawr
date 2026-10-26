@@ -59,7 +59,10 @@ impl Proof {
             output,
             span,
             instance: None,
-            place: item.guard() == Some(host::item::Guard::Mutable),
+            place: matches!(
+                item.guard(),
+                Some(host::item::Guard::Mutable | host::item::Guard::OptionMutable)
+            ),
         }
     }
 
@@ -214,6 +217,16 @@ impl Proof {
 
         #[cfg(feature = "rust-import")]
         if self.place && result.is::<crate::island::place::Place>() {
+            return Ok(result);
+        }
+        // `Some` of a place, or `None`, of an `Option<&mut T>` the method
+        // lends.
+        #[cfg(feature = "rust-import")]
+        if self.place
+            && crate::option::read(&result).is_some_and(|option| {
+                option.is_none_or(|inner| inner.is::<crate::island::place::Place>())
+            })
+        {
             return Ok(result);
         }
         // A scope frame the call made (D558 tier 1): what it makes is

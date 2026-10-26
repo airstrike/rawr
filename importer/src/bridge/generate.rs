@@ -4718,8 +4718,13 @@ fn returns_values(plan: &Plan) -> bool {
             signature,
             substitutions,
             ..
-        } if signature.guard()
-            != Some(crate::classify::representability::signature::Guard::Mutable) =>
+        } if !matches!(
+            signature.guard(),
+            Some(
+                crate::classify::representability::signature::Guard::Mutable
+                    | crate::classify::representability::signature::Guard::OptionMutable
+            )
+        ) =>
         {
             substituted(signature.output(), signature, substitutions).ok()
         }
@@ -6053,6 +6058,8 @@ fn render_scoped_guard(
     render_give(&target, "output", &mut give)?;
     let give = String::from_utf8(give).map_err(|_| request::Error::Encoding)?;
     match guard {
+        // A receiver in a region lends no optional borrow yet.
+        Guard::OptionShared | Guard::OptionMutable => Ok(()),
         Guard::Shared => writeln!(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
@@ -6215,6 +6222,47 @@ fn render_guard(
         "    let receiver = native_handle(arguments, 0, false)?;"
     )
     .map_err(encoding)?;
+    // `call`, giving the method copies of its inputs, so a place reaches
+    // its target again with each access.
+    let call_again = |access: &str,
+                      handle: &str,
+                      taking: &str,
+                      output: &mut Vec<u8>|
+     -> Result<(), request::Error> {
+        write!(output, "{access}::<").map_err(encoding)?;
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            output,
+        )?;
+        write!(
+            output,
+            ", _>({handle}, |{taking}| {{ let guard = receiver.{}",
+            plan.name()
+        )
+        .map_err(encoding)?;
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            output,
+        )?;
+        output.write_all(b"(").map_err(encoding)?;
+        for input in 0..signature.inputs().len() {
+            if input > 0 {
+                output.write_all(b", ").map_err(encoding)?;
+            }
+            write!(output, "Clone::clone(&argument_{input})").map_err(encoding)?;
+        }
+        output
+            .write_all(b"); let Some(mut guard) = guard else { return Err(Error::StaleHandle) }; let _ = &mut guard; ")
+            .map_err(encoding)
+    };
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
@@ -6223,6 +6271,122 @@ fn render_guard(
                 .write_all(b"guard_copy!(&*guard) })??;\n")
                 .map_err(encoding)?;
             render_give(&target, "output", output)
+        }
+        // `Some` of a copy of the target, or `None`.
+        Guard::OptionShared => {
+            output.write_all(b"    let output = ").map_err(encoding)?;
+            call(borrow, "receiver", "receiver", output)?;
+            output
+                .write_all(b"guard.map(|target| guard_copy!(&*target)).transpose() })??;\n")
+                .map_err(encoding)?;
+            render_give(&target, "output", output)
+        }
+        // `Some` of a place whose accesses call the method again, or `None`.
+        Guard::OptionMutable => {
+            let convert::Type::Option(element) = &target else {
+                return Err(request::Error::Drift {
+                    field: "an optional borrow's output is no option",
+                });
+            };
+            let mut given = Vec::new();
+            render_give(element, "output", &mut given)?;
+            let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+            let give = format!(
+                "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
+            )
+            .into_bytes();
+            let mut take = Vec::new();
+            let stored = signature.inputs().len();
+            render_take(stored, 0, element, &mut take)?;
+            output.write_all(b"    let present = ").map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(
+                    b"Ok::<(), Error>(()) }).map(|reached| reached.is_ok())?;
+    if !present {
+        return Ok(__rawr_internal::option::none());
+    }
+    let witness = output_witness().and_then(|witness| witness.argument_witness(0));
+    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
+        use __rawr_internal::island::place::Access;
+        let mut stored = match access {
+            Access::Read => None,
+            Access::Store(value) => Some(value),
+            Access::Update(apply) => {
+                return with_arena(|arena| {
+                    ",
+                )
+                .map_err(encoding)?;
+            call_again("arena.held", "receiver.clone()", "arena, receiver", output)?;
+            output
+                .write_all(
+                    b"
+                        let output = guard_copy!(&*guard)?;
+                        let value = {
+                            #[allow(unused_variables)]
+                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&give, "                        ", output)?;
+            output
+                .write_all(
+                    b"                        }?;
+                        let mut stored = match lend(arena, || apply(value)) {
+                            Ok(stored) => stored,
+                            Err(error) => return Ok(Err(error)),
+                        };
+                        let mut values = [&mut stored];
+                        let arguments = &mut Arguments { values: &mut values, arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&take, "                    ", output)?;
+            output
+                .write_all(
+                    format!(
+                        "                        *guard = argument_{stored};
+                        Ok(Ok(Dynamic::UNIT))
+                    }})?
+                }})
+                .map_err(runtime_error)?;
+            }}
+        }};
+        with_arena(|arena| {{
+            let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
+            let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
+            if arguments.values.is_empty() {{
+                let output = "
+                    )
+                    .as_bytes(),
+                )
+                .map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .map_err(encoding)?;
+            indented(&give, "            ", output)?;
+            output
+                .write_all(b"            } else {\n")
+                .map_err(encoding)?;
+            indented(&take, "            ", output)?;
+            output.write_all(b"                ").map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(
+                    format!(
+                        "*guard = argument_{stored}; Ok::<(), Error>(()) }})??;
+                Ok(Dynamic::UNIT)
+            }}
+        }})
+        .map_err(runtime_error)
+    }});
+    Ok(__rawr_internal::option::some(Dynamic::from(place)))
+"
+                    )
+                    .as_bytes(),
+                )
+                .map_err(encoding)
         }
         Guard::Mutable => {
             if !signature.inputs().is_empty() {

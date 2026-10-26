@@ -556,6 +556,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         DEBUG_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
+    // `iced::keyboard::Key` is a re-export of `keyboard::key::Key`, which
+    // pane_grid's example names through `use keyboard::key::{self, Key}`.
+    builder.alias("keyboard::key::Key", "keyboard::Key")?;
     builder.value_type::<iced::keyboard::key::Named>(
         "keyboard::key::Named",
         &[],
@@ -6436,6 +6439,58 @@ mod tests {
             )
             .unwrap();
         assert!(output.is::<marker::Text>());
+    }
+
+    /// pane_grid's example names `keyboard::key::Key`, the path iced
+    /// re-exports as `keyboard::Key`, and builds its styles with
+    /// `..Default::default()`, whose type the struct literal gives.
+    #[test]
+    fn a_key_by_its_module_path_and_a_default_base_check() {
+        let mut engine = Engine::new();
+        super::install(&mut engine).unwrap();
+        let engine = Shared::new(engine);
+        engine
+            .compile_application(
+                r#"
+use iced::keyboard;
+use iced::widget::{container, text};
+use iced::{Element, Theme};
+
+struct State;
+#[derive(Debug, Clone, Copy)] enum Message { Tick }
+
+impl State {
+    fn new() -> State { State {} }
+    fn update(&mut self, message: Message) {}
+    fn view(&self) -> Element<'_, Message> {
+        container(text("x")).style(styled).boxed()
+    }
+}
+
+fn styled(theme: &Theme) -> container::Style {
+    let palette = theme.palette();
+    container::Style {
+        text_color: Some(palette.background.strong.text),
+        background: Some(palette.background.strong.color.into()),
+        ..Default::default()
+    }
+}
+
+fn hotkey(key: keyboard::Key) -> Option<Message> {
+    use keyboard::key::{self, Key};
+    match key.as_ref() {
+        Key::Character("v") => Some(Message::Tick),
+        Key::Named(key::Named::ArrowUp) => Some(Message::Tick),
+        _ => None,
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#,
+            )
+            .unwrap();
     }
 
     #[test]

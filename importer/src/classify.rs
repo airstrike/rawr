@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 25;
+const CLASSIFIER_VERSION: u32 = 26;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4022,6 +4022,24 @@ impl<P: api::Phase> Context<'_, P> {
                     owned: false,
                 })
             }
+            // An `Option` of a tuple, as pane_grid's `State::split` gives
+            // `Option<(Pane, Split)>`: Rawr's `Option` of its tuple.
+            model::Type::Definition { id, arguments }
+                if let Some(model::Type::Tuple(members)) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    && members.len() >= 2 =>
+            {
+                let element = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    .ok_or(Error::Cardinality)?;
+                Ok(Type::Option(Box::new(self.convert_value(element)?)))
+            }
             model::Type::Tuple(members) if members.len() >= 2 => {
                 let mut converted = Vec::new();
                 self.retain_array::<Type>(members.len())?;
@@ -5021,6 +5039,53 @@ impl<P: api::Phase> Context<'_, P> {
             ) if lifetime == receiver => Some((&**ty, *mutability == model::Mutability::Mutable)),
             _ => None,
         };
+        // An `Option<&T>` the method lends from its receiver, as pane_grid's
+        // `State::get(&self, pane)` and `get_mut(&mut self, pane)` give:
+        // `Some` of a copy or of a place, or `None` (T012).
+        if signature.guard().is_none()
+            && lent.is_none()
+            && let model::Receiver::Reference {
+                lifetime: receiver @ model::Lifetime::Late { .. },
+                ..
+            } = signature.receiver()
+            && let model::Type::Definition { id, arguments } = signature.output()
+            && let Some(model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            }) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| option_element(definition, arguments))
+            && lifetime == receiver
+        {
+            use representability::convert::Type;
+            let target = match self.convert_value(ty) {
+                Ok(target) => target,
+                Err(Failure::Reject(_)) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            if !matches!(
+                target,
+                Type::Parameter(_) | Type::Nominal { .. } | Type::Builtin(_)
+            ) || matches!(target, Type::Builtin(_) | Type::Nominal { .. } if !self.clones(&target))
+            {
+                return Ok(None);
+            }
+            // A place reached again by calling the method again needs its
+            // inputs again: copies of values that clone.
+            let mutable = *mutability == model::Mutability::Mutable
+                && inputs.iter().all(|input| self.clones(input));
+            return Ok(Some((
+                Type::Option(Box::new(target)),
+                if mutable {
+                    representability::signature::Guard::OptionMutable
+                } else {
+                    representability::signature::Guard::OptionShared
+                },
+            )));
+        }
         let (target, mutable) = match (signature.guard(), lent) {
             (Some(evidence), _) => (evidence.target(), evidence.mutable()),
             (None, Some(lent)) => lent,
@@ -5260,6 +5325,16 @@ fn borrows_receiver(signature: &model::Signature) -> bool {
         && !names_opaque(output)
         && signature.binders().len() == 1
         && !signature.inputs().any(names_late_lifetime)
+        && !lends_option_reference(output, receiver)
+}
+
+/// Whether `output` is an `Option<&'r T>` of the receiver's lifetime `'r`,
+/// as pane_grid's `State::get_mut` gives: a borrow guard's place, not a
+/// frame (T012).
+fn lends_option_reference(output: &model::Type, receiver: &model::Lifetime) -> bool {
+    matches!(output, model::Type::Definition { arguments, .. }
+        if matches!(&arguments[..], [model::Argument::Type(model::Type::Reference { lifetime, .. })]
+            if lifetime == receiver))
 }
 
 /// Whether `ty` holds an opaque, trait object or function pointer type.

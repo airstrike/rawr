@@ -6,6 +6,7 @@
 
 mod erasure;
 mod islands;
+mod panes;
 mod plain;
 mod scope;
 mod support;

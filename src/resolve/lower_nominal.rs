@@ -18967,6 +18967,20 @@ impl<'a> Parser<'a> {
         guard: crate::host::item::Guard,
     ) -> ParsedExpr {
         let inner = value.ty.clone();
+        match guard {
+            crate::host::item::Guard::OptionShared => {
+                // `Some` of a copy of the target, typed as Rust's `Option<&T>`.
+                if let Ty::Option(target) = self.inference.resolve(&inner) {
+                    value.ty = Ty::Option(Box::new(Ty::Reference {
+                        mutable: false,
+                        target,
+                    }));
+                }
+                return value;
+            }
+            crate::host::item::Guard::OptionMutable => return self.optional_guard(value),
+            crate::host::item::Guard::Shared | crate::host::item::Guard::Mutable => {}
+        }
         if guard == crate::host::item::Guard::Shared {
             value.ty = Ty::Reference {
                 mutable: false,
@@ -19016,6 +19030,67 @@ impl<'a> Parser<'a> {
             native: true,
         });
         expression
+    }
+
+    /// An imported method's `Option<&mut T>` lent from its receiver, as
+    /// pane_grid's `state.get_mut(pane)`: the call gives `Some` of a place
+    /// (`island::place::Place`) or `None`. The value is `Some` of a copy of
+    /// the target, whose place a pattern's `&mut` binding writes back
+    /// through the place, as `v.get_mut(i)`'s element is (T012).
+    fn optional_guard(&mut self, value: ParsedExpr) -> ParsedExpr {
+        let call = value.span;
+        let target = match self.inference.resolve(&value.ty) {
+            Ty::Option(target) => *target,
+            other => other,
+        };
+        let slot = self.temporary("borrowed");
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {slot} = (); ")),
+            origin::Fragment::default(),
+        ));
+        self.bindings.insert(
+            slot.as_str().into(),
+            Binding {
+                ty: Ty::Unknown,
+                mutable: true,
+                available: true,
+                moved_fields: Default::default(),
+                declaration: call,
+                kind: BindingKind::Local,
+            },
+        );
+        let held = origin::Fragment::plain(slot.as_str());
+        let present = self.prelude_op(PreludeOp::IsSome, [held.clone()]);
+        let place = self.prelude_op(PreludeOp::Unwrap, [held]);
+        let read = self.prelude_op(PreludeOp::CellGet, [place.clone()]);
+        let some = self.prelude_op(PreludeOp::Some, [read]);
+        let none = self.prelude_op(PreludeOp::None, []);
+        let mut source = origin::Fragment::plain(format!("{{ {slot} = "));
+        source.push(value.rendered_source());
+        source.push_text("; if ");
+        source.push(present);
+        source.push_text(" { ");
+        source.push(some);
+        source.push_text(" } else { ");
+        source.push(none);
+        source.push_text(" } }");
+        let ty = Ty::Option(Box::new(Ty::Reference {
+            mutable: true,
+            target: Box::new(target.clone()),
+        }));
+        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, call);
+        parsed.outcome = value.outcome;
+        parsed.evaluation = value.evaluation;
+        parsed.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            binding: slot.as_str().into(),
+            base: place,
+            steps: vec![PlaceStep::Cell {
+                release: false,
+                native: true,
+            }],
+            ty: target,
+        })));
+        parsed
     }
 
     /// `stdin.read_line(&mut buf)`, a std reader that appends to a
@@ -19438,6 +19513,37 @@ impl<'a> Parser<'a> {
         operation: Span,
         item: &crate::host::item::Definition,
     ) -> Result<(), Error> {
+        // An imported value is changed where it lives, through its handle,
+        // so a place below a mutable binding (`self.panes.split(..)`) needs
+        // only that binding to be mutable, as Rust's `&mut self` does.
+        let root = match &receiver.lvalue {
+            Some(Lvalue::Field(field)) => Some(field.binding.clone()),
+            Some(Lvalue::Nested(nested)) => Some(nested.binding.clone()),
+            Some(Lvalue::Place { binding, .. }) => Some(binding.clone()),
+            _ => None,
+        };
+        if let Some(root) = root {
+            return match self.mutation_binding(root.as_str()) {
+                Some(binding) if binding.mutable => Ok(()),
+                Some(binding) => Err(match &binding.kind {
+                    BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
+                        owner: owner.clone(),
+                        mutation: operation,
+                        receiver: binding.declaration,
+                    },
+                    BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
+                        binding: root,
+                        mutation: operation,
+                        declaration: binding.declaration,
+                    },
+                }),
+                None => Err(Error::InvalidHostOperation {
+                    item: item.path().into(),
+                    reason: "mutable receiver binding could not be proven".into(),
+                    operation,
+                }),
+            };
+        }
         let Some(name) = variable_name(receiver.source.as_str()) else {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
@@ -25783,8 +25889,31 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map(|(names, _)| names.as_ref())
                 .unwrap_or_default();
+            // An imported struct's fields are read by their selectors, as
+            // `event.split` reads them.
+            #[cfg(feature = "rust-import")]
+            let imported = (proof.definition.identity().imported().is_some()
+                && matches!(
+                    proof.definition.shape(),
+                    crate::host::type_def::Shape::Struct { .. }
+                ))
+            .then(|| proof.definition.clone());
+            #[cfg(not(feature = "rust-import"))]
+            let imported: Option<crate::host::type_def::Definition> = None;
             for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
-                let field_value = self.host_read(value.clone(), ty, field.clone(), *field_span)?;
+                let field_value = match &imported {
+                    #[cfg(feature = "rust-import")]
+                    Some(definition) => {
+                        let receiver = self.operator_expr(value.clone(), ty.clone(), *field_span);
+                        self.parse_imported_field(
+                            receiver,
+                            definition.clone(),
+                            field.clone(),
+                            *field_span,
+                        )?
+                    }
+                    _ => self.host_read(value.clone(), ty, field.clone(), *field_span)?,
+                };
                 self.host_pattern(member, field_value.rendered_source(), &field_value.ty, out)?;
             }
             return Ok(());
@@ -38894,6 +39023,24 @@ impl<'a> Parser<'a> {
         }
         let mut value = match base {
             Some(base) => {
+                // `..Default::default()` is a value of the struct, as Rust
+                // infers it from the literal.
+                if let Ok(own) = crate::host::type_ref::Type::registered(definition.path().as_str())
+                    && let Ok(own) = self.instantiate_host_type(
+                        &own,
+                        &mut BTreeMap::new(),
+                        "struct base",
+                        None,
+                        Some(&definition),
+                    )
+                {
+                    let checkpoint = self.inference.checkpoint();
+                    if self.unify_type(&own, &base.ty) {
+                        self.inference.commit(checkpoint);
+                    } else {
+                        self.inference.rollback(checkpoint);
+                    }
+                }
                 let temporary = self.temporary("base");
                 prelude.push_text(format!("let {temporary} = "));
                 prelude.push(base.rendered_source());
@@ -40425,6 +40572,22 @@ impl<'a> Parser<'a> {
             {
                 return self.parse_host_struct(definition, path_span);
             }
+            // An imported struct named through an imported module, as
+            // `pane_grid::ResizeEvent { split, ratio }`.
+            #[cfg(feature = "rust-import")]
+            if let Some(definition) = self.models.host.source_type(&full).cloned()
+                && definition.identity().imported().is_some()
+                && matches!(
+                    definition.shape(),
+                    crate::host::type_def::Shape::Struct {
+                        form: crate::host::type_def::Form::Record,
+                        ..
+                    }
+                )
+            {
+                let owner = self.models.host.type_owner(&full).cloned();
+                return self.parse_imported_struct(full.into(), definition, owner, path_span);
+            }
         }
         // `iced::Degrees(90.0)`: a facade tuple struct's constructor named
         // in full, which the facade declares as the type's `from`, as an
@@ -40718,6 +40881,28 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // An imported type named through an imported module, as
+        // `pane_grid::Axis` after `use iced::widget::pane_grid;`, is the
+        // type at the module's path.
+        #[cfg(feature = "rust-import")]
+        let owner: ImmutableString = match self.models.import(&segments[0].0) {
+            Some(binding)
+                if qualified_model.is_none()
+                    && segments.len() > 1
+                    && matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    ) =>
+            {
+                let through = format!("{}{}", binding.qualified, &owner[segments[0].0.len()..]);
+                if self.models.host.type_(&through).is_some() {
+                    through.into()
+                } else {
+                    owner
+                }
+            }
+            _ => owner,
+        };
         #[cfg(feature = "rust-import")]
         let imported_nominal_owner = if qualified_model.is_none() && segments.len() > 1 {
             self.models

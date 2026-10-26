@@ -2288,6 +2288,8 @@ fn guard(signature: &representability::signature::Signature) -> Option<host::ite
     signature.guard().map(|guard| match guard {
         representability::signature::Guard::Shared => host::item::Guard::Shared,
         representability::signature::Guard::Mutable => host::item::Guard::Mutable,
+        representability::signature::Guard::OptionShared => host::item::Guard::OptionShared,
+        representability::signature::Guard::OptionMutable => host::item::Guard::OptionMutable,
     })
 }
 

@@ -1219,6 +1219,12 @@ fn item_definition(
         rawr_import::classify::representability::signature::Guard::Mutable => {
             host::item::Guard::Mutable
         }
+        rawr_import::classify::representability::signature::Guard::OptionShared => {
+            host::item::Guard::OptionShared
+        }
+        rawr_import::classify::representability::signature::Guard::OptionMutable => {
+            host::item::Guard::OptionMutable
+        }
     });
     Ok(definition
         .imported(item.selector().try_clone()?)
