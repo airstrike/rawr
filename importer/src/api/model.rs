@@ -257,6 +257,35 @@ pub struct Signature {
     receiver: Receiver,
     inputs: Box<[Type]>,
     output: Type,
+    /// A borrowing method's guard output, as rustc reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard: Option<Guard>,
+}
+
+/// A borrowing method's output that is a guard: a type holding a lifetime
+/// that implements `Deref`, as `RefCell::borrow_mut` and Freya's
+/// `State::write` give. `target` is rustc's normalized `Deref::Target`,
+/// and `mutable` whether the output is also `DerefMut`.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub struct Guard {
+    target: Type,
+    mutable: bool,
+}
+
+impl Guard {
+    pub(crate) const fn new(target: Type, mutable: bool) -> Self {
+        Self { target, mutable }
+    }
+
+    /// The type the guard dereferences to.
+    pub const fn target(&self) -> &Type {
+        &self.target
+    }
+
+    /// Whether the guard is `DerefMut`.
+    pub const fn mutable(&self) -> bool {
+        self.mutable
+    }
 }
 
 /// Function or implementation safety.
@@ -778,7 +807,11 @@ impl Signature {
         for input in &self.inputs {
             input.retain(retained)?;
         }
-        self.output.retain(retained)
+        self.output.retain(retained)?;
+        match &self.guard {
+            Some(guard) => guard.target.retain(retained),
+            None => Some(()),
+        }
     }
 }
 
@@ -1511,7 +1544,15 @@ impl Signature {
             receiver,
             inputs,
             output,
+            guard: None,
         }
+    }
+
+    /// The signature with `guard` as its output's guard evidence.
+    #[must_use]
+    pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {
+        self.guard = guard;
+        self
     }
 
     fn collect_references(&self, references: &mut dyn FnMut(&identity::Definition)) {
@@ -1525,6 +1566,9 @@ impl Signature {
             .iter()
             .for_each(|ty| ty.collect_references(references));
         self.output.collect_references(references);
+        if let Some(guard) = &self.guard {
+            guard.target.collect_references(references);
+        }
     }
 
     /// Safe or unsafe callable evidence.
@@ -1570,6 +1614,12 @@ impl Signature {
     /// The exact output type.
     pub const fn output(&self) -> &Type {
         &self.output
+    }
+
+    /// The output's guard evidence, for a borrowing method whose output
+    /// dereferences to a type.
+    pub const fn guard(&self) -> Option<&Guard> {
+        self.guard.as_ref()
     }
 }
 

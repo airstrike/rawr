@@ -374,3 +374,117 @@ impl WindowConfig {
             .join("; ")
     }
 }
+
+/// Methods that give borrow guards, which Rawr reaches inside each call:
+/// std's `Ref` and `RefMut`, the crate's own guard that counts the guards
+/// it gave, and a projection through a storage trait's generic associated
+/// types, as Freya's `State::read` gives `<UnsyncStorage as
+/// AnyStorage>::Ref<'_, T>`.
+pub struct Meter {
+    value: std::cell::RefCell<i64>,
+}
+
+impl Meter {
+    pub fn new(value: i64) -> Self {
+        Self {
+            value: std::cell::RefCell::new(value),
+        }
+    }
+
+    pub fn borrow(&self) -> std::cell::Ref<'_, i64> {
+        self.value.borrow()
+    }
+
+    pub fn borrow_mut(&self) -> std::cell::RefMut<'_, i64> {
+        self.value.borrow_mut()
+    }
+}
+
+/// A value whose guard counts the guards it gave.
+pub struct Tally {
+    value: i64,
+    guards: i64,
+}
+
+pub struct TallyGuard<'a>(&'a mut Tally);
+
+impl std::ops::Deref for TallyGuard<'_> {
+    type Target = i64;
+
+    fn deref(&self) -> &i64 {
+        &self.0.value
+    }
+}
+
+impl std::ops::DerefMut for TallyGuard<'_> {
+    fn deref_mut(&mut self) -> &mut i64 {
+        &mut self.0.value
+    }
+}
+
+impl Drop for TallyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.guards += 1;
+    }
+}
+
+impl Tally {
+    pub fn new() -> Self {
+        Self {
+            value: 0,
+            guards: 0,
+        }
+    }
+
+    pub fn lock(&mut self) -> TallyGuard<'_> {
+        TallyGuard(self)
+    }
+
+    pub fn guards(&self) -> i64 {
+        self.guards
+    }
+}
+
+impl Default for Tally {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub trait Storage {
+    type Ref<'a, T: 'static>: std::ops::Deref<Target = T>;
+    type Mut<'a, T: 'static>: std::ops::DerefMut<Target = T>;
+}
+
+pub struct Unsync;
+
+impl Storage for Unsync {
+    type Ref<'a, T: 'static> = std::cell::Ref<'a, T>;
+    type Mut<'a, T: 'static> = std::cell::RefMut<'a, T>;
+}
+
+pub type ReadRef<'a, T> = <Unsync as Storage>::Ref<'a, T>;
+pub type WriteRef<'a, T> = <Unsync as Storage>::Mut<'a, T>;
+
+/// A shared value, as Freya's `State<T>` is.
+pub struct Signal<T: 'static>(std::rc::Rc<std::cell::RefCell<T>>);
+
+impl<T: 'static> Clone for Signal<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: 'static> Signal<T> {
+    pub fn new(value: T) -> Self {
+        Self(std::rc::Rc::new(std::cell::RefCell::new(value)))
+    }
+
+    pub fn read(&self) -> ReadRef<'_, T> {
+        self.0.borrow()
+    }
+
+    pub fn write(&mut self) -> WriteRef<'_, T> {
+        self.0.borrow_mut()
+    }
+}

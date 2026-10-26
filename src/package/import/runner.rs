@@ -1211,7 +1211,17 @@ fn item_definition(
             ty(facade, item.signature().output(), profile, installed)?,
         )?,
     };
-    Ok(definition.imported(item.selector().try_clone()?))
+    let guard = item.signature().guard().map(|guard| match guard {
+        rawr_import::classify::representability::signature::Guard::Shared => {
+            host::item::Guard::Shared
+        }
+        rawr_import::classify::representability::signature::Guard::Mutable => {
+            host::item::Guard::Mutable
+        }
+    });
+    Ok(definition
+        .imported(item.selector().try_clone()?)
+        .guarded(guard))
 }
 
 fn signature(

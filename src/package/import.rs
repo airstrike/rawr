@@ -1693,7 +1693,8 @@ fn imported_item(
                 receiver(plan.receiver()),
                 signature(types, plan.signature(), allocation)?,
             )?
-            .imported(outcome.identity().selector().try_clone()?),
+            .imported(outcome.identity().selector().try_clone()?)
+            .guarded(guard(plan.signature())),
         ),
         Representability::Constant(plan) => Some(
             match outcome.identity().selector() {
@@ -1721,7 +1722,8 @@ fn imported_item(
                 )?,
                 _ => return Err(Error::Cardinality),
             }
-            .imported(outcome.identity().selector().try_clone()?),
+            .imported(outcome.identity().selector().try_clone()?)
+            .guarded(guard(plan.signature())),
         ),
         // A generic function Rawr calls at the types it infers or a
         // turbofish names. The bridge calls it at those types, where rustc
@@ -1743,7 +1745,8 @@ fn imported_item(
                 )?,
                 _ => return Err(Error::Cardinality),
             }
-            .imported(outcome.identity().selector().try_clone()?),
+            .imported(outcome.identity().selector().try_clone()?)
+            .guarded(guard(plan.signature())),
         ),
         Representability::Value(_)
         | Representability::Struct(_)
@@ -2237,6 +2240,14 @@ fn defaults(
         );
     }
     Ok(defaults.into_boxed_slice())
+}
+
+/// How a method's borrow guard output is reached, when it gives one.
+fn guard(signature: &representability::signature::Signature) -> Option<host::item::Guard> {
+    signature.guard().map(|guard| match guard {
+        representability::signature::Guard::Shared => host::item::Guard::Shared,
+        representability::signature::Guard::Mutable => host::item::Guard::Mutable,
+    })
 }
 
 fn receiver(receiver: representability::ownership::Receiver) -> receiver::Mode {
