@@ -9993,3 +9993,25 @@ fn language_circle_std_float_constants_and_rc_counts() {
     );
     assert!(refused.contains("Rc::strong_count"), "{refused}");
 }
+
+#[test]
+fn language_circle_std_size_of_and_sleep() {
+    let value = run(r#"
+        use std::thread;
+        use std::time::Duration;
+        pub fn run() -> i64 {
+            let x = 5;
+            let c = 'c';
+            thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::ZERO);
+            (std::mem::size_of_val(&x) * 1000 + size_of::<[u16; 3]>() * 100
+                + std::mem::size_of_val(&c) * 10 + std::mem::size_of::<()>()) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 4640);
+    let refused = rejected(
+        "pub fn run() -> i64 { let s = String::new(); std::mem::size_of_val(&s) as i64 } run()",
+    );
+    assert!(refused.contains("size_of_val"), "{refused}");
+}

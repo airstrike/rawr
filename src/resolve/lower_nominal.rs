@@ -5974,7 +5974,10 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
-    let op_is_print = matches!(op, ExecutableOp::Prelude(PreludeOp::Print));
+    let op_is_print = matches!(
+        op,
+        ExecutableOp::Prelude(PreludeOp::Print | PreludeOp::Time)
+    );
     let func: Shared<crate::func::native::FnAny> =
         Shared::new(move |context, args| op.invoke(context, args, &models, requirement.as_ref()));
     let func = match by_reference {
@@ -30221,10 +30224,36 @@ impl<'a> Parser<'a> {
             }
             return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
+        // `std::thread::sleep(duration)`, `thread::sleep`, `sleep`.
+        if let Some(skip) = self.sleep_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            let (mut arguments, end) = self.parse_call_arguments("`sleep` arguments")?;
+            let call = span(name_span.start(), end);
+            let [duration] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: "std::thread".into(),
+                    method: "sleep".into(),
+                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    call,
+                });
+            };
+            self.coerce_expr(&Ty::Time(Time::Duration), duration)?;
+            let code = time_code("sleep").to_string();
+            let source = self.prelude_op(
+                PreludeOp::Time,
+                ["()".into(), code.into(), duration.rendered_source()],
+            );
+            return Ok(self.operator_expr(source, Ty::Unit, call));
+        }
         // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
         if let Some((function, skip)) = self.mem_path(&name) {
             for _ in 0..skip {
                 self.next();
+            }
+            if function.starts_with("size_of") {
+                return self.parse_size_of(function, name_span);
             }
             return self.parse_mem_call(function, name_span);
         }
@@ -30604,7 +30633,7 @@ impl<'a> Parser<'a> {
             .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
             .collect();
         let function = |token: &Token| match token {
-            Token::Identifier(name) => ["swap", "replace", "take"]
+            Token::Identifier(name) => ["swap", "replace", "take", "size_of", "size_of_val"]
                 .into_iter()
                 .find(|function| *function == name.as_str()),
             _ => None,
@@ -30638,7 +30667,111 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         };
-        matches!(tokens[skip], Token::LeftParen).then_some((function, skip))
+        let next = if function == "size_of" {
+            Token::DoubleColon
+        } else {
+            Token::LeftParen
+        };
+        (tokens[skip] == next).then_some((function, skip))
+    }
+
+    /// A call of `std::thread::sleep` at `name`, by its path or imported
+    /// (`use std::thread;`, `use std::thread::sleep;`): the tokens before
+    /// its name.
+    #[inline(never)]
+    fn sleep_path(&mut self, name: &str) -> Option<usize> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..5)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let named = |token: &Token, wanted: &str| matches!(token, Token::Identifier(name) if name.as_str() == wanted);
+        // Imported from `std::thread`, and not a local item or binding.
+        let imported = |this: &Self, name: &str, from: &[&str]| {
+            this.models.get(name).is_none()
+                && this.models.function(name).is_none()
+                && !this.bindings.contains_key(name)
+                && this.models.import(name).is_some_and(|binding| {
+                    let path = binding.qualified.as_str();
+                    from.contains(&path.strip_suffix(name).unwrap_or(path))
+                })
+        };
+        let skip = match name {
+            "std" | "core"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "thread")
+                    && tokens[2] == Token::DoubleColon
+                    && named(&tokens[3], "sleep") =>
+            {
+                4
+            }
+            "thread"
+                if tokens[0] == Token::DoubleColon
+                    && named(&tokens[1], "sleep")
+                    && imported(self, name, &["std::", "core::"]) =>
+            {
+                2
+            }
+            "sleep" if imported(self, name, &["std::thread::", "core::thread::"]) => 0,
+            _ => return None,
+        };
+        matches!(tokens[skip], Token::LeftParen).then_some(skip)
+    }
+
+    /// `size_of::<T>()` and `size_of_val(&value)`: rustc's size in bytes of
+    /// a number, `bool`, `char`, `()` or an array of them. Another type's
+    /// layout is rustc's own choice, so it is refused.
+    #[inline(never)]
+    fn parse_size_of(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let ty = if function == "size_of" {
+            self.expect(Token::DoubleColon, "'::' after `size_of`")?;
+            self.expect(Token::LessThan, "'<' after `size_of::`")?;
+            let ty = self.parse_local_type()?;
+            self.expect_close_angle("'>' after `size_of`'s type")?;
+            ty
+        } else {
+            self.inference.fresh()
+        };
+        let (mut arguments, end) = self.parse_call_arguments("`std::mem` arguments")?;
+        let call = span(name_span.start(), end);
+        let count = usize::from(function == "size_of_val");
+        if arguments.len() != count {
+            return Err(Error::InvalidMethodCall {
+                owner: "std::mem".into(),
+                method: function.into(),
+                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+                call,
+            });
+        }
+        let ty = match arguments.first_mut() {
+            Some(argument) => {
+                let expected = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(ty.clone()),
+                };
+                self.coerce_expr(&expected, argument)?;
+                self.inference.resolve(&ty)
+            }
+            None => self.inference.resolve(&ty),
+        };
+        let Some(size) = primitive_size(&ty) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "`std::mem::{function}` of `{}`, whose layout is rustc's own; only numbers, \
+                     `bool`, `char`, `()` and arrays of them have a size in Rawr",
+                    ty.name(&self.models)
+                )
+                .into(),
+                source: call,
+            });
+        };
+        // The argument is still evaluated, for its effects.
+        let mut source = origin::Fragment::plain("{ ");
+        if let Some(argument) = arguments.first() {
+            source.push(argument.rendered_source());
+            source.push_text("; ");
+        }
+        source.push_text(format!("{size} }}"));
+        Ok(self.operator_expr(source, Ty::Int(Int::Usize), call))
     }
 
     /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
@@ -43237,6 +43370,26 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult 
     }
 }
 
+/// rustc's size in bytes of a value of `ty`, for a type whose layout Rust
+/// fixes: a number, `bool`, `char`, `()` or an array of them.
+fn primitive_size(ty: &Ty) -> Option<u64> {
+    Some(match ty {
+        Ty::Unit => 0,
+        Ty::Bool => 1,
+        Ty::Char => 4,
+        // An integer literal's type defaults to `i32`.
+        Ty::Int(Int::Var(_)) => 4,
+        Ty::Int(kind) => u64::from(kind.bits() / 8),
+        Ty::Float(Float::F32) => 4,
+        Ty::Float(_) => 8,
+        Ty::Array {
+            element,
+            length: Some(length),
+        } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
+        _ => return None,
+    })
+}
+
 /// The slice methods `SliceChunks` runs, by code: each gives the slices.
 const SLICE_CHUNKS: &[&str] = &[
     "chunks",
@@ -43318,6 +43471,8 @@ const TIME_METHODS: &[&str] = &[
     "compare",
     "from_secs_f32",
     "as_secs_f32",
+    // `std::thread::sleep(duration)`.
+    "sleep",
 ];
 
 fn time_code(name: &str) -> usize {
@@ -43357,6 +43512,12 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
     Ok(match name {
         "from_secs" => Dynamic::from(Duration::from_secs(unsigned(operand))),
         "from_millis" => Dynamic::from(Duration::from_millis(unsigned(operand))),
+        "sleep" => {
+            if let Some(duration) = duration(operand) {
+                std::thread::sleep(duration);
+            }
+            Dynamic::UNIT
+        }
         "from_micros" => Dynamic::from(Duration::from_micros(unsigned(operand))),
         "from_nanos" => Dynamic::from(Duration::from_nanos(unsigned(operand))),
         "from_secs_f64" | "from_secs_f32" => Dynamic::from(float(number(operand))?),

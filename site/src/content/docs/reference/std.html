@@ -52,7 +52,7 @@ println!("{angle:?} {wrapped:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite">45.0 0.75</span></div>
 </div>
 <h2 id="time"><code>Duration</code> and <code>Instant</code></h2>
-<p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
+<p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="time.rs" id="src-time">use std::time::{Duration, Instant};
 
@@ -103,14 +103,16 @@ println!("{len}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite">2</span></div>
 </div>
 <h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
-<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>.</p>
+<p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>. <code>size_of::&lt;T&gt;()</code> and <code>size_of_val(&amp;x)</code> give rustc&rsquo;s size of a number, <code>bool</code>, <code>char</code>, <code>()</code> or an array of them. Other types are refused, because rustc chooses their layout.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="mem.rs" id="src-mem">let mut a = vec![1];
 let mut b = vec![2, 3];
 std::mem::swap(&amp;mut a, &amp;mut b);
 let old = std::mem::take(&amp;mut a); // [2, 3], and a is empty
-println!("{old:?} {a:?} {b:?}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite">[2, 3] [] [1]</span></div>
+println!("{old:?} {a:?} {b:?}");
+println!("{} {}", size_of::&lt;u64&gt;(), std::mem::size_of_val(&amp;[1u16; 3])); // 8 6</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite">[2, 3] [] [1]
+8 6</span></div>
 </div>
 <h2 id="traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></h2>
 <p><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits, and <code>std::cmp::Ordering</code>.</p>
