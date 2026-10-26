@@ -23379,6 +23379,32 @@ impl<'a> Parser<'a> {
         };
         self.next();
         let rhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // `for c in 'a'..='e'`: the chars between, as a chain of one loop.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            let range = self.range_iterator(&lhs, Some(&rhs), Ty::Char, operator == "..=");
+            let Some((pipeline, item)) = self.for_pipeline(&range) else {
+                return Err(self.unsupported("`for` over this `char` range"));
+            };
+            let (setup, header, entry, exit) = Self::for_parts(pipeline, &name);
+            let mut looped = self.parse_for_body(
+                name,
+                declaration,
+                mutable,
+                item,
+                header,
+                start,
+                label,
+                pattern.as_ref(),
+                Some((entry, exit)),
+            )?;
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(setup);
+            source.push(looped.source);
+            source.push_text(" }");
+            looped.source = source;
+            return Ok(looped);
+        }
         let item = self.integer_bounds(&lhs, Some(&rhs))?;
         let mut source = origin::Fragment::plain(format!("for {name} in "));
         source.push(lhs.rendered_source());
@@ -25147,6 +25173,13 @@ impl<'a> Parser<'a> {
             self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
             let element = Box::new(lhs.ty.clone());
             return Ok(self.binary(lhs, "..", rhs.clone(), Ty::Range(element)));
+        }
+        // `'a'..='e'`: an iterator over the chars between.
+        if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
+            if let Some(rhs) = &rhs {
+                self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
+            }
+            return Ok(self.range_iterator(&lhs, rhs.as_ref(), Ty::Char, inclusive));
         }
         let item = self.integer_bounds(&lhs, rhs.as_ref())?;
         let range = self.range_iterator(&lhs, rhs.as_ref(), item, inclusive);
@@ -44430,6 +44463,16 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
         10 => Dynamic::from_float(integer as f32 as crate::FLOAT),
         11 => Dynamic::from_float(integer as crate::FLOAT),
         12 => Dynamic::from(char::from(integer as u8)),
+        // A char range's item by its code point (`iterator::CHAR_OF_CODE`).
+        15 => {
+            match u32::try_from(integer).ok().and_then(char::from_u32) {
+                Some(c) => Dynamic::from(c),
+                None => return fail(
+                    "a `char` range across the surrogates U+D800 to U+DFFF is not supported in \
+                     Rawr yet",
+                ),
+            }
+        }
         // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
         13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
         14 => Dynamic::from_float(integer as u64 as crate::FLOAT),

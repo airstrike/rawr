@@ -10015,3 +10015,25 @@ fn language_circle_std_size_of_and_sleep() {
     );
     assert!(refused.contains("size_of_val"), "{refused}");
 }
+
+#[test]
+fn language_circle_std_char_ranges_iterate() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let letters: String = ('a'..='e').collect();
+            let back: String = ('x'..'z').rev().collect();
+            let mut looped = String::new();
+            for c in 'p'..='r' { looped.push(c); }
+            let c = 'm';
+            format!(
+                "{letters} {back} {looped} {} {} {} {}",
+                ('a'..='z').contains(&c), ('a'..'m').contains(&c),
+                ('a'..='z').count(), (0..10).contains(&10)
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "abcde yx pqr true false 26 false");
+}
