@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 22;
+const CLASSIFIER_VERSION: u32 = 23;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3312,7 +3312,12 @@ impl<P: api::Phase> Context<'_, P> {
                     export.span().clone(),
                     definition.span().clone(),
                 );
-                let evidence = self.classify_associated(implementation, definition, definitions)?;
+                let evidence = self.classify_associated(
+                    implementation,
+                    definition,
+                    definitions,
+                    export.target(),
+                )?;
                 associated.push(OutcomeRecord {
                     export: export.key().clone(),
                     identity: item_identity,
@@ -3337,6 +3342,7 @@ impl<P: api::Phase> Context<'_, P> {
         implementation: &model::Implementation,
         definition: &model::Definition,
         definitions: &[DefinitionPlan],
+        target: &api::identity::Definition,
     ) -> Result<OutcomeEvidence, Error> {
         use representability::{reject, Representability};
         let rejected = match (
@@ -3349,6 +3355,17 @@ impl<P: api::Phase> Context<'_, P> {
             (_, model::Polarity::Negative, _, _) => Some(reject::Kind::NegativeImplementation),
             (_, _, true, _) => Some(reject::Kind::ConstImplementation),
             (_, _, _, true) => Some(reject::Kind::DefaultImplementation),
+            // An implementation that declares lifetimes for another type
+            // that names this one, as cosmic-text's `impl<'a>
+            // BorrowedWithFontSystem<'a, Buffer>` names `Buffer`, has no
+            // members of this type: its `hit(&mut self)` is not
+            // `Buffer::hit(&self)`.
+            _ if implementation.generics().parameters().next().is_some()
+                && lifetime_only(implementation.generics())
+                && !own_implementation(implementation.self_type(), target) =>
+            {
+                Some(reject::Kind::GenericImplementation)
+            }
             _ => None,
         };
         // A trait's default method, as Freya's `ContainerSizeExt::expanded(self)
@@ -5263,6 +5280,16 @@ fn borrows_at_early_lifetime(ty: &model::Type) -> bool {
 
 /// `ty` is the definition `id` whose type arguments are all generic
 /// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
+/// Whether `ty`, an implementation's self type, is the definition `id`
+/// with any arguments, or a reference to it.
+fn own_implementation(ty: &model::Type, id: &api::identity::Definition) -> bool {
+    match ty {
+        model::Type::Definition { id: actual, .. } => actual == id,
+        model::Type::Reference { ty, .. } => own_implementation(ty, id),
+        _ => false,
+    }
+}
+
 fn any_arguments(ty: &model::Type, id: &api::identity::Definition) -> bool {
     matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
     && arguments.iter().all(|argument| match argument {
@@ -6575,6 +6602,96 @@ mod tests {
         }
     }
 
+    /// An implementation that declares only lifetimes for another type that
+    /// names this one, as cosmic-text's `impl<'a> BorrowedWithFontSystem<'a,
+    /// Buffer>`, gives this type no members: its `hit(&mut self)` must not
+    /// be filed as `Buffer::hit` beside `Buffer::hit(&self)`. The same
+    /// implementation of the type itself is this type's.
+    #[test]
+    fn a_lifetime_only_implementation_of_another_type_gives_no_members() {
+        use super::representability::reject::Kind;
+        use crate::api::model;
+
+        let graph = crate::test_fixture::graph();
+        let limits = crate::cargo::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let definition = graph
+            .definitions()
+            .next()
+            .expect("fixture retains a definition");
+        let wrapper = crate::test_fixture::representability_families()
+            .definitions()
+            .next()
+            .expect("family fixture retains a distinct definition")
+            .id()
+            .clone();
+        let generics = model::Generics::new(
+            Box::from([model::Parameter::new(
+                wrapper.clone(),
+                0,
+                "'a".into(),
+                model::ParameterKind::Lifetime {
+                    bounds: Box::default(),
+                },
+            )]),
+            Box::default(),
+        );
+        let implementation = |self_type: model::Type| {
+            model::Implementation::new(
+                "fixture-impl".into(),
+                wrapper.clone(),
+                Box::from([definition.id().clone(), wrapper.clone()]),
+                model::Trait::Inherent,
+                self_type,
+                model::Safety::Safe,
+                model::Polarity::Positive,
+                false,
+                false,
+                generics.clone(),
+                Box::default(),
+                rejection_span(),
+                model::Origin::Source,
+            )
+        };
+        let early = model::Argument::Lifetime(model::Lifetime::Early {
+            owner: wrapper.clone(),
+            index: 0,
+        });
+        // `impl<'a> Wrapper<'a, Definition>`, listed among the members of
+        // `Definition`, which it names.
+        let borrowed = implementation(model::Type::Definition {
+            id: wrapper.clone(),
+            arguments: Box::from([
+                early.clone(),
+                model::Argument::Type(model::Type::Definition {
+                    id: definition.id().clone(),
+                    arguments: Box::default(),
+                }),
+            ]),
+        });
+        let evidence = context
+            .classify_associated(&borrowed, definition, &[], definition.id())
+            .expect("the implementation is classified");
+        let super::OutcomeEvidence::Inline(representability) = evidence else {
+            panic!("a member of another type is rejected inline");
+        };
+        let Representability::Rejected(reason) = representability.as_ref() else {
+            panic!("a member of another type is not this type's");
+        };
+        assert_eq!(reason.kind(), Kind::GenericImplementation);
+        // `impl<'a> Definition<'a>` is the type's own: its member is read
+        // as the definition's plan, which this fixture doesn't hold.
+        let own = implementation(model::Type::Definition {
+            id: definition.id().clone(),
+            arguments: Box::from([early]),
+        });
+        assert!(matches!(
+            context.classify_associated(&own, definition, &[], definition.id()),
+            Err(super::Error::Cardinality)
+        ));
+    }
+
     fn rejection<T>(result: Result<T, super::Failure>) -> super::representability::reject::Kind {
         match result {
             Err(super::Failure::Reject(kind)) => kind,
@@ -6648,7 +6765,7 @@ mod tests {
             model::Origin::Source,
         );
         let evidence = context
-            .classify_associated(&implementation, definition, &[])
+            .classify_associated(&implementation, definition, &[], definition.id())
             .expect("implementation rejection is semantic");
         let super::OutcomeEvidence::Inline(representability) = evidence else {
             panic!("rejected implementation must retain inline evidence");
