@@ -3991,7 +3991,7 @@ dependencies = [
 
 [[package]]
 name = "rawr"
-version = "1.25.1"
+version = "0.1.0"
 dependencies = [
  "ahash",
  "arbitrary",
@@ -4255,7 +4255,7 @@ dependencies = [
 
 [[package]]
 name = "rawr_codegen"
-version = "3.2.0"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
