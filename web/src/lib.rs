@@ -268,6 +268,11 @@ impl Web {
                 tasks.push(fonts::load(index).map(|()| Message::Font));
             }
         }
+        // The view's style functions read the page's theme, as iced draws
+        // with it.
+        if let Some(theme) = &theme {
+            adapter.use_theme(theme.clone());
+        }
         self.adapter = Some(adapter);
         self.theme = theme;
         self.state = state;

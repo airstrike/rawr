@@ -41,7 +41,7 @@ impl Value {
         })
     }
 
-    fn built_in(native: iced::Theme) -> Self {
+    pub(crate) fn built_in(native: iced::Theme) -> Self {
         Self { native }
     }
 }

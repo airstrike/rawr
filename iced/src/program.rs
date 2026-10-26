@@ -761,6 +761,16 @@ impl Adapter {
         &self.theme
     }
 
+    /// Draw with `theme`, as a host does an application that declares
+    /// none, as the playground does with its page's theme: the style
+    /// functions the view runs read it too, as iced's renderer draws with
+    /// it.
+    pub fn use_theme(&mut self, theme: iced::Theme) {
+        let theme = theme::Value::built_in(theme);
+        self.theme = theme.clone();
+        self.last_good_theme = Some(theme);
+    }
+
     /// Return the last successful state-derived theme, if one exists.
     #[must_use]
     pub const fn last_good_theme(&self) -> Option<&theme::Value> {
