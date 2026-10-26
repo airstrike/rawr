@@ -28,9 +28,10 @@ pub enum Category {
 pub struct Error {
     sources: Box<[diagnostic::Source]>,
     kind: Kind,
-    /// The Rust path a failure missed, and whether it lies below a wholesale
-    /// crate re-export. An import demanding it may resolve it.
-    rust_demand: Option<(Box<str>, bool)>,
+    /// The Rust path a failure missed, whether it lies below a wholesale
+    /// crate re-export, and whether it names a member of a type. An import
+    /// demanding it may resolve it.
+    rust_demand: Option<(Box<str>, bool, bool)>,
 }
 
 #[derive(Debug)]
@@ -208,8 +209,13 @@ impl Error {
     }
 
     #[cfg(feature = "rust-import")]
-    pub(crate) fn with_rust_demand(mut self, path: &str, through_alias: bool) -> Self {
-        self.rust_demand = Some((path.into(), through_alias));
+    pub(crate) fn with_rust_demand(
+        mut self,
+        path: &str,
+        through_alias: bool,
+        member: bool,
+    ) -> Self {
+        self.rust_demand = Some((path.into(), through_alias, member));
         self
     }
 
@@ -220,8 +226,8 @@ impl Error {
     pub fn rust_demand(&self) -> Option<&str> {
         self.rust_demand
             .as_ref()
-            .filter(|(_, through_alias)| *through_alias)
-            .map(|(path, _)| &**path)
+            .filter(|(_, through_alias, _)| *through_alias)
+            .map(|(path, _, _)| &**path)
     }
 
     /// The Rust path below a dependency alias this failure
@@ -231,7 +237,20 @@ impl Error {
     #[doc(hidden)]
     #[must_use]
     pub fn rust_miss(&self) -> Option<&str> {
-        self.rust_demand.as_ref().map(|(path, _)| &**path)
+        self.rust_demand.as_ref().map(|(path, _, _)| &**path)
+    }
+
+    /// The type whose member this failure missed (`a::Type` of
+    /// `a::Type::member`), when [`Self::rust_miss`] names a member: a member
+    /// a trait provides arrives only when demanded by name.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_member_owner(&self) -> Option<&str> {
+        self.rust_demand
+            .as_ref()
+            .filter(|(_, _, member)| *member)
+            .and_then(|(path, _, _)| path.rsplit_once("::"))
+            .map(|(owner, _)| owner)
     }
 
     /// Classify this failure without inspecting its display text.

@@ -184,6 +184,7 @@ impl<W: Work> Supervisor<W> {
                     }
                 }
             }
+            self.adapter.poll();
             if let Some(request) = self.adapter.start(now) {
                 self.delivery
                     .reloading(self.adapter.gate().as_ref(), &request);

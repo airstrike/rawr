@@ -90,7 +90,7 @@ pub(crate) fn retain_owner<O>(
     owner: node::Validated<crate::cargo::resolution::owner::Product>,
     retention: &node::read_set::Retention,
     memo: Option<[u8; 32]>,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + 'static,
+    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
     finish: impl FnOnce(
         node::Validated<crate::cargo::resolution::owner::Product>,
         node::staging::Owned<Product>,

@@ -284,12 +284,16 @@ impl crate::Engine {
                         .finish();
                         return Err(super::Error::import_diagnostic(report));
                     }
-                    Some(Miss::Demand(path, through_alias)) => Some((path, through_alias)),
+                    Some(Miss::Demand(path, through_alias, member)) => {
+                        Some((path, through_alias, member))
+                    }
                     None => None,
                 };
                 let error = super::Error::resolution(sources.clone(), failure);
                 return Err(match demand {
-                    Some((path, through_alias)) => error.with_rust_demand(&path, through_alias),
+                    Some((path, through_alias, member)) => {
+                        error.with_rust_demand(&path, through_alias, member)
+                    }
                     None => error,
                 });
             }
@@ -305,8 +309,8 @@ impl crate::Engine {
                     let demand = match error.err_type() {
                         crate::ParseErrorType::Resolution(resolution) => {
                             match rust_miss(contract, resolution) {
-                                Some(Miss::Demand(path, through_alias)) => {
-                                    Some((path, through_alias))
+                                Some(Miss::Demand(path, through_alias, member)) => {
+                                    Some((path, through_alias, member))
                                 }
                                 _ => None,
                             }
@@ -319,15 +323,17 @@ impl crate::Engine {
                     {
                         let error = super::Error::import_diagnostic(report);
                         return Err(match demand {
-                            Some((path, through_alias)) => {
-                                error.with_rust_demand(&path, through_alias)
+                            Some((path, through_alias, member)) => {
+                                error.with_rust_demand(&path, through_alias, member)
                             }
                             None => error,
                         });
                     }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
                     return Err(match demand {
-                        Some((path, through_alias)) => error.with_rust_demand(&path, through_alias),
+                        Some((path, through_alias, member)) => {
+                            error.with_rust_demand(&path, through_alias, member)
+                        }
                         None => error,
                     });
                 }
@@ -808,8 +814,8 @@ enum Miss {
     /// wholesale crate re-export (`pub use other_crate;`), which
     /// extraction names without walking. A path below a dependency extracted
     /// from demand may resolve once demanded too; the caller
-    /// knows which those are.
-    Demand(String, bool),
+    /// knows which those are. The last flag marks a member of a type.
+    Demand(String, bool, bool),
     /// The dependency's name index has no such path: a Rust-style
     /// unresolved import, never retried.
     Unresolved(String),
@@ -836,7 +842,7 @@ fn rust_miss(
     // demanding `Type::member` brings the member of each trait it
     // implements. Demanded once, a member still missing is a real miss.
     if matches!(error, R::UnknownMember { .. }) {
-        return Some(Miss::Demand(path, through_alias));
+        return Some(Miss::Demand(path, through_alias, true));
     }
     match contract.rust_lookup(&path) {
         Some(Lookup::Missing {
@@ -850,8 +856,8 @@ fn rust_miss(
             }
             Some(Miss::Unresolved(message))
         }
-        Some(Lookup::ThroughCrate) => Some(Miss::Demand(path, true)),
-        _ => Some(Miss::Demand(path, through_alias)),
+        Some(Lookup::ThroughCrate) => Some(Miss::Demand(path, true, false)),
+        _ => Some(Miss::Demand(path, through_alias, false)),
     }
 }
 

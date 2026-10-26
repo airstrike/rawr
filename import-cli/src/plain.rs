@@ -179,7 +179,19 @@ fn prepare(
                     {
                         crate_demand
                             .extend(crate::new_demand(&error, &request_demand).map(Box::from));
+                        // A member a trait provides arrives only when named:
+                        // each method the source calls is demanded on the
+                        // type at once, as a builder chain names several.
+                        if let Some(owner) = error.rust_member_owner() {
+                            crate_demand.extend(
+                                graph
+                                    .rust_method_names()
+                                    .iter()
+                                    .map(|name| Box::from(format!("{owner}::{name}"))),
+                            );
+                        }
                         crate_demand.sort_unstable();
+                        crate_demand.dedup();
                         rawr_import::crate_demand::store(&project, &crate_demand);
                         continue;
                     }

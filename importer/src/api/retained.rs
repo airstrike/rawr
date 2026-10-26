@@ -1,10 +1,14 @@
 //! Owned API capture awaiting the connected source-consumer union.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
+
 use crate::node;
 
 /// Rebuild the captured graph from its stored API product, only when asked.
 pub(crate) type Materialize = Box<
-    dyn FnOnce(Option<&super::cached::Product>) -> crate::Result<super::Graph<super::Captured>>,
+    dyn FnOnce(Option<&super::cached::Product>) -> crate::Result<super::Graph<super::Captured>>
+        + Send,
 >;
 
 /// The captured graph, or the deferred rebuild of a current stored API hit.
@@ -65,14 +69,7 @@ impl Continuation {
 
     /// Build the captured graph, from the stored API product when deferred.
     pub(crate) fn materialize(self) -> Result<Materialized, node::Error> {
-        let graph = match self.graph {
-            Lazy::Ready(graph) => graph,
-            Lazy::Pending(materialize) => {
-                let product = self.product.value();
-                let resolved = product.resolve(&self.publication.context)?;
-                materialize(Some(resolved.as_ref().unwrap_or(product)))?
-            }
-        };
+        let graph = build(&self.product, self.graph, &self.publication.context)?;
         Ok(Materialized {
             product: self.product,
             graph,
@@ -82,12 +79,73 @@ impl Continuation {
 
     /// Publish the native-input proof of a current API without its graph. The
     /// owner already revalidated this evidence; the checks match `publish`.
+    /// A process that keeps graphs builds the deferred one off this thread,
+    /// so its next save that changes Rawr source finds it built.
     pub(crate) fn into_native_proof(self) -> Result<crate::input::proof::Proof, node::Error> {
-        let node::staging::Owned::Current(api) = &self.product else {
+        let Self {
+            product,
+            graph,
+            publication,
+        } = self;
+        let node::staging::Owned::Current(api) = &product else {
             return Err(node::Error::State("historical API has no current proof"));
         };
-        self.publication.proof(api)
+        let context = publication.context.clone();
+        let proof = publication.proof(api)?;
+        if KEEP.load(Ordering::Relaxed) && matches!(graph, Lazy::Pending(_)) {
+            std::thread::spawn(move || drop(build(&product, graph, &context)));
+        }
+        Ok(proof)
     }
+}
+
+/// Whether this process keeps the API graph it builds (see [`keep_graphs`]).
+static KEEP: AtomicBool = AtomicBool::new(false);
+
+/// The graph this process built last, by its API product's action and
+/// content.
+#[allow(clippy::type_complexity)]
+static KEPT: Mutex<
+    Option<(
+        (node::ActionKey, node::Digest),
+        super::Graph<super::Captured>,
+    )>,
+> = Mutex::new(None);
+
+/// Keep the API graph this process builds. A `rawr run` owner builds the
+/// same graph on each save that changes only Rawr source, and decoding it
+/// takes seconds; kept, a save copies it. A warm launch that never built it
+/// builds it in the background once the program runs.
+pub fn keep_graphs() {
+    KEEP.store(true, Ordering::Relaxed);
+}
+
+/// The graph of `product`: the captured one, the one this process kept, or
+/// one rebuilt from the stored product. The lock is held while it builds, so
+/// a save waits for a background build instead of repeating it.
+fn build(
+    product: &node::staging::Owned<super::cached::Product>,
+    graph: Lazy,
+    context: &crate::context::Context,
+) -> Result<super::Graph<super::Captured>, node::Error> {
+    let key = product.identity();
+    let keep = KEEP.load(Ordering::Relaxed);
+    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    let graph = match graph {
+        Lazy::Ready(graph) => graph,
+        Lazy::Pending(materialize) => match kept.as_ref() {
+            Some((held, graph)) if *held == key => return Ok(graph.duplicate()),
+            _ => {
+                let product = product.value();
+                let resolved = product.resolve(context)?;
+                materialize(Some(resolved.as_ref().unwrap_or(product)))?
+            }
+        },
+    };
+    if keep {
+        *kept = Some((key, graph.duplicate()));
+    }
+    Ok(graph)
 }
 
 impl Publication {

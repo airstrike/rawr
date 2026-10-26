@@ -579,6 +579,7 @@ pub(crate) fn retain_from_owner_parts(
     policy: &Policy,
     memo: impl FnOnce(&[u8; 32]) -> Option<[u8; 32]>,
     materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
+        + Send
         + 'static,
 ) -> Result<api::Continuation> {
     let policy_identity = policy.cache_identity(context.graph_budget())?;
