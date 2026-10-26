@@ -31,7 +31,7 @@ pub enum Category {
     /// A local is used after its value was moved out, as rustc's E0382.
     MovedValue,
     /// An access conflicts with a live borrow, as rustc's borrow checker
-    /// reports it (E0499, E0502, E0503, E0505, E0506, E0597).
+    /// reports it (E0499, E0502, E0503, E0505, E0506, E0515, E0597, E0716).
     BorrowConflict,
     /// A nominal constructor has the wrong field or payload shape.
     InvalidConstruction,
@@ -221,7 +221,8 @@ pub enum Error {
     /// An access conflicts with a borrow that is still live, as rustc's
     /// borrow checker reports it.
     BorrowConflict {
-        /// rustc's code: E0499, E0502, E0503, E0505, E0506 or E0597.
+        /// rustc's code: E0499, E0502, E0503, E0505, E0506, E0515, E0597 or
+        /// E0716.
         code: &'static str,
         /// rustc's message.
         message: ImmutableString,

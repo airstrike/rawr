@@ -40,7 +40,7 @@ impl Rule for Nll {
             let mut region = Points::new(count);
             // Borrowed for `'static`, or returned through a reference the
             // function was given (its output's region): every point. A
-            // returned borrow of a local is rustc's E0515, left to it.
+            // returned borrow of a local is rustc's E0515 (`check`).
             let returned = loan.place.projection.contains(&Projection::Deref)
                 && body.returned.iter().any(|local| reached[local.0 as usize]);
             if returned

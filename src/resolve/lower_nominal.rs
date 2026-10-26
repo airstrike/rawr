@@ -22,7 +22,10 @@ mod language_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
 
-use super::borrowck::{record::Matched, Access as FactAccess, Projection as FactStep};
+use super::borrowck::{
+    record::{Matched, ScopeEnd},
+    Access as FactAccess, Projection as FactStep,
+};
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
@@ -10437,6 +10440,7 @@ impl<'a> Parser<'a> {
     fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
         // The value of an associated `const NAME: T = value;` is a tail.
         if definition.constant() {
+            self.flow().constant();
             self.parse_statement()?;
             if !matches!(self.peek(), Token::EOF) {
                 return Err(self.unsupported("tokens after an associated const"));
@@ -10667,7 +10671,9 @@ impl<'a> Parser<'a> {
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         let mut startup_tail = false;
         if definition.body.constant {
-            // The initializer of `const NAME: T = value;` is a tail.
+            // The initializer of `const NAME: T = value;` is a tail, whose
+            // temporaries are promoted to `'static`.
+            self.flow().constant();
             self.parse_statement()?;
         } else {
             self.parse_block_function_body(definition, &mut startup_tail)?;
@@ -20231,8 +20237,10 @@ impl<'a> Parser<'a> {
         let start = self.output.len();
         let depth = self.temporary_scopes.len();
         self.open_temporaries();
+        self.flow().open_temporaries();
         self.open_frames();
         let bound = self.parse_binding_statement(let_keyword);
+        self.flow().close_temporaries(ScopeEnd::Let);
         let frames = self.close_frames();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.
@@ -21781,8 +21789,17 @@ impl<'a> Parser<'a> {
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         self.open_temporaries();
+        self.flow().open_temporaries();
         self.open_frames();
         let parsed = self.parse_expression_statement(pending);
+        // A tail's value goes on into the block's: a temporary it borrows in
+        // an extending place goes on with it.
+        let end = if self.last_expression.is_some() {
+            ScopeEnd::Value
+        } else {
+            ScopeEnd::Statement
+        };
+        self.flow().close_temporaries(end);
         let frames = self.close_frames();
         let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
@@ -24314,7 +24331,9 @@ impl<'a> Parser<'a> {
                     let normalize_private_calls =
                         std::mem::replace(&mut self.normalize_private_calls, false);
                     self.open_temporaries();
+                    self.flow().open_temporaries();
                     let guard = self.parse_expr();
+                    self.flow().close_temporaries(ScopeEnd::Statement);
                     let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
                     let mut guard = guard?;
@@ -24415,7 +24434,9 @@ impl<'a> Parser<'a> {
                     let normalize_private_calls =
                         std::mem::replace(&mut self.normalize_private_calls, false);
                     self.open_temporaries();
+                    self.flow().open_temporaries();
                     let guard = self.parse_expr();
+                    self.flow().close_temporaries(ScopeEnd::Statement);
                     let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
                     let mut guard = guard?;
@@ -24878,12 +24899,14 @@ impl<'a> Parser<'a> {
             }
             Token::While => {
                 self.open_temporaries();
+                self.flow().open_temporaries();
                 self.open_frames();
                 self.flow().loop_enter();
                 let condition = self.parse_head(Self::parse_expr);
                 self.flow().loop_test();
                 self.loop_entered = true;
                 let frames = self.close_frames();
+                self.flow().close_temporaries(ScopeEnd::Statement);
                 let temporaries = self.close_temporaries();
                 let mut condition = condition?;
                 if !temporaries.is_empty() {
@@ -27145,7 +27168,9 @@ impl<'a> Parser<'a> {
         } else {
             // The condition is a temporary scope.
             self.open_temporaries();
+            self.flow().open_temporaries();
             let condition = self.parse_head(Self::parse_expr);
+            self.flow().close_temporaries(ScopeEnd::Statement);
             let temporaries = self.close_temporaries();
             let mut condition = condition?;
             if !temporaries.is_empty() {
@@ -27285,6 +27310,7 @@ impl<'a> Parser<'a> {
             let outer_last_expression = self.last_expression.take();
             self.last_type = Ty::Unit;
             self.open_drops();
+            self.flow().open_block();
             let outer_locals: BTreeSet<Span> = self
                 .bindings
                 .values()
@@ -27351,9 +27377,11 @@ impl<'a> Parser<'a> {
         let block_like = self.peek_block_like();
         // An arm is a temporary scope, and opens its own scope frames.
         self.open_temporaries();
+        self.flow().open_temporaries();
         self.open_frames();
         let value = self.parse_expr();
         let frames = self.close_frames();
+        self.flow().close_temporaries(ScopeEnd::Value);
         let temporaries = self.close_temporaries();
         let mut value = value?;
         if matches!(self.inference.resolve(&value.ty), Ty::Never) {
@@ -27893,11 +27921,13 @@ impl<'a> Parser<'a> {
             let lazy = matches!(operator, Token::And | Token::Or);
             if lazy {
                 self.open_temporaries();
+                self.flow().open_temporaries();
                 self.open_frames();
             }
             let rhs = self.parse_binary(precedence + 1);
             let (temporaries, frames) = if lazy {
                 let frames = self.close_frames();
+                self.flow().close_temporaries(ScopeEnd::Statement);
                 (self.close_temporaries(), frames)
             } else {
                 (Vec::new(), Vec::new())
@@ -31189,7 +31219,9 @@ impl<'a> Parser<'a> {
                 }
                 let whole = span(start, operand.span.end());
                 let inner = self.may_hold_borrow(&operand.ty);
-                self.flow().borrow(operand.span.start(), whole, true, inner);
+                let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
+                self.flow()
+                    .borrow(operand.span.start(), whole, true, inner, reference);
                 self.flow().alias(operand.span.start(), start);
                 operand.ty = Ty::Reference {
                     mutable: true,
@@ -31202,16 +31234,12 @@ impl<'a> Parser<'a> {
             let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
+                let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
                 self.flow()
-                    .borrow(operand.span.start(), whole, false, inner);
-            } else if self.may_hold_borrow(&operand.ty) {
-                // `&v.first()`: a reference to a value made here holds
-                // what the value holds.
-                self.flow().same_origins(whole, operand.span);
+                    .borrow(operand.span.start(), whole, false, inner, reference);
             } else {
-                // `&1`, `&v.len()`: a temporary of the statement, or a
-                // constant promoted to `'static`, borrowing nothing else.
-                self.flow().set_origins(whole, Vec::new());
+                // `&String::from("a")`, `&(n + 1)`: a borrow of a temporary.
+                self.borrow_temporary(&operand, whole);
             }
             self.hold_temporary(&mut operand)?;
             operand.ty = Ty::Reference {
@@ -38855,10 +38883,12 @@ impl<'a> Parser<'a> {
             self.parse_match_action().map(|branch| branch.value)
         } else {
             self.open_temporaries();
+            self.flow().open_temporaries();
             // A closure's body opens its own scope frames (D558 tier 1).
             self.open_frames();
             let body = self.parse_expr();
             let frames = self.close_frames();
+            self.flow().close_temporaries(ScopeEnd::Statement);
             let temporaries = self.close_temporaries();
             body.and_then(|mut value| {
                 if !temporaries.is_empty() {
@@ -40155,7 +40185,9 @@ impl<'a> Parser<'a> {
             return Ok(pending);
         }
         if matches!(self.peek(), Token::Unit) {
-            return Ok((Vec::new(), self.next().1));
+            let end = self.next().1;
+            self.flow().called(end);
+            return Ok((Vec::new(), end));
         }
 
         self.expect(Token::LeftParen, "'(' to start call arguments")?;

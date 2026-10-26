@@ -1,0 +1,44 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+signatures/return_local_as_str.rs	E0515:3
+signatures/return_local_ref.rs	E0515:3
+signatures/return_local_through_let.rs	E0515:4
+signatures/return_param_owned.rs	E0515:2
+signatures/return_param_ref_ok.rs	ok	0	"n 3 1 2 n\n"
+signatures/return_promoted_constructors_ok.rs	ok	0	"Some(5) None (1, \"a\")\n"
+signatures/return_promoted_ok.rs	ok	0	"5 [1, 2, 3]\n"
+signatures/return_slice_of_local.rs	E0515:3
+signatures/return_slices_ok.rs	ok	0	"[2, 3] he abc [98, 99] yz\n"
+signatures/return_some_local.rs	E0515:3
+signatures/return_statement_local.rs	E0515:4
+signatures/return_static_str.rs	ok	0	"static\n"
+signatures/return_struct_local.rs	E0515:7
+signatures/return_temporary.rs	E0515:2
+signatures/return_temporary_format.rs	E0515:2
+signatures/return_temporary_sum.rs	E0515:2
+signatures/return_temporary_vec.rs	E0515:2
+signatures/temporary_argument_ok.rs	ok	0	"b 1\nc\n1\n"
+signatures/temporary_as_str.rs	E0716:2
+signatures/temporary_as_str_ok.rs	ok	0	"2 c\n"
+signatures/temporary_assigned.rs	E0716:4
+signatures/temporary_block_tail.rs	E0716:2
+signatures/temporary_call_argument_kept.rs	E0716:6
+signatures/temporary_call_argument_ok.rs	ok	0	"1 b\n"
+signatures/temporary_extended_ok.rs	ok	0	"a b\n"
+signatures/temporary_extended_sum_ok.rs	ok	0	"3 [2] 2\n"
+signatures/temporary_function_value.rs	E0716:6
+signatures/temporary_inner_let.rs	E0716:4
+signatures/temporary_inner_let_ok.rs	ok	0	"\na\n"
+signatures/temporary_iter.rs	E0716:58
+signatures/temporary_match_arm_extended_ok.rs	ok	0	"b d\n"
+signatures/temporary_method_ref.rs	E0716:16
+signatures/temporary_method_ref_ok.rs	ok	0	"1 s s\n"
+signatures/temporary_next_statement.rs	E0716:3
+signatures/temporary_promoted_ok.rs	ok	0	"5 [1, 2, 3]\n"
+signatures/temporary_reassigned.rs	E0716:4
+signatures/temporary_some_extended.rs	ok	0	"Some(\"a\")\n"
+signatures/temporary_static_annotation.rs	E0716:2
+signatures/temporary_struct_extended_ok.rs	ok	0	"a b c\n"
+signatures/temporary_sum_assigned.rs	E0716:5
+signatures/temporary_trim_chain.rs	E0716:2
+signatures/temporary_trim_chain_ok.rs	ok	0	"a\nb\n2\n"
+signatures/temporary_vec_first.rs	E0716:58

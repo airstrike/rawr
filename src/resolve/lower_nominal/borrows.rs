@@ -24,7 +24,7 @@ pub(super) struct CallReceiver {
 
 /// Whether a value of type `ty` is a reference, whose own loan is apart from
 /// what it refers to.
-fn is_reference(ty: &Ty) -> bool {
+pub(super) fn is_reference(ty: &Ty) -> bool {
     matches!(ty, Ty::Reference { .. } | Ty::Str)
 }
 
@@ -539,13 +539,53 @@ impl Parser<'_> {
         }
     }
 
+    /// `&value` (spanning `whole`) of a value that is no place: a borrow of
+    /// a temporary its temporary scope holds, which a `let` may extend, or
+    /// of a constant promoted to `'static` (`&1`, `&[1, 2]`), which borrows
+    /// nothing. A value that reads no local and calls nothing is taken for
+    /// a constant.
+    pub(super) fn borrow_temporary(&self, value: &ParsedExpr, whole: Span) {
+        let ty = self.inference.resolve(&value.ty);
+        let holds = self.may_hold_borrow(&ty);
+        let held = if holds {
+            self.flow().origins(value.span).map(<[Origin]>::to_vec)
+        } else {
+            Some(Vec::new())
+        };
+        // A part of a place (`&v[1..]`), or one read through a reference
+        // (`&s.as_bytes()[1..]`), is a place.
+        let place = self.flow().in_place(value.span);
+        match held {
+            Some(held) if !place && self.made_here(value.span, &ty) => {
+                let loan = self.flow().borrow_temporary(value.span, false, &held, true);
+                self.flow().set_origins(whole, vec![Origin::Loan(loan)]);
+            }
+            // `&v.first()` of a value these facts do not follow: what the
+            // value holds.
+            _ if holds => self.flow().same_origins(whole, value.span),
+            _ => self.flow().set_origins(whole, Vec::new()),
+        }
+    }
+
+    /// Whether the value of type `ty` spanning `span` is made here, at run
+    /// time, rather than a constant promoted to `'static`: it reads a local
+    /// or calls something, or only a call makes a value of its type.
+    fn made_here(&self, span: Span, ty: &Ty) -> bool {
+        matches!(
+            ty,
+            Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
+        ) || self.flow().computed(span)
+    }
+
     /// The value spanning `whole`, of type `ty`, is a part of the one
     /// spanning `base` (a field, a member, an element): below no reference,
     /// it holds what that value holds. A part read through a reference
     /// holds that reference's inner borrows, which these facts can't tell
     /// apart from its own loan yet.
     pub(super) fn part_of(&self, base: (Span, &Ty), whole: Span, ty: &Ty) {
-        if self.may_hold_borrow(ty) && !is_reference(&self.inference.resolve(base.1)) {
+        let reference = is_reference(&self.inference.resolve(base.1));
+        self.flow().projected(whole, base.0, reference);
+        if self.may_hold_borrow(ty) && !reference {
             self.flow().same_origins(whole, base.0);
         }
     }
@@ -555,6 +595,7 @@ impl Parser<'_> {
     /// they hold. A type that can hold no borrow of the body holds only
     /// `'static` ones (`Foo { x: &a }` of `x: &'static u32`).
     pub(super) fn compose(&self, whole: Span, ty: &Ty, parts: &[&ParsedExpr]) {
+        self.flow().constructed(whole.end());
         let mut origins = Vec::new();
         for part in parts {
             if !self.may_hold_borrow(&part.ty) {
@@ -652,6 +693,17 @@ impl Parser<'_> {
         summary: &Summary,
     ) {
         let arguments = self.flow().arguments(call.end()).unwrap_or_default();
+        // A temporary a call borrows is no `let`'s to extend.
+        for span in arguments
+            .iter()
+            .map(|argument| argument.span)
+            .chain(receiver.map(|receiver| receiver.span))
+        {
+            let origins = self.flow().origins(span).map(<[Origin]>::to_vec);
+            if let Some(origins) = origins {
+                self.flow().pin(&origins);
+            }
+        }
         let holds = self.may_hold_borrow(ty);
         // An argument that may hold borrows these facts don't follow (a
         // closure that captured, T105) may be kept in ways they can't see.
@@ -782,9 +834,21 @@ impl Parser<'_> {
                     .autoref(receiver.start, whole, mutable, below)
                     .map(|origin| vec![origin])
             }
-            // A reference made here (`v.iter().as_slice()`) is its loans; a
-            // temporary borrowed for the call ends with its statement.
+            // A reference made here (`v.iter().as_slice()`) is its loans.
             (Keeps::All, _) if reference => value(),
+            // A value made here (`String::from("a").as_str()`): a temporary
+            // borrowed for the call, which its temporary scope holds.
+            (Keeps::All, mode)
+                if !self.flow().in_place(receiver.span)
+                    && self.made_here(receiver.span, &receiver.ty) =>
+            {
+                let held = if holds { value()? } else { Vec::new() };
+                let mutable = mode == signature::Receiver::Mutable;
+                let loan = self
+                    .flow()
+                    .borrow_temporary(receiver.span, mutable, &held, false);
+                Some(vec![Origin::Loan(loan)])
+            }
             (Keeps::All, _) => None,
             (Keeps::Inner, _) if receiver.place && !reference => held(),
             (Keeps::Inner, _) if !reference => value(),

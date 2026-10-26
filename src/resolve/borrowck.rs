@@ -137,6 +137,9 @@ pub(crate) struct Loan {
     /// The hidden local the borrow's value is held in until a `let`, an
     /// assignment or a call takes it: the loan's point defines it.
     pub(crate) temporary: Local,
+    /// A borrow of a reference itself (`&r`), which a deref coercion may
+    /// make a reborrow of what it refers to (`&*r`).
+    pub(crate) of_reference: bool,
 }
 
 /// A local's name and declaration, for messages.
@@ -178,8 +181,9 @@ pub(crate) struct Body {
     /// Locals whose region is every point: a loan flowing into one is
     /// borrowed for `'static`.
     pub(crate) everywhere: Vec<Local>,
-    /// The locals a function's returned value flows into: its output's
-    /// region, which is every point of the body.
+    /// The locals a function's returned values flow into, one for each
+    /// value it returns, declared where that value is: its output's region,
+    /// which is every point of the body.
     pub(crate) returned: Vec<Local>,
 }
 
@@ -256,7 +260,8 @@ impl Points {
 /// A borrow error, as rustc reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Conflict {
-    /// rustc's code: E0499, E0502, E0503, E0505, E0506 or E0597.
+    /// rustc's code: E0499, E0502, E0503, E0505, E0506, E0515, E0597 or
+    /// E0716.
     pub(crate) code: &'static str,
     pub(crate) message: String,
     /// The access that conflicts.
@@ -270,6 +275,9 @@ pub(crate) struct Conflict {
 pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     if body.loans.is_empty() {
         return None;
+    }
+    if let Some(returned) = returned_local(body) {
+        return Some(returned);
     }
     let in_scope = rule.loans_in_scope(body);
     let index = point_index(body);
@@ -302,6 +310,14 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                 .contains(&Projection::Deref)
         {
             let loan = &body.loans[loan.0 as usize];
+            if is_temporary(body, loan.place.local) {
+                return Some(Conflict {
+                    code: "E0716",
+                    message: "temporary value dropped while borrowed".to_string(),
+                    access: loan.span,
+                    borrow: loan.span,
+                });
+            }
             return Some(Conflict {
                 code: "E0597",
                 message: format!(
@@ -328,6 +344,47 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     }
     None
 }
+
+/// A borrow of one of the function's own locals, or of a temporary, that
+/// the function returns: rustc's E0515, reported at the returned value.
+fn returned_local(body: &Body) -> Option<Conflict> {
+    for &returned in &body.returned {
+        let reached = reaches(body, &[returned]);
+        let Some(loan) = body.loans.iter().zip(reached).find_map(|(loan, reached)| {
+            (reached && !loan.of_reference && !loan.place.projection.contains(&Projection::Deref))
+                .then_some(loan)
+        }) else {
+            continue;
+        };
+        let value = body.locals[returned.0 as usize].declaration;
+        let direct = if value == loan.span {
+            "reference to"
+        } else {
+            "value referencing"
+        };
+        let message = if is_temporary(body, loan.place.local) {
+            format!("cannot return {direct} temporary value")
+        } else {
+            let name = &body.locals[loan.place.local.0 as usize].name;
+            format!("cannot return {direct} local variable `{name}`")
+        };
+        return Some(Conflict {
+            code: "E0515",
+            message,
+            access: value,
+            borrow: loan.span,
+        });
+    }
+    None
+}
+
+/// Whether `local` holds a temporary value an expression made.
+pub(crate) fn is_temporary(body: &Body, local: Local) -> bool {
+    body.locals[local.0 as usize].name == TEMPORARY
+}
+
+/// The name of a hidden local that holds a temporary value.
+pub(crate) const TEMPORARY: &str = "<temporary>";
 
 /// Whether each loan flows into one of `sinks` ([`Body::everywhere`]: it is
 /// borrowed for `'static`; [`Body::returned`]: the function returns it).
@@ -492,6 +549,14 @@ fn conflict(
             format!("cannot move out of `{name}` because it is borrowed"),
         ),
         // rustc reports this one at the borrow, which the end outlives.
+        Access::StorageDead if is_temporary(body, place.local) => {
+            return Some(Conflict {
+                code: "E0716",
+                message: "temporary value dropped while borrowed".to_string(),
+                access: loan.span,
+                borrow: span,
+            });
+        }
         Access::StorageDead => {
             return Some(Conflict {
                 code: "E0597",
