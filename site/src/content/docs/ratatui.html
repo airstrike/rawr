@@ -33,6 +33,7 @@ target = "host-tuple"</code></pre>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">mod app;
+mod ui;
 
 fn main() -&gt; std::io::Result&lt;()&gt; {
     let terminal = ratatui::init();
@@ -43,71 +44,73 @@ fn main() -&gt; std::io::Result&lt;()&gt; {
 
 fn run(mut terminal: DefaultTerminal) -&gt; std::io::Result&lt;()&gt; {
     let mut app = app::App::new();
-    let mut list = ListState::default().with_selected(Some(0));
     loop {
-        let view = app::view(&amp;app, terminal.size()?.width);
-        terminal.draw(|frame| draw(frame, &amp;view, &amp;mut list))?;
+        terminal.draw(|frame| ui::draw(frame, &amp;mut app))?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
-        // Up and Down move the list; q quits; other keys go to the app.
+        // q quits; other keys go to the app.
         // ...
-        app::update(&amp;mut app, key, list.selected());
+        app::update(&amp;mut app, key);
     }
 }</code></pre>
 </div>
-<p>Its marked <code>app.rs</code> holds the to-dos, what each key does and what the screen says:</p>
+<p>Its marked <code>ui.rs</code> draws the screen on the <code>Frame</code> ratatui hands the closure, as any ratatui app does:</p>
 <div class="block">
-  <div class="file"><b>src/app.rs</b></div>
+  <div class="file"><b>src/ui.rs</b></div>
   <pre><code data-lang="rust">// rawr
-use ratatui::layout::{Margin, Rect};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
-pub struct App {
-    pub todos: Vec&lt;Todo&gt;,
-    pub input: String,
-    pub editing: bool,
-}
+use crate::app::App;
 
-pub struct View {
-    pub title: String,
-    pub rows: Vec&lt;Row&gt;,
-    pub input: String,
+pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
+    let areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
+    frame.render_widget(
+        Paragraph::new(app.input.clone()).block(Block::bordered().title(" New to-do ")),
+        areas[0],
+    );
+    let rows: Vec&lt;ListItem&gt; = app
+        .todos
+        .iter()
+        .map(|todo| ListItem::new(todo.text.clone()))
+        .collect();
+    let mut list = ListState::default().with_selected(app.selected);
+    frame.render_stateful_widget(List::new(rows).highlight_symbol("&gt; "), areas[1], &amp;mut list);
+    app.selected = list.selected();
     // ...
-}
-
-pub fn update(app: &amp;mut App, key: Key, selected: Option&lt;usize&gt;) {
-    // ...
-}
-
-pub fn view(app: &amp;App, width: u16) -&gt; View {
-    let left = app.todos.iter().filter(|todo| !todo.done).count();
-    let input_box = Rect::new(0, 0, width, 3);
-    let room = input_box.inner(Margin::new(1, 1)).width as usize;
-    // ...
-    View {
-        title: format!(" To do: {left} left "),
-        // ...
-    }
 }</code></pre>
 </div>
+<p>Its marked <code>app.rs</code> holds the to-dos and what each key does to them.</p>
 <p>The example is a package of rawr&rsquo;s Cargo workspace. Run it from the repository&rsquo;s root:</p>
 <div class="block"><pre><code>rawr run -p tui</code></pre></div>
 <p><code>rawr run examples/tui</code> runs it too. <code>cargo run -p tui</code> runs it natively.</p>
-<p>Change the title&rsquo;s text and save. The new title shows within a second or two, with no key pressed. The to-dos you added and the selected row stay as they were.</p>
+<p>Change a title&rsquo;s text in <code>ui.rs</code> and save. The new title shows within a second or two, with no key pressed. The to-dos you added and the selected row stay as they were.</p>
 
 <h2 id="mark">What to mark</h2>
-<p>Mark the module you are working on, and keep <code>main</code> native.</p>
+<p>Mark the modules you are working on, and keep <code>main</code> native.</p>
 <ul>
-  <li>Native code owns the terminal: <code>ratatui::init</code>, the loop, crossterm&rsquo;s events, <code>Terminal::draw</code>, widget state such as <code>ListState</code>, and <code>ratatui::restore</code>.</li>
-  <li>Marked code holds the app&rsquo;s state, what a key does to it and a view model. A view model is a plain struct of strings, numbers and lists that native code draws.</li>
-  <li>Marked code may use ratatui&rsquo;s own values inside its functions, such as <code>Rect</code> and <code>Layout</code> arithmetic. Those values stay inside the marked module.</li>
+  <li>Native code owns the terminal: <code>ratatui::init</code>, the loop, crossterm&rsquo;s events, <code>Terminal::draw</code> and <code>ratatui::restore</code>.</li>
+  <li>Marked code holds the app&rsquo;s state and what a key does to it.</li>
+  <li>Marked code draws, too. A marked function may take <code>&amp;mut Frame</code>, and build ratatui&rsquo;s widgets and layouts on it, as <code>ui::draw</code> does.</li>
 </ul>
-<p>Values cross between native and marked code as they do for any <a href="/docs/run#native-main">native main</a>. Numbers, <code>bool</code>, <code>char</code>, <code>String</code>, <code>Vec</code>, <code>Option</code> and the structs and enums of marked modules cross. ratatui&rsquo;s types don&rsquo;t cross, so a key reaches the app as an enum of its own. Native code turns crossterm&rsquo;s <code>KeyCode</code> into it.</p>
+<p>Values cross between native and marked code as they do for any <a href="/docs/run#native-main">native main</a>. Numbers, <code>bool</code>, <code>char</code>, <code>String</code>, <code>Vec</code>, <code>Option</code> and the structs and enums of marked modules cross. A key reaches the app as an enum of its own, which native code makes from crossterm&rsquo;s <code>KeyCode</code>.</p>
+
+<h2 id="frame">The lent frame</h2>
+<p>A <code>&amp;mut Frame</code> borrows the terminal&rsquo;s buffer, so it can&rsquo;t be copied into marked code. rawr lends it instead, for the length of the call. Each of <code>frame</code>&rsquo;s methods reaches the native frame itself, so what <code>draw</code> renders is in the buffer when the call returns. A borrowed parameter of any type your marked crate doesn&rsquo;t declare is lent the same way.</p>
+<p>The borrow ends with the call, as in Rust. A marked function can&rsquo;t keep the frame in what it returns, or in an argument native code takes back. rawr refuses that with Rust&rsquo;s borrow rule (E0515, E0521). A copy kept anywhere else is useless after the call, and using it says so (E0597).</p>
+<p>A widget&rsquo;s state works as in Rust. <code>render_stateful_widget</code> borrows the <code>ListState</code> for its call, and the list scrolls the selection into view in it. Here the app keeps the selection and the offset as plain numbers, and <code>draw</code> makes the <code>ListState</code> from them and reads them back.</p>
 
 <h2 id="reload">What swaps and what restarts</h2>
 <p>A save of a marked file reaches the program at its next call into that file.</p>
 <ul>
-  <li>An edit to a function body or to a private item swaps in place. The app&rsquo;s state lives in native memory, so it carries on. So does the native <code>ListState</code>.</li>
+  <li>An edit to a function body or to a private item swaps in place. The app&rsquo;s state lives in native memory, so it carries on.</li>
   <li>An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr restarts the program and prints one line on the restored screen:</li>
 </ul>
 <div class="block"><pre><code>rawr: `app::App` changed its fields; restarting the program</code></pre></div>
@@ -139,7 +142,9 @@ pub fn view(app: &amp;App, width: u16) -&gt; View {
 
 <h2 id="limits">Limits</h2>
 <ul>
-  <li>Marked code can&rsquo;t take <code>&amp;mut Frame</code> yet, so it can&rsquo;t build ratatui&rsquo;s widgets itself. Native code draws from the view model.</li>
+  <li><code>Layout::areas</code>, which gives an array whose length is a const generic, isn&rsquo;t reached yet. <code>Layout::split</code> is.</li>
+  <li><code>Line::from</code> and other <code>From</code> conversions of ratatui&rsquo;s types aren&rsquo;t called directly yet. A widget that takes <code>impl Into&lt;Text&gt;</code> takes a <code>String</code>.</li>
+  <li>A marked struct can&rsquo;t hold a native value such as a <code>ListState</code> that native code keeps between calls yet.</li>
   <li>A marked <code>impl Widget</code> doesn&rsquo;t reach native code yet.</li>
   <li>A failing save&rsquo;s error shows when the program ends or restarts, not while it holds the screen.</li>
   <li>rawr resets the terminal only when the program changed its settings. A program that enters the alternate screen without raw mode isn&rsquo;t reset.</li>
