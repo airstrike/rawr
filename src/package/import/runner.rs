@@ -1356,6 +1356,9 @@ fn ty(
             )
         }
         facade::Type::Parameter(parameter) => host::type_ref::Type::parameter(parameter.as_ref())?,
+        facade::Type::Reference { mutable, target } => {
+            host::type_ref::Type::reference(*mutable, ty(facade, target, profile, installed)?)
+        }
         facade::Type::Option(element) => {
             host::type_ref::Type::option(ty(facade, element, profile, installed)?)
         }

@@ -563,6 +563,19 @@ fn same_input_type(
         | (Shape::Range(left), Shape::Range(right)) => {
             same_input_type(left, right, left_parameters, right_parameters, mappings)?
         }
+        (
+            Shape::Reference {
+                mutable: left_mutable,
+                target: left,
+            },
+            Shape::Reference {
+                mutable: right_mutable,
+                target: right,
+            },
+        ) => {
+            left_mutable == right_mutable
+                && same_input_type(left, right, left_parameters, right_parameters, mappings)?
+        }
         (Shape::Result(left_ok, left_err), Shape::Result(right_ok, right_err)) => {
             same_input_type(
                 left_ok,

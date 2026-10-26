@@ -357,6 +357,9 @@ enum Error {
     Value(String),
     /// A borrow guard's target read without `Clone`, by its type's name.
     NotClone(&'static str),
+    /// A value native code lent the call (D558.3), by its type's name,
+    /// that can't be reached.
+    Lent(&'static str, __rawr_internal::scope::Error),
 }
 
 impl std::fmt::Debug for Error {
@@ -380,6 +383,7 @@ impl std::fmt::Debug for Error {
                 f,
                 "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
             ),
+            Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
         }
     }
 }
@@ -400,6 +404,7 @@ impl Error {
             Self::Leased => 11,
             Self::Value(_) => 12,
             Self::NotClone(_) => 13,
+            Self::Lent(..) => 14,
         }
     }
 }
@@ -978,6 +983,16 @@ fn check_values(
     }
 }
 
+/// The value native code lent the call at argument `index` (D558.3), if
+/// that argument is one.
+#[allow(dead_code)]
+fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Lent> {
+    arguments
+        .values
+        .get(index)
+        .and_then(|value| value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent))
+}
+
 fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
@@ -1208,12 +1223,17 @@ fn invoke_in_arena(
                 2 => receiver
                     .as_ref()
                     .and_then(|witness| call.transform_native_witness(witness).ok()),
-                _ => None,
+                // A method that borrows its receiver gives an output of its
+                // declared type, a receiver native code lent (D558.3) too.
+                _ => call.borrowed_output_witness().ok(),
             };
             if let Some(witness) = witness {
                 arguments.arena.attest(handle, witness)?;
             }
-        } else if let Ok(witness) = call.output_witness() {
+        } else if let Ok(witness) = call
+            .output_witness()
+            .or_else(|_| call.borrowed_output_witness())
+        {
             // A Rust value inside an `Option` or a `Result` takes the
             // witness of its own type argument.
             attest_inner(&output, &witness, arguments.arena)?;
@@ -5241,55 +5261,33 @@ fn render_adapter(
                             plan.name()
                         )
                         .map_err(|_| request::Error::Encoding)?;
-                    }
-                    Receiver::Shared | Receiver::Mutable => {
-                        writeln!(
-                            output,
-                            "    let receiver = native_handle(arguments, 0, false)?;"
-                        )
-                        .map_err(|_| request::Error::Encoding)?;
-                        write!(
-                            output,
-                            "    let output = arguments.arena.{}::<",
-                            if matches!(receiver, Receiver::Mutable) {
-                                "mutable"
-                            } else {
-                                "shared"
-                            }
-                        )
-                        .map_err(|_| request::Error::Encoding)?;
-                        render_container_path(
-                            &path,
+                        render_item_turbofish(
                             signature,
                             substitutions,
                             constants,
                             *container_parameters,
-                            true,
                             output,
                         )?;
-                        write!(output, ", _>(receiver, |receiver| receiver.{}", plan.name())
+                        output
+                            .write_all(b"(")
+                            .map_err(|_| request::Error::Encoding)?;
+                        argument_list(signature.inputs().len(), 1, output)?;
+                        output
+                            .write_all(b"));\n")
                             .map_err(|_| request::Error::Encoding)?;
                     }
-                }
-                render_item_turbofish(
-                    signature,
-                    substitutions,
-                    constants,
-                    *container_parameters,
-                    output,
-                )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
-                argument_list(signature.inputs().len(), 1, output)?;
-                if matches!(receiver, Receiver::Owned) {
-                    output
-                        .write_all(b"));\n")
-                        .map_err(|_| request::Error::Encoding)?;
-                } else {
-                    output
-                        .write_all(b"))?;\n")
-                        .map_err(|_| request::Error::Encoding)?;
+                    Receiver::Shared | Receiver::Mutable => {
+                        render_borrowed_receiver(
+                            plan,
+                            &path,
+                            *receiver,
+                            signature,
+                            substitutions,
+                            constants,
+                            *container_parameters,
+                            output,
+                        )?;
+                    }
                 }
                 // A method that takes `self` by value may give a Rust
                 // future, as `Response::text` does.
@@ -5331,6 +5329,85 @@ fn render_adapter(
     output
         .write_all(b"}\n\n")
         .map_err(|_| request::Error::Encoding)
+}
+
+/// The call of a method that borrows its receiver, into `output`. The
+/// receiver is a value in the arena, or one native code lends the call
+/// (D558.3), as ratatui's `&mut Frame<'_>` is. That one is reached through
+/// the accessor its trampoline made, a `fn(u64, &mut dyn FnMut(&mut T))`
+/// whose visitor takes the value at every lifetime, so the call can keep
+/// nothing that borrows it, and the runner stays free of unsafe code.
+#[allow(clippy::too_many_arguments)]
+fn render_borrowed_receiver(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let mutable = matches!(receiver, Receiver::Mutable);
+    let mut call = format!("receiver.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let access = if mutable { "mutable" } else { "shared" };
+    let borrow = if mutable { "&mut " } else { "&" };
+    let mut taken = Vec::new();
+    argument_list(signature.inputs().len(), 1, &mut taken)?;
+    let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    let taken = if taken.is_empty() {
+        String::from("()")
+    } else {
+        format!("({taken},)")
+    };
+    writeln!(
+        output,
+        "    let output = match lent_value(arguments, 0) {{
+        Some(lent) => {{
+            let access: fn(u64, &mut dyn FnMut({borrow}{container})) -> Result<(), u8> = lent
+                .accessor({mutable})
+                .map_err(|error| Error::Lent(lent.name(), error))?;
+            let mut taken = Some({taken});
+            let mut output = None;
+            access(lent.nonce().bits(), &mut |receiver| {{
+                #[allow(irrefutable_let_patterns, unused_parens)]
+                if let Some({taken}) = taken.take() {{
+                    output = Some({call});
+                }}
+            }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+            output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?
+        }}
+        None => {{
+            let receiver = native_handle(arguments, 0, false)?;
+            arguments.arena.{access}::<{container}, _>(receiver, |receiver| {call})?
+        }}
+    }};"
+    )
+    .map_err(encoding)
 }
 
 /// A method whose Rust output is a borrow guard, as Freya's `State::read`
@@ -6374,6 +6451,12 @@ fn render_rust_type(
             render_rust_type(result, facade, output)
         }
         convert::Type::ProfileMessage { payload, .. } => render_rust_type(payload, facade, output),
+        convert::Type::Borrowed { mutable, ty } => {
+            output
+                .write_all(if *mutable { b"&mut " } else { b"&" })
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(ty, facade, output)
+        }
         convert::Type::Option(element) => {
             output
                 .write_all(b"Option<")
@@ -6818,6 +6901,14 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    if let convert::Type::Borrowed { .. } = ty {
+        return render_lease(
+            local,
+            index,
+            &substituted(ty, signature, substitutions)?,
+            output,
+        );
+    }
     let generic = matches!(ty, convert::Type::Parameter(_));
     let ty = substitute(ty, signature, substitutions)?;
     let mut taken = Vec::new();
@@ -6844,6 +6935,32 @@ fn render_take_input(
     output
         .write_all(taken.as_bytes())
         .map_err(|_| request::Error::Encoding)
+}
+
+/// A `&T` or `&mut T` input of a value in the arena, as ratatui's
+/// `render_stateful_widget` takes `&mut ListState`: the value leaves its
+/// slot for the call, which refuses every other use meanwhile (E0499), and
+/// goes back when the lease drops, before the arena is next used (D558.5).
+fn render_lease(
+    local: usize,
+    index: usize,
+    ty: &convert::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let convert::Type::Borrowed { mutable, ty } = ty else {
+        return Err(request::Error::Drift {
+            field: "a lease of other than a borrow",
+        });
+    };
+    let rust = concrete_type(ty).ok_or(request::Error::Drift {
+        field: "borrowed input type",
+    })?;
+    let borrow = if *mutable { "" } else { "&*" };
+    writeln!(
+        output,
+        "    let mut argument_{local}_held: Held<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
+    )
+    .map_err(|_| request::Error::Encoding)
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -6983,22 +7100,20 @@ fn render_take(
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
-        convert::Type::FunctionItem { .. } => {
+        convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime argument decoding",
-            });
-        }
-        convert::Type::Sequence { .. } => {
-            return Err(request::Error::Drift {
-                field: "output-only sequence entered runtime argument decoding",
             });
         }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_take(local, index, payload, output);
         }
+        // A Rawr array an instance takes as a `Vec`, as ratatui's
+        // `List::new(rows)` does.
         convert::Type::Option(_)
         | convert::Type::Result(..)
         | convert::Type::Range(_)
+        | convert::Type::Sequence { .. }
         | convert::Type::Tuple(_) => {
             // A Rawr `Option` of the converted `T`, a Rawr `Result` of the
             // converted `T` and `E`, or a float range.
@@ -7046,7 +7161,7 @@ fn render_give(
         convert::Type::Unit | convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
-        convert::Type::FunctionItem { .. } => {
+        convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime output encoding",
             });
@@ -7174,7 +7289,7 @@ fn render_from_dynamic(
                 "{{ let mut {value} = {value}; match __rawr_internal::result::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ Ok({inner}) => ({ok_converted}).map(Ok), Err({inner}) => ({err_converted}).map(Err) }} }}"
             )
         }
-        convert::Type::FunctionItem { .. } => {
+        convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime argument decoding",
             });
@@ -7201,10 +7316,15 @@ fn render_from_dynamic(
             }
             write!(output, ")) }})")
         }
-        convert::Type::Sequence { .. } => {
-            return Err(request::Error::Drift {
-                field: "output-only sequence entered runtime argument decoding",
-            });
+        // A Rawr array, as the `Vec` of its converted elements.
+        convert::Type::Sequence { element, .. } => {
+            let inner = format!("inner_{depth}");
+            let mut converted = String::new();
+            render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>())"
+            )
         }
     }
     .map_err(|_| request::Error::Encoding)
@@ -7313,7 +7433,7 @@ fn render_to_dynamic(
             }
             write!(output, "])) }})()")
         }
-        convert::Type::FunctionItem { .. } => {
+        convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime output encoding",
             });
@@ -7456,6 +7576,10 @@ fn substituted(
             arguments: all(arguments)?,
         },
         convert::Type::Option(element) => convert::Type::Option(one(element)?),
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: one(ty)?,
+        },
         convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
         convert::Type::Sequence { element, owned } => convert::Type::Sequence {
@@ -7756,7 +7880,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .collect::<Option<Vec<_>>>()?
                 .join(", ")
         ),
-        convert::Type::FunctionItem { .. } | convert::Type::Parameter(_) => return None,
+        convert::Type::FunctionItem { .. }
+        | convert::Type::Borrowed { .. }
+        | convert::Type::Parameter(_) => return None,
     })
 }
 
@@ -7844,9 +7970,10 @@ fn render_generic_arguments(
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
-                        convert::Type::FunctionItem { .. } => {
+                        convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
                             return Err(request::Error::Drift {
-                                field: "static function item used as generic substitution",
+                                field:
+                                    "static function item or borrow used as generic substitution",
                             });
                         }
                         convert::Type::ProfileMessage { payload, .. } => match payload.as_ref() {
@@ -8236,6 +8363,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         | convert::Type::Sequence { .. }
         | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
+        | convert::Type::Borrowed { .. }
         | convert::Type::Parameter(_) => {
             return Err(request::Error::Drift {
                 field: "generated execution producer input",

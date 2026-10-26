@@ -344,6 +344,9 @@ pub enum Type {
     /// A script closure a generic item's `F: FnOnce` parameter takes, of
     /// one input (a tuple of several, or unit) and one output (D513.7 b).
     Callable { input: Box<Type>, output: Box<Type> },
+    /// An input `&T` or `&mut T` the call leases from the value's slot
+    /// (D558.5).
+    Reference { mutable: bool, target: Box<Type> },
 }
 
 impl Signature {
@@ -367,9 +370,12 @@ impl Type {
             Self::FunctionItem { input, output }
             | Self::Callable { input, output }
             | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
-            Self::Option(element) | Self::Array(element) | Self::Range(element) => {
-                element.declared(declared)
-            }
+            Self::Option(element)
+            | Self::Array(element)
+            | Self::Range(element)
+            | Self::Reference {
+                target: element, ..
+            } => element.declared(declared),
             Self::Tuple(members) => members.iter().all(|ty| ty.declared(declared)),
             _ => true,
         }
@@ -2371,6 +2377,13 @@ fn ty(
             output: Box::new(ty(output, parameters)?),
         },
         Source::ProfileMessage { payload, .. } => ty(payload, parameters)?,
+        Source::Borrowed {
+            mutable,
+            ty: target,
+        } => Type::Reference {
+            mutable: *mutable,
+            target: Box::new(ty(target, parameters)?),
+        },
         Source::Option(element) => Type::Option(Box::new(ty(element, parameters)?)),
         Source::Range(element) => Type::Range(Box::new(ty(element, parameters)?)),
         Source::Result(ok, err) => Type::Result(

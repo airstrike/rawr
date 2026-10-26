@@ -1494,6 +1494,12 @@ impl Registry {
         ty: &type_ref::Type,
         model: &crate::program::model::Model,
     ) -> Result<(), type_ref::Error> {
+        // A value native code lends the call (D558.3) has no witness: it is
+        // reached only through the accessor its trampoline made, whose exact
+        // type each access checks.
+        if value.is::<crate::scope::Lent>() {
+            return Ok(());
+        }
         let attestor = self
             .facades
             .get(owner.root())

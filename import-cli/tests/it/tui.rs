@@ -85,6 +85,124 @@ fn a_test_backend_frame_shows_a_body_edit_with_its_state_unbroken() {
     );
 }
 
+const DRAW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-draw");
+const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tui/src");
+
+/// The keys of each frame the comparison draws: one line a frame.
+const KEYS: &[&str] = &[
+    "",
+    "down",
+    "down down down",
+    "a x y",
+    "enter",
+    "up space",
+    "d",
+];
+
+/// `examples/tui`'s marked `app.rs` and `ui.rs` beside the headless
+/// driver, which draws each frame on a `TestBackend`.
+fn draw_fixture(name: &str) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(DRAW), &root);
+    for file in ["app.rs", "ui.rs"] {
+        fs::copy(Path::new(EXAMPLE).join(file), root.join("src").join(file)).unwrap();
+    }
+    root
+}
+
+/// The frames in the driver's output: the lines before each `end`.
+fn frames(output: &str) -> Vec<Vec<String>> {
+    let mut frames = vec![Vec::new()];
+    for line in output.lines() {
+        if line == "end" {
+            frames.push(Vec::new());
+        } else if let Some(frame) = frames.last_mut() {
+            frame.push(line.to_owned());
+        }
+    }
+    frames.pop();
+    frames
+}
+
+/// D558's first slice: `examples/tui`'s `ui::draw(frame: &mut Frame, app:
+/// &mut App)`, idiomatic ratatui with a `Layout`, `Paragraph`s, `Block`s and
+/// a stateful `List`, runs on the native `&mut Frame` lent to it. Every
+/// frame's buffer, styles and cursor match `cargo run`'s, and a body edit of
+/// `ui.rs` repaints the next frame with the app's state unbroken.
+#[test]
+fn a_lent_frame_draws_the_example_ui_as_cargo_run_does_and_a_body_edit_repaints() {
+    let root = draw_fixture("tui-draw");
+    let keys = KEYS
+        .iter()
+        .map(|keys| format!("{keys}\n"))
+        .collect::<String>();
+    let mut native = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    native
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(keys.as_bytes())
+        .unwrap();
+    let native = native.wait_with_output().unwrap();
+    assert!(native.status.success());
+    let native = frames(&String::from_utf8(native.stdout).unwrap());
+    assert_eq!(native.len(), KEYS.len());
+
+    let mut run = start_with(&root, &[], &[], Stdio::piped());
+    let mut stdin = run.child.stdin.take().unwrap();
+    let mut frame = |run: &mut crate::support::Run, keys: &str, limit| {
+        stdin.write_all(format!("{keys}\n").as_bytes()).unwrap();
+        let from = run.seen.len();
+        run.until(limit, |line| line == "end");
+        run.seen[from..run.seen.len() - 1]
+            .iter()
+            .filter(|line| !line.starts_with("stderr: "))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    for (index, keys) in KEYS.iter().enumerate() {
+        let drawn = frame(&mut run, keys, Duration::from_secs(900));
+        assert_eq!(drawn, native[index], "frame {index} after `{keys}`");
+    }
+    let last = native.last().unwrap();
+
+    // An edit as the program starts may start it again (D531.9); this one
+    // comes once it runs.
+    std::thread::sleep(Duration::from_secs(3));
+    edit(&root.join("src/ui.rs"), "\" New to-do \"", "\" New task \"");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let swapped = loop {
+        let next = frame(&mut run, "", Duration::from_secs(30));
+        if next[0].contains("New task") {
+            break next;
+        }
+        assert!(Instant::now() < deadline, "{}", run.seen.join("\n"));
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    let seen = run.seen.join("\n");
+    assert_eq!(
+        swapped[0],
+        last[0].replace(" New to-do ", " New task ─"),
+        "{seen}"
+    );
+    // The list and its selection are as they were.
+    assert_eq!(swapped[1..10], last[1..10], "{seen}");
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{seen}"
+    );
+}
+
 /// What a terminal shows, from the bytes written to it: the alternate
 /// screen's cells, and the text written on the main screen.
 #[derive(Default)]
