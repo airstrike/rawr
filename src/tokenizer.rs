@@ -1563,6 +1563,11 @@ pub fn parse_string_literal(
                 escape.clear();
                 result.push_str("\t");
             }
+            // \0, Rust's NUL
+            '0' if !escape.is_empty() => {
+                escape.clear();
+                result.push('\0');
+            }
             // \x??, \u????, \U????????
             ch @ ('x' | 'u' | 'U') if !escape.is_empty() => {
                 let mut seq = escape.clone();

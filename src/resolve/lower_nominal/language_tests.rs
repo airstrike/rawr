@@ -10037,3 +10037,17 @@ fn language_circle_std_char_ranges_iterate() {
     );
     assert_eq!(value, "abcde yx pqr true false 26 false");
 }
+
+#[test]
+fn language_circle_std_nul_escapes() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let s = "a\0b";
+            format!("{:?} {} {:?} {:?} {}", s, s.len(), '\0', "\u{0}", '\0' as u32)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, r#""a\0b" 3 '\0' "\0" 0"#);
+}

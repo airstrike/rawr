@@ -21,7 +21,7 @@ println!("{side} {area:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-sqrt" data-out="out-sqrt" aria-label="Run sqrt.rs" hidden></button><b>rawr run sqrt.rs</b><span id="out-sqrt" aria-live="polite">1.4142135623730951 2.0</span></div>
 </div>
 <h2 id="text"><code>bool</code>, <code>char</code> and strings</h2>
-<p>A <code>char</code> range such as <code>'a'..='e'</code> is an iterator over the chars between. It collects into a <code>String</code>, runs in a <code>for</code> loop and has <code>rev</code>, <code>count</code> and <code>contains</code>. <code>(a..b).contains(&amp;x)</code> works for an integer range too.</p>
+<p>A <code>char</code> range such as <code>'a'..='e'</code> is an iterator over the chars between. It collects into a <code>String</code>, runs in a <code>for</code> loop and has <code>rev</code>, <code>count</code> and <code>contains</code>. <code>(a..b).contains(&amp;x)</code> works for an integer range too. String and char literals take Rust&rsquo;s escapes, <code>\0</code> and <code>\u{..}</code> among them.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="text.rs" id="src-text">let ok: bool = true;
 let initial: char = 'r';
