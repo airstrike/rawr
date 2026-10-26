@@ -882,9 +882,14 @@ impl Parser<'_> {
                 arity(1, &arguments)?;
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
                 let flags =
-                    i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() == 64) << 1;
+                    i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() >= 64) << 1;
+                let op = if kind.wide() {
+                    PreludeOp::WideStepBy
+                } else {
+                    PreludeOp::StepBy
+                };
                 let step = self.prelude_op(
-                    PreludeOp::StepBy,
+                    op,
                     [
                         low,
                         high,

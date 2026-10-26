@@ -5378,6 +5378,77 @@ fn language_full_unsigned_range() {
 }
 
 #[test]
+fn language_i128_and_u128() {
+    // An `i128` or a `u128` is an `i64` while it fits one and a boxed Rust
+    // value past it: literals, casts, operators, methods, text, parsing,
+    // ordering, keys and generic code all see the number.
+    let value = run_string(
+        r#"
+        use std::collections::BTreeMap;
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+        struct Big { id: u128, delta: i128 }
+        fn twice<T: std::ops::Add<Output = T> + Copy>(t: T) -> T { t + t }
+        pub fn run() -> String {
+            let a: i128 = 170141183460469231731687303715884105727;
+            let b = u128::MAX;
+            let c = 1u128 << 100;
+            let d: i128 = -(1 << 90);
+            let m = u64::MAX;
+            let mut keys: BTreeMap<u128, i32> = BTreeMap::new();
+            keys.insert(c, 1);
+            keys.insert(5, 2);
+            let mut bigs = vec![Big { id: c, delta: d }, Big { id: 1, delta: 2 }];
+            bigs.sort();
+            let parsed: u128 = "340282366920938463463374607431768211455".parse().unwrap();
+            let v: Vec<u128> = vec![c, 5];
+            let s: u128 = v.iter().sum();
+            format!(
+                "{} {} {} {} {} {:?} {:x} {} {} {} {:?} {:?} {:?} {} {} {} {} {} {} {}",
+                a, b, b / 3, d * 2, i128::MIN, 5i128.checked_mul(i128::MAX), c,
+                m as u128 + 1, -1i64 as u128, b as u8, keys, bigs[0], u8::try_from(c).is_err(),
+                parsed == b, s, twice(c), c > 5, d < 0, (b as f64) > 1e38, 0xFFFF_FFFF_FFFF_FFFFu128
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "170141183460469231731687303715884105727 340282366920938463463374607431768211455 \
+         113427455640312821154458202477256070485 -2475880078570760549798248448 \
+         -170141183460469231731687303715884105728 None 10000000000000000000000000 \
+         18446744073709551616 340282366920938463463374607431768211455 255 \
+         {5: 2, 1267650600228229401496703205376: 1} Big { id: 1, delta: 2 } true true \
+         1267650600228229401496703205381 2535301200456458802993406410752 true true true \
+         18446744073709551615"
+    );
+    for (source, panic) in [
+        (
+            "pub fn run() -> i64 { let a = i128::MAX; let b: i128 = \"1\".parse().unwrap(); (a + b) as i64 } run()",
+            "attempt to add with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a: u128 = 0; let b: u128 = \"1\".parse().unwrap(); (a - b) as i64 } run()",
+            "attempt to subtract with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a = i128::MIN; (-a) as i64 } run()",
+            "attempt to negate with overflow",
+        ),
+        (
+            "pub fn run() -> i64 { let a: u128 = 1; let b: u32 = \"128\".parse().unwrap(); (a << b) as i64 } run()",
+            "attempt to shift left with overflow",
+        ),
+    ] {
+        let error = rejected(source);
+        assert!(error.contains(panic), "{error}");
+    }
+    // A literal must fit its kind; there is no `From<u128>` for `i128`.
+    rejected("pub fn run() -> i64 { let a: i64 = 18446744073709551616; a } run()");
+    rejected("pub fn run() -> i64 { let a: u128 = 1; let b = i128::from(a); 0 } run()");
+}
+
+#[test]
 fn language_references_in_locals_patterns_and_parameters() {
     // `ref`/`ref mut` bindings; `let r = &mut place;` used in straight-line
     // code; several `&mut` parameters on free functions, `&mut` parameters

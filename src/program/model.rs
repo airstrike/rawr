@@ -455,7 +455,7 @@ impl Model {
                     }
                     "bool" => Ok(false.into()),
                     "char" => Ok('\0'.into()),
-                    "i64" => Ok(0_i64.into()),
+                    "i64" | "i128" => Ok(0_i64.into()),
                     "f64" => Ok(0.0_f64.into()),
                     "String" => Ok(ImmutableString::new().into()),
                     "Duration" => Ok(Dynamic::from(std::time::Duration::ZERO)),

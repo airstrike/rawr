@@ -250,7 +250,7 @@ impl Type {
         match &self.0 {
             Shape::Unit => Some(crate::Dynamic::UNIT),
             Shape::Builtin(name) => match crate::host::runtime_builtin(name) {
-                "i64" => Some(crate::Dynamic::from_int(0)),
+                "i64" | "i128" => Some(crate::Dynamic::from_int(0)),
                 "f64" => Some(crate::Dynamic::from_float(0.0)),
                 "bool" => Some(crate::Dynamic::FALSE),
                 "char" => Some(crate::Dynamic::from_char('\0')),
@@ -888,7 +888,7 @@ fn builtin_provides(name: &str, capability: capability::Kind) -> bool {
     match crate::host::runtime_builtin(name) {
         "String" => capability != capability::Kind::Copy,
         "f64" => capability != capability::Kind::Eq,
-        "bool" | "char" | "i64" => true,
+        "bool" | "char" | "i64" | "i128" => true,
         _ => false,
     }
 }

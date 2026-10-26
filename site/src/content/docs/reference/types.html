@@ -3,7 +3,7 @@
 <h1>Types</h1>
 <p class="lede">The built-in types, and how values convert between them.</p>
 <h2 id="integers">Integers</h2>
-<p><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>isize</code>, <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code> and <code>usize</code>. Overflow panics, as in a Rust debug build. The <code>wrapping_*</code>, <code>checked_*</code>, <code>saturating_*</code> and <code>overflowing_*</code> methods work. <code>i128</code> and <code>u128</code> aren&rsquo;t supported yet.</p>
+<p><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>i128</code>, <code>isize</code>, <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>u128</code> and <code>usize</code>. Overflow panics, as in a Rust debug build. The <code>wrapping_*</code>, <code>checked_*</code>, <code>saturating_*</code> and <code>overflowing_*</code> methods work.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="integers.rs" id="src-integers">let a: u8 = 250;
 let b = a.checked_add(10); // None
@@ -11,6 +11,13 @@ let c = a.wrapping_add(10); // 4
 let d = a.saturating_add(10); // 255
 println!("{b:?} {c} {d}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-integers" data-out="out-integers" aria-label="Run integers.rs" hidden></button><b>rawr run integers.rs</b><span id="out-integers" aria-live="polite">None 4 255</span></div>
+</div>
+<p>An <code>i128</code> or a <code>u128</code> holds its full range. A literal past <code>i64</code> takes its type from a suffix or from the code that uses it. They don&rsquo;t cross to Rust dependencies yet.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="wide.rs" id="src-wide">let big: u128 = u64::MAX as u128 * 3;
+let low = i128::MIN;
+println!("{big} {low} {:?}", big.checked_mul(big));</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-wide" data-out="out-wide" aria-label="Run wide.rs" hidden></button><b>rawr run wide.rs</b><span id="out-wide" aria-live="polite">55340232221128654845 -170141183460469231731687303715884105728 None</span></div>
 </div>
 <h2 id="floats">Floats</h2>
 <p><code>f32</code> and <code>f64</code>, with methods such as <code>sqrt</code>, <code>powi</code>, <code>floor</code>, <code>round</code> and <code>trunc</code>.</p>
