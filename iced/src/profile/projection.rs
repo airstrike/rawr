@@ -305,6 +305,18 @@ pub(super) fn source<'a>(
         r#"
     pub fn payload<T>(value: T) -> T { value }
 
+    /// The imported view value (D558 tier 2) a script value names.
+    fn views(value: &__rawr_internal::Dynamic) -> Option<__rawr_profile_host::widget::recipe::View> {
+        let handle = value.read_lock::<super::NativeHandle>()?.clone();
+        super::arena_access(|arena| {
+            arena.with_value(handle, |value| {
+                value.downcast_ref::<__rawr_profile_host::widget::recipe::View>().cloned()
+            })
+        })
+        .flatten()
+        .flatten()
+    }
+
     pub struct Replay<T>(std::sync::Arc<dyn for<'a> Fn(&__rawr_profile_host::widget::Context<'a>) -> T + Send + Sync>);
 
     impl<T> Clone for Replay<T> {
@@ -459,6 +471,7 @@ pub(super) fn source<'a>(
              \x20       definitions: &[__rawr_internal::host::facade::Definition],\n\
              \x20       builders: &mut [__rawr_internal::host::runtime::Builder],\n\
              \x20   ) -> Result<(), String> {\n\
+             \x20       __rawr_profile_host::widget::recipe::install(views);\n\
              \x20       __rawr_profile_host::profile::runner::bind_runtime(definitions, builders, PROJECTIONS)\n\
              \x20           .map_err(|error| error.to_string())\n\
              \x20   }\n\

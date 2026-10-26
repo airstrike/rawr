@@ -16,7 +16,10 @@
 //! owned (a descriptor or another recipe), and the replayed constructor is
 //! given a native closure that hands back what each call returned.
 
-use std::sync::Arc;
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
+
+use rawr::Dynamic;
 
 use super::{Context, Descriptor, Identity};
 use crate::runtime;
@@ -93,6 +96,134 @@ impl Descriptor for Widget {
     fn identity(&self) -> Identity {
         self.identity.clone()
     }
+}
+
+/// An imported view value as the runner's arena holds it: its recipe, and,
+/// for a type iced implements `Widget` for, the recipe of the element it
+/// shows as. Copies share the recipe.
+#[derive(Clone)]
+pub struct View {
+    recipe: Arc<dyn Any + Send + Sync>,
+    element: Option<Recipe<ElementFamily>>,
+}
+
+impl View {
+    /// A view value that is part of a widget, as pane_grid's `Content`.
+    pub fn part<F: Family>(recipe: Recipe<F>) -> Self {
+        Self {
+            recipe: Arc::new(recipe),
+            element: None,
+        }
+    }
+
+    /// A view value iced shows as an element, through `element`.
+    pub fn widget<F: Family>(
+        recipe: Recipe<F>,
+        element: impl FnOnce(Recipe<F>) -> Recipe<ElementFamily>,
+    ) -> Self {
+        Self {
+            element: Some(element(recipe.clone())),
+            recipe: Arc::new(recipe),
+        }
+    }
+
+    /// The recipe of `F` this value holds.
+    pub fn recipe<F: Family>(&self) -> Option<Recipe<F>> {
+        self.recipe.downcast_ref::<Recipe<F>>().cloned()
+    }
+}
+
+/// A native value a recipe borrows at each lowering, as `PaneGrid::new`
+/// borrows the `pane_grid::State`: a copy the view's transition put in the
+/// application's home, which the lowering context lends for iced's view
+/// lifetime. The State can change only in a transition, which evaluates the
+/// view again, so the copy is the value the view borrows.
+pub struct Native<T> {
+    handle: crate::home::Handle,
+    marker: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for Native<T> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T: Any + Send> Native<T> {
+    /// `value`, kept in the home of the transition running now.
+    pub fn keep(value: T) -> Result<Self, String> {
+        crate::home::insert(value)
+            .map(|handle| Self {
+                handle,
+                marker: std::marker::PhantomData,
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    /// The value, borrowed for the view lifetime `context` lends.
+    pub fn get<'a>(&self, context: &Context<'a>) -> Option<&'a T> {
+        context.home()?.get::<T>(&self.handle).ok()
+    }
+}
+
+/// A context for a view's dry run at its transition (D546.2): a native
+/// constructor runs once there so the callbacks it calls run then, and
+/// what it makes is dropped. It lends no home and maps no message.
+pub fn dry_context() -> Context<'static> {
+    let instance = rawr::application::Instance::new();
+    let generation = rawr::program::GenerationId::detached();
+    Context::unavailable(
+        instance,
+        generation,
+        &Arc::new(super::diagnostic::Sink::new(instance, generation)),
+        &crate::theme::Value::default(),
+    )
+}
+
+/// The message a view value's event callback gives, stamped for the
+/// application `context` lowers for, as iced's `on_click(Message::Clicked)`
+/// gives one.
+pub fn message(context: &Context<'_>, payload: Dynamic) -> runtime::Message {
+    context.message(payload)
+}
+
+/// How rawr-iced finds the view value a script value names in the runner's
+/// arena: the runner's generated code installs it.
+static VIEWS: OnceLock<fn(&Dynamic) -> Option<View>> = OnceLock::new();
+
+/// Install the runner's lookup of a view value by the script value naming
+/// it. The first install holds; every runner's lookup is the same code.
+pub fn install(views: fn(&Dynamic) -> Option<View>) {
+    let _ = VIEWS.set(views);
+}
+
+/// `iced::widget::recipe::element(view)`: the element an imported view
+/// value shows as, which the compiler calls where a view takes it as an
+/// `Element`.
+pub(crate) fn bind(builder: &mut rawr::host::runtime::Builder) {
+    builder
+        .bind_with_context("iced::widget::recipe::element", |call, args| {
+            let [view] = args else {
+                return Err(super::builtin::arity("recipe::element", 1, args.len()));
+            };
+            let element = VIEWS
+                .get()
+                .and_then(|views| views(view))
+                .and_then(|view| view.element)
+                .ok_or_else(|| {
+                    super::builtin::runtime_error(format!(
+                        "`{}` is no view value iced shows as an element",
+                        view.type_name()
+                    ))
+                })?;
+            super::Value::from_factory(Widget::new(element), call)
+                .map(Dynamic::from)
+                .map_err(super::builtin::witness_error)
+        })
+        .expect("the iced facade must retain recipe::element");
 }
 
 /// D558's check (c): what the importer generates for iced's pane_grid

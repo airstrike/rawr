@@ -1326,6 +1326,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     }
     widget::custom::declare::declare(&mut builder)?;
     declare_text_editor(&mut builder)?;
+    declare_recipe_element(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -5451,6 +5452,27 @@ fn pick_list_builders(builder: &mut facade::Builder) -> Result<(), host::Error> 
             signature.finish(),
         )?)?;
     }
+    Ok(())
+}
+
+/// `recipe::element(view)`: the element an imported view value, as
+/// pane_grid's `PaneGrid`, shows as (D558 tier 2). The compiler calls it
+/// where a view takes the value as an `Element`, as Rust's `Widget` impl
+/// lets it; no program names it.
+fn declare_recipe_element(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    builder.module("widget::recipe")?;
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("View", &[])?;
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::parameter("View")?);
+    signature.output(type_ref::Type::applied(
+        "Element",
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    builder.item(item::Definition::function(
+        "widget::recipe::element",
+        signature.finish(),
+    )?)?;
     Ok(())
 }
 

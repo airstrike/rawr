@@ -2641,9 +2641,16 @@ impl<'proof> Decoration<'proof> {
         if facade.root() != ROOT {
             return None;
         }
+        // An imported type the facade declares at its own path, as
+        // `widget::container::Style` is, is the facade's: an imported item
+        // that names it, as pane_grid's `Content::style` does, names that.
         facade
             .types()
-            .find(|ty| ty.identity() == identity && SEMANTIC_TYPES.contains(&ty.path()))
+            .find(|ty| {
+                ty.identity() == identity
+                    && (SEMANTIC_TYPES.contains(&ty.path())
+                        || (ty.parameters().len() == 0 && self.plain_compatibility_type(ty.path())))
+            })
             .map(facade::TypeDefinition::path)
     }
 
@@ -2660,6 +2667,14 @@ impl<'proof> Decoration<'proof> {
         self.semantic
             .types()
             .any(|definition| definition.path() == qualified)
+    }
+
+    /// A compatibility type the facade declares without parameters.
+    fn plain_compatibility_type(&self, path: &str) -> bool {
+        let qualified = format!("iced::{path}");
+        self.semantic
+            .types()
+            .any(|definition| definition.path() == qualified && definition.parameters().is_empty())
     }
 
     fn compatibility_item(&self, path: &str) -> bool {

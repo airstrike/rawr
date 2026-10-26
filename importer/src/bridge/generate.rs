@@ -11,6 +11,7 @@ use crate::classify::representability::ownership::Receiver;
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
+mod view;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
@@ -4458,6 +4459,7 @@ fn render_source(
     }
     let mut families = Vec::new();
     render_families(&mut families)?;
+    view::render_families(&mut families)?;
     sources.push((FAMILIES_PATH.into(), families));
     sources.push((SURFACE_PATH.into(), stamps));
     Ok(())
@@ -5068,6 +5070,17 @@ fn render_adapter(
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
     let name = adapter_name(plan);
+    // A call that makes or takes an iced view value keeps a recipe (D558
+    // tier 2).
+    if view::is_view_call(plan)? {
+        writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{\n    let _ = &mut *arguments;"
+        )
+        .map_err(encoding)?;
+        view::render(plan, output)?;
+        return output.write_all(b"}\n\n").map_err(encoding);
+    }
     let plain = method_message(plan, cohort, profile, facade)?.is_none()
         && replay(plan, profile)?.is_none();
     let lent = if plain {
@@ -8329,7 +8342,7 @@ fn render_take(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
-        ty if is_duration(ty) => "take_primitive",
+        ty if is_duration(ty) || is_facade_value(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
@@ -8374,7 +8387,9 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
-        ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
+        ty if is_duration(ty) || is_facade_value(ty) => {
+            writeln!(output, "    Ok(Dynamic::from({value}))")
+        }
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1).
@@ -8412,6 +8427,19 @@ fn render_give(
             ty: lent,
         } if matches!(**lent, convert::Type::Sequence { .. }) => {
             return render_give(lent, value, output);
+        }
+        // A `&T` given to a script closure: a copy.
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if matches!(
+            **lent,
+            convert::Type::Nominal { .. } | convert::Type::Builtin(_)
+        ) && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            writeln!(output, "    let copied = Clone::clone({value});")
+                .map_err(|_| request::Error::Encoding)?;
+            return render_give(lent, "copied", output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
@@ -8485,6 +8513,12 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
         ty if is_duration(ty) => cast(output, "std::time::Duration"),
+        ty if is_facade_value(ty) => {
+            let rust = concrete_type(ty).ok_or(request::Error::Drift {
+                field: "a facade value's Rust type",
+            })?;
+            cast(output, &rust)
+        }
         ty if is_value(ty) => write!(
             output,
             "Ok::<__rawr_internal::Value, Error>(__rawr_internal::Value::from({value}))"
@@ -8592,7 +8626,7 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
-        ty if is_duration(ty) => {
+        ty if is_duration(ty) || is_facade_value(ty) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
@@ -8706,6 +8740,20 @@ fn render_to_dynamic(
         {
             return render_to_dynamic(lent, value, depth, output);
         }
+        // A `&T` native code gives a script closure, as pane_grid's
+        // `view(pane, &state, ..)` gives `&S`: a copy.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if matches!(**lent, convert::Type::Nominal { .. } | convert::Type::Builtin(_))
+                && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            let copied = format!("copied_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(lent, &copied, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{{ let {copied} = Clone::clone({value}); {converted} }}"
+            )
+        }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime output encoding",
@@ -8719,6 +8767,12 @@ fn render_to_dynamic(
 fn is_future(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
         if *definition == crate::surface::identity::Definition::future())
+}
+
+/// A facade value, as `iced::Length`, which crosses as its Rust value.
+fn is_facade_value(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if FACADE_VALUES.with_borrow(|values| values.contains(definition.as_bytes())))
 }
 
 /// Rust's `std::time::Duration`, which crosses by value.
@@ -8953,6 +9007,15 @@ fn substitute<'a>(
             arguments: Box::default(),
         }));
     }
+    // A script closure fills a callable parameter, which has no Rust type
+    // to name: its input takes the closure (`render_take_callable`).
+    if signature.parameters().iter().any(|parameter| {
+        parameter.index() == *index
+            && parameter.kind() == crate::classify::representability::signature::Kind::Callable
+    }) {
+        static CLOSURE: convert::Type = convert::Type::Unit;
+        return Ok(&CLOSURE);
+    }
     let position = signature
         .parameters()
         .iter()
@@ -9104,6 +9167,34 @@ fn render_container_path(
             .map_err(|_| request::Error::Encoding);
     }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
+    // An impl that fixes some of its type's arguments, as pane_grid's
+    // `Content<'a, Message, Void, W, ..>`: that instance, its own
+    // parameters given their substitutions.
+    if let Some(instance) = signature.instance() {
+        let mut types = partition
+            .container_parameters
+            .iter()
+            .filter(|parameter| {
+                parameter.kind() == crate::classify::representability::signature::Kind::Type
+            })
+            .map(|parameter| parameter.index())
+            .zip(partition.container_types.iter());
+        let substituted =
+            instance_substituted(instance, &mut types).ok_or(request::Error::Drift {
+                field: "an impl's fixed instance names a parameter it does not declare",
+            })?;
+        let instance = concrete_type(&substituted).ok_or(request::Error::Drift {
+            field: "an impl's fixed instance has no Rust name",
+        })?;
+        let instance = if type_position {
+            instance
+        } else {
+            format!("<{instance}>")
+        };
+        return output
+            .write_all(instance.as_bytes())
+            .map_err(|_| request::Error::Encoding);
+    }
     output
         .write_all(path.as_bytes())
         .map_err(|_| request::Error::Encoding)?;
@@ -9116,6 +9207,34 @@ fn render_container_path(
     )
 }
 
+/// `instance` with each parameter given its substitution from `types`, the
+/// impl's parameter indexes with theirs.
+fn instance_substituted<'a>(
+    instance: &convert::Type,
+    types: &mut (impl Iterator<Item = (u32, &'a convert::Type)> + Clone),
+) -> Option<convert::Type> {
+    Some(match instance {
+        convert::Type::Parameter(index) => types
+            .clone()
+            .find(|(parameter, _)| parameter == index)
+            .map(|(_, ty)| ty.clone())?,
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: *definition,
+            arguments: arguments
+                .iter()
+                .map(|argument| instance_substituted(argument, types))
+                .collect::<Option<Box<[_]>>>()?,
+        },
+        convert::Type::Option(element) => {
+            convert::Type::Option(Box::new(instance_substituted(element, types)?))
+        }
+        other => other.clone(),
+    })
+}
+
 thread_local! {
     /// The Rust path of each imported type of the facade plan the runner
     /// being generated declares, by identity: an imported type argument is
@@ -9123,6 +9242,10 @@ thread_local! {
     /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
     static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The facade's own values by the identity a script names them at
+    /// (`Definition::facade`), which cross as their Rust values.
+    static FACADE_VALUES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// The imported types that are Copy, by identity, as the compiler reads
     /// a field of one through a shared borrow.
     static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
@@ -9417,18 +9540,27 @@ struct TypePaths;
 
 impl TypePaths {
     fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
+        view::install(facade);
         TYPE_PATHS.with_borrow_mut(|paths| {
-            paths.clear();
-            for owner in facade
-                .into_iter()
-                .flat_map(crate::surface::facade::Plan::facades)
-            {
-                for ty in owner.types() {
-                    paths
-                        .entry(*ty.identity())
-                        .or_insert_with(|| format!("{}::{}", owner.root(), ty.path()));
+            FACADE_VALUES.with_borrow_mut(|values| {
+                paths.clear();
+                values.clear();
+                for owner in facade
+                    .into_iter()
+                    .flat_map(crate::surface::facade::Plan::facades)
+                {
+                    for ty in owner.types() {
+                        let path = format!("{}::{}", owner.root(), ty.path());
+                        // The facade's own value at this path, as a view's
+                        // builder takes `iced::Length` (D558 tier 2).
+                        let facade =
+                            *crate::surface::identity::Definition::facade(&path).as_bytes();
+                        values.insert(facade);
+                        paths.entry(facade).or_insert_with(|| path.clone());
+                        paths.entry(*ty.identity()).or_insert(path);
+                    }
                 }
-            }
+            });
         });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
@@ -9461,7 +9593,9 @@ impl TypePaths {
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),
                             };
-                            if ty.lifetimes() != 0 {
+                            // An iced view type's value is a recipe, not
+                            // a scope frame's (D558 tier 2).
+                            if ty.lifetimes() != 0 && !ty.view() {
                                 types.entry(*ty.identity()).or_insert(lifetimes);
                             }
                             traits.entry(*ty.identity()).or_insert(lifetimes);
@@ -9488,6 +9622,7 @@ impl Drop for TypePaths {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        view::clear();
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -9561,6 +9696,8 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
             owned: false,
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
+        // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
+        convert::Type::Nominal { .. } | convert::Type::Builtin(_) => concrete_type(ty),
         _ => None,
     }
 }

@@ -35,6 +35,16 @@ pub struct Plan {
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// An iced type whose lifetime is iced's view lifetime, as pane_grid's
+    /// `PaneGrid<'a, ..>` and `Content<'a, ..>`: it has a lifetime and a
+    /// type parameter bounded by iced's `Renderer`. In an iced program its
+    /// value is a recipe replayed at each lowering (D558 tier 2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    view: bool,
+    /// A view type iced implements `Widget` for, which a view shows as an
+    /// element.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    widget: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -118,6 +128,8 @@ impl Plan {
             hash,
             lifetimes: 0,
             iterator: false,
+            view: false,
+            widget: false,
         }
     }
 
@@ -196,6 +208,24 @@ impl Plan {
         self.lifetimes = lifetimes;
         self.iterator = iterator;
         self
+    }
+
+    pub(crate) const fn with_view(mut self, view: bool, widget: bool) -> Self {
+        self.view = view;
+        self.widget = view && widget;
+        self
+    }
+
+    /// Whether the type is an iced view type ([`Plan`]'s `view`).
+    #[must_use]
+    pub const fn view(&self) -> bool {
+        self.view
+    }
+
+    /// Whether the type is a view type iced implements `Widget` for.
+    #[must_use]
+    pub const fn widget(&self) -> bool {
+        self.widget
     }
 
     /// How many lifetime parameters the type declares.

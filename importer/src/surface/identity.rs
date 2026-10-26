@@ -12,6 +12,10 @@ const IMPLEMENTATION_DOMAIN: &[u8] = b"rawr.identity.implementation/v1";
 const OPERATION_DOMAIN: &[u8] = b"rawr.identity.operation/v3";
 const SIPPER_DOMAIN: &[u8] = b"rawr.identity.sipper/v1";
 const VALUE_DOMAIN: &[u8] = b"rawr.identity.value/v1";
+const ELEMENT_DOMAIN: &[u8] = b"rawr.identity.element/v1";
+const THEME_DOMAIN: &[u8] = b"rawr.identity.theme/v1";
+const RENDERER_DOMAIN: &[u8] = b"rawr.identity.renderer/v1";
+const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
 
@@ -225,6 +229,38 @@ impl Definition {
         Self(Framed::new(VALUE_DOMAIN).finish())
     }
 
+    /// An iced element a view value takes where an imported view type has
+    /// a widget parameter, as pane_grid's `Content<'a, Message, T, W>`
+    /// does: the facade widget the script passes, lowered (D558 tier 2).
+    #[must_use]
+    pub fn element() -> Self {
+        Self(Framed::new(ELEMENT_DOMAIN).finish())
+    }
+
+    /// iced's `Theme`, which the iced facade declares, as an imported view
+    /// type's `Theme` argument.
+    #[must_use]
+    pub fn theme() -> Self {
+        Self(Framed::new(THEME_DOMAIN).finish())
+    }
+
+    /// iced's `Renderer`, which the iced facade declares, as an imported
+    /// view type's `Renderer` argument.
+    #[must_use]
+    pub fn renderer() -> Self {
+        Self(Framed::new(RENDERER_DOMAIN).finish())
+    }
+
+    /// A value of the facade type at `path`, as `iced::Length`, which a
+    /// script value holds as the Rust value itself: an imported view type's
+    /// argument the facade declares (D558 tier 2).
+    #[must_use]
+    pub fn facade(path: &str) -> Self {
+        let mut framed = Framed::new(FACADE_DOMAIN);
+        framed.strings([path].into_iter());
+        Self(framed.finish())
+    }
+
     /// Whether these bytes name a type the iced facade declares for a Rust
     /// value no imported crate declares: a future, a sipper or a duration.
     #[must_use]
@@ -233,6 +269,9 @@ impl Definition {
             || *bytes == Self::sipper().0
             || *bytes == Self::duration().0
             || *bytes == Self::value().0
+            || *bytes == Self::element().0
+            || *bytes == Self::theme().0
+            || *bytes == Self::renderer().0
     }
 
     /// Reconstitute one semantic definition digest carried by an authenticated

@@ -302,6 +302,13 @@ impl Catalog<'_> {
 }
 
 impl Application<'_> {
+    /// Run the closures native code calls on this thread in this
+    /// application, as an iced view value's closures (D558 tier 2).
+    #[cfg(feature = "sync")]
+    pub fn serve_closures(&self) {
+        self.0.serve_closures();
+    }
+
     /// Return the normalized boot contract.
     #[must_use]
     pub fn boot(&self) -> &application::Boot {

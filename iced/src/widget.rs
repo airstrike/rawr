@@ -60,6 +60,7 @@ pub(crate) fn bind(
     protocol::bind(iced, rawr);
     script::bind(iced);
     text_editor::bind(iced);
+    recipe::bind(iced);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,6 +79,7 @@ pub(crate) fn bind_profile(
     protocol::bind_profile(iced, rawr);
     script::bind(iced);
     text_editor::bind(iced);
+    recipe::bind(iced);
 }
 
 /// One opaque logical identity owned by a widget descriptor.

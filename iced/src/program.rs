@@ -1200,6 +1200,7 @@ impl Adapter {
         // `update` reaches the native home mutably (`self.content.perform(a)`);
         // a failure below restores the State, not a native value changed in
         // place, as D481.4 accepted of native effects.
+        launch.serve_closures();
         let invoked = home::enter(&mut self.home, || launch.invoke_update(&mut args[..arity]));
         let plan = match invoked {
             Ok(Some(plan)) => match task::Plan::from_dynamic(plan) {
@@ -1909,6 +1910,10 @@ fn evaluate_view(
     state: &Dynamic,
 ) -> Result<widget::Value, Error> {
     launch.validate_state(state).map_err(Error::Boot)?;
+    // An imported view value's closures run in this application (D558
+    // tier 2): the view's transition runs a constructor's, and iced calls
+    // an event's.
+    launch.serve_closures();
     let mut args = [state.clone()];
     let output = launch.invoke_view(&mut args).map_err(Error::Invocation)?;
     widget::Value::from_dynamic(output).map_err(Error::ViewOutput)
