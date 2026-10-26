@@ -789,7 +789,7 @@ mod tests {
     fn references_break_intrinsic_structural_facts() {
         let engine = Engine::new();
         let unit = engine
-            .parse_unit("struct Borrowed { value: &i64 }")
+            .parse_unit("struct Borrowed<'a> { value: &'a i64 }")
             .unwrap();
         let program = resolve::resolve(unit, &engine.host_registry).unwrap();
         let capabilities = program.types()[0].capabilities();

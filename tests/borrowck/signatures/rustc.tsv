@@ -1,4 +1,16 @@
 # rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+signatures/elided_hidden_input_ok.rs	ok	0	"4 Some(\"b\") n 4\n"
+signatures/elided_lifetime_ok.rs	ok	0	"n ab\n"
+signatures/elided_static_input.rs	ok	0	"a\n"
+signatures/missing_lifetime_associated.rs	E0106:4
+signatures/missing_lifetime_field.rs	E0106:2
+signatures/missing_lifetime_generic.rs	E0106:1
+signatures/missing_lifetime_none.rs	E0106:1
+signatures/missing_lifetime_option.rs	E0106:1
+signatures/missing_lifetime_owned_input.rs	E0106:1
+signatures/missing_lifetime_struct_output.rs	E0106:5
+signatures/missing_lifetime_two.rs	E0106:1
+signatures/missing_lifetime_variant.rs	E0106:2
 signatures/return_local_as_str.rs	E0515:3
 signatures/return_local_ref.rs	E0515:3
 signatures/return_local_through_let.rs	E0515:4

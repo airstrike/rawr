@@ -10438,6 +10438,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
+        self.check_method_signature(definition)?;
         // The value of an associated `const NAME: T = value;` is a tail.
         if definition.constant() {
             self.flow().constant();
@@ -10669,6 +10670,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
+        self.check_function_signature(definition)?;
         let mut startup_tail = false;
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose

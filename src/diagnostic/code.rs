@@ -82,6 +82,7 @@ codes!(Resolve;
     (BORROW_LIFETIME, "E0597", "A local that ends while a borrow of it is live, as rustc reports it."),
     (BORROW_RETURNED_LOCAL, "E0515", "A function returns a borrow of its own local or a temporary, as rustc reports it."),
     (BORROW_TEMPORARY, "E0716", "A temporary value that ends while a borrow of it is live, as rustc reports it."),
+    (BORROW_MISSING_LIFETIME, "E0106", "A reference's lifetime that elision gives nothing, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
     (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
@@ -174,6 +175,7 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0506" => BORROW_ASSIGN,
         "E0515" => BORROW_RETURNED_LOCAL,
         "E0716" => BORROW_TEMPORARY,
+        "E0106" => BORROW_MISSING_LIFETIME,
         _ => BORROW_LIFETIME,
     }
 }

@@ -638,6 +638,43 @@ pub(crate) fn lower_resolved(
     lower_nominal::lower(engine, program, model, scope, optimization_level)
 }
 
+/// A reference written without its lifetime in a struct's field or a
+/// variant's payload, where no elision gives it one: rustc's E0106. A
+/// function type's or a trait object's own references may leave it out.
+fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
+    use crate::item::type_ref::{Argument, Type, DYN_SEGMENT, FN_TYPE};
+    match ty {
+        Type::Unit(_) => Ok(()),
+        Type::Tuple { members, .. } => members.iter().try_for_each(missing_lifetime),
+        Type::Reference {
+            lifetime: None,
+            span,
+            ..
+        } => Err(Error::BorrowConflict {
+            code: "E0106",
+            message: "missing lifetime specifier".into(),
+            access: *span,
+            borrow: Span::NONE,
+        }),
+        Type::Reference { target, .. } => missing_lifetime(target),
+        Type::Path(path)
+            if path.segments.first().is_some_and(|segment| {
+                matches!(segment.name.text.as_str(), FN_TYPE | DYN_SEGMENT)
+            }) =>
+        {
+            Ok(())
+        }
+        Type::Path(path) => path
+            .segments
+            .iter()
+            .flat_map(|segment| segment.arguments.iter())
+            .try_for_each(|argument| match argument {
+                Argument::Type(ty) => missing_lifetime(ty),
+                Argument::Lifetime(_) => Ok(()),
+            }),
+    }
+}
+
 fn reject_unavailable(function: &item::Function) -> Result<(), Error> {
     match function.body.lowering {
         item::Lowering::Unavailable => Err(Error::LoweringUnavailable {
@@ -1864,6 +1901,7 @@ fn resolve_item(
                         previous_declaration,
                     });
                 }
+                missing_lifetime(&field.ty)?;
                 let shared_str = matches!(
                     &field.ty,
                     crate::item::type_ref::Type::Reference { mutable: false, target, .. }
@@ -1922,6 +1960,7 @@ fn resolve_item(
                 let mut payload = Vec::with_capacity(variant.payload.len());
 
                 for ty in variant.payload.into_vec() {
+                    missing_lifetime(&ty)?;
                     payload.push(type_ref::resolve(
                         ty,
                         types,
