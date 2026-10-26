@@ -669,6 +669,11 @@ fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> Str
     rawr_snippet::report(&rawr::diagnostic::render(report), program, source)
 }
 
+/// `report`, a run-time failure, as a Cargo-built program prints its panic.
+fn panic(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
+    rawr_snippet::panic(&rawr::diagnostic::panic(report), program, source)
+}
+
 fn classify(text: &str, limits: &Limits) -> PlayError {
     let lower = text.to_ascii_lowercase();
     let reason = if lower.contains(TIME_LIMIT) || lower.contains("terminated") {
@@ -1149,14 +1154,21 @@ fn view() -> impl Widget<()> {
 
     #[test]
     fn run_plain_runtime_errors_point_at_the_users_text() {
-        let output = text("let a = [1,2,3]; let i = 5; println!(\"{}\", a[i]);");
+        // A Vec's index panics at its `[`, as rustc places it.
+        let output = text("let a = vec![1,2,3]; let i = 5; println!(\"{}\", a[i]);");
         let shown = output.text();
-        assert!(shown.contains(" --> play.rs:1:44"), "{shown}");
-        assert!(!shown.contains("(line "), "{shown}");
+        assert_eq!(
+            shown,
+            format!(
+                "thread 'main' panicked at play.rs:1:49:\n\
+                 index out of bounds: the len is 3 but the index is 5\n{}\n",
+                rawr::diagnostic::BACKTRACE_NOTE
+            )
+        );
         let output = text("let x: u8 = 255; let y = x + 1; y");
         let shown = output.text();
         assert!(
-            shown.contains("attempt to add with overflow\n --> play.rs:1:26"),
+            shown.contains("panicked at play.rs:1:26:\nattempt to add with overflow\n"),
             "{shown}"
         );
         let limited = text("let mut s = String::new(); loop { s.push_str(\"xxxxxxxxxxxxxxxx\"); }");
@@ -1190,10 +1202,13 @@ fn view() -> impl Widget<()> {
         assert_eq!(output.status, 101);
         assert!(!output.limit);
         let text = output.text();
-        assert!(text.starts_with("before\n"), "{text}");
-        assert!(
-            text.contains("assertion `left == right` failed\n  left: 2\n right: 3"),
-            "{text}"
+        assert_eq!(
+            text,
+            format!(
+                "before\nthread 'main' panicked at play.rs:2:1:\n\
+                 assertion `left == right` failed\n  left: 2\n right: 3\n{}\n",
+                rawr::diagnostic::BACKTRACE_NOTE
+            )
         );
     }
 
@@ -1277,17 +1292,19 @@ fn view() -> impl Widget<()> {
         assert_eq!(panicked.status, 101);
         let text = panicked.text();
         assert!(
-            text.contains("out of bounds") && text.contains("play.rs:2:5"),
+            // rustc places a slice's index at 2:5 and a Vec's at its `[`;
+            // rawr places both at the `[` (a known difference).
+            text.contains("out of bounds") && text.contains("panicked at play.rs:2:6:"),
             "{text}"
         );
 
         // A failure in the async body's own statements is placed at the
         // statement, before an await and after one.
         for (body, at) in [
-            ("let v: Vec<i64> = Vec::new();\n    let x = v[3];\n    println!(\"{x}\");", "play.rs:4:13"),
+            ("let v: Vec<i64> = Vec::new();\n    let x = v[3];\n    println!(\"{x}\");", "play.rs:4:14:"),
             (
                 "tokio::task::yield_now().await;\n    let v: Vec<i64> = Vec::new();\n    println!(\"{}\", v[3]);",
-                "play.rs:5:20",
+                "play.rs:5:21:",
             ),
         ] {
             let failed = async_text(&format!("#[tokio::main]\nasync fn main() {{\n    {body}\n}}\n"));

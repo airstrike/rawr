@@ -4,7 +4,7 @@
 //! A program nothing else serves runs once here: its top level, then
 //! `fn main` if there is one, as in Rust.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rawr::layer::{Claims, Sheet};
 use rawr::package::Cells;
@@ -142,22 +142,32 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
     // A runtime error's position is in the lowered program: the compiler's
-    // positions map it back to the source, or to none in code it wrote.
-    let runtime =
-        |error: Box<rawr::EvalAltResult>| {
-            let source = source(target);
-            let located = match source.clone() {
-                Some(source) => diagnostic::Report::from_evaluation_located(
-                    source,
-                    positions.translate(&error),
-                    &error,
-                ),
-                None => diagnostic::Report::from_evaluation(None, &error),
-            };
-            Failed::Panic(located.unwrap_or_else(|_| {
-                report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
-            }))
+    // positions map it back to its file, the entry or a module's, or to
+    // none in code it wrote.
+    let runtime = |error: Box<rawr::EvalAltResult>| {
+        let Some(entry) = source(target) else {
+            return Failed::Panic(
+                diagnostic::Report::from_evaluation(None, &error).unwrap_or_else(|_| {
+                    report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, None)
+                }),
+            );
         };
+        let located = match positions.locate(&entry, &error) {
+            Some((file, span)) => diagnostic::Report::from_evaluation_located(
+                cargo_named(file, target),
+                Some(span),
+                &error,
+            ),
+            None => diagnostic::Report::from_evaluation_located(
+                cargo_named(&entry, target),
+                None,
+                &error,
+            ),
+        };
+        Failed::Panic(located.unwrap_or_else(|_| {
+            report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, Some(entry))
+        }))
+    };
     let mut scope = Scope::new();
     let value = engine
         .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
@@ -190,6 +200,20 @@ fn source(target: &project::Target) -> Option<diagnostic::Source> {
         target.source().text(),
     )
     .ok()
+}
+
+/// `file` named as a Cargo-built program names it in a panic: by its path
+/// from the workspace root, or a lone file's from the current directory.
+fn cargo_named(file: &diagnostic::Source, target: &project::Target) -> diagnostic::Source {
+    let base = match target.project() {
+        Some(project) => Some(rawr_location::workspace_root(project.root().as_path())),
+        None => std::env::current_dir().and_then(std::fs::canonicalize).ok(),
+    };
+    base.and_then(|base| {
+        let relative = Path::new(file.identity()).strip_prefix(base).ok()?;
+        diagnostic::Source::new(relative.to_string_lossy().into_owned(), file.text()).ok()
+    })
+    .unwrap_or_else(|| file.clone())
 }
 
 fn compile_report(error: &rawr::package::Error, target: &project::Target) -> diagnostic::Report {

@@ -310,11 +310,18 @@ impl Parsed {
                                     })
                             });
                             rawr::diagnostic::Report::from_evaluation_located(
-                                evidence, original, &error,
+                                evidence.clone(),
+                                original,
+                                &error,
                             )
+                            .or_else(|_| {
+                                rawr::diagnostic::Report::from_evaluation_located(
+                                    evidence, None, &error,
+                                )
+                            })
                             .map_or_else(
                                 |_| rawr_snippet::without_positions(&text),
-                                |report| crate::report(&report, &program, source),
+                                |report| crate::panic(&report, &program, source),
                             )
                         }
                     };
@@ -476,7 +483,7 @@ pub fn run_async(
                 }
                 _ => {
                     output.status = PANIC_STATUS;
-                    crate::report(report, &program, &source)
+                    crate::panic(report, &program, &source)
                 }
             };
             output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));

@@ -202,7 +202,11 @@ fn a_panic_exits_101_like_rust() {
 
     assert_eq!(output.status.code(), Some(101));
     assert_eq!(stdout(&output), "before\n");
-    assert!(stderr(&output).contains("boom 1"), "{}", stderr(&output));
+    assert_eq!(
+        stderr(&output),
+        "thread 'main' panicked at panic.rs:3:5:\nboom 1\n\
+         note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    );
 }
 
 #[test]

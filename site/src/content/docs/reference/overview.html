@@ -32,7 +32,11 @@ fn main() -&gt; Result&lt;(), String&gt; {
 Error: "\"forty\": invalid digit found in string"
 <span class="exit">exit status 1</span></span></div>
 </div>
-<p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101.</p>
+<p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101. It prints what a program built by Cargo prints on stderr:</p>
+<pre><code>thread 'main' panicked at src/main.rs:5:5:
+boom 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</code></pre>
+<p>The path is the file&rsquo;s path from the workspace root, as Cargo gives it. In <code>?play</code> and in the browser the file is <code>play.rs</code>.</p>
 
 <h2 id="supported">Supported Rust</h2>
 <p>Each page lists one area of the language, with an example for each construct.</p>
@@ -87,7 +91,7 @@ Error: "\"forty\": invalid digit found in string"
 <ul>
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
-  <li><strong>Panic messages.</strong> rawr writes a panic&rsquo;s message as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+  <li><strong>The column of an index panic.</strong> rawr places a panic from indexing at the <code>[</code>, as Rust does for a <code>Vec</code>. For an array or a slice Rust places it at the start of the expression.</li>
   <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
   <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. With <code>i128</code> or <code>u128</code> values it panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
   <li><strong>Arithmetic on literals alone.</strong> An operation whose operands are all unsuffixed literals is computed as an <code>i64</code>. So <code>let x: i128 = 10_000_000_000 * 10_000_000_000;</code> panics where Rust gives the result. A suffix, as in <code>10_000_000_000i128</code>, gives Rust&rsquo;s result.</li>

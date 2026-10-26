@@ -783,6 +783,10 @@ fn evaluation_message(error: &EvalAltResult) -> String {
         EvalAltResult::ErrorRuntime(value, ..) if value.is_unit() => "runtime error".into(),
         EvalAltResult::ErrorRuntime(value, ..) => format!("runtime error: {value}"),
         EvalAltResult::ErrorParsing(error, ..) => format!("syntax error: {error}"),
+        // Rust's wording for an index past the end.
+        EvalAltResult::ErrorArrayBounds(len, index, ..) if *index >= 0 => {
+            format!("index out of bounds: the len is {len} but the index is {index}")
+        }
         _ => error.to_string(),
     }
 }

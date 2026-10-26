@@ -431,7 +431,8 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
         }
         Err(base::Failed::Compile(report)) => failure(&report),
         Err(base::Failed::Panic(report)) => {
-            eprint!("{}", diagnostic::render(&report));
+            // What a Cargo-built program prints when it panics.
+            eprint!("{}", rawr::diagnostic::panic(&report));
             // Rust's exit status for a panic.
             ExitCode::from(101)
         }
