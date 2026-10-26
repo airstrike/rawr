@@ -24871,15 +24871,6 @@ impl<'a> Parser<'a> {
             .loop_drop_depth
             .take()
             .unwrap_or(self.drop_scopes.len());
-        self.loops.push(LoopFrame {
-            label,
-            jump,
-            value,
-            ty: None,
-            targeted: false,
-            exits: BTreeSet::new(),
-            drop_depth,
-        });
         if !std::mem::take(&mut self.loop_entered) {
             self.flow().loop_enter();
             if let Some(iterator) = self.loop_iterator.take() {
@@ -24892,6 +24883,17 @@ impl<'a> Parser<'a> {
                 self.flow().flow(iterator, element);
             }
         }
+        let flow_depth = self.flow().loop_depth();
+        self.loops.push(LoopFrame {
+            label,
+            jump,
+            value,
+            ty: None,
+            targeted: false,
+            exits: BTreeSet::new(),
+            drop_depth,
+            flow_depth,
+        });
         let body = self.parse_match_action();
         self.flow().loop_exit();
         let frame = self.loops.pop().expect("the loop pushed its frame");
@@ -25060,7 +25062,8 @@ impl<'a> Parser<'a> {
                 None => self.loops[target].ty = Some(Ty::Unit),
             }
         }
-        self.flow().jump(target, breaking);
+        let flow_depth = self.loops[target].flow_depth;
+        self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
         let drops =
             self.temporary_drops_here() + self.exit_drops(self.loops[target].drop_depth)?.as_str();
@@ -45877,6 +45880,9 @@ struct LoopFrame {
     /// The depth of `drop_scopes` outside the loop's body: a jump to the
     /// loop drops the scopes above it.
     drop_depth: usize,
+    /// The loop's depth in the recorded control flow, which also counts a
+    /// `while` whose condition holds this loop.
+    flow_depth: usize,
 }
 
 /// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.

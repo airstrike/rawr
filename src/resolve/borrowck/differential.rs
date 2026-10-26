@@ -1,6 +1,6 @@
 //! The differential harness (D572.8): rawr's own frontend verdict on each
 //! program of `tests/borrowck`, beside the pinned rustc's verdict on the
-//! same file (`tests/borrowck/rustc.tsv`, written by `record.py`). The rawr
+//! same file (each corpus folder's `rustc.tsv`, written by `record.py`). The rawr
 //! side is the frontend alone: `rawr check` runs rustc too, which would
 //! hide rawr's misses.
 //!
@@ -161,7 +161,16 @@ enum Recorded {
 }
 
 fn recorded() -> Vec<(String, Recorded)> {
-    let text = std::fs::read_to_string(corpus().join("rustc.tsv")).expect("the recorded verdicts");
+    let mut folders = std::fs::read_dir(corpus())
+        .expect("the borrow corpus")
+        .map(|entry| entry.expect("a corpus entry").path().join("rustc.tsv"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    folders.sort();
+    let text = folders
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("the recorded verdicts"))
+        .collect::<String>();
     text.lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
         .map(|line| {

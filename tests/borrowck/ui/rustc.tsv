@@ -1,0 +1,195 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+ui/borrowck/access-mode-in-closures.rs	E0507:12
+ui/borrowck/already-borrowed-as-mutable-if-let-133941.rs	E0499:24 E0499:29 E0499:33 E0499:37 E0499:42 E0499:49
+ui/borrowck/borrowck-assign-comp-idx.rs	E0502:12 E0502:29
+ui/borrowck/borrowck-assign-comp.rs	E0506:13 E0506:23 E0506:34
+ui/borrowck/borrowck-assign-to-subfield.rs	ok	0	""
+ui/borrowck/borrowck-bad-nested-calls-free.rs	E0502:21 E0502:26
+ui/borrowck/borrowck-bad-nested-calls-move.rs	E0505:21 E0505:26
+ui/borrowck/borrowck-binding-mutbl.rs	ok	0	""
+ui/borrowck/borrowck-borrow-from-owned-ptr.rs	E0499:20 E0502:27 E0502:34 E0499:66 E0502:74 E0502:75 E0499:82 E0499:89 E0502:96 E0502:103 E0596:123
+ui/borrowck/borrowck-borrow-from-stack-variable.rs	E0499:20 E0502:27 E0502:34 E0499:63 E0502:72 E0502:73 E0499:80 E0499:87 E0502:94 E0502:101 E0596:122
+ui/borrowck/borrowck-borrow-from-temporary.rs	E0515:12
+ui/borrowck/borrowck-borrow-of-mut-base-ptr-safe.rs	ok	0	""
+ui/borrowck/borrowck-borrowed-uniq-rvalue-2.rs	E0716:58
+ui/borrowck/borrowck-closures-two-imm.rs	ok	0	""
+ui/borrowck/borrowck-closures-use-after-free.rs	E0502:20
+ui/borrowck/borrowck-escaping-closure-error-2.rs	E0373:11
+ui/borrowck/borrowck-fixed-length-vecs.rs	ok	0	""
+ui/borrowck/borrowck-imm-ref-to-mut-rec-field-issue-3162-c.rs	E0506:6
+ui/borrowck/borrowck-issue-2657-2.rs	E0507:7
+ui/borrowck/borrowck-lend-args.rs	ok	0	""
+ui/borrowck/borrowck-lend-flow-match.rs	E0506:12
+ui/borrowck/borrowck-loan-blocks-mut-uniq.rs	E0502:10
+ui/borrowck/borrowck-loan-rcvr-overloaded-op.rs	E0503:38 E0502:39
+ui/borrowck/borrowck-loan-rcvr.rs	E0502:33 E0502:45
+ui/borrowck/borrowck-loan-vec-content.rs	E0502:19
+ui/borrowck/borrowck-local-borrow-outlives-fn.rs	E0515:2
+ui/borrowck/borrowck-local-borrow.rs	ok	101	""
+ui/borrowck/borrowck-move-by-capture-ok.rs	ok	0	""
+ui/borrowck/borrowck-move-in-irrefut-pat.rs	E0507:7 E0507:11 E0507:16
+ui/borrowck/borrowck-move-out-from-array-no-overlap.rs	ok	0	""
+ui/borrowck/borrowck-move-out-from-array.rs	E0382:10 E0382:16 E0382:22 E0382:30 E0382:36 E0382:42 E0382:48 E0382:54 E0382:60 E0382:68
+ui/borrowck/borrowck-move-out-of-overloaded-auto-deref.rs	E0507:5
+ui/borrowck/borrowck-move-out-of-overloaded-deref.rs	E0507:4
+ui/borrowck/borrowck-move-out-of-static-item.rs	E0507:15
+ui/borrowck/borrowck-move-out-of-tuple-struct-with-dtor.rs	E0509:9 E0509:16 E0509:20
+ui/borrowck/borrowck-move-subcomponent.rs	E0505:13
+ui/borrowck/borrowck-multiple-borrows-interior-boxes.rs	ok	0	""
+ui/borrowck/borrowck-mut-vec-as-imm-slice.rs	ok	0	""
+ui/borrowck/borrowck-pat-enum.rs	ok	0	""
+ui/borrowck/borrowck-pat-reassign-binding.rs	E0506:10
+ui/borrowck/borrowck-pat-reassign-no-binding.rs	ok	0	""
+ui/borrowck/borrowck-reborrow-from-mut.rs	E0499:13 E0502:18 E0502:23 E0499:47 E0502:53 E0502:54 E0499:59 E0499:64 E0502:69 E0502:74 E0596:89
+ui/borrowck/borrowck-trait-lifetime.rs	ok	0	""
+ui/borrowck/borrowck-unary-move.rs	E0505:3
+ui/borrowck/borrowck-unboxed-closures.rs	E0502:3 E0596:7 E0382:12
+ui/borrowck/borrowck-uniq-via-ref.rs	ok	0	""
+ui/borrowck/borrowck-univariant-enum.rs	ok	0	""
+ui/borrowck/borrowck-use-mut-borrow.rs	E0503:15 E0503:22 E0503:29 E0503:36 E0503:43 E0503:51 E0503:59 E0503:66 E0503:73
+ui/borrowck/borrowed-data-escapes-closure-148392.rs	E0521:11
+ui/borrowck/borrowed-pointer-in-struct-5884.rs	ok	0	""
+ui/borrowck/clone-span-on-try-operator.rs	E0507:10
+ui/borrowck/closure-borrow-conflict-11192.rs	E0502:20
+ui/borrowck/copy-suggestion-region-vid.rs	E0382:13
+ui/borrowck/derive-clone-implicit-bound.rs	E0382:28
+ui/borrowck/do-not-suggest-adding-move-when-closure-is-already-marked-as-move.rs	error:6
+ui/borrowck/format-args-temporary-scopes.rs	E0716:13 E0716:19
+ui/borrowck/incorrect-loan-error-on-local-update-5550.rs	ok	0	""
+ui/borrowck/issue-11493.rs	E0716:8
+ui/borrowck/issue-115259-suggest-iter-mut.rs	E0596:15
+ui/borrowck/issue-17718-static-move.rs	E0507:6
+ui/borrowck/issue-23338-params-outlive-temps-of-body.rs	ok	0	""
+ui/borrowck/issue-33819.rs	E0596:5
+ui/borrowck/issue-41962.rs	E0382:5
+ui/borrowck/issue-46471.rs	E0515:3
+ui/borrowck/issue-51117.rs	E0499:10
+ui/borrowck/issue-52713-bug.rs	E0506:12
+ui/borrowck/issue-52967-edition-2018-needs-two-phase-borrows.rs	ok	0	""
+ui/borrowck/issue-53432-nested-closure-outlives-borrowed-value.rs	error:4
+ui/borrowck/issue-54597-reject-move-out-of-borrow-via-pat.rs	E0507:14
+ui/borrowck/issue-55552-ascribe-wildcard-to-structured-pattern.rs	ok	0	""
+ui/borrowck/issue-58776-borrowck-scans-children.rs	E0506:5
+ui/borrowck/issue-7573.rs	E0521:20
+ui/borrowck/issue-80772.rs	ok	0	""
+ui/borrowck/issue-81899.rs	E0080:6
+ui/borrowck/issue-83760.rs	E0382:10 E0382:26 E0382:42
+ui/borrowck/issue-87456-point-to-closure.rs	E0507:10
+ui/borrowck/issue-88434-minimal-example.rs	E0080:5
+ui/borrowck/issue-88434-removal-index-should-be-less.rs	E0080:5
+ui/borrowck/liberated-region-from-outer-closure.rs	E0310:5
+ui/borrowck/move-error-in-promoted-2.rs	E0508:6
+ui/borrowck/move-in-pattern-mut.rs	E0382:16 E0382:20
+ui/borrowck/move-in-pattern.rs	E0382:17 E0382:21
+ui/borrowck/move-in-static-initializer-issue-38520.rs	E0507:12 E0507:13
+ui/borrowck/moved-value-suggest-reborrow-issue-127285.rs	E0382:10
+ui/borrowck/mut-borrow-in-loop.rs	E0499:10 E0499:17 E0499:24
+ui/borrowck/nested-closure-with-generic-ice.rs	ok	timeout	""
+ui/borrowck/non-promotable-static-ref.rs	E0716:10
+ui/borrowck/refcell-borrow-comparison-12033.rs	ok	0	""
+ui/borrowck/region-checker-map-closure-13665.rs	ok	0	""
+ui/borrowck/regions-escape-bound-fn-2.rs	E0521:11
+ui/borrowck/regions-escape-bound-fn.rs	E0521:11
+ui/borrowck/rvalue-lifetime-match-equivalence-7660.rs	ok	0	""
+ui/borrowck/struct-field-move-with-drop-borrow.rs	ok	0	""
+ui/borrowck/struct-with-reference-to-trait-5708.rs	ok	0	"Inner: 5\n"
+ui/borrowck/suggest-as-ref-on-mut-closure.rs	E0507:7 E0596:12
+ui/borrowck/suggest-local-var-for-vector.rs	E0502:3
+ui/borrowck/suggest-lt-on-ty-alias-w-generics.rs	error:5
+ui/borrowck/suggest-storing-local-var-for-vector.rs	E0502:3
+ui/borrowck/two-phase-across-loop.rs	E0499:19
+ui/borrowck/two-phase-activation-sharing-interference.rs	E0502:30 E0502:40 E0502:50 E0502:59
+ui/borrowck/two-phase-allow-access-during-reservation.rs	E0503:30 E0503:38
+ui/borrowck/two-phase-cannot-nest-mut-self-calls.rs	E0502:11
+ui/borrowck/two-phase-multi-mut.rs	E0499:9 E0499:9
+ui/borrowck/two-phase-reservation-sharing-interference-2.rs	E0502:11 E0502:18
+ui/borrowck/two-phase-sneaky.rs	E0499:9
+ui/borrowck/unboxed-closures-move-upvar-from-non-once-ref-closure.rs	E0507:15
+ui/borrowck/var-matching-lifetime-but-unused-not-mentioned.rs	E0521:14
+ui/borrowck/auxiliary/aux-5518.rs	ok	lib	""
+ui/nll/borrow-use-issue-46875.rs	ok	0	""
+ui/nll/borrowed-match-issue-45045.rs	E0503:12
+ui/nll/borrowed-referent-issue-38899.rs	E0502:11
+ui/nll/cannot-move-block-spans.rs	E0507:5 E0507:6 E0507:8 E0508:13 E0508:14 E0508:16 E0507:24 E0507:29 E0507:34
+ui/nll/closure-move-spans.rs	E0382:7 E0382:12 E0382:17
+ui/nll/closure-use-spans.rs	E0506:5 E0506:11 E0506:17
+ui/nll/constant.rs	ok	0	""
+ui/nll/continue-after-missing-main.rs	error:24 E0597:24
+ui/nll/do-not-ignore-lifetime-bounds-in-copy-proj.rs	E0597:9
+ui/nll/do-not-ignore-lifetime-bounds-in-copy.rs	E0597:9
+ui/nll/get_default.rs	E0502:25 E0502:37 E0502:43
+ui/nll/issue-21114-kixunil.rs	ok	0	""
+ui/nll/issue-27868.rs	E0506:24
+ui/nll/issue-30438-a.rs	E0515:12
+ui/nll/issue-30438-b.rs	E0515:13
+ui/nll/issue-40510-2.rs	ok	0	""
+ui/nll/issue-40510-3.rs	error:7
+ui/nll/issue-40510-4.rs	ok	0	""
+ui/nll/issue-45696-no-variant-box-recur.rs	ok	0	""
+ui/nll/issue-46036.rs	E0597:10
+ui/nll/issue-47022.rs	ok	0	""
+ui/nll/issue-47153-generic-const.rs	ok	0	""
+ui/nll/issue-47470.rs	E0515:15
+ui/nll/issue-48238.rs	error:9
+ui/nll/issue-48697.rs	E0515:7
+ui/nll/issue-48803.rs	E0506:10
+ui/nll/issue-50461-used-mut-from-moves.rs	ok	0	"413\n"
+ui/nll/issue-51268.rs	ok	0	""
+ui/nll/issue-51345-2.rs	ok	101	""
+ui/nll/issue-51351.rs	ok	0	""
+ui/nll/issue-52078.rs	ok	0	""
+ui/nll/issue-52086.rs	E0507:10 E0507:14
+ui/nll/issue-52534.rs	E0597:7 E0597:13
+ui/nll/issue-52742.rs	error:12
+ui/nll/issue-53807.rs	E0382:4
+ui/nll/issue-54382-use-span-of-tail-of-block.rs	E0597:7
+ui/nll/issue-54556-niconii.rs	ok	0	"MutexGuard::drop\nMutex::drop\n"
+ui/nll/issue-54556-stephaneyfx.rs	ok	0	""
+ui/nll/issue-54556-temps-in-tail-diagnostic.rs	ok	0	"dropping D(D(\"thing1\")))\ndropping D(\"thing1\"))\n"
+ui/nll/issue-54943-3.rs	ok	0	""
+ui/nll/issue-54943.rs	error:6
+ui/nll/issue-55288.rs	ok	0	""
+ui/nll/issue-55344.rs	ok	0	""
+ui/nll/issue-55394.rs	error:9
+ui/nll/issue-55401.rs	error:3
+ui/nll/issue-58053.rs	error:4 error:8
+ui/nll/issue-73159-rpit-static.rs	ok	0	""
+ui/nll/issue-98170.rs	error:7 error:7 error:19 error:19
+ui/nll/issue-98589-closures-relate-named-regions.rs	error:10 error:17 error:26 E0309:33 E0309:41
+ui/nll/lint-no-err.rs	ok	0	""
+ui/nll/lub-if.rs	error:28 error:36
+ui/nll/lub-match.rs	error:30 error:40
+ui/nll/match-cfg-fake-edges2.rs	E0503:8
+ui/nll/mir_check_cast_closure.rs	error:5
+ui/nll/nll-anon-to-static.rs	error:3
+ui/nll/outlives-suggestion-more.rs	error:5 error:5 error:12 error:12 error:19 error:19 error:19
+ui/nll/outlives-suggestion-simple.rs	error:4 error:8 error:12 error:12 error:21 error:30 error:40 error:51 error:72
+ui/nll/promotable-mutable-zst-doesnt-conflict.rs	ok	0	""
+ui/nll/promoted-closure-pair.rs	E0515:7
+ui/nll/promoted-liveness.rs	ok	0	""
+ui/nll/rc-loop.rs	ok	0	""
+ui/nll/self-assign-ref-mut.rs	ok	0	""
+ui/nll/unused-mut-issue-50343.rs	error:7 unused_mut:7
+ui/nll/where_clauses_in_structs.rs	error:11
+ui/nll/closure-requirements/region-lbr-anon-does-not-outlive-static.rs	error:9
+ui/nll/closure-requirements/region-lbr-named-does-not-outlive-static.rs	error:9
+ui/nll/closure-requirements/region-lbr1-does-not-outlive-ebr2.rs	error:9
+ui/nll/closure-requirements/region-lbr1-does-outlive-lbr2-because-implied-bound.rs	ok	0	""
+ui/nll/polonius/array-literal-index-oob-2024.rs	unconditional_panic:11
+ui/nll/polonius/flow-sensitive-invariance.rs	error:20 error:20
+ui/nll/polonius/location-insensitive-scopes-issue-117146.rs	E0597:10 error:13 error:13
+ui/nll/polonius/polonius-smoke-test.rs	E0515:10 E0503:16 E0505:22 E0506:32 E0505:46
+ui/nll/polonius/subset-relations.rs	error:13
+ui/nll/relate_tys/universe-violation.rs	E0308:13
+ui/nll/relate_tys/var-appears-twice.rs	E0597:20
+ui/nll/ty-outlives/ty-param-fn-body.rs	E0309:17
+ui/nll/ty-outlives/ty-param-implied-bounds.rs	ok	0	""
+ui/nll/user-annotations/adt-brace-enums.rs	E0597:25 E0597:30 E0597:40
+ui/nll/user-annotations/adt-tuple-enums.rs	E0597:28 E0597:33 E0597:43
+ui/nll/user-annotations/cast_static_lifetime.rs	E0597:5
+ui/nll/user-annotations/closure-sig.rs	ok	0	""
+ui/nll/user-annotations/closure-substs.rs	error:6 error:13 error:20 E0521:27
+ui/nll/user-annotations/fns.rs	E0597:23 E0597:28 E0597:38
+ui/nll/user-annotations/issue-54124.rs	error:2 error:2
+ui/nll/user-annotations/issue-55219.rs	ok	0	""
+ui/nll/user-annotations/wf-self-type.rs	error:10

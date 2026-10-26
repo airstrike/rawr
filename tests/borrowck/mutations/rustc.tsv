@@ -1,0 +1,526 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+mutations/assign_after_last_use_x_5_back_edge.rs	E0506:8
+mutations/assign_after_last_use_x_5_fresh_each_iteration.rs	ok	0	"3\n"
+mutations/assign_after_last_use_x_5_into_branch.rs	E0506:6
+mutations/assign_after_last_use_x_5_mut_across.rs	E0506:6
+mutations/assign_after_last_use_x_5_mut_ended.rs	ok	0	"3\n"
+mutations/assign_after_last_use_x_5_other_arm.rs	ok	0	"3\n"
+mutations/assign_after_last_use_x_5_shared_across.rs	E0506:6
+mutations/assign_after_last_use_x_6_back_edge.rs	E0503:9
+mutations/assign_after_last_use_x_6_fresh_each_iteration.rs	ok	0	"3\n3\n"
+mutations/assign_after_last_use_x_6_into_branch.rs	E0503:7
+mutations/assign_after_last_use_x_6_mut_across.rs	E0503:7
+mutations/assign_after_last_use_x_6_mut_ended.rs	ok	0	"3\n"
+mutations/assign_after_last_use_x_6_other_arm.rs	ok	0	"3\n"
+mutations/assign_after_last_use_x_6_shared_across.rs	ok	0	"3\n"
+mutations/assign_borrowed_x_4_back_edge.rs	E0502:4 E0506:7
+mutations/assign_borrowed_x_4_fresh_each_iteration.rs	E0502:5 E0506:7
+mutations/assign_borrowed_x_4_into_branch.rs	E0502:4 E0506:5
+mutations/assign_borrowed_x_4_mut_across.rs	E0502:4 E0506:5
+mutations/assign_borrowed_x_4_mut_ended.rs	E0502:4 E0506:6
+mutations/assign_borrowed_x_4_other_arm.rs	E0502:4 E0506:8
+mutations/assign_borrowed_x_4_shared_across.rs	E0506:5
+mutations/assign_borrowed_x_5_back_edge.rs	E0506:4 E0503:8
+mutations/assign_borrowed_x_5_fresh_each_iteration.rs	E0506:4
+mutations/assign_borrowed_x_5_into_branch.rs	E0506:4 E0503:6
+mutations/assign_borrowed_x_5_mut_across.rs	E0506:4 E0503:6
+mutations/assign_borrowed_x_5_mut_ended.rs	E0506:4
+mutations/assign_borrowed_x_5_other_arm.rs	E0506:4
+mutations/assign_borrowed_x_5_shared_across.rs	E0506:4
+mutations/block_scope_dead_v_7_back_edge.rs	E0499:10
+mutations/block_scope_dead_v_7_fresh_each_iteration.rs	ok	0	"[1, 2, 3, 3]\n"
+mutations/block_scope_dead_v_7_into_branch.rs	E0499:8
+mutations/block_scope_dead_v_7_mut_across.rs	E0499:8
+mutations/block_scope_dead_v_7_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/block_scope_dead_v_7_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/block_scope_dead_v_7_shared_across.rs	E0502:8
+mutations/block_scope_dead_v_8_back_edge.rs	E0502:11
+mutations/block_scope_dead_v_8_fresh_each_iteration.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+mutations/block_scope_dead_v_8_into_branch.rs	E0502:9
+mutations/block_scope_dead_v_8_mut_across.rs	E0502:9
+mutations/block_scope_dead_v_8_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/block_scope_dead_v_8_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/block_scope_dead_v_8_shared_across.rs	ok	0	"[1, 2, 3]\n"
+mutations/branch_value_after_last_use_b_7_back_edge.rs	E0499:10
+mutations/branch_value_after_last_use_b_7_fresh_each_iteration.rs	ok	0	"1\n[2, 3, 3]\n"
+mutations/branch_value_after_last_use_b_7_into_branch.rs	E0499:8
+mutations/branch_value_after_last_use_b_7_mut_across.rs	E0499:8
+mutations/branch_value_after_last_use_b_7_mut_ended.rs	ok	0	"1\n[2, 3]\n"
+mutations/branch_value_after_last_use_b_7_other_arm.rs	ok	0	"1\n[2, 3]\n"
+mutations/branch_value_after_last_use_b_7_shared_across.rs	E0502:8
+mutations/branch_value_after_last_use_b_8_back_edge.rs	E0502:11
+mutations/branch_value_after_last_use_b_8_fresh_each_iteration.rs	ok	0	"1\n[2, 3]\n[2, 3]\n"
+mutations/branch_value_after_last_use_b_8_into_branch.rs	E0502:9
+mutations/branch_value_after_last_use_b_8_mut_across.rs	E0502:9
+mutations/branch_value_after_last_use_b_8_mut_ended.rs	ok	0	"1\n[2, 3]\n"
+mutations/branch_value_after_last_use_b_8_other_arm.rs	ok	0	"1\n[2, 3]\n"
+mutations/branch_value_after_last_use_b_8_shared_across.rs	ok	0	"1\n[2, 3]\n"
+mutations/branch_value_holds_both_b_6_back_edge.rs	E0502:6 E0499:9
+mutations/branch_value_holds_both_b_6_fresh_each_iteration.rs	E0502:7 E0502:9
+mutations/branch_value_holds_both_b_6_into_branch.rs	E0502:6 E0499:7
+mutations/branch_value_holds_both_b_6_mut_across.rs	E0502:6 E0499:7
+mutations/branch_value_holds_both_b_6_mut_ended.rs	E0502:6 E0502:8
+mutations/branch_value_holds_both_b_6_other_arm.rs	E0502:6 E0502:10
+mutations/branch_value_holds_both_b_6_shared_across.rs	E0502:7
+mutations/break_continue_end_paths_v_16_back_edge.rs	E0502:19
+mutations/break_continue_end_paths_v_16_fresh_each_iteration.rs	ok	0	"[1, 1, 3, 9]\n[1, 1, 3, 9]\n"
+mutations/break_continue_end_paths_v_16_into_branch.rs	E0502:17
+mutations/break_continue_end_paths_v_16_mut_across.rs	E0502:17
+mutations/break_continue_end_paths_v_16_mut_ended.rs	ok	0	"[1, 1, 3, 9]\n"
+mutations/break_continue_end_paths_v_16_other_arm.rs	ok	0	"[1, 1, 3, 9]\n"
+mutations/break_continue_end_paths_v_16_shared_across.rs	ok	0	"[1, 1, 3, 9]\n"
+mutations/closure_inline_use_v_5_back_edge.rs	E0499:8
+mutations/closure_inline_use_v_5_fresh_each_iteration.rs	ok	0	"[1, 2, 3, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_5_into_branch.rs	E0499:6
+mutations/closure_inline_use_v_5_mut_across.rs	E0499:6
+mutations/closure_inline_use_v_5_mut_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_5_other_arm.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_5_shared_across.rs	E0502:6
+mutations/closure_inline_use_v_6_back_edge.rs	E0502:9
+mutations/closure_inline_use_v_6_fresh_each_iteration.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_6_into_branch.rs	E0502:7
+mutations/closure_inline_use_v_6_mut_across.rs	E0502:7
+mutations/closure_inline_use_v_6_mut_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_6_other_arm.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/closure_inline_use_v_6_shared_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+mutations/element_method_cs_12_back_edge.rs	E0499:15
+mutations/element_method_cs_12_fresh_each_iteration.rs	ok	0	"[1, 1]\n"
+mutations/element_method_cs_12_into_branch.rs	E0499:13
+mutations/element_method_cs_12_mut_across.rs	E0499:13
+mutations/element_method_cs_12_mut_ended.rs	ok	0	"[1]\n"
+mutations/element_method_cs_12_other_arm.rs	ok	0	"[1]\n"
+mutations/element_method_cs_12_shared_across.rs	E0502:13
+mutations/element_method_cs_13_back_edge.rs	E0502:16
+mutations/element_method_cs_13_fresh_each_iteration.rs	ok	0	"[1]\n[1]\n"
+mutations/element_method_cs_13_into_branch.rs	E0502:14
+mutations/element_method_cs_13_mut_across.rs	E0502:14
+mutations/element_method_cs_13_mut_ended.rs	ok	0	"[1]\n"
+mutations/element_method_cs_13_other_arm.rs	ok	0	"[1]\n"
+mutations/element_method_cs_13_shared_across.rs	ok	0	"[1]\n"
+mutations/element_method_while_borrowed_cs_12_back_edge.rs	E0502:12 E0502:15
+mutations/element_method_while_borrowed_cs_12_fresh_each_iteration.rs	E0502:13 E0502:15
+mutations/element_method_while_borrowed_cs_12_into_branch.rs	E0502:12 E0502:13
+mutations/element_method_while_borrowed_cs_12_mut_across.rs	E0502:12 E0502:13
+mutations/element_method_while_borrowed_cs_12_mut_ended.rs	E0502:12 E0502:14
+mutations/element_method_while_borrowed_cs_12_other_arm.rs	E0502:12 E0502:16
+mutations/element_method_while_borrowed_cs_12_shared_across.rs	E0502:13
+mutations/field_conflict_s_10_back_edge.rs	E0503:8 E0502:13 E0502:13
+mutations/field_conflict_s_10_fresh_each_iteration.rs	E0503:8
+mutations/field_conflict_s_10_into_branch.rs	E0503:8 E0502:11 E0502:11
+mutations/field_conflict_s_10_mut_across.rs	E0503:8 E0502:11 E0502:11
+mutations/field_conflict_s_10_mut_ended.rs	E0503:8
+mutations/field_conflict_s_10_other_arm.rs	E0503:8
+mutations/field_conflict_s_10_shared_across.rs	E0503:8
+mutations/field_conflict_s_8_back_edge.rs	E0499:8 E0503:11
+mutations/field_conflict_s_8_fresh_each_iteration.rs	E0499:9 E0503:11
+mutations/field_conflict_s_8_into_branch.rs	E0499:8 E0503:9
+mutations/field_conflict_s_8_mut_across.rs	E0499:8 E0503:9
+mutations/field_conflict_s_8_mut_ended.rs	E0499:8 E0503:10
+mutations/field_conflict_s_8_other_arm.rs	E0499:8 E0503:12
+mutations/field_conflict_s_8_shared_across.rs	E0502:8 E0503:9
+mutations/fields_apart_s_10_back_edge.rs	E0502:13 E0502:13
+mutations/fields_apart_s_10_fresh_each_iteration.rs	ok	0	"101 12\n101 12\n"
+mutations/fields_apart_s_10_into_branch.rs	E0502:11 E0502:11
+mutations/fields_apart_s_10_mut_across.rs	E0502:11 E0502:11
+mutations/fields_apart_s_10_mut_ended.rs	ok	0	"101 12\n"
+mutations/fields_apart_s_10_other_arm.rs	ok	0	"101 12\n"
+mutations/fields_apart_s_10_shared_across.rs	ok	0	"101 12\n"
+mutations/fields_apart_s_8_back_edge.rs	E0499:8 E0503:11
+mutations/fields_apart_s_8_fresh_each_iteration.rs	E0499:9
+mutations/fields_apart_s_8_into_branch.rs	E0499:8 E0503:9
+mutations/fields_apart_s_8_mut_across.rs	E0499:8 E0503:9
+mutations/fields_apart_s_8_mut_ended.rs	E0499:8
+mutations/fields_apart_s_8_other_arm.rs	E0499:8
+mutations/fields_apart_s_8_shared_across.rs	E0502:8 E0506:9
+mutations/for_over_shared_borrow_mutated_v_8_back_edge.rs	E0502:5 E0502:11
+mutations/for_over_shared_borrow_mutated_v_8_fresh_each_iteration.rs	E0502:5
+mutations/for_over_shared_borrow_mutated_v_8_into_branch.rs	E0502:5 E0502:9
+mutations/for_over_shared_borrow_mutated_v_8_mut_across.rs	E0502:5 E0502:9
+mutations/for_over_shared_borrow_mutated_v_8_mut_ended.rs	E0502:5
+mutations/for_over_shared_borrow_mutated_v_8_other_arm.rs	E0502:5
+mutations/for_over_shared_borrow_mutated_v_8_shared_across.rs	E0502:5
+mutations/for_over_shared_borrow_total_7_back_edge.rs	E0503:10
+mutations/for_over_shared_borrow_total_7_fresh_each_iteration.rs	ok	0	"[1, 2, 3, 3]\n"
+mutations/for_over_shared_borrow_total_7_into_branch.rs	E0503:8
+mutations/for_over_shared_borrow_total_7_mut_across.rs	E0503:8
+mutations/for_over_shared_borrow_total_7_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_total_7_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_total_7_shared_across.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_7_back_edge.rs	E0499:10
+mutations/for_over_shared_borrow_v_7_fresh_each_iteration.rs	ok	0	"[1, 2, 3, 3]\n"
+mutations/for_over_shared_borrow_v_7_into_branch.rs	E0499:8
+mutations/for_over_shared_borrow_v_7_mut_across.rs	E0499:8
+mutations/for_over_shared_borrow_v_7_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_7_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_7_shared_across.rs	E0502:8
+mutations/for_over_shared_borrow_v_8_back_edge.rs	E0502:11
+mutations/for_over_shared_borrow_v_8_fresh_each_iteration.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_8_into_branch.rs	E0502:9
+mutations/for_over_shared_borrow_v_8_mut_across.rs	E0502:9
+mutations/for_over_shared_borrow_v_8_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_8_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/for_over_shared_borrow_v_8_shared_across.rs	ok	0	"[1, 2, 3]\n"
+mutations/holder_copy_keeps_borrow_v_5_back_edge.rs	E0502:5 E0499:8
+mutations/holder_copy_keeps_borrow_v_5_fresh_each_iteration.rs	E0502:6 E0502:8
+mutations/holder_copy_keeps_borrow_v_5_into_branch.rs	E0502:5 E0499:6
+mutations/holder_copy_keeps_borrow_v_5_mut_across.rs	E0502:5 E0499:6
+mutations/holder_copy_keeps_borrow_v_5_mut_ended.rs	E0502:5 E0502:7
+mutations/holder_copy_keeps_borrow_v_5_other_arm.rs	E0502:5 E0502:9
+mutations/holder_copy_keeps_borrow_v_5_shared_across.rs	E0502:6
+mutations/holder_reassigned_a_7_back_edge.rs	E0499:10
+mutations/holder_reassigned_a_7_fresh_each_iteration.rs	ok	0	"1\n1 [1, 3, 3]\n"
+mutations/holder_reassigned_a_7_into_branch.rs	E0499:8
+mutations/holder_reassigned_a_7_mut_across.rs	E0499:8
+mutations/holder_reassigned_a_7_mut_ended.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_a_7_other_arm.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_a_7_shared_across.rs	E0502:8
+mutations/holder_reassigned_a_8_back_edge.rs	E0502:11
+mutations/holder_reassigned_a_8_fresh_each_iteration.rs	ok	0	"1\n1 [1, 3]\n1 [1, 3]\n"
+mutations/holder_reassigned_a_8_into_branch.rs	E0502:9
+mutations/holder_reassigned_a_8_mut_across.rs	E0502:9
+mutations/holder_reassigned_a_8_mut_ended.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_a_8_other_arm.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_a_8_shared_across.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_5_back_edge.rs	E0502:8
+mutations/holder_reassigned_r_5_fresh_each_iteration.rs	ok	0	"1\n1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_5_into_branch.rs	E0502:6
+mutations/holder_reassigned_r_5_mut_across.rs	E0502:6
+mutations/holder_reassigned_r_5_mut_ended.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_5_other_arm.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_5_shared_across.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_6_back_edge.rs	E0506:9 E0502:11
+mutations/holder_reassigned_r_6_fresh_each_iteration.rs	E0502:11
+mutations/holder_reassigned_r_6_into_branch.rs	E0506:7 E0502:11
+mutations/holder_reassigned_r_6_mut_across.rs	E0506:7 E0502:9
+mutations/holder_reassigned_r_6_mut_ended.rs	ok	0	"1\n1 [1, 3]\n"
+mutations/holder_reassigned_r_6_other_arm.rs	E0502:12
+mutations/holder_reassigned_r_6_shared_across.rs	E0506:7 E0502:9
+mutations/index_assign_after_last_use_v_5_back_edge.rs	E0499:8
+mutations/index_assign_after_last_use_v_5_fresh_each_iteration.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_5_into_branch.rs	E0499:6
+mutations/index_assign_after_last_use_v_5_mut_across.rs	E0499:6
+mutations/index_assign_after_last_use_v_5_mut_ended.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_5_other_arm.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_5_shared_across.rs	E0502:6
+mutations/index_assign_after_last_use_v_6_back_edge.rs	E0502:9
+mutations/index_assign_after_last_use_v_6_fresh_each_iteration.rs	ok	0	"1 [5, 2]\n1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_6_into_branch.rs	E0502:7
+mutations/index_assign_after_last_use_v_6_mut_across.rs	E0502:7
+mutations/index_assign_after_last_use_v_6_mut_ended.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_6_other_arm.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_after_last_use_v_6_shared_across.rs	ok	0	"1 [5, 2]\n"
+mutations/index_assign_borrowed_v_4_back_edge.rs	E0502:4 E0502:7
+mutations/index_assign_borrowed_v_4_fresh_each_iteration.rs	E0502:5 E0502:7
+mutations/index_assign_borrowed_v_4_into_branch.rs	E0502:4 E0502:5
+mutations/index_assign_borrowed_v_4_mut_across.rs	E0502:4 E0502:5
+mutations/index_assign_borrowed_v_4_mut_ended.rs	E0502:4 E0502:6
+mutations/index_assign_borrowed_v_4_other_arm.rs	E0502:4 E0502:8
+mutations/index_assign_borrowed_v_4_shared_across.rs	E0502:5
+mutations/index_assign_index_reads_v_3_back_edge.rs	E0499:6 E0502:6
+mutations/index_assign_index_reads_v_3_fresh_each_iteration.rs	E0502:6
+mutations/index_assign_index_reads_v_3_into_branch.rs	E0499:4 E0502:4
+mutations/index_assign_index_reads_v_3_mut_across.rs	E0499:4 E0502:4
+mutations/index_assign_index_reads_v_3_mut_ended.rs	E0502:5
+mutations/index_assign_index_reads_v_3_other_arm.rs	E0502:7
+mutations/index_assign_index_reads_v_3_shared_across.rs	E0502:4 E0502:4
+mutations/index_assign_index_reads_v_4_back_edge.rs	E0502:3 E0502:7
+mutations/index_assign_index_reads_v_4_fresh_each_iteration.rs	E0502:3
+mutations/index_assign_index_reads_v_4_into_branch.rs	E0502:3 E0502:5
+mutations/index_assign_index_reads_v_4_mut_across.rs	E0502:3 E0502:5
+mutations/index_assign_index_reads_v_4_mut_ended.rs	E0502:3
+mutations/index_assign_index_reads_v_4_other_arm.rs	E0502:3
+mutations/index_assign_index_reads_v_4_shared_across.rs	E0502:3
+mutations/labeled_break_v_14_back_edge.rs	E0499:17
+mutations/labeled_break_v_14_fresh_each_iteration.rs	ok	0	"[1, 1, 2, 7, 7]\n"
+mutations/labeled_break_v_14_into_branch.rs	E0499:15
+mutations/labeled_break_v_14_mut_across.rs	E0499:15
+mutations/labeled_break_v_14_mut_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+mutations/labeled_break_v_14_other_arm.rs	ok	0	"[1, 1, 2, 7]\n"
+mutations/labeled_break_v_14_shared_across.rs	E0502:15
+mutations/labeled_break_v_15_back_edge.rs	E0502:18
+mutations/labeled_break_v_15_fresh_each_iteration.rs	ok	0	"[1, 1, 2, 7]\n[1, 1, 2, 7]\n"
+mutations/labeled_break_v_15_into_branch.rs	E0502:16
+mutations/labeled_break_v_15_mut_across.rs	E0502:16
+mutations/labeled_break_v_15_mut_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+mutations/labeled_break_v_15_other_arm.rs	ok	0	"[1, 1, 2, 7]\n"
+mutations/labeled_break_v_15_shared_across.rs	ok	0	"[1, 1, 2, 7]\n"
+mutations/labeled_continue_conflict_v_13_back_edge.rs	E0499:8 E0502:16
+mutations/labeled_continue_conflict_v_13_fresh_each_iteration.rs	E0499:8
+mutations/labeled_continue_conflict_v_13_into_branch.rs	E0499:8 E0502:14
+mutations/labeled_continue_conflict_v_13_mut_across.rs	E0499:8 E0502:14
+mutations/labeled_continue_conflict_v_13_mut_ended.rs	E0499:8
+mutations/labeled_continue_conflict_v_13_other_arm.rs	E0499:8
+mutations/labeled_continue_conflict_v_13_shared_across.rs	E0499:8
+mutations/last_use_ends_borrow_v_5_back_edge.rs	E0499:8
+mutations/last_use_ends_borrow_v_5_fresh_each_iteration.rs	ok	0	"2 [1, 2, 3, 3, 4, 5]\n"
+mutations/last_use_ends_borrow_v_5_into_branch.rs	E0499:6
+mutations/last_use_ends_borrow_v_5_mut_across.rs	E0499:6
+mutations/last_use_ends_borrow_v_5_mut_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+mutations/last_use_ends_borrow_v_5_other_arm.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+mutations/last_use_ends_borrow_v_5_shared_across.rs	E0502:6
+mutations/last_use_ends_borrow_v_8_back_edge.rs	E0499:11
+mutations/last_use_ends_borrow_v_8_fresh_each_iteration.rs	ok	0	"2 [1, 2, 3, 4, 5, 5]\n"
+mutations/last_use_ends_borrow_v_8_into_branch.rs	E0499:9
+mutations/last_use_ends_borrow_v_8_mut_across.rs	E0499:9
+mutations/last_use_ends_borrow_v_8_mut_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+mutations/last_use_ends_borrow_v_8_other_arm.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+mutations/last_use_ends_borrow_v_8_shared_across.rs	E0502:9
+mutations/loop_borrow_carried_conflict_a_12_back_edge.rs	E0499:7 E0502:15
+mutations/loop_borrow_carried_conflict_a_12_fresh_each_iteration.rs	E0499:7
+mutations/loop_borrow_carried_conflict_a_12_into_branch.rs	E0499:7 E0502:13
+mutations/loop_borrow_carried_conflict_a_12_mut_across.rs	E0499:7 E0502:13
+mutations/loop_borrow_carried_conflict_a_12_mut_ended.rs	E0499:7
+mutations/loop_borrow_carried_conflict_a_12_other_arm.rs	E0499:7
+mutations/loop_borrow_carried_conflict_a_12_shared_across.rs	E0499:7
+mutations/loop_borrow_carried_into_next_a_14_back_edge.rs	E0502:17
+mutations/loop_borrow_carried_into_next_a_14_fresh_each_iteration.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_a_14_into_branch.rs	E0502:15
+mutations/loop_borrow_carried_into_next_a_14_mut_across.rs	E0502:15
+mutations/loop_borrow_carried_into_next_a_14_mut_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_a_14_other_arm.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_a_14_shared_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_13_back_edge.rs	E0499:16
+mutations/loop_borrow_carried_into_next_b_13_fresh_each_iteration.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9, 9]\n"
+mutations/loop_borrow_carried_into_next_b_13_into_branch.rs	E0499:14
+mutations/loop_borrow_carried_into_next_b_13_mut_across.rs	E0499:14
+mutations/loop_borrow_carried_into_next_b_13_mut_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_13_other_arm.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_13_shared_across.rs	E0502:14
+mutations/loop_borrow_carried_into_next_b_14_back_edge.rs	E0502:17
+mutations/loop_borrow_carried_into_next_b_14_fresh_each_iteration.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_14_into_branch.rs	E0502:15
+mutations/loop_borrow_carried_into_next_b_14_mut_across.rs	E0502:15
+mutations/loop_borrow_carried_into_next_b_14_mut_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_14_other_arm.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_carried_into_next_b_14_shared_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+mutations/loop_borrow_each_iteration_n_9_back_edge.rs	E0502:12
+mutations/loop_borrow_each_iteration_n_9_fresh_each_iteration.rs	ok	0	"5 [1, 0, 2]\n5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_n_9_into_branch.rs	E0502:10
+mutations/loop_borrow_each_iteration_n_9_mut_across.rs	E0502:10
+mutations/loop_borrow_each_iteration_n_9_mut_ended.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_n_9_other_arm.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_n_9_shared_across.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_v_9_back_edge.rs	E0502:12
+mutations/loop_borrow_each_iteration_v_9_fresh_each_iteration.rs	ok	0	"5 [1, 0, 2]\n5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_v_9_into_branch.rs	E0502:10
+mutations/loop_borrow_each_iteration_v_9_mut_across.rs	E0502:10
+mutations/loop_borrow_each_iteration_v_9_mut_ended.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_v_9_other_arm.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_each_iteration_v_9_shared_across.rs	ok	0	"5 [1, 0, 2]\n"
+mutations/loop_borrow_outlives_iteration_keep_10_back_edge.rs	E0502:13
+mutations/loop_borrow_outlives_iteration_keep_10_fresh_each_iteration.rs	ok	0	"[1, 0, 1, 2]\n[1, 0, 1, 2]\n"
+mutations/loop_borrow_outlives_iteration_keep_10_into_branch.rs	E0502:11
+mutations/loop_borrow_outlives_iteration_keep_10_mut_across.rs	E0502:11
+mutations/loop_borrow_outlives_iteration_keep_10_mut_ended.rs	ok	0	"[1, 0, 1, 2]\n"
+mutations/loop_borrow_outlives_iteration_keep_10_other_arm.rs	ok	0	"[1, 0, 1, 2]\n"
+mutations/loop_borrow_outlives_iteration_keep_10_shared_across.rs	ok	0	"[1, 0, 1, 2]\n"
+mutations/match_arm_conflict_v_10_back_edge.rs	E0499:6 E0502:13
+mutations/match_arm_conflict_v_10_fresh_each_iteration.rs	E0499:6
+mutations/match_arm_conflict_v_10_into_branch.rs	E0499:6 E0502:11
+mutations/match_arm_conflict_v_10_mut_across.rs	E0499:6 E0502:11
+mutations/match_arm_conflict_v_10_mut_ended.rs	E0499:6
+mutations/match_arm_conflict_v_10_other_arm.rs	E0499:6
+mutations/match_arm_conflict_v_10_shared_across.rs	E0499:6
+mutations/match_arms_v_9_back_edge.rs	E0502:12
+mutations/match_arms_v_9_fresh_each_iteration.rs	ok	0	"[1, 2, 2]\n[1, 2, 2]\n"
+mutations/match_arms_v_9_into_branch.rs	E0502:10
+mutations/match_arms_v_9_mut_across.rs	E0502:10
+mutations/match_arms_v_9_mut_ended.rs	ok	0	"[1, 2, 2]\n"
+mutations/match_arms_v_9_other_arm.rs	ok	0	"[1, 2, 2]\n"
+mutations/match_arms_v_9_shared_across.rs	ok	0	"[1, 2, 2]\n"
+mutations/method_two_phase_c_14_back_edge.rs	E0499:17 E0502:17
+mutations/method_two_phase_c_14_fresh_each_iteration.rs	ok	0	"[0, 1, 2]\n"
+mutations/method_two_phase_c_14_into_branch.rs	E0499:15 E0502:15
+mutations/method_two_phase_c_14_mut_across.rs	E0499:15 E0502:15
+mutations/method_two_phase_c_14_mut_ended.rs	ok	0	"[0, 1]\n"
+mutations/method_two_phase_c_14_other_arm.rs	ok	0	"[0, 1]\n"
+mutations/method_two_phase_c_14_shared_across.rs	E0502:15
+mutations/method_two_phase_c_16_back_edge.rs	E0502:16 E0499:19
+mutations/method_two_phase_c_16_fresh_each_iteration.rs	E0502:17 E0502:19
+mutations/method_two_phase_c_16_into_branch.rs	E0502:16 E0499:17
+mutations/method_two_phase_c_16_mut_across.rs	E0502:16 E0499:17
+mutations/method_two_phase_c_16_mut_ended.rs	E0502:16
+mutations/method_two_phase_c_16_other_arm.rs	E0502:16
+mutations/method_two_phase_c_16_shared_across.rs	E0502:17
+mutations/method_while_borrowed_c_15_back_edge.rs	E0502:15 E0499:18
+mutations/method_while_borrowed_c_15_fresh_each_iteration.rs	E0502:16 E0502:18
+mutations/method_while_borrowed_c_15_into_branch.rs	E0502:15 E0499:16
+mutations/method_while_borrowed_c_15_mut_across.rs	E0502:15 E0499:16
+mutations/method_while_borrowed_c_15_mut_ended.rs	E0502:15 E0502:17
+mutations/method_while_borrowed_c_15_other_arm.rs	E0502:15 E0502:19
+mutations/method_while_borrowed_c_15_shared_across.rs	E0502:16
+mutations/mutable_twice_v_7_back_edge.rs	E0499:4 E0502:10
+mutations/mutable_twice_v_7_fresh_each_iteration.rs	E0499:4
+mutations/mutable_twice_v_7_into_branch.rs	E0499:4 E0502:8
+mutations/mutable_twice_v_7_mut_across.rs	E0499:4 E0502:8
+mutations/mutable_twice_v_7_mut_ended.rs	E0499:4
+mutations/mutable_twice_v_7_other_arm.rs	E0499:4
+mutations/mutable_twice_v_7_shared_across.rs	E0499:4
+mutations/oracle_branch_arms_v_10_back_edge.rs	E0502:13
+mutations/oracle_branch_arms_v_10_fresh_each_iteration.rs	ok	0	"[1, 1]\n[1, 1]\n"
+mutations/oracle_branch_arms_v_10_into_branch.rs	E0502:11
+mutations/oracle_branch_arms_v_10_mut_across.rs	E0502:11
+mutations/oracle_branch_arms_v_10_mut_ended.rs	ok	0	"[1, 1]\n"
+mutations/oracle_branch_arms_v_10_other_arm.rs	ok	0	"[1, 1]\n"
+mutations/oracle_branch_arms_v_10_shared_across.rs	ok	0	"[1, 1]\n"
+mutations/oracle_loop_back_edge_n_12_back_edge.rs	E0502:7 E0502:15
+mutations/oracle_loop_back_edge_n_12_fresh_each_iteration.rs	E0502:7
+mutations/oracle_loop_back_edge_n_12_into_branch.rs	E0502:7 E0502:13
+mutations/oracle_loop_back_edge_n_12_mut_across.rs	E0502:7 E0502:13
+mutations/oracle_loop_back_edge_n_12_mut_ended.rs	E0502:7
+mutations/oracle_loop_back_edge_n_12_other_arm.rs	E0502:7
+mutations/oracle_loop_back_edge_n_12_shared_across.rs	E0502:7
+mutations/oracle_stale_shared_v_4_back_edge.rs	E0502:4 E0499:7
+mutations/oracle_stale_shared_v_4_fresh_each_iteration.rs	E0502:5 E0502:7
+mutations/oracle_stale_shared_v_4_into_branch.rs	E0502:4 E0499:5
+mutations/oracle_stale_shared_v_4_mut_across.rs	E0502:4 E0499:5
+mutations/oracle_stale_shared_v_4_mut_ended.rs	E0502:4 E0502:6
+mutations/oracle_stale_shared_v_4_other_arm.rs	E0502:4 E0502:8
+mutations/oracle_stale_shared_v_4_shared_across.rs	E0502:5
+mutations/panic_ends_path_ok_v_10_back_edge.rs	E0502:13
+mutations/panic_ends_path_ok_v_10_fresh_each_iteration.rs	ok	0	"[1, 2]\n[1, 2]\n"
+mutations/panic_ends_path_ok_v_10_into_branch.rs	E0502:11
+mutations/panic_ends_path_ok_v_10_mut_across.rs	E0502:11
+mutations/panic_ends_path_ok_v_10_mut_ended.rs	ok	0	"[1, 2]\n"
+mutations/panic_ends_path_ok_v_10_other_arm.rs	ok	0	"[1, 2]\n"
+mutations/panic_ends_path_ok_v_10_shared_across.rs	ok	0	"[1, 2]\n"
+mutations/panic_ends_path_v_9_back_edge.rs	E0502:4 E0502:12
+mutations/panic_ends_path_v_9_fresh_each_iteration.rs	E0502:4
+mutations/panic_ends_path_v_9_into_branch.rs	E0502:4 E0502:10
+mutations/panic_ends_path_v_9_mut_across.rs	E0502:4 E0502:10
+mutations/panic_ends_path_v_9_mut_ended.rs	E0502:4
+mutations/panic_ends_path_v_9_other_arm.rs	E0502:4
+mutations/panic_ends_path_v_9_shared_across.rs	E0502:4
+mutations/reborrow_conflict_v_7_back_edge.rs	E0499:5 E0502:10
+mutations/reborrow_conflict_v_7_fresh_each_iteration.rs	E0499:5
+mutations/reborrow_conflict_v_7_into_branch.rs	E0499:5 E0502:8
+mutations/reborrow_conflict_v_7_mut_across.rs	E0499:5 E0502:8
+mutations/reborrow_conflict_v_7_mut_ended.rs	E0499:5
+mutations/reborrow_conflict_v_7_other_arm.rs	E0499:5
+mutations/reborrow_conflict_v_7_shared_across.rs	E0499:5
+mutations/reborrow_through_holder_v_7_back_edge.rs	E0502:10
+mutations/reborrow_through_holder_v_7_fresh_each_iteration.rs	ok	0	"[1, 2, 3]\n[1, 2, 3]\n"
+mutations/reborrow_through_holder_v_7_into_branch.rs	E0502:8
+mutations/reborrow_through_holder_v_7_mut_across.rs	E0502:8
+mutations/reborrow_through_holder_v_7_mut_ended.rs	ok	0	"[1, 2, 3]\n"
+mutations/reborrow_through_holder_v_7_other_arm.rs	ok	0	"[1, 2, 3]\n"
+mutations/reborrow_through_holder_v_7_shared_across.rs	ok	0	"[1, 2, 3]\n"
+mutations/string_push_after_last_use_s_5_back_edge.rs	E0499:8
+mutations/string_push_after_last_use_s_5_fresh_each_iteration.rs	ok	0	"1 abb\n"
+mutations/string_push_after_last_use_s_5_into_branch.rs	E0499:6
+mutations/string_push_after_last_use_s_5_mut_across.rs	E0499:6
+mutations/string_push_after_last_use_s_5_mut_ended.rs	ok	0	"1 ab\n"
+mutations/string_push_after_last_use_s_5_other_arm.rs	ok	0	"1 ab\n"
+mutations/string_push_after_last_use_s_5_shared_across.rs	E0502:6
+mutations/string_push_after_last_use_s_6_back_edge.rs	E0502:9
+mutations/string_push_after_last_use_s_6_fresh_each_iteration.rs	ok	0	"1 ab\n1 ab\n"
+mutations/string_push_after_last_use_s_6_into_branch.rs	E0502:7
+mutations/string_push_after_last_use_s_6_mut_across.rs	E0502:7
+mutations/string_push_after_last_use_s_6_mut_ended.rs	ok	0	"1 ab\n"
+mutations/string_push_after_last_use_s_6_other_arm.rs	ok	0	"1 ab\n"
+mutations/string_push_after_last_use_s_6_shared_across.rs	ok	0	"1 ab\n"
+mutations/string_push_while_borrowed_s_4_back_edge.rs	E0502:4 E0499:7
+mutations/string_push_while_borrowed_s_4_fresh_each_iteration.rs	E0502:5 E0502:7
+mutations/string_push_while_borrowed_s_4_into_branch.rs	E0502:4 E0499:5
+mutations/string_push_while_borrowed_s_4_mut_across.rs	E0502:4 E0499:5
+mutations/string_push_while_borrowed_s_4_mut_ended.rs	E0502:4 E0502:6
+mutations/string_push_while_borrowed_s_4_other_arm.rs	E0502:4 E0502:8
+mutations/string_push_while_borrowed_s_4_shared_across.rs	E0502:5
+mutations/strings_best_21_back_edge.rs	E0502:24 E0502:24
+mutations/strings_best_21_fresh_each_iteration.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+mutations/strings_best_21_into_branch.rs	E0502:22 E0502:22
+mutations/strings_best_21_mut_across.rs	E0502:22 E0502:22
+mutations/strings_best_21_mut_ended.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+mutations/strings_best_21_other_arm.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+mutations/strings_best_21_shared_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+mutations/try_operator_path_v_9_back_edge.rs	E0499:12 E0502:12
+mutations/try_operator_path_v_9_fresh_each_iteration.rs	ok	0	"Some(4) [4, 4]\nSome(4) [4, 4, 4]\n"
+mutations/try_operator_path_v_9_into_branch.rs	E0499:10 E0502:10
+mutations/try_operator_path_v_9_mut_across.rs	E0499:10 E0502:10
+mutations/try_operator_path_v_9_mut_ended.rs	ok	0	"Some(4) [4, 4]\n"
+mutations/try_operator_path_v_9_other_arm.rs	ok	0	"Some(4) [4, 4]\n"
+mutations/try_operator_path_v_9_shared_across.rs	E0502:10
+mutations/two_phase_holder_arg_v_4_back_edge.rs	E0499:4 E0502:7
+mutations/two_phase_holder_arg_v_4_fresh_each_iteration.rs	E0499:5 E0502:7
+mutations/two_phase_holder_arg_v_4_into_branch.rs	E0499:4 E0502:5
+mutations/two_phase_holder_arg_v_4_mut_across.rs	E0499:4 E0502:5
+mutations/two_phase_holder_arg_v_4_mut_ended.rs	E0499:4 E0502:6
+mutations/two_phase_holder_arg_v_4_other_arm.rs	E0499:4 E0502:8
+mutations/two_phase_holder_arg_v_4_shared_across.rs	E0502:4 E0502:5
+mutations/two_phase_holder_arg_v_5_back_edge.rs	E0502:4 E0502:8
+mutations/two_phase_holder_arg_v_5_fresh_each_iteration.rs	E0502:4
+mutations/two_phase_holder_arg_v_5_into_branch.rs	E0502:4 E0502:6
+mutations/two_phase_holder_arg_v_5_mut_across.rs	E0502:4 E0502:6
+mutations/two_phase_holder_arg_v_5_mut_ended.rs	E0502:4
+mutations/two_phase_holder_arg_v_5_other_arm.rs	E0502:4
+mutations/two_phase_holder_arg_v_5_shared_across.rs	E0502:4
+mutations/two_phase_len_v_3_back_edge.rs	E0499:6 E0502:6
+mutations/two_phase_len_v_3_fresh_each_iteration.rs	ok	0	"[1, 2, 2, 3, 4]\n"
+mutations/two_phase_len_v_3_into_branch.rs	E0499:4 E0502:4
+mutations/two_phase_len_v_3_mut_across.rs	E0499:4 E0502:4
+mutations/two_phase_len_v_3_mut_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+mutations/two_phase_len_v_3_other_arm.rs	ok	0	"[1, 2, 2, 3]\n"
+mutations/two_phase_len_v_3_shared_across.rs	E0502:4
+mutations/two_phase_len_v_5_back_edge.rs	E0502:5 E0499:8
+mutations/two_phase_len_v_5_fresh_each_iteration.rs	E0502:6 E0502:8
+mutations/two_phase_len_v_5_into_branch.rs	E0502:5 E0499:6
+mutations/two_phase_len_v_5_mut_across.rs	E0502:5 E0499:6
+mutations/two_phase_len_v_5_mut_ended.rs	E0502:5
+mutations/two_phase_len_v_5_other_arm.rs	E0502:5
+mutations/two_phase_len_v_5_shared_across.rs	E0502:6
+mutations/two_phase_mutable_arg_v_7_back_edge.rs	E0499:4 E0502:10
+mutations/two_phase_mutable_arg_v_7_fresh_each_iteration.rs	E0499:4
+mutations/two_phase_mutable_arg_v_7_into_branch.rs	E0499:4 E0502:8
+mutations/two_phase_mutable_arg_v_7_mut_across.rs	E0499:4 E0502:8
+mutations/two_phase_mutable_arg_v_7_mut_ended.rs	E0499:4
+mutations/two_phase_mutable_arg_v_7_other_arm.rs	E0499:4
+mutations/two_phase_mutable_arg_v_7_shared_across.rs	E0499:4
+mutations/use_while_mutably_borrowed_x_6_back_edge.rs	E0503:4 E0502:9
+mutations/use_while_mutably_borrowed_x_6_fresh_each_iteration.rs	E0503:4
+mutations/use_while_mutably_borrowed_x_6_into_branch.rs	E0503:4 E0502:7
+mutations/use_while_mutably_borrowed_x_6_mut_across.rs	E0503:4 E0502:7
+mutations/use_while_mutably_borrowed_x_6_mut_ended.rs	E0503:4
+mutations/use_while_mutably_borrowed_x_6_other_arm.rs	E0503:4
+mutations/use_while_mutably_borrowed_x_6_shared_across.rs	E0503:4
+mutations/while_let_borrow_stack_8_back_edge.rs	E0499:11
+mutations/while_let_borrow_stack_8_fresh_each_iteration.rs	ok	0	"[6, 6]\n"
+mutations/while_let_borrow_stack_8_into_branch.rs	E0499:9
+mutations/while_let_borrow_stack_8_mut_across.rs	E0499:9
+mutations/while_let_borrow_stack_8_mut_ended.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_stack_8_other_arm.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_stack_8_shared_across.rs	E0502:9
+mutations/while_let_borrow_stack_9_back_edge.rs	E0502:12
+mutations/while_let_borrow_stack_9_fresh_each_iteration.rs	ok	0	"[6]\n[6]\n"
+mutations/while_let_borrow_stack_9_into_branch.rs	E0502:10
+mutations/while_let_borrow_stack_9_mut_across.rs	E0502:10
+mutations/while_let_borrow_stack_9_mut_ended.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_stack_9_other_arm.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_stack_9_shared_across.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_total_8_back_edge.rs	E0503:11
+mutations/while_let_borrow_total_8_fresh_each_iteration.rs	ok	0	"[6, 6]\n"
+mutations/while_let_borrow_total_8_into_branch.rs	E0503:9
+mutations/while_let_borrow_total_8_mut_across.rs	E0503:9
+mutations/while_let_borrow_total_8_mut_ended.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_total_8_other_arm.rs	ok	0	"[6]\n"
+mutations/while_let_borrow_total_8_shared_across.rs	ok	0	"[6]\n"
+mutations/while_let_conflict_total_11_back_edge.rs	E0499:8 E0502:14
+mutations/while_let_conflict_total_11_fresh_each_iteration.rs	E0499:8
+mutations/while_let_conflict_total_11_into_branch.rs	E0499:8 E0502:12
+mutations/while_let_conflict_total_11_mut_across.rs	E0499:8 E0502:12
+mutations/while_let_conflict_total_11_mut_ended.rs	E0499:8
+mutations/while_let_conflict_total_11_other_arm.rs	E0499:8
+mutations/while_let_conflict_total_11_shared_across.rs	E0499:8
+mutations/word_count_top_12_back_edge.rs	E0499:15
+mutations/word_count_top_12_fresh_each_iteration.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+mutations/word_count_top_12_into_branch.rs	E0499:13
+mutations/word_count_top_12_mut_across.rs	E0499:13
+mutations/word_count_top_12_mut_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+mutations/word_count_top_12_other_arm.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+mutations/word_count_top_12_shared_across.rs	E0502:13
+mutations/word_count_top_16_back_edge.rs	E0502:19
+mutations/word_count_top_16_fresh_each_iteration.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n8 distinct words\n"
+mutations/word_count_top_16_into_branch.rs	E0502:17
+mutations/word_count_top_16_mut_across.rs	E0502:17
+mutations/word_count_top_16_mut_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+mutations/word_count_top_16_other_arm.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+mutations/word_count_top_16_shared_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"

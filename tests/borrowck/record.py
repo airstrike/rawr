@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Record the pinned rustc's verdict on each program of the borrow corpus.
 
-    python3 -I tests/borrowck/record.py [files or a folder...]
+    python3 -I tests/borrowck/record.py [folders or files...]
 
-With no files, it records every `.rs` under `tests/borrowck` and writes
-`tests/borrowck/rustc.tsv`: one row per program, its path relative to this
-directory, rustc's error codes with their lines (`E0502:7`), or `ok`
+With folders, or with none for every folder, it records each `.rs` under a
+corpus folder and writes that folder's `rustc.tsv`: one row per program, its
+path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`), or `ok`
 followed by what the program's binary printed (escaped), which the
-differential harness compares with rawr's run. With a folder of the
-corpus, it records the programs under it and replaces only that folder's
-rows. With files, it prints the rows instead (for picking cases). Builds
-go under `target/borrowck`.
+differential harness compares with rawr's run. With `.rs` files, it prints
+the rows instead (for picking cases). Builds go under `target/borrowck`.
 
 The corpus: `ui/` holds the cases of rustc 1.96.0's tests/ui/borrowck and
 tests/ui/nll that rawr's frontend lowers (rustc's tests, MIT OR Apache-2.0
@@ -76,43 +74,25 @@ def main():
     version = subprocess.run(["rustc", f"+{TOOLCHAIN}", "--version"], capture_output=True, text=True)
     if not version.stdout.startswith(PINNED):
         sys.exit(f"the corpus is recorded with {PINNED.strip()}, not {version.stdout.strip()}")
-    files = sys.argv[1:]
-    if len(files) == 1 and os.path.isdir(files[0]):
-        record(os.path.abspath(files[0]), version.stdout.strip())
-        return
+    arguments = sys.argv[1:]
+    files = [path for path in arguments if path.endswith(".rs")]
+    for path in files:
+        print(f"{path}\t{verdict(os.path.abspath(path))}")
     if files:
-        for path in files:
-            print(f"{path}\t{verdict(os.path.abspath(path))}")
         return
-    record(HERE, version.stdout.strip())
-
-
-def record(folder, version):
-    """Record the programs under `folder` into rustc.tsv, keeping the rows
-    of the programs outside it, in the order a whole run writes them."""
-    prefix = os.path.relpath(folder, HERE)
-    if prefix.startswith(".."):
-        sys.exit(f"{folder} is not in the corpus")
-    inside = lambda path: prefix == "." or path == prefix or path.startswith(prefix + os.sep)
-    rows = {}
-    table = os.path.join(HERE, "rustc.tsv")
-    if prefix != "." and os.path.exists(table):
-        for line in open(table, encoding="utf-8").read().splitlines():
-            if line and not line.startswith("#"):
-                path = line.split("\t", 1)[0]
-                if not inside(path):
-                    rows[path] = line
-    for directory, _, names in os.walk(folder):
-        for name in names:
-            if name.endswith(".rs"):
-                path = os.path.join(directory, name)
-                relative = os.path.relpath(path, HERE)
-                rows[relative] = f"{relative}\t{verdict(path)}"
-    order = sorted(rows, key=lambda path: (os.path.dirname(path), os.path.basename(path)))
-    with open(table, "w") as out:
-        out.write(f"# {version}, edition {EDITION}\n")
-        out.write("\n".join(rows[path] for path in order) + "\n")
-
+    folders = [os.path.abspath(path) for path in arguments] or [
+        os.path.join(HERE, name) for name in sorted(os.listdir(HERE)) if os.path.isdir(os.path.join(HERE, name))
+    ]
+    for folder in folders:
+        rows = []
+        for directory, _, names in sorted(os.walk(folder)):
+            for name in sorted(names):
+                if name.endswith(".rs"):
+                    path = os.path.join(directory, name)
+                    rows.append(f"{os.path.relpath(path, HERE)}\t{verdict(path)}")
+        with open(os.path.join(folder, "rustc.tsv"), "w") as out:
+            out.write(f"# {version.stdout.strip()}, edition {EDITION}\n")
+            out.write("\n".join(rows) + "\n")
 
 if __name__ == "__main__":
     main()

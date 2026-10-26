@@ -764,6 +764,12 @@ impl Recorder {
         self.arm(here);
     }
 
+    /// The depth of the innermost loop being read, from the outermost: what
+    /// [`Self::jump`] takes to name it.
+    pub(crate) fn loop_depth(&self) -> usize {
+        self.loops.len().saturating_sub(1)
+    }
+
     /// `break` (or `continue`) to the loop `depth` from the outermost.
     pub(crate) fn jump(&mut self, depth: usize, breaking: bool) {
         let here = self.current;
