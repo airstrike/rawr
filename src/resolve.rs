@@ -1345,6 +1345,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "collections::HashSet"
                 | "collections::BTreeMap"
                 | "collections::BTreeSet"
+                | "collections::VecDeque"
                 | "hash"
                 | "hash::Hash"
                 | "convert"
@@ -1399,6 +1400,7 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
         "HashSet",
         "BTreeMap",
         "BTreeSet",
+        "VecDeque",
         "Debug",
         "Display",
         "Formatter",
@@ -1564,6 +1566,14 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     ["Duration", "Instant"]
         .into_iter()
         .find(|time| *time == name)
+}
+
+/// `std::collections::VecDeque` as a path is written with its module.
+pub(crate) fn std_vec_deque(path: &str) -> bool {
+    matches!(
+        path,
+        "collections::VecDeque" | "std::collections::VecDeque" | "alloc::collections::VecDeque"
+    )
 }
 
 /// `std::cell::Cell` as a path is written with its module.

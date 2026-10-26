@@ -515,6 +515,12 @@ fn resolve_path(
         Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
         None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
         None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
+        // `std::collections::VecDeque` is Rawr's `Vec` (`vec_deque_as_vec`).
+        None if !types.contains_key("VecDeque")
+            && (super::std_vec_deque(&name) || name.as_str() == "VecDeque") =>
+        {
+            "Vec".into()
+        }
         // `std::cell::Cell`, or a bare `Cell` that names no crate or host
         // type.
         None if !types.contains_key("Cell")
@@ -543,6 +549,7 @@ fn resolve_path(
         || name.as_str() == "Reverse"
         || name.as_str() == "RefCell"
         || name.as_str() == "Cell" && host.source_type("Cell").is_none()
+        || name.as_str() == "Vec"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
         || name.as_str() == "RangeInclusive"

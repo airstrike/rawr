@@ -10084,3 +10084,40 @@ main();
          bad 0 Bad(0) Err(\"plain\")\n"
     );
 }
+
+/// `std::collections::VecDeque` is Rawr's `Vec` with a deque's
+/// `push_front`, `pop_front`, `push_back`, `pop_back`, `front` and `back`,
+/// as a local, a field, a parameter and a collect target.
+#[test]
+fn language_vec_deque_is_a_vec_with_a_front() {
+    assert_eq!(
+        printed(
+            r#"
+use std::collections::VecDeque;
+struct Queue { items: VecDeque<String> }
+fn fill(q: &mut VecDeque<i32>, n: i32) { for i in 0..n { q.push_back(i); } }
+fn main() {
+    let mut q = Queue { items: VecDeque::new() };
+    q.items.push_back("a".to_string());
+    q.items.push_front("z".to_string());
+    let first = q.items.pop_front();
+    println!("{:?} {:?}", first, q.items);
+    let mut d = VecDeque::with_capacity(4);
+    fill(&mut d, 4);
+    d[0] = 100;
+    let back = d.pop_back();
+    println!("{d:?} {:?} {:?} {:?}", d.front(), d.back(), back);
+    let e: std::collections::VecDeque<char> = "abc".chars().collect();
+    println!("{:?} {}", e.iter().rev().collect::<String>(), e.contains(&'b'));
+    let mut f: VecDeque<u8> = VecDeque::new();
+    println!("{:?}", f.pop_front());
+    f.extend(vec![1, 2]);
+    let all: Vec<u8> = f.drain(..).collect();
+    println!("{all:?} {}", f.is_empty());
+}
+main();
+"#
+        ),
+        "Some(\"z\") [\"a\"]\n[100, 1, 2] Some(100) Some(2) Some(3)\n\"cba\" true\nNone\n[1, 2] true\n"
+    );
+}

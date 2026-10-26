@@ -9360,6 +9360,12 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        if models.get("VecDeque").is_none() {
+            let imported = models
+                .import("VecDeque")
+                .is_some_and(|binding| crate::resolve::std_vec_deque(&binding.qualified));
+            vec_deque_as_vec(&mut tokens, imported);
+        }
         let associated = Shared::clone(&models.associated);
 
         Self {
@@ -34044,6 +34050,15 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A `VecDeque` is a `Vec` (`vec_deque_as_vec`): its back is the
+        // `Vec`'s end.
+        let member: ImmutableString = match member.as_str() {
+            "push_back" => "push".into(),
+            "pop_back" => "pop".into(),
+            "front" => "first".into(),
+            "back" => "last".into(),
+            _ => member,
+        };
         // `v.as_mut_slice()` is the place `v`, which a pattern writes back.
         let whole = (member.as_str() == "as_mut_slice")
             .then(|| value.lvalue.clone())
@@ -34360,14 +34375,18 @@ impl<'a> Parser<'a> {
             ("insert", [_, _])
             | ("remove" | "swap_remove", [_])
             | ("swap", [_, _])
-            | ("dedup" | "pop", []) => {
-                let code = VEC_METHODS
-                    .iter()
-                    .position(|name| *name == member.as_str())
-                    .expect("listed `Vec` method");
+            | ("push_front", [_])
+            | ("dedup" | "pop" | "pop_front", []) => {
+                // A deque's `push_front(x)` is `insert(0, x)`.
+                let front = member.as_str() == "push_front";
+                let name = if front { "insert" } else { member.as_str() };
+                let code = vec_method_code(name);
                 let mut operands = vec![origin::Fragment::from(code.to_string())];
+                if front {
+                    operands.push("0".into());
+                }
                 for (index, argument) in arguments.iter_mut().enumerate() {
-                    let expected = if member.as_str() == "insert" && index == 1 {
+                    let expected = if name == "insert" && (front || index == 1) {
                         element.clone()
                     } else {
                         Ty::Int(Int::Usize)
@@ -34378,9 +34397,9 @@ impl<'a> Parser<'a> {
                 operands.resize(4, "()".into());
                 let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
                 let source = self.mutation_call(&value, &helper, operands)?;
-                let ty = match member.as_str() {
+                let ty = match name {
                     "remove" | "swap_remove" => element,
-                    "pop" => Ty::Option(Box::new(element)),
+                    "pop" | "pop_front" => Ty::Option(Box::new(element)),
                     _ => Ty::Unit,
                 };
                 (source, ty)
@@ -43081,7 +43100,51 @@ const VEC_METHODS: &[&str] = &[
     "copy_from_slice",
     "split_off",
     "swap_remove",
+    "pop_front",
 ];
+
+/// `std::collections::VecDeque` in a body, by its path or as imported
+/// (`imported`), is `Vec`: Rawr's `Vec` is an array, which takes a
+/// deque's `push_front` and `pop_front` too (`parse_array_method`), and
+/// prints as a deque does.
+fn vec_deque_as_vec(tokens: &mut Vec<(Token, Position)>, imported: bool) {
+    let named = |token: &Token, name: &str| matches!(token, Token::Identifier(text) if text.as_str() == name);
+    let mut index = 0;
+    while index < tokens.len() {
+        if !named(&tokens[index].0, "VecDeque") {
+            index += 1;
+            continue;
+        }
+        // `std::collections::VecDeque` or `collections::VecDeque`.
+        let mut start = index;
+        if start >= 2
+            && named(&tokens[start - 2].0, "collections")
+            && tokens[start - 1].0 == Token::DoubleColon
+        {
+            start -= 2;
+            if start >= 2
+                && (named(&tokens[start - 2].0, "std")
+                    || named(&tokens[start - 2].0, "alloc")
+                    || named(&tokens[start - 2].0, "core"))
+                && tokens[start - 1].0 == Token::DoubleColon
+            {
+                start -= 2;
+            }
+        }
+        let qualified = start < index;
+        let after_path = index > 0 && !qualified && tokens[index - 1].0 == Token::DoubleColon;
+        if (qualified || imported) && !after_path {
+            let position = tokens[start].1;
+            tokens.splice(
+                start..=index,
+                [(Token::Identifier(Box::new("Vec".into())), position)],
+            );
+            index = start + 1;
+        } else {
+            index += 1;
+        }
+    }
+}
 
 /// A `VEC_METHODS` code by name.
 fn vec_method_code(name: &str) -> usize {
@@ -43350,6 +43413,8 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             Some(last) => crate::option::some(last),
             None => crate::option::none(),
         }),
+        Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
+        Some("pop_front") => Ok(crate::option::some(array.remove(0))),
         // A changed copy of `array[a..]` stored back over it.
         Some("store") => {
             let copy = value.into_array().unwrap_or_default();
