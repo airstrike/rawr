@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py
+    python3 -I tests/borrowck/mutate.py [out sources...]
 
-For each `let mut x` in a program, and each later statement in its block
+With an output folder and sources, it mutates those programs into that
+folder instead (`tests/borrowck/patterns/mutations` from the pattern
+cases). For each `let mut x` in a program, and each later statement in its block
 that names `x`, it writes variants that move a borrow's use past that
 statement, into a branch, and across a loop's back edge, and variants
 where the borrow ends first. rustc decides which are errors: run
@@ -14,6 +16,7 @@ import glob
 import os
 import re
 import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -82,11 +85,14 @@ def variants(indent, name, statement):
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
-    for old in glob.glob(os.path.join(OUT, "*.rs")):
+    out, sources = OUT, SOURCES
+    if len(sys.argv) > 2:
+        out, sources = sys.argv[1], sorted(sys.argv[2:])
+    os.makedirs(out, exist_ok=True)
+    for old in glob.glob(os.path.join(out, "*.rs")):
         os.remove(old)
     count = 0
-    for source in SOURCES:
+    for source in sources:
         stem = os.path.splitext(os.path.basename(source))[0]
         lines = open(source, encoding="utf-8").read().splitlines()
         for start, line in enumerate(lines):
@@ -97,12 +103,12 @@ def main():
             for target in list(statements(lines, start, indent, name))[:PER_LOCAL]:
                 for kind, replacement in variants(indent, name, lines[target]).items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
-                    path = os.path.join(OUT, f"{stem}_{name}_{target + 1}_{kind}.rs")
+                    path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
                     with open(path, "w", encoding="utf-8") as file:
                         file.write("\n".join(mutated) + "\n" + HELPERS)
                     count += 1
     # As the repository's other Rust files are.
-    written = sorted(glob.glob(os.path.join(OUT, "*.rs")))
+    written = sorted(glob.glob(os.path.join(out, "*.rs")))
     subprocess.run(["rustfmt", "+stable", "--edition", "2024", *written], check=True)
     print(count)
 

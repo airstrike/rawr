@@ -1,0 +1,23 @@
+struct S {
+    a: i64,
+    b: i64,
+}
+fn main() {
+    let mut s = S { a: 1, b: 2 };
+    let r = &mut s.a;
+    let n = match s {
+        S { a, .. } => a,
+    };
+    *r += 1;
+    for __i in 0..2 {
+        let __b = &mut s;
+        __touch(__b);
+        println!("{} {} {}", n, s.a, s.b);
+    }
+}
+
+fn __touch<T>(_: &mut T) {}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}
