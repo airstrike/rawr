@@ -23,6 +23,7 @@ mod media;
 pub mod mouse;
 pub mod operation;
 pub mod overlay;
+pub(crate) mod pane_grid;
 mod protocol;
 pub mod recipe;
 pub(crate) mod reported;
@@ -61,6 +62,9 @@ pub(crate) fn bind(
     script::bind(iced);
     text_editor::bind(iced);
     recipe::bind(iced);
+    if crate::features::in_playground() {
+        pane_grid::bind(iced);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

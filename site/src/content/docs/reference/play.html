@@ -231,6 +231,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <li><code>rand::rng()</code> gives a handle to rand&rsquo;s own <code>StdRng</code>. Its <code>random_range</code> takes <code>a..b</code> of floats, or <code>a..=b</code> of floats or integers. <code>random_bool(p)</code> works too. <code>use rand::RngExt;</code> is accepted.</li>
   <li>A render seeds that generator the same way every time, as it freezes its clock the same way. So a snippet gives the same image each time it runs. The browser seeds it from the page.</li>
   <li><code>tracing_subscriber::fmt::init()</code> installs tracing-subscriber&rsquo;s own <code>fmt</code> subscriber. In the browser, its lines go to the console. A render on the server has no terminal, so its lines go nowhere.</li>
+  <li>iced&rsquo;s <code>pane_grid</code> works as <a href="/docs/reference/iced#pane-grid">Pane grids</a> describes, so iced&rsquo;s own <code>pane_grid</code> example runs as written. Its State&rsquo;s methods are <code>new</code>, <code>len</code>, <code>is_empty</code>, <code>get</code>, <code>get_mut</code>, <code>adjacent</code>, <code>maximized</code>, <code>split</code>, <code>close</code>, <code>drop</code>, <code>swap</code>, <code>move_to_edge</code>, <code>resize</code>, <code>maximize</code> and <code>restore</code>.</li>
 </ul>
 
 <h3 id="prelude">The prelude</h3>

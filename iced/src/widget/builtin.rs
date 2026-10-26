@@ -461,7 +461,7 @@ impl widget::Descriptor for marker::Container {
 
 /// A container style, pinned or a Rawr function; a failing function is a
 /// diagnostic in place of the widget.
-fn container_style(
+pub(super) fn container_style(
     source: &Option<marker::container::Source>,
     context: &widget::Context<'_>,
     widget: &str,

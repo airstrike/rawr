@@ -23,6 +23,7 @@ import customQuad from "../../../tests/fixtures/custom_quad.rs";
 import customWidget from "../../../tests/fixtures/custom_widget.rs";
 import lazy from "../../../tests/fixtures/lazy.rs";
 import modal from "../../../tests/fixtures/modal.rs";
+import paneGrid from "../../../tests/fixtures/iced/pane_grid.rs";
 import progressBar from "../../../tests/fixtures/progress_bar.rs";
 import qrCode from "../../../tests/fixtures/qr_code.rs";
 import sandpiles from "../../../tests/fixtures/sandpiles.rs";
@@ -87,6 +88,7 @@ const ICED: Example[] = [
   { name: "Text", code: text },
   { name: "Scrollable", code: scrollable },
   { name: "Table", code: table },
+  { name: "Pane grid", code: paneGrid },
   {
     name: "QR code",
     code: qrCode,

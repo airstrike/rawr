@@ -334,8 +334,10 @@ const NO_FILES: &str = "?play has no files";
 /// A snippet's files: none of the server's, only the playground examples'
 /// shipped assets (`rawr_play_sandbox::bundle`). rand is seeded the same
 /// for every render, as its clock is frozen the same, so a snippet's frames
-/// repeat.
+/// repeat. The facade declares the iced items a snippet can't import, as
+/// `pane_grid` (`rawr_iced::features::playground`).
 fn no_files() {
+    rawr_iced::features::playground();
     rawr::resolve::deny_files(NO_FILES);
     rawr_play_sandbox::bundle::install();
     rawr_play_sandbox::rand::seed(rawr_play_sandbox::rand::RENDER_SEED);

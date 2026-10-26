@@ -1326,6 +1326,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     }
     widget::custom::declare::declare(&mut builder)?;
     declare_text_editor(&mut builder)?;
+    if features::in_playground() {
+        widget::pane_grid::declare(&mut builder)?;
+    }
     declare_recipe_element(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;

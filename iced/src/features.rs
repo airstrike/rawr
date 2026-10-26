@@ -87,6 +87,24 @@ pub fn on(feature: Feature) -> bool {
     feature.compiled() && SELECTED.get().is_none_or(|bits| bits & feature.bit() != 0)
 }
 
+static PLAYGROUND: OnceLock<()> = OnceLock::new();
+
+/// Declare the playground's own iced items for the rest of this process.
+/// A `?play` snippet is no Cargo project, so the importer never runs for
+/// it (D513.5), and the facade declares what the playground's examples
+/// reach through it elsewhere: iced's `pane_grid`. Under D550 this is
+/// facade debt. `rawr run` never selects it, so a program there reaches
+/// `pane_grid` through the importer.
+pub fn playground() {
+    let _ = PLAYGROUND.set(());
+}
+
+/// Whether [`playground`] was selected.
+#[must_use]
+pub fn in_playground() -> bool {
+    PLAYGROUND.get().is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::Feature;
