@@ -67,7 +67,10 @@ pub(super) fn dep_info_entry(
             {
                 return Err(super::input(
                     "unproved-out-dir-env-dep",
-                    "OUT_DIR does not identify this package's Build execution",
+                    format_args!(
+                        "OUT_DIR `{}` does not identify the Build execution of `{package_id}`",
+                        out_dir.display()
+                    ),
                 ));
             }
         }

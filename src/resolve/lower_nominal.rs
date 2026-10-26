@@ -751,6 +751,15 @@ fn imported_surface_type(
                 )?),
             }
         }
+        Ty::Host { proof, .. }
+            if proof.definition.identity().imported().is_none()
+                && let Some(definition) = facade_view_argument(&proof.definition) =>
+        {
+            Type::Nominal {
+                definition,
+                arguments: Box::default(),
+            }
+        }
         Ty::Host { proof, arguments } => {
             let identity = proof.definition.identity().imported().ok_or_else(|| {
                 Error::InvalidHostOperation {
@@ -825,6 +834,31 @@ fn imported_surface_type(
     })
 }
 
+/// The surface type an imported view type's argument names for one of the
+/// iced facade's own types (D558 tier 2): a widget, which the view lowers
+/// to an element; iced's `Theme`; or its `Renderer`.
+#[cfg(feature = "rust-import")]
+fn facade_view_argument(
+    definition: &crate::host::type_def::Definition,
+) -> Option<rawr_import::surface::identity::Definition> {
+    use rawr_import::surface::identity::Definition;
+    let path = definition.path();
+    match path.as_str() {
+        "iced::Theme" => Some(Definition::theme()),
+        "iced::Renderer" | "iced::widget::Renderer" => Some(Definition::renderer()),
+        "iced::Element" => Some(Definition::element()),
+        path if path.starts_with("iced::") && !definition.projections().is_empty() => {
+            Some(Definition::element())
+        }
+        // A value the facade holds as its Rust value, as `iced::Length` is,
+        // where a view's builder takes it (`.width(Fill)`).
+        path if path.starts_with("iced::") && definition.parameters().is_empty() => {
+            Some(Definition::facade(path))
+        }
+        _ => None,
+    }
+}
+
 /// A value type Rust can't name in the runner, as a script struct or a
 /// tuple holding one: a generic Rust item takes it as `rawr::Value`
 /// (D513.2), which carries it as it is.
@@ -880,6 +914,15 @@ fn instance_surface_type(
             mapper: *seal,
             payload: Box::new(instance_surface_type(inference, payload)?),
         },
+        Ty::Host { proof, .. }
+            if proof.definition.identity().imported().is_none()
+                && let Some(definition) = facade_view_argument(&proof.definition) =>
+        {
+            Type::Nominal {
+                definition,
+                arguments: Box::default(),
+            }
+        }
         Ty::Host { proof, arguments } => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::authenticated(
                 *proof.definition.identity().imported()?.as_bytes(),
@@ -15869,6 +15912,59 @@ impl<'a> Parser<'a> {
         if let Some(arguments) = arguments {
             self.apply_relations(item, arguments, &mut parameters)?;
         }
+        // An imported iced item's `Theme` and `Renderer` are iced's, the ones
+        // the facade declares, as its defaults name and its view uses (D558
+        // tier 2).
+        // An iced view value an iced item takes carries the item's messages,
+        // as a `Controls` given to `TitleBar::controls(impl Into<..>)` does:
+        // a view's messages are its application's (D558 tier 2).
+        #[cfg(feature = "rust-import")]
+        if item.imported_identity().is_some()
+            && item_path.starts_with("iced::")
+            && let Some(message) = parameters.get("Message").cloned()
+            && let Some(arguments) = arguments
+        {
+            for argument in arguments {
+                if let Ty::Host { proof, arguments } = self.inference.resolve(&argument.ty)
+                    && proof.definition.identity().imported().is_some()
+                    && let Some(index) = proof
+                        .definition
+                        .parameters()
+                        .iter()
+                        .position(|parameter| parameter.as_str() == "Message")
+                    && let Some(carried) = arguments.get(index)
+                {
+                    let _ = self.unify_type(&message, carried);
+                }
+            }
+        }
+        #[cfg(feature = "rust-import")]
+        if item.imported_identity().is_some() && item_path.starts_with("iced::") {
+            for (name, path) in [
+                ("Theme", "iced::Theme"),
+                ("Renderer", "iced::widget::Renderer"),
+            ] {
+                let Some(ty) = parameters.get(name).cloned() else {
+                    continue;
+                };
+                if !matches!(self.inference.resolve(&ty), Ty::Infer(_)) {
+                    continue;
+                }
+                if let Some(definition) = self.models.host.type_(path).cloned()
+                    && definition.parameters().is_empty()
+                {
+                    let facade = Ty::Host {
+                        proof: HostTyProof::new(
+                            definition,
+                            None,
+                            self.models.host.type_owner(path).cloned(),
+                        ),
+                        arguments: Box::default(),
+                    };
+                    let _ = self.unify_type(&ty, &facade);
+                }
+            }
+        }
         let requirements = item
             .signature()
             .type_parameters()
@@ -18998,6 +19094,20 @@ impl<'a> Parser<'a> {
         guard: crate::host::item::Guard,
     ) -> ParsedExpr {
         let inner = value.ty.clone();
+        match guard {
+            crate::host::item::Guard::OptionShared => {
+                // `Some` of a copy of the target, typed as Rust's `Option<&T>`.
+                if let Ty::Option(target) = self.inference.resolve(&inner) {
+                    value.ty = Ty::Option(Box::new(Ty::Reference {
+                        mutable: false,
+                        target,
+                    }));
+                }
+                return value;
+            }
+            crate::host::item::Guard::OptionMutable => return self.optional_guard(value),
+            crate::host::item::Guard::Shared | crate::host::item::Guard::Mutable => {}
+        }
         if guard == crate::host::item::Guard::Shared {
             value.ty = Ty::Reference {
                 mutable: false,
@@ -19047,6 +19157,67 @@ impl<'a> Parser<'a> {
             native: true,
         });
         expression
+    }
+
+    /// An imported method's `Option<&mut T>` lent from its receiver, as
+    /// pane_grid's `state.get_mut(pane)`: the call gives `Some` of a place
+    /// (`island::place::Place`) or `None`. The value is `Some` of a copy of
+    /// the target, whose place a pattern's `&mut` binding writes back
+    /// through the place, as `v.get_mut(i)`'s element is (T012).
+    fn optional_guard(&mut self, value: ParsedExpr) -> ParsedExpr {
+        let call = value.span;
+        let target = match self.inference.resolve(&value.ty) {
+            Ty::Option(target) => *target,
+            other => other,
+        };
+        let slot = self.temporary("borrowed");
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {slot} = (); ")),
+            origin::Fragment::default(),
+        ));
+        self.bindings.insert(
+            slot.as_str().into(),
+            Binding {
+                ty: Ty::Unknown,
+                mutable: true,
+                available: true,
+                moved_fields: Default::default(),
+                declaration: call,
+                kind: BindingKind::Local,
+            },
+        );
+        let held = origin::Fragment::plain(slot.as_str());
+        let present = self.prelude_op(PreludeOp::IsSome, [held.clone()]);
+        let place = self.prelude_op(PreludeOp::Unwrap, [held]);
+        let read = self.prelude_op(PreludeOp::CellGet, [place.clone()]);
+        let some = self.prelude_op(PreludeOp::Some, [read]);
+        let none = self.prelude_op(PreludeOp::None, []);
+        let mut source = origin::Fragment::plain(format!("{{ {slot} = "));
+        source.push(value.rendered_source());
+        source.push_text("; if ");
+        source.push(present);
+        source.push_text(" { ");
+        source.push(some);
+        source.push_text(" } else { ");
+        source.push(none);
+        source.push_text(" } }");
+        let ty = Ty::Option(Box::new(Ty::Reference {
+            mutable: true,
+            target: Box::new(target.clone()),
+        }));
+        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, call);
+        parsed.outcome = value.outcome;
+        parsed.evaluation = value.evaluation;
+        parsed.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            binding: slot.as_str().into(),
+            base: place,
+            steps: vec![PlaceStep::Cell {
+                release: false,
+                native: true,
+            }],
+            ty: target,
+        })));
+        parsed
     }
 
     /// `stdin.read_line(&mut buf)`, a std reader that appends to a
@@ -19469,6 +19640,37 @@ impl<'a> Parser<'a> {
         operation: Span,
         item: &crate::host::item::Definition,
     ) -> Result<(), Error> {
+        // An imported value is changed where it lives, through its handle,
+        // so a place below a mutable binding (`self.panes.split(..)`) needs
+        // only that binding to be mutable, as Rust's `&mut self` does.
+        let root = match &receiver.lvalue {
+            Some(Lvalue::Field(field)) => Some(field.binding.clone()),
+            Some(Lvalue::Nested(nested)) => Some(nested.binding.clone()),
+            Some(Lvalue::Place { binding, .. }) => Some(binding.clone()),
+            _ => None,
+        };
+        if let Some(root) = root {
+            return match self.mutation_binding(root.as_str()) {
+                Some(binding) if binding.mutable => Ok(()),
+                Some(binding) => Err(match &binding.kind {
+                    BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
+                        owner: owner.clone(),
+                        mutation: operation,
+                        receiver: binding.declaration,
+                    },
+                    BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
+                        binding: root,
+                        mutation: operation,
+                        declaration: binding.declaration,
+                    },
+                }),
+                None => Err(Error::InvalidHostOperation {
+                    item: item.path().into(),
+                    reason: "mutable receiver binding could not be proven".into(),
+                    operation,
+                }),
+            };
+        }
         let Some(name) = variable_name(receiver.source.as_str()) else {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
@@ -25814,8 +26016,31 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map(|(names, _)| names.as_ref())
                 .unwrap_or_default();
+            // An imported struct's fields are read by their selectors, as
+            // `event.split` reads them.
+            #[cfg(feature = "rust-import")]
+            let imported = (proof.definition.identity().imported().is_some()
+                && matches!(
+                    proof.definition.shape(),
+                    crate::host::type_def::Shape::Struct { .. }
+                ))
+            .then(|| proof.definition.clone());
+            #[cfg(not(feature = "rust-import"))]
+            let imported: Option<crate::host::type_def::Definition> = None;
             for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
-                let field_value = self.host_read(value.clone(), ty, field.clone(), *field_span)?;
+                let field_value = match &imported {
+                    #[cfg(feature = "rust-import")]
+                    Some(definition) => {
+                        let receiver = self.operator_expr(value.clone(), ty.clone(), *field_span);
+                        self.parse_imported_field(
+                            receiver,
+                            definition.clone(),
+                            field.clone(),
+                            *field_span,
+                        )?
+                    }
+                    _ => self.host_read(value.clone(), ty, field.clone(), *field_span)?,
+                };
                 self.host_pattern(member, field_value.rendered_source(), &field_value.ty, out)?;
             }
             return Ok(());
@@ -34542,7 +34767,20 @@ impl<'a> Parser<'a> {
                 }
                 for (parameter, argument) in signature.inputs.iter().zip(arguments) {
                     let actual = self.inference.resolve(&argument.ty);
-                    if !self.unify_type(parameter, &actual) && exact {
+                    // `&state` of a value the call borrows, as
+                    // `PaneGrid::new(&self.panes, ..)`, settles what the
+                    // reference's target does.
+                    let unified = self.unify_type(parameter, &actual)
+                        || match (self.inference.resolve(parameter), &actual) {
+                            (Ty::Reference { target, .. }, Ty::Reference { target: inner, .. }) => {
+                                self.unify_type(&target, inner)
+                            }
+                            (Ty::Reference { target, .. }, actual) => {
+                                self.unify_type(&target, actual)
+                            }
+                            _ => false,
+                        };
+                    if !unified && exact {
                         return None;
                     }
                 }
@@ -38925,6 +39163,24 @@ impl<'a> Parser<'a> {
         }
         let mut value = match base {
             Some(base) => {
+                // `..Default::default()` is a value of the struct, as Rust
+                // infers it from the literal.
+                if let Ok(own) = crate::host::type_ref::Type::registered(definition.path().as_str())
+                    && let Ok(own) = self.instantiate_host_type(
+                        &own,
+                        &mut BTreeMap::new(),
+                        "struct base",
+                        None,
+                        Some(&definition),
+                    )
+                {
+                    let checkpoint = self.inference.checkpoint();
+                    if self.unify_type(&own, &base.ty) {
+                        self.inference.commit(checkpoint);
+                    } else {
+                        self.inference.rollback(checkpoint);
+                    }
+                }
                 let temporary = self.temporary("base");
                 prelude.push_text(format!("let {temporary} = "));
                 prelude.push(base.rendered_source());
@@ -40456,6 +40712,22 @@ impl<'a> Parser<'a> {
             {
                 return self.parse_host_struct(definition, path_span);
             }
+            // An imported struct named through an imported module, as
+            // `pane_grid::ResizeEvent { split, ratio }`.
+            #[cfg(feature = "rust-import")]
+            if let Some(definition) = self.models.host.source_type(&full).cloned()
+                && definition.identity().imported().is_some()
+                && matches!(
+                    definition.shape(),
+                    crate::host::type_def::Shape::Struct {
+                        form: crate::host::type_def::Form::Record,
+                        ..
+                    }
+                )
+            {
+                let owner = self.models.host.type_owner(&full).cloned();
+                return self.parse_imported_struct(full.into(), definition, owner, path_span);
+            }
         }
         // `iced::Degrees(90.0)`: a facade tuple struct's constructor named
         // in full, which the facade declares as the type's `from`, as an
@@ -40749,6 +41021,28 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // An imported type named through an imported module, as
+        // `pane_grid::Axis` after `use iced::widget::pane_grid;`, is the
+        // type at the module's path.
+        #[cfg(feature = "rust-import")]
+        let owner: ImmutableString = match self.models.import(&segments[0].0) {
+            Some(binding)
+                if qualified_model.is_none()
+                    && segments.len() > 1
+                    && matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    ) =>
+            {
+                let through = format!("{}{}", binding.qualified, &owner[segments[0].0.len()..]);
+                if self.models.host.type_(&through).is_some() {
+                    through.into()
+                } else {
+                    owner
+                }
+            }
+            _ => owner,
+        };
         #[cfg(feature = "rust-import")]
         let imported_nominal_owner = if qualified_model.is_none() && segments.len() > 1 {
             self.models
@@ -42726,6 +43020,10 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         #[cfg(feature = "rust-import")]
+        if self.coerce_imported_widget(&source, &target, value)? {
+            return Ok(None);
+        }
+        #[cfg(feature = "rust-import")]
         if let Some(key) = self.coerce_profile_projectable(&source, &target)? {
             let target = self.inference.resolve(&target);
             let helper = self.push_op(Op::Event {
@@ -42931,6 +43229,78 @@ impl<'a> Parser<'a> {
             value.prelude = origin::Fragment::default();
             value.source = items;
         }
+    }
+
+    /// An imported iced view value iced implements `Widget` for, as
+    /// pane_grid's `PaneGrid`, where a view takes an `Element`: the element
+    /// it shows as, through rawr-iced's `recipe::element` (D558 tier 2).
+    #[cfg(feature = "rust-import")]
+    fn coerce_imported_widget(
+        &mut self,
+        source: &Ty,
+        target: &Ty,
+        value: &mut ParsedExpr,
+    ) -> Result<bool, Error> {
+        const ELEMENT: &str = "iced::widget::recipe::element";
+        let Ty::Host { proof, arguments } = self.inference.resolve(source) else {
+            return Ok(false);
+        };
+        if proof.definition.identity().imported().is_none()
+            || !proof
+                .definition
+                .capabilities()
+                .contains(capability::Kind::Widget)
+        {
+            return Ok(false);
+        }
+        let Ty::Host {
+            proof: target_proof,
+            arguments: target_arguments,
+        } = self.inference.resolve(target)
+        else {
+            return Ok(false);
+        };
+        let Some(element) = self.models.host.type_("iced::Element") else {
+            return Ok(false);
+        };
+        let [message] = target_arguments.as_ref() else {
+            return Ok(false);
+        };
+        if target_proof.definition.contract() != element.contract() {
+            return Ok(false);
+        }
+        if let Some(index) = proof
+            .definition
+            .parameters()
+            .iter()
+            .position(|parameter| parameter.as_str() == "Message")
+            && let Some(argument) = arguments.get(index)
+        {
+            let checkpoint = self.inference.checkpoint();
+            if !self.unify_type(message, argument) {
+                self.inference.rollback(checkpoint);
+                return Ok(false);
+            }
+            self.inference.commit(checkpoint);
+        }
+        let Some(items) = self.models.host_items(ELEMENT).map(<[_]>::to_vec) else {
+            return Ok(false);
+        };
+        let owner = self.models.item_owner(ELEMENT).cloned();
+        let span = value.span;
+        let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, span);
+        let view = std::mem::replace(value, placeholder);
+        *value = self.call_host_function(&items, owner, vec![view], span)?;
+        let target = self.inference.resolve(target);
+        if !self.unify_type(&target, &value.ty) {
+            return Err(Error::TypeMismatch {
+                expected: target.name(&self.models),
+                actual: self.inference.resolve(&value.ty).name(&self.models),
+                expression: span,
+            });
+        }
+        value.ty = target;
+        Ok(true)
     }
 
     #[cfg(feature = "rust-import")]
@@ -43997,7 +44367,16 @@ impl<'a> Parser<'a> {
                             } => (**target).clone(),
                             actual => actual.clone(),
                         };
-                        self.unify_type(expected, &actual)
+                        // A `&T` the host gives a closure is the closure's
+                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
+                        let expected = match self.inference.resolve(expected) {
+                            Ty::Reference {
+                                mutable: false,
+                                target,
+                            } => *target,
+                            expected => expected,
+                        };
+                        self.unify_type(&expected, &actual)
                     })
                     && self.unify_type(expected_output, actual_output)
             }
@@ -44054,7 +44433,28 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| self.unify_type(expected, actual))
+                    .all(|(expected, actual)| {
+                        if self.unify_type(expected, actual) {
+                            return true;
+                        }
+                        // A `&T` the host gives a closure is the closure's
+                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
+                        match (
+                            self.inference.resolve(expected),
+                            self.inference.resolve(actual),
+                        ) {
+                            (
+                                Ty::Reference {
+                                    mutable: false,
+                                    target,
+                                },
+                                actual,
+                            ) if !matches!(actual, Ty::Reference { .. }) => {
+                                self.unify_type(&target, &actual)
+                            }
+                            _ => false,
+                        }
+                    })
                     && self.unify_type(expected_output, actual_output)
             }
             // A stream's tuple spread over a closure of as many parameters,

@@ -1632,7 +1632,7 @@ fn invoke_view<'a>(
 
 /// A view function's widget as an Element: a closure's body is the widget
 /// itself (`column![..]`), which iced converts with `Into<Element>`.
-fn into_element(view: Dynamic) -> Result<widget::Value, String> {
+pub(crate) fn into_element(view: Dynamic) -> Result<widget::Value, String> {
     macro_rules! widgets {
         ($($marker:ident),*) => {
             $(if view.is::<marker::$marker>() {

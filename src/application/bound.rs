@@ -48,6 +48,17 @@ impl BoundLaunch {
         })
     }
 
+    /// Run the closures native code calls on this thread in this
+    /// application, as an iced view value's closures (D558 tier 2).
+    #[cfg(feature = "sync")]
+    pub fn serve_closures(&self) {
+        crate::island::serve_application(
+            self.generation(),
+            self.launch.authority().clone(),
+            self.runtime.clone(),
+        );
+    }
+
     pub(crate) fn new(
         launch: application::Launch,
         runtime: Shared<host::runtime::Registry>,

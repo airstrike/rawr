@@ -418,6 +418,61 @@ impl crate::future::Host for Current {
     }
 }
 
+/// The application whose closures native code calls on this thread, as an
+/// iced view value's closures (D558 tier 2), by generation.
+#[cfg(feature = "sync")]
+struct Served {
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+    shared: crate::future::Program,
+}
+
+#[cfg(feature = "sync")]
+impl crate::future::Host for Served {
+    fn invoke(
+        &self,
+        function: &item::Value,
+        arguments: &mut [Dynamic],
+    ) -> crate::RawrResultOf<Dynamic> {
+        self.authority
+            .invoke_bound(function, arguments, self.runtime.clone())
+            .map_err(|error| crate::future::error(error.to_string()))
+    }
+
+    fn share(&self) -> Option<crate::future::Program> {
+        Some(self.shared.clone())
+    }
+}
+
+#[cfg(feature = "sync")]
+thread_local! {
+    /// The generation [`serve_application`] serves on this thread.
+    static SERVED: std::cell::Cell<Option<program::GenerationId>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Make this thread run the closures native code calls in the application
+/// `authority` with `runtime`, generation `generation`: an iced program's
+/// thread, whose transitions make view values whose closures iced calls.
+/// A generation already served here is kept.
+#[cfg(feature = "sync")]
+pub(crate) fn serve_application(
+    generation: program::GenerationId,
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+) {
+    if SERVED.with(std::cell::Cell::get) == Some(generation) {
+        return;
+    }
+    let shared = shared(authority.clone(), runtime.clone());
+    crate::future::serve(Rc::new(Served {
+        authority,
+        runtime,
+        shared,
+    }));
+    SERVED.with(|served| served.set(Some(generation)));
+}
+
 /// `authority` with `runtime` as any thread may use it, with each script
 /// type's own `Clone` found once.
 #[cfg(feature = "sync")]

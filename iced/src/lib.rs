@@ -556,6 +556,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         DEBUG_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
+    // `iced::keyboard::Key` is a re-export of `keyboard::key::Key`, which
+    // pane_grid's example names through `use keyboard::key::{self, Key}`.
+    builder.alias("keyboard::key::Key", "keyboard::Key")?;
     builder.value_type::<iced::keyboard::key::Named>(
         "keyboard::key::Named",
         &[],
@@ -1323,6 +1326,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     }
     widget::custom::declare::declare(&mut builder)?;
     declare_text_editor(&mut builder)?;
+    declare_recipe_element(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -5451,6 +5455,27 @@ fn pick_list_builders(builder: &mut facade::Builder) -> Result<(), host::Error> 
     Ok(())
 }
 
+/// `recipe::element(view)`: the element an imported view value, as
+/// pane_grid's `PaneGrid`, shows as (D558 tier 2). The compiler calls it
+/// where a view takes the value as an `Element`, as Rust's `Widget` impl
+/// lets it; no program names it.
+fn declare_recipe_element(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    builder.module("widget::recipe")?;
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("View", &[])?;
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::parameter("View")?);
+    signature.output(type_ref::Type::applied(
+        "Element",
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    builder.item(item::Definition::function(
+        "widget::recipe::element",
+        signature.finish(),
+    )?)?;
+    Ok(())
+}
+
 /// iced's `text_editor(&content)` over a `text_editor::Content` the app
 /// owns, its builders, and the `Content` methods an app calls: `new`,
 /// `with_text`, `perform` and the readers. The `Content` lives in the
@@ -6436,6 +6461,58 @@ mod tests {
             )
             .unwrap();
         assert!(output.is::<marker::Text>());
+    }
+
+    /// pane_grid's example names `keyboard::key::Key`, the path iced
+    /// re-exports as `keyboard::Key`, and builds its styles with
+    /// `..Default::default()`, whose type the struct literal gives.
+    #[test]
+    fn a_key_by_its_module_path_and_a_default_base_check() {
+        let mut engine = Engine::new();
+        super::install(&mut engine).unwrap();
+        let engine = Shared::new(engine);
+        engine
+            .compile_application(
+                r#"
+use iced::keyboard;
+use iced::widget::{container, text};
+use iced::{Element, Theme};
+
+struct State;
+#[derive(Debug, Clone, Copy)] enum Message { Tick }
+
+impl State {
+    fn new() -> State { State {} }
+    fn update(&mut self, message: Message) {}
+    fn view(&self) -> Element<'_, Message> {
+        container(text("x")).style(styled).boxed()
+    }
+}
+
+fn styled(theme: &Theme) -> container::Style {
+    let palette = theme.palette();
+    container::Style {
+        text_color: Some(palette.background.strong.text),
+        background: Some(palette.background.strong.color.into()),
+        ..Default::default()
+    }
+}
+
+fn hotkey(key: keyboard::Key) -> Option<Message> {
+    use keyboard::key::{self, Key};
+    match key.as_ref() {
+        Key::Character("v") => Some(Message::Tick),
+        Key::Named(key::Named::ArrowUp) => Some(Message::Tick),
+        _ => None,
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#,
+            )
+            .unwrap();
     }
 
     #[test]

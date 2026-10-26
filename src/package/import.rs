@@ -522,15 +522,34 @@ impl crate::Engine {
                 .outcome(identity)
                 .and_then(|outcome| match outcome.representability() {
                     Representability::FunctionItem(plan) => plan.class(),
+                    Representability::Invocation(plan) => plan.class(),
                     _ => None,
                 })
                 .filter(|_| used.callable);
+            // A closure the native call runs only while it runs, as
+            // `PaneGrid::new`'s pane closure is (D558 tier 2).
+            let binders = contract
+                .outcome(identity)
+                .and_then(|outcome| match outcome.representability() {
+                    Representability::FunctionItem(plan) => Some(plan.binders()),
+                    Representability::Invocation(plan) => Some(plan.binders()),
+                    _ => None,
+                })
+                .map(|binders| binders.to_vec().into_boxed_slice())
+                .unwrap_or_default();
             let instance =
-                if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
+                if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
+                    rawr_import::surface::instance::Arguments::borrowed(
+                        used.types,
+                        Box::default(),
+                        binders,
+                        limits,
+                    )
+                } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
                     rawr_import::surface::instance::Arguments::shared(
                         used.types,
                         Box::default(),
-                        Box::default(),
+                        binders,
                         proof.scope(),
                         limits,
                     )
@@ -538,7 +557,7 @@ impl crate::Engine {
                     rawr_import::surface::instance::Arguments::mutable(
                         used.types,
                         Box::default(),
-                        Box::default(),
+                        binders,
                         limits,
                     )
                 } else if used.callable {
@@ -1504,6 +1523,7 @@ fn build(
                     plan.eq(),
                     plan.hash(),
                     plan.iterator(),
+                    plan.widget(),
                 ]),
             ),
             Representability::Enum(plan) => (
@@ -1518,6 +1538,7 @@ fn build(
                     plan.eq(),
                     plan.hash(),
                     plan.iterator(),
+                    false,
                 ]),
             ),
             Representability::Value(_)
@@ -2244,7 +2265,7 @@ fn names(
 /// The traits a crate implements for a type, in the order `copy`,
 /// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
 /// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
+pub(crate) fn implemented(traits: [bool; 9]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -2255,6 +2276,7 @@ pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
         Kind::Eq,
         Kind::Hash,
         Kind::Iterator,
+        Kind::Widget,
     ]
     .into_iter()
     .zip(traits)
@@ -2294,6 +2316,8 @@ fn guard(signature: &representability::signature::Signature) -> Option<host::ite
     signature.guard().map(|guard| match guard {
         representability::signature::Guard::Shared => host::item::Guard::Shared,
         representability::signature::Guard::Mutable => host::item::Guard::Mutable,
+        representability::signature::Guard::OptionShared => host::item::Guard::OptionShared,
+        representability::signature::Guard::OptionMutable => host::item::Guard::OptionMutable,
     })
 }
 

@@ -987,6 +987,7 @@ fn build(
                     ty.eq(),
                     ty.hash(),
                     ty.iterator(),
+                    ty.widget(),
                 ]),
                 parameters,
                 defaults,
@@ -1219,6 +1220,12 @@ fn item_definition(
         rawr_import::classify::representability::signature::Guard::Mutable => {
             host::item::Guard::Mutable
         }
+        rawr_import::classify::representability::signature::Guard::OptionShared => {
+            host::item::Guard::OptionShared
+        }
+        rawr_import::classify::representability::signature::Guard::OptionMutable => {
+            host::item::Guard::OptionMutable
+        }
     });
     Ok(definition
         .imported(item.selector().try_clone()?)
@@ -1250,7 +1257,9 @@ fn signature(
                 .map(|case| (case.this(), case.arguments())),
             |source| {
                 pattern(source, &|nominal| {
-                    ty(facade, nominal, profile, installed).ok()
+                    ty(facade, nominal, profile, installed)
+                        .ok()
+                        .and_then(|ty| rooted(facade.root(), ty))
                 })
             },
         ) {
@@ -1258,6 +1267,25 @@ fn signature(
         }
     }
     Ok(builder.finish())
+}
+
+/// `ty` with a facade type's path from the root `root`, as a relation's
+/// case names it: a relation is read where the program calls the item, not
+/// resolved where the facade installs (`Padding`, which pane_grid's
+/// `TitleBar::padding(impl Into<Padding>)` converts to).
+fn rooted(root: &str, ty: host::type_ref::Type) -> Option<host::type_ref::Type> {
+    match ty.shape() {
+        host::type_ref::Shape::Registered { path, arguments } if arguments.is_empty() => {
+            let path = path.to_string();
+            if path.starts_with(&format!("{root}::")) {
+                Some(ty)
+            } else {
+                host::type_ref::Type::registered(format!("{root}::{path}")).ok()
+            }
+        }
+        host::type_ref::Shape::Registered { .. } => None,
+        _ => Some(ty),
+    }
 }
 
 /// Whether `source` names an implementation's own type parameter or the

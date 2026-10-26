@@ -11,6 +11,7 @@ use crate::classify::representability::ownership::Receiver;
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
+mod view;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
@@ -4458,6 +4459,7 @@ fn render_source(
     }
     let mut families = Vec::new();
     render_families(&mut families)?;
+    view::render_families(&mut families)?;
     sources.push((FAMILIES_PATH.into(), families));
     sources.push((SURFACE_PATH.into(), stamps));
     Ok(())
@@ -4820,8 +4822,13 @@ fn returns_values(plan: &Plan) -> bool {
             signature,
             substitutions,
             ..
-        } if signature.guard()
-            != Some(crate::classify::representability::signature::Guard::Mutable) =>
+        } if !matches!(
+            signature.guard(),
+            Some(
+                crate::classify::representability::signature::Guard::Mutable
+                    | crate::classify::representability::signature::Guard::OptionMutable
+            )
+        ) =>
         {
             substituted(signature.output(), signature, substitutions).ok()
         }
@@ -5063,6 +5070,17 @@ fn render_adapter(
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
     let name = adapter_name(plan);
+    // A call that makes or takes an iced view value keeps a recipe (D558
+    // tier 2).
+    if view::is_view_call(plan)? {
+        writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{\n    let _ = &mut *arguments;"
+        )
+        .map_err(encoding)?;
+        view::render(plan, output)?;
+        return output.write_all(b"}\n\n").map_err(encoding);
+    }
     let plain = method_message(plan, cohort, profile, facade)?.is_none()
         && replay(plan, profile)?.is_none();
     let lent = if plain {
@@ -6342,6 +6360,8 @@ fn render_scoped_guard(
     render_give(&target, "output", &mut give)?;
     let give = String::from_utf8(give).map_err(|_| request::Error::Encoding)?;
     match guard {
+        // A receiver in a region lends no optional borrow yet.
+        Guard::OptionShared | Guard::OptionMutable => Ok(()),
         Guard::Shared => writeln!(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
@@ -6504,6 +6524,47 @@ fn render_guard(
         "    let receiver = native_handle(arguments, 0, false)?;"
     )
     .map_err(encoding)?;
+    // `call`, giving the method copies of its inputs, so a place reaches
+    // its target again with each access.
+    let call_again = |access: &str,
+                      handle: &str,
+                      taking: &str,
+                      output: &mut Vec<u8>|
+     -> Result<(), request::Error> {
+        write!(output, "{access}::<").map_err(encoding)?;
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            output,
+        )?;
+        write!(
+            output,
+            ", _>({handle}, |{taking}| {{ let guard = receiver.{}",
+            plan.name()
+        )
+        .map_err(encoding)?;
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            output,
+        )?;
+        output.write_all(b"(").map_err(encoding)?;
+        for input in 0..signature.inputs().len() {
+            if input > 0 {
+                output.write_all(b", ").map_err(encoding)?;
+            }
+            write!(output, "Clone::clone(&argument_{input})").map_err(encoding)?;
+        }
+        output
+            .write_all(b"); let Some(mut guard) = guard else { return Err(Error::StaleHandle) }; let _ = &mut guard; ")
+            .map_err(encoding)
+    };
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
@@ -6512,6 +6573,122 @@ fn render_guard(
                 .write_all(b"guard_copy!(&*guard) })??;\n")
                 .map_err(encoding)?;
             render_give(&target, "output", output)
+        }
+        // `Some` of a copy of the target, or `None`.
+        Guard::OptionShared => {
+            output.write_all(b"    let output = ").map_err(encoding)?;
+            call(borrow, "receiver", "receiver", output)?;
+            output
+                .write_all(b"guard.map(|target| guard_copy!(&*target)).transpose() })??;\n")
+                .map_err(encoding)?;
+            render_give(&target, "output", output)
+        }
+        // `Some` of a place whose accesses call the method again, or `None`.
+        Guard::OptionMutable => {
+            let convert::Type::Option(element) = &target else {
+                return Err(request::Error::Drift {
+                    field: "an optional borrow's output is no option",
+                });
+            };
+            let mut given = Vec::new();
+            render_give(element, "output", &mut given)?;
+            let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+            let give = format!(
+                "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
+            )
+            .into_bytes();
+            let mut take = Vec::new();
+            let stored = signature.inputs().len();
+            render_take(stored, 0, element, &mut take)?;
+            output.write_all(b"    let present = ").map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(
+                    b"Ok::<(), Error>(()) }).map(|reached| reached.is_ok())?;
+    if !present {
+        return Ok(__rawr_internal::option::none());
+    }
+    let witness = output_witness().and_then(|witness| witness.argument_witness(0));
+    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
+        use __rawr_internal::island::place::Access;
+        let mut stored = match access {
+            Access::Read => None,
+            Access::Store(value) => Some(value),
+            Access::Update(apply) => {
+                return with_arena(|arena| {
+                    ",
+                )
+                .map_err(encoding)?;
+            call_again("arena.held", "receiver.clone()", "arena, receiver", output)?;
+            output
+                .write_all(
+                    b"
+                        let output = guard_copy!(&*guard)?;
+                        let value = {
+                            #[allow(unused_variables)]
+                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&give, "                        ", output)?;
+            output
+                .write_all(
+                    b"                        }?;
+                        let mut stored = match lend(arena, || apply(value)) {
+                            Ok(stored) => stored,
+                            Err(error) => return Ok(Err(error)),
+                        };
+                        let mut values = [&mut stored];
+                        let arguments = &mut Arguments { values: &mut values, arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&take, "                    ", output)?;
+            output
+                .write_all(
+                    format!(
+                        "                        *guard = argument_{stored};
+                        Ok(Ok(Dynamic::UNIT))
+                    }})?
+                }})
+                .map_err(runtime_error)?;
+            }}
+        }};
+        with_arena(|arena| {{
+            let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
+            let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
+            if arguments.values.is_empty() {{
+                let output = "
+                    )
+                    .as_bytes(),
+                )
+                .map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .map_err(encoding)?;
+            indented(&give, "            ", output)?;
+            output
+                .write_all(b"            } else {\n")
+                .map_err(encoding)?;
+            indented(&take, "            ", output)?;
+            output.write_all(b"                ").map_err(encoding)?;
+            call_again(borrow, "receiver.clone()", "receiver", output)?;
+            output
+                .write_all(
+                    format!(
+                        "*guard = argument_{stored}; Ok::<(), Error>(()) }})??;
+                Ok(Dynamic::UNIT)
+            }}
+        }})
+        .map_err(runtime_error)
+    }});
+    Ok(__rawr_internal::option::some(Dynamic::from(place)))
+"
+                    )
+                    .as_bytes(),
+                )
+                .map_err(encoding)
         }
         Guard::Mutable => {
             if !signature.inputs().is_empty() {
@@ -8165,7 +8342,7 @@ fn render_take(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
-        ty if is_duration(ty) => "take_primitive",
+        ty if is_duration(ty) || is_facade_value(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
@@ -8210,7 +8387,9 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
-        ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
+        ty if is_duration(ty) || is_facade_value(ty) => {
+            writeln!(output, "    Ok(Dynamic::from({value}))")
+        }
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1).
@@ -8248,6 +8427,19 @@ fn render_give(
             ty: lent,
         } if matches!(**lent, convert::Type::Sequence { .. }) => {
             return render_give(lent, value, output);
+        }
+        // A `&T` given to a script closure: a copy.
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if matches!(
+            **lent,
+            convert::Type::Nominal { .. } | convert::Type::Builtin(_)
+        ) && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            writeln!(output, "    let copied = Clone::clone({value});")
+                .map_err(|_| request::Error::Encoding)?;
+            return render_give(lent, "copied", output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
@@ -8321,6 +8513,12 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
         ty if is_duration(ty) => cast(output, "std::time::Duration"),
+        ty if is_facade_value(ty) => {
+            let rust = concrete_type(ty).ok_or(request::Error::Drift {
+                field: "a facade value's Rust type",
+            })?;
+            cast(output, &rust)
+        }
         ty if is_value(ty) => write!(
             output,
             "Ok::<__rawr_internal::Value, Error>(__rawr_internal::Value::from({value}))"
@@ -8428,7 +8626,7 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
-        ty if is_duration(ty) => {
+        ty if is_duration(ty) || is_facade_value(ty) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
@@ -8542,6 +8740,20 @@ fn render_to_dynamic(
         {
             return render_to_dynamic(lent, value, depth, output);
         }
+        // A `&T` native code gives a script closure, as pane_grid's
+        // `view(pane, &state, ..)` gives `&S`: a copy.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if matches!(**lent, convert::Type::Nominal { .. } | convert::Type::Builtin(_))
+                && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            let copied = format!("copied_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(lent, &copied, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{{ let {copied} = Clone::clone({value}); {converted} }}"
+            )
+        }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime output encoding",
@@ -8555,6 +8767,12 @@ fn render_to_dynamic(
 fn is_future(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
         if *definition == crate::surface::identity::Definition::future())
+}
+
+/// A facade value, as `iced::Length`, which crosses as its Rust value.
+fn is_facade_value(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if FACADE_VALUES.with_borrow(|values| values.contains(definition.as_bytes())))
 }
 
 /// Rust's `std::time::Duration`, which crosses by value.
@@ -8789,6 +9007,15 @@ fn substitute<'a>(
             arguments: Box::default(),
         }));
     }
+    // A script closure fills a callable parameter, which has no Rust type
+    // to name: its input takes the closure (`render_take_callable`).
+    if signature.parameters().iter().any(|parameter| {
+        parameter.index() == *index
+            && parameter.kind() == crate::classify::representability::signature::Kind::Callable
+    }) {
+        static CLOSURE: convert::Type = convert::Type::Unit;
+        return Ok(&CLOSURE);
+    }
     let position = signature
         .parameters()
         .iter()
@@ -8940,6 +9167,34 @@ fn render_container_path(
             .map_err(|_| request::Error::Encoding);
     }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
+    // An impl that fixes some of its type's arguments, as pane_grid's
+    // `Content<'a, Message, Void, W, ..>`: that instance, its own
+    // parameters given their substitutions.
+    if let Some(instance) = signature.instance() {
+        let mut types = partition
+            .container_parameters
+            .iter()
+            .filter(|parameter| {
+                parameter.kind() == crate::classify::representability::signature::Kind::Type
+            })
+            .map(|parameter| parameter.index())
+            .zip(partition.container_types.iter());
+        let substituted =
+            instance_substituted(instance, &mut types).ok_or(request::Error::Drift {
+                field: "an impl's fixed instance names a parameter it does not declare",
+            })?;
+        let instance = concrete_type(&substituted).ok_or(request::Error::Drift {
+            field: "an impl's fixed instance has no Rust name",
+        })?;
+        let instance = if type_position {
+            instance
+        } else {
+            format!("<{instance}>")
+        };
+        return output
+            .write_all(instance.as_bytes())
+            .map_err(|_| request::Error::Encoding);
+    }
     output
         .write_all(path.as_bytes())
         .map_err(|_| request::Error::Encoding)?;
@@ -8952,6 +9207,34 @@ fn render_container_path(
     )
 }
 
+/// `instance` with each parameter given its substitution from `types`, the
+/// impl's parameter indexes with theirs.
+fn instance_substituted<'a>(
+    instance: &convert::Type,
+    types: &mut (impl Iterator<Item = (u32, &'a convert::Type)> + Clone),
+) -> Option<convert::Type> {
+    Some(match instance {
+        convert::Type::Parameter(index) => types
+            .clone()
+            .find(|(parameter, _)| parameter == index)
+            .map(|(_, ty)| ty.clone())?,
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: *definition,
+            arguments: arguments
+                .iter()
+                .map(|argument| instance_substituted(argument, types))
+                .collect::<Option<Box<[_]>>>()?,
+        },
+        convert::Type::Option(element) => {
+            convert::Type::Option(Box::new(instance_substituted(element, types)?))
+        }
+        other => other.clone(),
+    })
+}
+
 thread_local! {
     /// The Rust path of each imported type of the facade plan the runner
     /// being generated declares, by identity: an imported type argument is
@@ -8959,6 +9242,10 @@ thread_local! {
     /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
     static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The facade's own values by the identity a script names them at
+    /// (`Definition::facade`), which cross as their Rust values.
+    static FACADE_VALUES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// The imported types that are Copy, by identity, as the compiler reads
     /// a field of one through a shared borrow.
     static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
@@ -9253,18 +9540,27 @@ struct TypePaths;
 
 impl TypePaths {
     fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
+        view::install(facade);
         TYPE_PATHS.with_borrow_mut(|paths| {
-            paths.clear();
-            for owner in facade
-                .into_iter()
-                .flat_map(crate::surface::facade::Plan::facades)
-            {
-                for ty in owner.types() {
-                    paths
-                        .entry(*ty.identity())
-                        .or_insert_with(|| format!("{}::{}", owner.root(), ty.path()));
+            FACADE_VALUES.with_borrow_mut(|values| {
+                paths.clear();
+                values.clear();
+                for owner in facade
+                    .into_iter()
+                    .flat_map(crate::surface::facade::Plan::facades)
+                {
+                    for ty in owner.types() {
+                        let path = format!("{}::{}", owner.root(), ty.path());
+                        // The facade's own value at this path, as a view's
+                        // builder takes `iced::Length` (D558 tier 2).
+                        let facade =
+                            *crate::surface::identity::Definition::facade(&path).as_bytes();
+                        values.insert(facade);
+                        paths.entry(facade).or_insert_with(|| path.clone());
+                        paths.entry(*ty.identity()).or_insert(path);
+                    }
                 }
-            }
+            });
         });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
@@ -9297,7 +9593,9 @@ impl TypePaths {
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),
                             };
-                            if ty.lifetimes() != 0 {
+                            // An iced view type's value is a recipe, not
+                            // a scope frame's (D558 tier 2).
+                            if ty.lifetimes() != 0 && !ty.view() {
                                 types.entry(*ty.identity()).or_insert(lifetimes);
                             }
                             traits.entry(*ty.identity()).or_insert(lifetimes);
@@ -9324,6 +9622,7 @@ impl Drop for TypePaths {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        view::clear();
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -9397,6 +9696,8 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
             owned: false,
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
+        // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
+        convert::Type::Nominal { .. } | convert::Type::Builtin(_) => concrete_type(ty),
         _ => None,
     }
 }

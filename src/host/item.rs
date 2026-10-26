@@ -68,6 +68,12 @@ pub enum Guard {
     Shared,
     /// Read and stored through `DerefMut`: the call gives a place.
     Mutable,
+    /// An `Option<&T>` lent from the receiver: the call gives a copy of
+    /// the target in `Some`, or `None`.
+    OptionShared,
+    /// An `Option<&mut T>` lent from the receiver: the call gives a place
+    /// in `Some`, or `None`.
+    OptionMutable,
 }
 
 /// A deterministic proof of a host item's complete callable contract.
@@ -747,6 +753,8 @@ impl crate::preview::digest::Write for Fingerprint {
             writer.tag(match guard {
                 Guard::Shared => 0x2561,
                 Guard::Mutable => 0x2562,
+                Guard::OptionShared => 0x2563,
+                Guard::OptionMutable => 0x2564,
             });
         }
         if self.opens {

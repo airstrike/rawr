@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 26;
+const CLASSIFIER_VERSION: u32 = 29;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1025,6 +1025,13 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 // the bridge calls the method on its type.
                 model::Predicate::Bound {
                     ty: model::Type::SelfType(_),
+                    ..
+                } => {}
+                // A bound on an associated type, as iced's `style` has
+                // `where Theme::Class<'a>: From<StyleFn<'a, Theme>>`:
+                // rustc checks it where the bridge calls the method.
+                model::Predicate::Bound {
+                    ty: model::Type::Projection { .. },
                     ..
                 } => {}
                 _ => return Err(representability::reject::Kind::CallableProtocol.into()),
@@ -3505,20 +3512,34 @@ impl<P: api::Phase> Context<'_, P> {
                     )
                 })
                 .collect::<Vec<_>>();
-            if parameters.is_empty() || arguments.len() != parameters.len() {
+            if parameters.is_empty() {
                 return Err(reject::Kind::GenericImplementation.into());
             }
-            for (parameter, argument) in parameters.iter().zip(arguments) {
-                let model::Argument::Type(model::Type::Parameter { owner, index }) = argument
-                else {
-                    return Err(reject::Kind::GenericImplementation.into());
-                };
-                if owner != implementation.id()
-                    || *index != parameter.index()
-                    || !matches!(parameter.kind(), model::ParameterKind::Type { .. })
-                {
-                    return Err(reject::Kind::GenericImplementation.into());
+            // An impl may fix some of its type's arguments, as pane_grid's
+            // `impl<'a, Message, W, ..> Content<'a, Message, Void, W, ..>`
+            // does: its own parameters stand in order among them, and the
+            // bridge reaches the type at that instance.
+            let mut own = parameters.iter();
+            let mut fixed = false;
+            for argument in arguments {
+                match argument {
+                    model::Argument::Type(model::Type::Parameter { owner, index }) => {
+                        let Some(parameter) = own.next() else {
+                            return Err(reject::Kind::GenericImplementation.into());
+                        };
+                        if owner != implementation.id()
+                            || *index != parameter.index()
+                            || !matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                        {
+                            return Err(reject::Kind::GenericImplementation.into());
+                        }
+                    }
+                    model::Argument::Type(_) => fixed = true,
+                    _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
+            }
+            if own.next().is_some() {
+                return Err(reject::Kind::GenericImplementation.into());
             }
             if !implementation.relevance().any(|relevant| relevant == id)
                 || !implementation.retains_associated_owner(definition)
@@ -3547,15 +3568,26 @@ impl<P: api::Phase> Context<'_, P> {
             };
             // An invocation's signature declares each of its parameters, and
             // an argument's `impl Fn(..)` has no name to declare, as in
-            // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`.
-            if item
-                .signature()
-                .parameters()
-                .iter()
-                .any(|parameter| parameter.name().starts_with("impl "))
+            // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`,
+            // unless Rawr makes its closure, as pane_grid's `PaneGrid::new(
+            // &state, impl Fn(Pane, &S, bool) -> Content)`.
+            if item.call().is_none()
+                && item
+                    .signature()
+                    .parameters()
+                    .iter()
+                    .any(|parameter| parameter.name().starts_with("impl "))
             {
                 return Err(reject::Kind::CallableProtocol.into());
             }
+            let item = if fixed {
+                let instance = self
+                    .convert(implementation.self_type())
+                    .map_err(|_| reject::Kind::GenericImplementation)?;
+                item.with_instance(instance)
+            } else {
+                item
+            };
             Ok(Representability::Invocation(callable::Invocation::new(
                 item,
                 container_parameters,
@@ -3838,7 +3870,87 @@ impl<P: api::Phase> Context<'_, P> {
         .with_borrowing(
             lifetime_parameters(generics),
             self.implements_for_any(definition, "Iterator"),
+        )
+        .with_view(
+            lifetime_parameters(generics) != 0 && self.renders(generics),
+            self.implements_iced(definition, "Widget"),
         ))
+    }
+
+    /// An input native code gives a script closure: a value, or a copy of
+    /// what a shared reference names, as pane_grid's `view(pane, &state,
+    /// is_maximized)` gives `&S`.
+    fn convert_closure_input(
+        &self,
+        input: &model::Type,
+    ) -> Option<representability::convert::Type> {
+        if let Ok(input) = self.convert_value(input) {
+            return Some(input);
+        }
+        let model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty,
+            ..
+        } = input
+        else {
+            return None;
+        };
+        let target = self.convert_value(ty).ok()?;
+        matches!(
+            target,
+            representability::convert::Type::Parameter(_)
+                | representability::convert::Type::Nominal { .. }
+        )
+        .then(|| representability::convert::Type::Borrowed {
+            mutable: false,
+            ty: Box::new(target),
+        })
+    }
+
+    /// Whether `output` is an iced view type ([`Self::renders`]).
+    fn view_output(&self, output: &model::Type) -> bool {
+        let model::Type::Definition { id, .. } = output else {
+            return false;
+        };
+        self.graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .is_some_and(|definition| match definition.kind() {
+                model::Kind::Struct { generics, .. } => {
+                    lifetime_parameters(generics) != 0 && self.renders(generics)
+                }
+                _ => false,
+            })
+    }
+
+    /// Whether `generics` bound a type parameter by iced's `Renderer`, as
+    /// an iced widget's do: its lifetime is iced's view lifetime.
+    fn renders(&self, generics: &model::Generics) -> bool {
+        generics.predicates().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                ty: model::Type::Parameter { .. },
+                bound: model::Bound::Trait { trait_id, .. },
+            } if self.iced_trait(trait_id, "Renderer"))
+        })
+    }
+
+    /// Whether `id` is iced's own trait `name`, in `iced_core`.
+    fn iced_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
+        id.unit().crate_name() == "iced_core" && self.definition_name(id) == Some(name)
+    }
+
+    /// Whether iced's trait `name` is implemented for the definition at
+    /// `definition`, at any arguments.
+    fn implements_iced(&self, definition: usize, name: &str) -> bool {
+        let Some(definition) = self.graph.definitions().nth(definition) else {
+            return false;
+        };
+        self.graph.implementations().any(|implementation| {
+            implementation.polarity() == model::Polarity::Positive
+                && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
+                    if self.iced_trait(id, name))
+                && any_arguments(implementation.self_type(), definition.id())
+        })
     }
 
     fn enumeration(
@@ -4022,6 +4134,24 @@ impl<P: api::Phase> Context<'_, P> {
                     owned: false,
                 })
             }
+            // An `Option` of a tuple, as pane_grid's `State::split` gives
+            // `Option<(Pane, Split)>`: Rawr's `Option` of its tuple.
+            model::Type::Definition { id, arguments }
+                if let Some(model::Type::Tuple(members)) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    && members.len() >= 2 =>
+            {
+                let element = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    .ok_or(Error::Cardinality)?;
+                Ok(Type::Option(Box::new(self.convert_value(element)?)))
+            }
             model::Type::Tuple(members) if members.len() >= 2 => {
                 let mut converted = Vec::new();
                 self.retain_array::<Type>(members.len())?;
@@ -4138,6 +4268,11 @@ impl<P: api::Phase> Context<'_, P> {
                 && names_early_lifetime(signature.output())
             {
                 Some(representability::signature::Scope::Opens)
+            } else if self.view_output(signature.output()) {
+                // An iced view type's constructor, as `PaneGrid::new(&state,
+                // view)`: its value is a recipe, which borrows its inputs
+                // again at each lowering (D558 tier 2).
+                None
             } else {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
@@ -4317,7 +4452,7 @@ impl<P: api::Phase> Context<'_, P> {
             let call = call.and_then(|(parameter, inputs, returned)| {
                 let inputs = inputs
                     .iter()
-                    .map(|input| self.convert_value(input).ok())
+                    .map(|input| self.convert_closure_input(input))
                     .collect::<Option<Box<[_]>>>()?;
                 let returned = self.convert_value(&returned).ok()?;
                 Some(callable::Call::new(parameter, inputs, returned))
@@ -5021,6 +5156,53 @@ impl<P: api::Phase> Context<'_, P> {
             ) if lifetime == receiver => Some((&**ty, *mutability == model::Mutability::Mutable)),
             _ => None,
         };
+        // An `Option<&T>` the method lends from its receiver, as pane_grid's
+        // `State::get(&self, pane)` and `get_mut(&mut self, pane)` give:
+        // `Some` of a copy or of a place, or `None` (T012).
+        if signature.guard().is_none()
+            && lent.is_none()
+            && let model::Receiver::Reference {
+                lifetime: receiver @ model::Lifetime::Late { .. },
+                ..
+            } = signature.receiver()
+            && let model::Type::Definition { id, arguments } = signature.output()
+            && let Some(model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            }) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| option_element(definition, arguments))
+            && lifetime == receiver
+        {
+            use representability::convert::Type;
+            let target = match self.convert_value(ty) {
+                Ok(target) => target,
+                Err(Failure::Reject(_)) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            if !matches!(
+                target,
+                Type::Parameter(_) | Type::Nominal { .. } | Type::Builtin(_)
+            ) || matches!(target, Type::Builtin(_) | Type::Nominal { .. } if !self.clones(&target))
+            {
+                return Ok(None);
+            }
+            // A place reached again by calling the method again needs its
+            // inputs again: copies of values that clone.
+            let mutable = *mutability == model::Mutability::Mutable
+                && inputs.iter().all(|input| self.clones(input));
+            return Ok(Some((
+                Type::Option(Box::new(target)),
+                if mutable {
+                    representability::signature::Guard::OptionMutable
+                } else {
+                    representability::signature::Guard::OptionShared
+                },
+            )));
+        }
         let (target, mutable) = match (signature.guard(), lent) {
             (Some(evidence), _) => (evidence.target(), evidence.mutable()),
             (None, Some(lent)) => lent,
@@ -5278,6 +5460,16 @@ fn borrows_receiver(signature: &model::Signature) -> bool {
         && !names_opaque(output)
         && signature.binders().len() == 1
         && !signature.inputs().any(names_late_lifetime)
+        && !lends_option_reference(output, receiver)
+}
+
+/// Whether `output` is an `Option<&'r T>` of the receiver's lifetime `'r`,
+/// as pane_grid's `State::get_mut` gives: a borrow guard's place, not a
+/// frame (T012).
+fn lends_option_reference(output: &model::Type, receiver: &model::Lifetime) -> bool {
+    matches!(output, model::Type::Definition { arguments, .. }
+        if matches!(&arguments[..], [model::Argument::Type(model::Type::Reference { lifetime, .. })]
+            if lifetime == receiver))
 }
 
 /// Whether `ty` holds an opaque, trait object or function pointer type.

@@ -171,6 +171,12 @@ pub struct TypeDefinition {
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// Whether the native type is an iced view type (D558 tier 2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    view: bool,
+    /// Whether iced implements `Widget` for the view type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    widget: bool,
     shape: Shape,
 }
 
@@ -490,6 +496,16 @@ impl Plan {
                 .implementations()
                 .flat_map(crate::classify::ImplementationOutcome::associated)
             {
+                // An impl that fixes some of its type's arguments is
+                // relevant to each type it names: iced's `impl TextEditor<
+                // 'a, PlainText, ..>` is `TextEditor`'s, not `PlainText`'s.
+                if let Representability::Invocation(plan) = associated.representability()
+                    && let Some(representability::convert::Type::Nominal { definition, .. }) =
+                        plan.signature().instance()
+                    && outcome.identity().definition() != Some(*definition)
+                {
+                    continue;
+                }
                 let associated_path = format!("{relative}::{}", associated.name());
                 if let Some(item) = item(&associated_path, associated)? {
                     let mut items = std::mem::take(&mut facade.items).into_vec();
@@ -818,6 +834,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         hash: false,
         lifetimes: 0,
         iterator: false,
+        view: false,
+        widget: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -885,6 +903,8 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 hash: false,
                 lifetimes: 0,
                 iterator: false,
+                view: false,
+                widget: false,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -927,6 +947,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         hash: false,
         lifetimes: 0,
         iterator: false,
+        view: false,
+        widget: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1849,6 +1871,15 @@ impl TypeDefinition {
     pub const fn iterator(&self) -> bool {
         self.iterator
     }
+    /// Return whether the native type is an iced view type (D558 tier 2).
+    pub const fn view(&self) -> bool {
+        self.view
+    }
+    /// Return whether the native type is a view type iced implements
+    /// `Widget` for.
+    pub const fn widget(&self) -> bool {
+        self.widget
+    }
     /// Return the exact nominal shape.
     pub const fn shape(&self) -> &Shape {
         &self.shape
@@ -1999,9 +2030,14 @@ fn type_definition(
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
     let borrowing = match outcome.representability() {
-        Representability::Struct(plan) => (plan.lifetimes(), plan.iterator()),
-        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator()),
-        _ => (0, false),
+        Representability::Struct(plan) => (
+            plan.lifetimes(),
+            plan.iterator(),
+            plan.view(),
+            plan.widget(),
+        ),
+        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), false, false),
+        _ => (0, false, false, false),
     };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
@@ -2072,6 +2108,8 @@ fn type_definition(
         hash: compare[2],
         lifetimes: borrowing.0,
         iterator: borrowing.1,
+        view: borrowing.2,
+        widget: borrowing.3,
         shape,
     }))
 }
@@ -2162,7 +2200,12 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 },
                 _ => return Err(super::Error::ForeignIdentity),
             },
-            signature(plan.signature())?,
+            // A closure the item takes, as `PaneGrid::new(&state, view)`'s,
+            // is the closure's type, as a function item's is.
+            match plan.call() {
+                Some(call) => callable_signature(plan.signature(), call)?,
+                None => signature(plan.signature())?,
+            },
         ),
     };
     Ok(Some(Item {
@@ -2326,7 +2369,9 @@ fn callable_signature(
         bounds,
         inputs: inputs.into_boxed_slice(),
         output: ty(source.output(), all)?,
-        relations: Box::default(),
+        // A literal's argument settles by its other parameters' bounds, as
+        // `on_resize(10, ..)`'s `impl Into<Pixels>` does.
+        relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
     })

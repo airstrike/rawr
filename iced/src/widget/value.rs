@@ -117,6 +117,14 @@ impl Value {
         })
     }
 
+    /// Take a script widget as an Element, as iced converts one with
+    /// `Into<Element>`: an erased widget value, or one of the facade's own
+    /// widgets, such as the `row!` a pane's title bar is made from.
+    pub fn from_widget(value: Dynamic) -> Result<Self, Error> {
+        let actual = value.type_name();
+        super::helpers::into_element(value).map_err(|_| Error { actual })
+    }
+
     pub(crate) const fn witness(&self) -> Option<&rawr::host::runtime::Witness> {
         match &self.provenance {
             Provenance::Witness(witness) => Some(witness),

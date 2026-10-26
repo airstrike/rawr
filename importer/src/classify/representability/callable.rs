@@ -127,6 +127,15 @@ impl Item {
     }
 }
 
+impl Item {
+    /// This item of an impl that fixes some of its type's arguments, at
+    /// that instance.
+    pub(crate) fn with_instance(mut self, instance: super::convert::Type) -> Self {
+        self.signature = self.signature.with_instance(Some(instance));
+        self
+    }
+}
+
 impl Invocation {
     pub(crate) const fn new(item: Item, container_parameters: usize) -> Self {
         Self {
@@ -158,6 +167,12 @@ impl Invocation {
     #[must_use]
     pub const fn predicates(&self) -> &[super::predicate::Bound] {
         self.item.predicates()
+    }
+
+    /// The script closure the item takes, when Rawr makes it.
+    #[must_use]
+    pub const fn call(&self) -> Option<&Call> {
+        self.item.call()
     }
 
     /// Number of leading generic parameters owned by the inherent

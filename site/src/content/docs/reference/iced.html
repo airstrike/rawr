@@ -21,6 +21,16 @@
   <li>A widget of your own can&rsquo;t show a borrowing widget in its overlay, because the overlay keeps its content past the view. The window shows error E0597 at the overlay hook.</li>
   <li>A function that maps a widget&rsquo;s event to a message can&rsquo;t read a borrowed value.</li>
 </ul>
+<h3 id="pane-grid">Pane grids</h3>
+<p><code>pane_grid</code> works as in Rust. iced&rsquo;s own <code>pane_grid</code> example runs under <code>rawr run</code> with only <code>// rawr</code> added.</p>
+<ul>
+  <li><code>pane_grid::State</code> lives in the State. <code>update</code> calls its methods, such as <code>split</code>, <code>close</code>, <code>maximize</code>, <code>restore</code>, <code>drop</code>, <code>resize</code>, <code>adjacent</code> and <code>len</code>. <code>get</code> and <code>get_mut</code> reach a pane&rsquo;s own value. A change made through <code>get_mut</code> stays in the State.</li>
+  <li><code>PaneGrid::new(&amp;self.panes, |id, pane, is_maximized| ..)</code> borrows the State&rsquo;s <code>pane_grid::State</code> for the view. The closure runs once for each pane each time the view runs. It returns a <code>pane_grid::Content</code>.</li>
+  <li><code>Content</code>, <code>TitleBar</code> and <code>Controls</code> take your own widgets, such as a <code>row!</code> or a <code>responsive</code>. Their <code>style</code> takes a style function.</li>
+  <li><code>on_click</code>, <code>on_drag</code> and <code>on_resize</code> take a variant of your <code>Message</code>, as in <code>.on_click(Message::Clicked)</code>. Rawr runs it when iced reports the event.</li>
+  <li>A <code>PaneGrid</code> goes in a view as any widget does, as in <code>container(pane_grid)</code>.</li>
+  <li>A save starts the State again, the panes with it. The window says that <code>pane_grid::State</code> doesn&rsquo;t carry over.</li>
+</ul>
 <h3 id="components">Components</h3>
 <p>A type can implement iced&rsquo;s <code>component::Component</code> trait. Its state lives in the widget tree. Its events reach its own <code>update</code>. <code>component(value)</code> puts it in a view.</p>
 <h3 id="canvas">Custom drawing with <code>canvas</code></h3>
@@ -348,11 +358,11 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
-  <li><code>pane_grid</code>, <code>markdown</code> and <code>grid</code>.</li>
+  <li><code>markdown</code> and <code>grid</code>. <code>markdown::view_with</code> takes a <code>markdown::Viewer</code>, and a marked file can&rsquo;t implement that trait yet.</li>
   <li><code>iced::clipboard</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
   <li><code>std::thread::spawn</code>. <code>tokio::task::spawn_blocking</code> runs blocking work instead, as <a href="#blocking">Blocking work</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. 39 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>clock</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>ferris</code>, <code>geometry</code>, <code>gradient</code>, <code>layout</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>sandpiles</code>, <code>scrollable</code>, <code>sierpinski_triangle</code>, <code>slider</code>, <code>solar_system</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. <code>solar_system</code> is an <code>iced::application::timed</code> app with iced&rsquo;s backend picker. The playground runs it too. <code>gallery</code> runs as a <code>timed</code> app and needs <code>Allocation::handle</code>, which returns a <code>&amp;Handle</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. 40 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>clock</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>ferris</code>, <code>geometry</code>, <code>gradient</code>, <code>layout</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pane_grid</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>sandpiles</code>, <code>scrollable</code>, <code>sierpinski_triangle</code>, <code>slider</code>, <code>solar_system</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. <code>solar_system</code> is an <code>iced::application::timed</code> app with iced&rsquo;s backend picker. The playground runs it too. <code>gallery</code> runs as a <code>timed</code> app and needs <code>Allocation::handle</code>, which returns a <code>&amp;Handle</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 </article>

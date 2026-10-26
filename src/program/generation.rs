@@ -14,6 +14,15 @@ impl fmt::Debug for GenerationId {
 }
 
 impl GenerationId {
+    /// A new identity no program generation has: a host's context that
+    /// makes nothing a message of a running program reaches, as an iced
+    /// view's dry run at its transition does (D558 tier 2).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn detached() -> Self {
+        Self::issue()
+    }
+
     pub(crate) fn issue() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(1);
 

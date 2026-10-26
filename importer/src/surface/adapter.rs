@@ -671,7 +671,7 @@ fn clone_operation(
             mappers: clone_event_mappers(selected)?,
             container_parameters: plan.container_parameters(),
             associated: true,
-            call: None,
+            call: plan.call().cloned(),
         }),
         (
             representability::Representability::FunctionItem(plan),
@@ -697,7 +697,7 @@ fn clone_operation(
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             container_parameters: plan.container_parameters(),
-            call: None,
+            call: plan.call().cloned(),
         }),
         (
             representability::Representability::Constant(plan),
