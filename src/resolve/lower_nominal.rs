@@ -9697,8 +9697,8 @@ struct Parser<'a> {
     reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
     /// The body's borrow facts, solved once it is read (D572, `borrows.rs`).
     flow: std::cell::RefCell<super::borrowck::record::Recorder>,
-    /// The loop about to be read already entered its head (`while`'s
-    /// condition is in it).
+    /// The loop about to be read already entered its head and pushed its
+    /// frame (`while`'s condition is in it, and may jump to it).
     loop_entered: bool,
     /// The hidden local holding the borrows of the `for` loop about to be
     /// read's iterator (`for x in &v`), used at its head each iteration.
@@ -24784,10 +24784,9 @@ impl<'a> Parser<'a> {
             Token::While if self.let_chain_ahead() => {
                 let original = self.bindings.clone();
                 let write_backs = self.write_backs.len();
-                self.flow().loop_enter();
+                self.enter_while(label.clone());
                 let chain = self.parse_chain();
-                self.flow().loop_test();
-                self.loop_entered = true;
+                self.leave_while_condition();
                 let looped = chain.and_then(|(open, close)| {
                     let hit = self.temporary("hit");
                     let mut head = origin::Fragment::plain(format!("{{\nlet {hit} = false;\n"));
@@ -24817,10 +24816,9 @@ impl<'a> Parser<'a> {
                 // A subject that borrows what its call takes opens its frame
                 // in each iteration (D558 tier 1).
                 self.open_frames();
-                self.flow().loop_enter();
+                self.enter_while(label.clone());
                 let parsed = self.parse_let_condition(&scrutinee);
-                self.flow().loop_test();
-                self.loop_entered = true;
+                self.leave_while_condition();
                 let frames = self.close_frames();
                 let (subject, arm, binds, write_back, condition) = parsed?;
                 if frames.iter().any(|frame| !frame.after.is_empty()) {
@@ -24879,10 +24877,9 @@ impl<'a> Parser<'a> {
             Token::While => {
                 self.open_temporaries();
                 self.open_frames();
-                self.flow().loop_enter();
+                self.enter_while(label.clone());
                 let condition = self.parse_head(Self::parse_expr);
-                self.flow().loop_test();
-                self.loop_entered = true;
+                let jumped = self.leave_while_condition();
                 let frames = self.close_frames();
                 let temporaries = self.close_temporaries();
                 let mut condition = condition?;
@@ -24899,6 +24896,21 @@ impl<'a> Parser<'a> {
                     condition.prelude = origin::Fragment::default();
                 }
                 self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
+                if jumped {
+                    // A jump from the condition to the `while` must be inside
+                    // its loop: `loop { if !(condition) { break; } body }`.
+                    let mut head = origin::Fragment::plain("if !");
+                    head.push(condition.rendered_source().surrounded("(", ")"));
+                    head.push_text(" { break; }\n");
+                    return self.parse_loop_body(
+                        origin::Fragment::plain("loop"),
+                        start,
+                        label,
+                        false,
+                        Some((head, origin::Fragment::default())),
+                        None,
+                    );
+                }
                 let mut source = origin::Fragment::plain("while ");
                 source.push(condition.rendered_source());
                 source
@@ -24947,12 +24959,15 @@ impl<'a> Parser<'a> {
                     .is_some_and(|before| before.declaration == binding.declaration)
             })
         };
-        let jump = self.temporary("jump");
         let drop_depth = self
             .loop_drop_depth
             .take()
             .unwrap_or(self.drop_scopes.len());
-        if !std::mem::take(&mut self.loop_entered) {
+        if std::mem::take(&mut self.loop_entered) {
+            // A `while` pushed its frame before its condition.
+            let frame = self.loops.last_mut().expect("the `while` pushed its frame");
+            frame.drop_depth = drop_depth;
+        } else {
             self.flow().loop_enter();
             if let Some(iterator) = self.loop_iterator.take() {
                 self.flow().loop_header_use(iterator);
@@ -24963,18 +24978,8 @@ impl<'a> Parser<'a> {
             if let Some((iterator, element)) = self.loop_element.take() {
                 self.flow().flow(iterator, element);
             }
+            self.push_loop(label, value, drop_depth);
         }
-        let flow_depth = self.flow().loop_depth();
-        self.loops.push(LoopFrame {
-            label,
-            jump,
-            value,
-            ty: None,
-            targeted: false,
-            exits: BTreeSet::new(),
-            drop_depth,
-            flow_depth,
-        });
         let body = self.parse_match_action();
         self.flow().loop_exit();
         let frame = self.loops.pop().expect("the loop pushed its frame");
@@ -25093,6 +25098,46 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, ty, span))
     }
 
+    /// The frame of a loop whose head was just entered.
+    fn push_loop(&mut self, label: Option<ImmutableString>, value: bool, drop_depth: usize) {
+        let jump = self.temporary("jump");
+        let flow_depth = self.flow().loop_depth();
+        self.loops.push(LoopFrame {
+            label,
+            jump,
+            value,
+            ty: None,
+            targeted: false,
+            exits: BTreeSet::new(),
+            drop_depth,
+            flow_depth,
+            condition: None,
+        });
+    }
+
+    /// A `while`'s head: its frame is pushed before its condition, which a
+    /// labeled jump in it may go to, as in Rust.
+    fn enter_while(&mut self, label: Option<ImmutableString>) {
+        self.flow().loop_enter();
+        let drop_depth = self.drop_scopes.len();
+        self.push_loop(label, false, drop_depth);
+        self.loops
+            .last_mut()
+            .expect("the frame just pushed")
+            .condition = Some(false);
+    }
+
+    /// The end of a `while`'s condition: whether a jump in it goes to the
+    /// `while`.
+    fn leave_while_condition(&mut self) -> bool {
+        self.flow().loop_test();
+        self.loop_entered = true;
+        self.loops
+            .last_mut()
+            .and_then(|frame| frame.condition.take())
+            .unwrap_or(false)
+    }
+
     /// `break` or `continue`, with an optional label and `break` value.
     fn parse_jump(&mut self, token: Token, start: Span) -> Result<ParsedExpr, Error> {
         let mut end = start;
@@ -25110,11 +25155,23 @@ impl<'a> Parser<'a> {
                     source: label_span,
                 });
             };
+            if let Some(jumped) = &mut self.loops[target].condition {
+                *jumped = true;
+            }
             target
         } else {
             let Some(target) = self.loops.len().checked_sub(1) else {
                 return Err(self.unsupported("`break` or `continue` outside a loop"));
             };
+            // rustc's E0590.
+            if self.loops[target].condition.is_some() {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "`break` or `continue` with no label in the condition of a \
+                                `while` loop"
+                        .into(),
+                    source: start,
+                });
+            }
             target
         };
         let breaking = token == Token::Break;
@@ -46113,6 +46170,9 @@ struct LoopFrame {
     /// The loop's depth in the recorded control flow, which also counts a
     /// `while` whose condition holds this loop.
     flow_depth: usize,
+    /// While a `while`'s condition is read: whether a labeled jump in it
+    /// goes to this `while`.
+    condition: Option<bool>,
 }
 
 /// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.
