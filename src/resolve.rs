@@ -1,6 +1,7 @@
 //! Promotion of parsed Rawr units into opaque resolved programs.
 
 pub(crate) mod application;
+pub(crate) mod borrowck;
 mod error;
 mod intrinsic;
 pub(crate) mod item;

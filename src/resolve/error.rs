@@ -30,6 +30,9 @@ pub enum Category {
     UnknownVariable,
     /// A local is used after its value was moved out, as rustc's E0382.
     MovedValue,
+    /// An access conflicts with a live borrow, as rustc's borrow checker
+    /// reports it (E0499, E0502, E0503, E0505, E0506, E0597).
+    BorrowConflict,
     /// A nominal constructor has the wrong field or payload shape.
     InvalidConstruction,
     /// A statically known expression type does not match its declaration.
@@ -83,6 +86,7 @@ impl fmt::Display for Category {
             Self::UnknownFunction => formatter.write_str("unknown function"),
             Self::UnknownVariable => formatter.write_str("unknown variable"),
             Self::MovedValue => formatter.write_str("use of moved value"),
+            Self::BorrowConflict => formatter.write_str("borrow conflict"),
             Self::InvalidConstruction => formatter.write_str("invalid construction"),
             Self::TypeMismatch => formatter.write_str("type mismatch"),
             Self::ImmutableBinding => formatter.write_str("immutable binding"),
@@ -213,6 +217,18 @@ pub enum Error {
         /// in previous iteration of loop". `moved` and `reference` are both
         /// the move.
         previous_iteration: bool,
+    },
+    /// An access conflicts with a borrow that is still live, as rustc's
+    /// borrow checker reports it.
+    BorrowConflict {
+        /// rustc's code: E0499, E0502, E0503, E0505, E0506 or E0597.
+        code: &'static str,
+        /// rustc's message.
+        message: ImmutableString,
+        /// The access.
+        access: Span,
+        /// The borrow it conflicts with.
+        borrow: Span,
     },
     /// A struct field or enum variant reference cannot be resolved.
     UnknownMember {
@@ -412,6 +428,7 @@ impl Error {
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
             Self::MovedValue { .. } => Category::MovedValue,
+            Self::BorrowConflict { .. } => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. } => Category::TypeMismatch,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
@@ -442,6 +459,7 @@ impl Error {
             | Self::UnknownFunction { name, .. }
             | Self::UnknownVariable { name, .. }
             | Self::MovedValue { name, .. } => name.as_str(),
+            Self::BorrowConflict { message, .. } => message.as_str(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
@@ -489,6 +507,7 @@ impl Error {
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
+            Self::BorrowConflict { access, .. } => *access,
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. } => *expression,
             Self::ImmutableBinding { mutation, .. } => *mutation,
@@ -529,6 +548,7 @@ impl Error {
                 ..
             } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
+            Self::BorrowConflict { borrow, .. } => Some(*borrow),
             Self::DuplicateMethod {
                 previous_declaration,
                 ..
@@ -672,6 +692,12 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "use of moved value `{name}` at {reference}; it was already moved at {moved}"
             ),
+            Error::BorrowConflict {
+                code,
+                message,
+                access,
+                ..
+            } => write!(formatter, "{message} at {access} ({code})"),
             Error::InvalidConstruction {
                 owner,
                 reason,

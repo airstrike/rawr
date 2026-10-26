@@ -74,6 +74,12 @@ codes!(Resolve;
     (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
     (SCRIPT_NO_FUNCTION, "E0425", "A typed handle names no function of the script, as rustc reports it."),
     (SCRIPT_SIGNATURE, "E0308", "A typed handle's signature differs from the script's, as rustc reports it."),
+    (BORROW_MUTABLE_TWICE, "E0499", "A `&mut` borrow while another is live, as rustc reports it."),
+    (BORROW_SHARED_MUTABLE, "E0502", "A shared and a `&mut` borrow live at once, as rustc reports it."),
+    (BORROW_USE_MUTABLE, "E0503", "A use of a place while a `&mut` borrow of it is live, as rustc reports it."),
+    (BORROW_MOVE, "E0505", "A move out of a place while a borrow of it is live, as rustc reports it."),
+    (BORROW_ASSIGN, "E0506", "An assignment to a place while a borrow of it is live, as rustc reports it."),
+    (BORROW_LIFETIME, "E0597", "A local that ends while a borrow of it is live, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
     (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
@@ -155,3 +161,15 @@ codes!(Environment;
     (ENVIRONMENT_PACKAGE_MANIFEST, "RAWR-ENVIRONMENT-PACKAGE-MANIFEST", "Invalid Rawr package manifest."),
     (ENVIRONMENT_PACKAGE_RESOURCE, "RAWR-ENVIRONMENT-PACKAGE-RESOURCE", "Unreadable Rawr package resource."),
 );
+
+/// The code of a borrow error with rustc's code `rustc`.
+pub(crate) fn borrow(rustc: &str) -> Code {
+    match rustc {
+        "E0499" => BORROW_MUTABLE_TWICE,
+        "E0502" => BORROW_SHARED_MUTABLE,
+        "E0503" => BORROW_USE_MUTABLE,
+        "E0505" => BORROW_MOVE,
+        "E0506" => BORROW_ASSIGN,
+        _ => BORROW_LIFETIME,
+    }
+}
