@@ -1149,12 +1149,28 @@ impl<'a> Resolver<'a> {
                         self.resolve_any_path(context, &path, name.span, &mut active)?
                     }
                 };
-                // An item of a `.rs` module keeps its crate spelling.
+                // An item of a `.rs` module keeps its crate spelling. A Rust
+                // type another module of this crate imported, named through
+                // that import (`use crate::Preset;` after the root's `use
+                // preset::Preset;`), keeps the type's own spelling, so its
+                // members are the ones the root's name reaches.
+                let reexported = match &target {
+                    Target::Type(type_ref::Target::Host { definition, .. })
+                        if definition.identity().imported().is_some()
+                            && matches!(
+                                path.first().map(ImmutableString::as_str),
+                                Some("crate" | "super" | "self")
+                            ) =>
+                    {
+                        Some(definition.path())
+                    }
+                    _ => None,
+                };
                 let qualified = super::std_reexport(
-                    &self
-                        .rust_spelling(context, &path)
-                        .unwrap_or_else(|| path.to_vec())
-                        .join("::"),
+                    &self.rust_spelling(context, &path).map_or_else(
+                        || reexported.unwrap_or_else(|| path.join("::")),
+                        |spelling| spelling.join("::"),
+                    ),
                     self.host,
                 );
                 let import = match target {
