@@ -70,6 +70,17 @@ println!("{}", other.len()); // 3</code></pre>
 println!("{:?}", evens(7).collect::&lt;Vec&lt;_&gt;&gt;());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-impl-iter" data-out="out-impl-iter" aria-label="Run impl-iter.rs" hidden></button><b>rawr run impl-iter.rs</b><span id="out-impl-iter" aria-live="polite">[0, 2, 4, 6]</span></div>
 </div>
+<p><code>Box&lt;dyn Iterator&lt;Item = T&gt;&gt;</code> works as a value, a return type and a struct field. It takes the usual adapters, <code>next</code> and <code>for</code>.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="dyn-iter.rs" id="src-dyn-iter">fn pick(up: bool, v: &amp;[i64]) -&gt; Box&lt;dyn Iterator&lt;Item = i64&gt; + '_&gt; {
+    if up { Box::new(v.iter().copied()) } else { Box::new(v.iter().rev().copied()) }
+}
+
+let v = vec![1, 2, 3];
+let mut down = pick(false, &amp;v);
+println!("{:?} {:?}", down.next(), pick(true, &amp;v).map(|x| x * 10).collect::&lt;Vec&lt;_&gt;&gt;());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-dyn-iter" data-out="out-dyn-iter" aria-label="Run dyn-iter.rs" hidden></button><b>rawr run dyn-iter.rs</b><span id="out-dyn-iter" aria-live="polite">Some(3) [10, 20, 30]</span></div>
+</div>
 <h2 id="fn-pointers">Function pointers</h2>
 <div class="block">
   <pre><code data-lang="rust" data-run="fn-pointer.rs" id="src-fn-pointer">fn double(x: i64) -&gt; i64 {

@@ -23357,7 +23357,13 @@ impl<'a> Parser<'a> {
         )? {
             return Ok(looped);
         }
-        let lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // A `Box<dyn Iterator>` is its iterator at runtime.
+        if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
+            && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
+        {
+            lhs.ty = iterator;
+        }
         let operator = match self.peek() {
             Token::ExclusiveRange => "..",
             Token::InclusiveRange => "..=",
@@ -38737,6 +38743,23 @@ impl<'a> Parser<'a> {
                 self.next();
             }
             self.expect_close_angle("'>' after associated type bindings")?;
+        }
+        // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
+        // Iterator<Item = T>` is.
+        if matches!(
+            trait_name,
+            "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+        ) && !self.models.traits.contains_key(trait_name)
+        {
+            return match (&positional[..], &mut bindings[..]) {
+                ([], [(name, item)]) if name.as_str() == "Item" => {
+                    Ok(Ty::Iter(Box::new(std::mem::replace(item, Ty::Unknown))))
+                }
+                _ => Err(Error::UnsupportedNominalSyntax {
+                    construct: format!("`dyn {trait_name}` without its `<Item = T>`").into(),
+                    source: span,
+                }),
+            };
         }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {

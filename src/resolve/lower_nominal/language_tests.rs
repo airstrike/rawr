@@ -9998,3 +9998,34 @@ main();
     );
     assert!(error.contains("holds a `Cell` or `RefCell`"), "{error}");
 }
+
+/// `Box<dyn Iterator<Item = T>>` is Rawr's iterator of `T`, as `impl
+/// Iterator` is: a value, a return type and a struct field, with adapters,
+/// `next` on a local and on a field, and `for`.
+#[test]
+fn language_a_boxed_dyn_iterator_is_an_iterator() {
+    assert_eq!(
+        printed(
+            r#"
+fn evens(n: i32) -> Box<dyn Iterator<Item = i32>> {
+    Box::new((0..n).filter(|x| x % 2 == 0))
+}
+struct Wrap { inner: Box<dyn Iterator<Item = i32>> }
+impl Wrap {
+    fn pull(&mut self) -> Option<i32> { self.inner.next() }
+}
+fn main() {
+    let total: i32 = evens(10).map(|x| x * 10).sum();
+    println!("{:?} {total}", evens(7).collect::<Vec<_>>());
+    let mut it: Box<dyn Iterator<Item = i32>> = Box::new(vec![5, 6, 7].into_iter());
+    println!("{:?}", it.next());
+    for x in it { println!("rest {x}"); }
+    let mut w = Wrap { inner: Box::new(vec![1, 2].into_iter().map(|x| x + 1)) };
+    println!("{:?} {:?} {:?}", w.pull(), w.pull(), w.pull());
+}
+main();
+"#
+        ),
+        "[0, 2, 4, 6] 200\nSome(5)\nrest 6\nrest 7\nSome(2) Some(3) None\n"
+    );
+}

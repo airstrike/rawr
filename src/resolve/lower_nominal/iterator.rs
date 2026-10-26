@@ -1522,6 +1522,31 @@ impl Parser<'_> {
                                 expression,
                             ));
                         }
+                        // `self.items.next()` on a field, an element or a
+                        // nested place holding a `Box<dyn Iterator>`: its
+                        // first item, taken from the array the place holds.
+                        if matches!(
+                            &value.lvalue,
+                            Some(Lvalue::Field(_) | Lvalue::Nested(_) | Lvalue::Place { .. })
+                        ) && matches!(self.inference.resolve(&value.ty), Ty::Iter(_))
+                        {
+                            let shifted = self.mutation_call(&value, "shift", Vec::new())?;
+                            let mut source = origin::Fragment::plain("if ");
+                            source.push(value.rendered_source().surrounded("(", ")"));
+                            source.push_text(".len() == 0 { ");
+                            let empty = none(self);
+                            source.push(empty);
+                            source.push_text(" } else { ");
+                            let first = self.prelude_op(PreludeOp::Some, [shifted]);
+                            source.push(first);
+                            source.push_text(" }");
+                            let ty = Ty::Option(Box::new(item));
+                            return Ok(self.operator_expr(
+                                source.surrounded("(", ")"),
+                                ty,
+                                expression,
+                            ));
+                        }
                         sink.push_text(format!("{found} = "));
                         let value = some(self, &x);
                         sink.push(value);
