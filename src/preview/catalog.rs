@@ -256,7 +256,7 @@ mod top_level_tests {
     fn retained_ast_preserves_statements_without_evaluating_them() {
         let engine = crate::Engine::new();
         let executable = engine
-            .compile_executable("fn answer() { 42 } throw \"top-level sentinel\";")
+            .compile_executable("fn answer() -> i64 { 42 } panic!(\"top-level sentinel\");")
             .unwrap();
         let ordinary = executable.ast().clone();
         let catalog = super::Catalog::finish(
