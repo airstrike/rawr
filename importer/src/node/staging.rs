@@ -70,6 +70,11 @@ impl<K: Value> Owned<K> {
             current: matches!(self, Self::Current(_)),
         }
     }
+
+    /// The action that produced this value and the digest of its content.
+    pub(crate) fn identity(&self) -> (super::ActionKey, super::Digest) {
+        (self.action(), self.content())
+    }
 }
 
 impl<K: Value> Edge for Owned<K> {

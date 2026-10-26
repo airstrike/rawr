@@ -162,6 +162,26 @@ impl Graph {
     }
 }
 
+impl Graph {
+    /// The method names the Rawr source calls (`value.name(…)`), found by
+    /// the same syntactic pass as [`Self::rust_demand_seed`], sorted and
+    /// deduplicated. When resolution misses a member of an imported type,
+    /// these are demanded on that type at once, so a builder chain costs one
+    /// more extraction rather than one for each method it calls.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_method_names(&self) -> Vec<Box<str>> {
+        let mut names = self
+            .sources()
+            .iter()
+            .flat_map(|source| seed::methods(source.text()).into_iter().map(Box::from))
+            .collect::<Vec<Box<str>>>();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+}
+
 /// A script path (`crate::model::Thing`, `super::model::Thing`, or
 /// `model::Thing` from the module declaring `model`) that lands in a `.rs`
 /// module, spelled through the app's crate name (`app::model::Thing`).
@@ -465,6 +485,8 @@ mod seed {
         Close,
         Comma,
         End,
+        Dot,
+        Call,
         Other,
     }
 
@@ -539,6 +561,14 @@ mod seed {
                 }
                 b';' => {
                     tokens.push(Token::End);
+                    index += 1;
+                }
+                b'.' => {
+                    tokens.push(Token::Dot);
+                    index += 1;
+                }
+                b'(' => {
+                    tokens.push(Token::Call);
                     index += 1;
                 }
                 _ if byte == b'_' || byte.is_ascii_alphabetic() => {
@@ -679,8 +709,30 @@ mod seed {
         paths
     }
 
+    /// Every method the text calls by name (`.name(` or `.name::<`).
+    pub(super) fn methods(text: &str) -> Vec<&str> {
+        tokens(text)
+            .windows(3)
+            .filter_map(|window| match window {
+                [Token::Dot, Token::Ident(name), Token::Call | Token::Path] => Some(*name),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn seed_names_the_methods_a_chain_calls() {
+            let text =
+                "fn app() { rect().width(Size::fill()).on_press(move |_| *count.write() += 1)\n\
+                .child(format!(\"x.y(\", n.read())); v.iter().collect::<Vec<_>>(); s.len }\n";
+            assert_eq!(
+                super::methods(text),
+                ["width", "on_press", "write", "child", "read", "iter", "collect"]
+            );
+        }
+
         fn joined(text: &str) -> Vec<String> {
             let mut paths = super::paths(text)
                 .into_iter()

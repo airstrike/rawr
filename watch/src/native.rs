@@ -1,9 +1,10 @@
 //! Watcher-local invalidation history; never native freshness or live authority.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// One watcher's native invalidation watermark captured before full validation.
 /// A successfully admitted owner may retain it; capture alone grants no reuse.
@@ -19,6 +20,9 @@ pub struct Baseline {
 struct Counters {
     revision: AtomicU64,
     rescans: AtomicU64,
+    /// Each source input's identity as [`History::poll`] last saw it, and
+    /// whether that sighting was a change it delivered.
+    sources: Mutex<BTreeMap<PathBuf, (Option<Identity>, bool)>>,
 }
 
 #[derive(Clone, Default)]
@@ -59,6 +63,61 @@ impl History {
     pub(super) fn rescan(&self) {
         self.0.rescans.fetch_add(1, Ordering::AcqRel);
     }
+
+    /// Stat `paths` and return those whose identity changed since the last
+    /// poll. A path seen the first time is only recorded.
+    pub(super) fn poll(&self, paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+        let mut sources = self
+            .0
+            .sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut changed = Vec::new();
+        for path in paths {
+            let now = identity(&path);
+            let delivered = match sources.get(&path) {
+                Some((seen, delivered)) if *seen == now => *delivered,
+                Some(_) => {
+                    changed.push(path.clone());
+                    false
+                }
+                None => false,
+            };
+            sources.insert(path, (now, delivered));
+        }
+        changed
+    }
+
+    /// Mark the changes [`Self::poll`] returned as delivered.
+    pub(super) fn deliver(&self, paths: &[PathBuf]) {
+        let mut sources = self
+            .0
+            .sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for path in paths {
+            if let Some((_, delivered)) = sources.get_mut(path) {
+                *delivered = true;
+            }
+        }
+    }
+
+    /// Whether an event on `paths` reports only writes a poll already
+    /// delivered: each path a poll knows still has the identity it delivered.
+    /// A platform stream that lags behind the poll reports them again.
+    pub(super) fn delivered(&self, paths: &[PathBuf]) -> bool {
+        let sources = self
+            .0
+            .sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut known = paths
+            .iter()
+            .filter_map(|path| Some((path, sources.get(path)?)))
+            .peekable();
+        known.peek().is_some()
+            && known.all(|(path, (seen, delivered))| *delivered && *seen == identity(path))
+    }
 }
 
 /// Filesystem identity of every native input at baseline capture. Final
@@ -71,7 +130,7 @@ pub(super) struct Stamp {
     entries: Vec<(PathBuf, Option<Identity>)>,
 }
 
-type Identity = [i64; 8];
+pub(super) type Identity = [i64; 8];
 
 impl Stamp {
     pub(super) fn capture(paths: Box<[PathBuf]>, trees: Box<[PathBuf]>) -> Self {
@@ -100,7 +159,7 @@ fn entries(paths: &[PathBuf], trees: &[PathBuf]) -> Vec<(PathBuf, Option<Identit
 }
 
 #[cfg(unix)]
-fn identity(path: &Path) -> Option<Identity> {
+pub(super) fn identity(path: &Path) -> Option<Identity> {
     use std::os::unix::fs::MetadataExt as _;
     let metadata = fs::symlink_metadata(path).ok()?;
     #[allow(clippy::cast_possible_wrap)]
@@ -117,7 +176,7 @@ fn identity(path: &Path) -> Option<Identity> {
 }
 
 #[cfg(not(unix))]
-fn identity(_: &Path) -> Option<Identity> {
+pub(super) fn identity(_: &Path) -> Option<Identity> {
     None
 }
 
@@ -148,6 +207,7 @@ mod tests {
         let history = History(Arc::new(Counters {
             revision: AtomicU64::new(u64::MAX - 1),
             rescans: AtomicU64::new(0),
+            ..Counters::default()
         }));
         let before = history.capture(Stamp::default());
         history.invalidate();
@@ -155,6 +215,46 @@ mod tests {
         history.invalidate();
         assert!(!history.unchanged(&before));
         assert!(!history.unchanged(&exhausted));
+    }
+
+    #[test]
+    fn a_poll_delivers_each_write_once_and_a_late_event_for_it_is_stale() {
+        let root = std::env::temp_dir().join(format!("rawr-watch-poll-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("main.rs");
+        fs::write(&source, "fn main() {}\n").unwrap();
+        let history = History::default();
+        let paths = [source.clone()];
+
+        assert!(
+            history.poll(paths.clone()).is_empty(),
+            "a first sighting is recorded"
+        );
+        assert!(!history.delivered(&paths), "nothing was delivered yet");
+
+        fs::write(&source, "fn main() { 1; }\n").unwrap();
+        assert_eq!(history.poll(paths.clone()), paths);
+        assert!(
+            !history.delivered(&paths),
+            "delivery is marked after the event"
+        );
+        history.deliver(&paths);
+        assert!(
+            history.delivered(&paths),
+            "the stream's late event is stale"
+        );
+        assert!(history.poll(paths.clone()).is_empty());
+        assert!(
+            !history.delivered(&[root.join("other.rs")]),
+            "an unknown path is news"
+        );
+
+        fs::write(&source, "fn main() { 2; }\n").unwrap();
+        assert!(
+            !history.delivered(&paths),
+            "a newer write is news to the stream"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

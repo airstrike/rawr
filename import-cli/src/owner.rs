@@ -177,6 +177,8 @@ fn session(
     program: Option<&rawr_import::process::Arguments>,
 ) -> Result<Ended, diagnostic::Report> {
     same_build(target)?;
+    // Each save that changes Rawr source rebuilds the same API graph.
+    rawr_import::api::keep_graphs();
     // What the program starts from, read before it is prepared: a save
     // restarts it only when this changed.
     let mut started_from = program.and_then(|_| contents(target));
@@ -237,6 +239,7 @@ fn session(
             Err(error) => return Err(framework(error, source.clone())),
         }
 
+        adapter.poll();
         let now = Instant::now();
         if now >= refresh_at {
             refresh_at = now + REFRESH_POLL;

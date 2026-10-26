@@ -257,6 +257,17 @@ impl Read<'_> {
             })
     }
 
+    /// Return every exact input path across current and staged publications.
+    #[must_use]
+    pub fn paths(&self) -> Box<[std::path::PathBuf]> {
+        std::iter::once(&self.0.current)
+            .chain(self.0.staged.iter().map(|entry| &entry.inputs))
+            .flat_map(|inputs| inputs.paths().iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Return exact input parent paths across current and staged publications.
     /// Parents may not exist yet; native transports choose existing ancestors
     /// when registering or rearming their watches, rather than freezing them
