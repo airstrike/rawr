@@ -186,6 +186,42 @@ fn a_program_s_own_update_is_called_where_the_trait_is_not_imported() {
     assert!(error.to_string().contains("argument"), "{error}");
 }
 
+/// game_of_life's wheel: `WheelScrolled { delta }`, `match *delta` with
+/// `Lines { y, .. } | Pixels { y, .. }`, and `Size::UNIT`.
+#[test]
+fn a_canvas_program_reads_the_wheel_s_delta() {
+    let source = DOTS.replace(
+        "            _ => Some(Action::request_redraw()),",
+        "            Event::Mouse(mouse::Event::WheelScrolled { delta }) => match *delta {\n\
+                         mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {\n\
+                             let unit = iced::Size::UNIT;\n\
+                             Some(Action::publish(Message::Add(Point::new(unit.width * y, unit.height))))\n\
+                         }\n\
+                     },\n\
+                     _ => Some(Action::request_redraw()),",
+    );
+    assert!(source.contains("WheelScrolled { delta }"), "{source}");
+    let mut adapter = boot(&source);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.point_at((40.0, 120.0));
+    simulator.simulate([iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+        delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: -3.0 },
+    })]);
+    let messages = simulator.into_messages().collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1, "the wheel publishes one Message");
+    for message in messages {
+        adapter.update(message).unwrap();
+    }
+    adapter.refresh_view().unwrap();
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.find("1 dots").unwrap();
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
+}
+
 /// The program as iced's own canvas examples write it: generic over the
 /// Message, with only `draw`, and `canvas(self as &Self)`'s `&self`.
 const SQUARE: &str = r#"

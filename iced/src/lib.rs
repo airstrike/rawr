@@ -530,6 +530,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::window::Event>("window::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::mouse::Event>("mouse::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::mouse::Button>("mouse::Button", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::mouse::ScrollDelta>(
+        "mouse::ScrollDelta",
+        &[],
+        DEBUG_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::touch::Event>("touch::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::touch::Finger>(
         "touch::Finger",
@@ -3906,6 +3911,12 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "Point::ORIGIN",
         ty("Point")?,
     )?)?;
+    for name in ["ZERO", "UNIT", "INFINITE"] {
+        builder.item(item::Definition::associated_value(
+            format!("Size::{name}"),
+            ty("Size")?,
+        )?)?;
+    }
     builder.item(item::Definition::associated_function(
         "mouse::Interaction::default",
         signature(Vec::new(), ty("mouse::Interaction")?),
@@ -4183,6 +4194,23 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         "mouse::Event::position".into(),
         type_ref::Type::registered("Point")?,
     )?;
+    // `WheelScrolled { delta }` and `ScrollDelta::Lines { x, y }` or
+    // `Pixels { x, y }` in a pattern.
+    reader(
+        builder,
+        "mouse::Event::delta".into(),
+        type_ref::Type::registered("mouse::ScrollDelta")?,
+    )?;
+    for variant in ["Lines", "Pixels"] {
+        reader(builder, format!("mouse::ScrollDelta::{variant}"), bool_())?;
+    }
+    for field in ["x", "y"] {
+        reader(
+            builder,
+            format!("mouse::ScrollDelta::{field}"),
+            type_ref::Type::builtin(type_ref::Builtin::F32),
+        )?;
+    }
     for name in ["Left", "Right", "Middle", "Back", "Forward"] {
         builder.item(item::Definition::associated_value(
             format!("mouse::Button::{name}"),

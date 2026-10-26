@@ -9411,6 +9411,10 @@ type ClosureOutput = (Rc<HostTyProof>, usize);
 /// A host callable parameter's input types, when known, and its output.
 type ClosureHint = (Option<Box<[Ty]>>, Option<ClosureOutput>);
 
+/// A facade pattern met below a script pattern: the hidden name its value
+/// is bound to, the pattern, the value's type and the binding mode.
+type HostCheck = (ImmutableString, PatternSyntax, Ty, Option<bool>);
+
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
     input: Peekable<IntoIter<(Token, Position)>>,
@@ -9578,8 +9582,13 @@ struct Parser<'a> {
     slice_arity: std::cell::Cell<usize>,
     /// Patterns on facade values met below a script pattern: the hidden
     /// name the value is bound to, the pattern and the value's type. The
-    /// pattern's site lowers them to tests and bindings.
-    host_checks: std::cell::RefCell<Vec<(ImmutableString, PatternSyntax, Ty)>>,
+    /// pattern's site lowers them to tests and bindings. Each keeps the
+    /// binding mode it was met in: `Some(mutable)` below a reference.
+    host_checks: std::cell::RefCell<Vec<HostCheck>>,
+    /// The binding mode of the facade pattern being lowered: its bindings
+    /// are references (`Some(mutable)`) when it matches through one, as
+    /// rustc's default binding mode makes them.
+    host_binding_mode: std::cell::Cell<Option<bool>>,
     /// A host call's one signature, whose closure arguments take their
     /// parameter types from the arguments before them, as Rust infers
     /// `pick_list(selected, options, |x| x.to_string())`'s `x`.
@@ -9843,6 +9852,7 @@ impl<'a> Parser<'a> {
             binding_mode: std::cell::Cell::new(None),
             slice_arity: std::cell::Cell::new(0),
             host_checks: std::cell::RefCell::new(Vec::new()),
+            host_binding_mode: std::cell::Cell::new(None),
             deferred_hints: None,
             pending_bounds: Vec::new(),
             generic_traits: BTreeMap::new(),
@@ -22198,7 +22208,12 @@ impl<'a> Parser<'a> {
         {
             let mut checks = self.host_checks.borrow_mut();
             let name: ImmutableString = format!("__rawr_host_{}", checks.len()).into();
-            checks.push((name.clone(), syntax.clone(), expected.clone()));
+            checks.push((
+                name.clone(),
+                syntax.clone(),
+                expected.clone(),
+                self.binding_mode.get(),
+            ));
             drop(checks);
             binding_declarations.push(PatternBinding {
                 name: name.clone(),
@@ -25082,13 +25097,16 @@ impl<'a> Parser<'a> {
     fn take_host_checks(&mut self) -> Result<HostPattern, Error> {
         let checks = std::mem::take(&mut *self.host_checks.borrow_mut());
         let mut pattern = HostPattern::default();
-        for (name, syntax, ty) in checks {
-            self.host_pattern(
+        for (name, syntax, ty, mode) in checks {
+            let outer = self.host_binding_mode.replace(mode);
+            let lowered = self.host_pattern(
                 &syntax,
                 origin::Fragment::plain(name.as_str()),
                 &ty,
                 &mut pattern,
-            )?;
+            );
+            self.host_binding_mode.set(outer);
+            lowered?;
         }
         Ok(pattern)
     }
@@ -25142,9 +25160,36 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         out: &mut HostPattern,
     ) -> Result<(), Error> {
-        let ty = match self.inference.resolve(ty) {
-            Ty::Reference { target, .. } => self.inference.resolve(&target),
-            ty => ty,
+        // Through `&T` a binding is a reference, Rust's default binding mode;
+        // a `&` pattern takes the value itself.
+        let (ty, through) = match self.inference.resolve(ty) {
+            Ty::Reference { target, mutable } => (self.inference.resolve(&target), Some(mutable)),
+            ty => (ty, None),
+        };
+        let outer = self.host_binding_mode.get();
+        let mode = match syntax {
+            PatternSyntax::Reference { .. } if through.is_some() => None,
+            _ => outer.or(through),
+        };
+        self.host_binding_mode.set(mode);
+        let lowered = self.host_pattern_in_mode(syntax, value, ty, out);
+        self.host_binding_mode.set(outer);
+        lowered
+    }
+
+    fn host_pattern_in_mode(
+        &mut self,
+        syntax: &PatternSyntax,
+        value: origin::Fragment,
+        ty: Ty,
+        out: &mut HostPattern,
+    ) -> Result<(), Error> {
+        let bound = |ty: &Ty, mode: Option<bool>| match mode {
+            Some(mutable) => Ty::Reference {
+                mutable,
+                target: Box::new(ty.clone()),
+            },
+            None => ty.clone(),
         };
         match syntax {
             PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. } => Ok(()),
@@ -25158,7 +25203,7 @@ impl<'a> Parser<'a> {
                     PatternBinding {
                         name: name.clone(),
                         span: *span,
-                        ty,
+                        ty: bound(&ty, self.host_binding_mode.get()),
                         mutable: *mutable,
                     },
                     value,
@@ -25188,7 +25233,7 @@ impl<'a> Parser<'a> {
                     PatternBinding {
                         name: name.clone(),
                         span: *name_span,
-                        ty: ty.clone(),
+                        ty: bound(&ty, self.host_binding_mode.get()),
                         mutable: false,
                     },
                     value.clone(),
@@ -25694,6 +25739,15 @@ impl<'a> Parser<'a> {
             unreachable!("host matches are selected for facade types");
         };
         let owner_path = proof.definition.path();
+        // A match through `&T` binds references, as rustc's default binding
+        // mode does.
+        let written = match self.inference.resolve(&subject.ty) {
+            Ty::Reference { mutable, .. } => Ty::Reference {
+                mutable,
+                target: Box::new(subject_ty.clone()),
+            },
+            _ => subject_ty.clone(),
+        };
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let original_bindings = self.bindings.clone();
@@ -25707,7 +25761,7 @@ impl<'a> Parser<'a> {
             self.host_pattern(
                 &syntax,
                 origin::Fragment::plain(temporary.as_str()),
-                &subject_ty,
+                &written,
                 &mut compiled,
             )?;
             self.bind_host_pattern(&compiled);
