@@ -9678,6 +9678,9 @@ struct Parser<'a> {
     loop_iterator: Option<super::borrowck::Local>,
     /// That iterator and the loop's element, which takes what it holds.
     loop_element: Option<(super::borrowck::Local, super::borrowck::Local)>,
+    /// What each call keeps of its inputs, by where its `)` is, for its
+    /// receiver's method call to read once its value is made.
+    call_summaries: BTreeMap<Position, super::borrowck::signature::Summary>,
     /// The local whose place a `let` pattern with `ref mut` destructures.
     place_root: Option<ImmutableString>,
     /// The expected type of each argument of the call being parsed.
@@ -9983,6 +9986,7 @@ impl<'a> Parser<'a> {
             loop_entered: false,
             loop_iterator: None,
             loop_element: None,
+            call_summaries: BTreeMap::new(),
             place_root: None,
             argument_hints: Vec::new(),
             pending_arguments: None,
@@ -17203,6 +17207,7 @@ impl<'a> Parser<'a> {
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
+        let summary = self.host_summary(&item, &self.inference.resolve(&ty), arguments.len());
         let opens = item.opens();
         let imported = item.imported_identity().is_some();
         let helper = self.push_intrinsic(
@@ -17233,6 +17238,8 @@ impl<'a> Parser<'a> {
             evaluation,
         }
         .retain_origin();
+        let kept = self.inference.resolve(&value.ty);
+        self.kept_by_call(call, &kept, None, &summary);
         self.scoped_call(value, opens, &places)
     }
 
@@ -19023,6 +19030,8 @@ impl<'a> Parser<'a> {
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
+        let summary = self.host_summary(&item, &self.inference.resolve(&ty), arguments.len());
+        self.note_call(call.end(), summary);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
         let guard = item.guard();
         let opens = item.opens();
@@ -28601,6 +28610,12 @@ impl<'a> Parser<'a> {
         source.push_text(format!(";\n{receiver}.{}(", method_name(definition.id())));
         source.push(origin::Fragment::join(arguments, ", "));
         let ty = if symbol.ends_with('=') {
+            // `a += b` through a crate's `AddAssign` borrows `a` before `b`
+            // is made, which these facts do not record yet.
+            self.flow().unmodeled(
+                "a compound assignment through a crate's operator impl",
+                expression,
+            );
             source.push_text(format!(");\n{receiver}\n}})"));
             lhs_ty
         } else {
@@ -30900,7 +30915,8 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("`&mut` of a value that is not a place"));
                 }
                 let whole = span(start, operand.span.end());
-                self.flow().borrow(operand.span.start(), whole, true);
+                let inner = self.may_hold_borrow(&operand.ty);
+                self.flow().borrow(operand.span.start(), whole, true, inner);
                 self.flow().alias(operand.span.start(), start);
                 operand.ty = Ty::Reference {
                     mutable: true,
@@ -30910,9 +30926,19 @@ impl<'a> Parser<'a> {
                 return Ok(operand.retain_origin());
             }
             let mut operand = self.parse_operand()?;
+            let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
-                let whole = span(start, operand.span.end());
-                self.flow().borrow(operand.span.start(), whole, false);
+                let inner = self.may_hold_borrow(&operand.ty);
+                self.flow()
+                    .borrow(operand.span.start(), whole, false, inner);
+            } else if self.may_hold_borrow(&operand.ty) {
+                // `&v.first()`: a reference to a value made here holds
+                // what the value holds.
+                self.flow().same_origins(whole, operand.span);
+            } else {
+                // `&1`, `&v.len()`: a temporary of the statement, or a
+                // constant promoted to `'static`, borrowing nothing else.
+                self.flow().set_origins(whole, Vec::new());
             }
             self.hold_temporary(&mut operand)?;
             operand.ty = Ty::Reference {
@@ -31130,16 +31156,26 @@ impl<'a> Parser<'a> {
     fn parse_postfix_of(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
         // `b.clone()` on a `Box<T>` clones the box: the type to give back.
         let mut rebox: Option<Ty> = None;
-
+        // The method call the last step made, whose value is `value` now.
+        let mut called: Option<(borrows::CallReceiver, ImmutableString)> = None;
+        // Whether `value` is a method call's value, which is no place of a
+        // local's even where the lowering keeps it as one (`v.last_mut()`).
         loop {
             if let Some(boxed) = rebox.take() {
                 value.ty = boxed;
             }
+            let mut from_call = false;
+            if let Some((receiver, member)) = called.take() {
+                self.finish_method_call(&receiver, &member, &value);
+                from_call = true;
+            }
             // The second field of `t.0.1`, which reads as one number.
             let pending = self.pending_member.take();
             if pending.is_none() && matches!(self.peek(), Token::LeftBracket) {
+                let base = (value.span, value.ty.clone());
                 value = self.parse_index(value)?;
                 self.flow().index_end(value.span.start());
+                self.part_of((base.0, &base.1), value.span, &value.ty);
                 continue;
             }
             // `make()(x)`, `(self.f)(x)`: a call of a function value.
@@ -31210,6 +31246,7 @@ impl<'a> Parser<'a> {
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 self.call_on_place(&value);
+                called = Some((self.call_receiver(&value, from_call), member.clone()));
             } else {
                 self.project_place(&value, super::borrowck::Projection::Field(member.clone()));
             }
@@ -31736,6 +31773,11 @@ impl<'a> Parser<'a> {
                     )),
                     _ => None,
                 };
+                self.part_of(
+                    (value.span, &value.ty),
+                    span(value.span.start(), end),
+                    &members[index],
+                );
                 value = self.operator_expr(
                     source,
                     members[index].clone(),
@@ -32075,6 +32117,7 @@ impl<'a> Parser<'a> {
             };
             let helper = self.push_op(Op::Field { definition, slot });
             let expression_span = span(value.span.start(), member_span.end());
+            self.part_of((value.span, &value.ty), expression_span, &ty);
             if through_reference && lvalue.is_none() && self.drops() {
                 self.borrowed.insert(expression_span);
             }
@@ -32092,6 +32135,9 @@ impl<'a> Parser<'a> {
 
         if let Some(boxed) = rebox {
             value.ty = boxed;
+        }
+        if let Some((receiver, member)) = called {
+            self.finish_method_call(&receiver, &member, &value);
         }
         Ok(value)
     }
@@ -32132,6 +32178,8 @@ impl<'a> Parser<'a> {
                 .map(Ok);
         }
         if let Some(definition) = self.probed_method(owner, &member, &value.ty) {
+            let summary = self.method_summary(&definition);
+            self.note_call(end, summary);
             if self.models.widget_hook(&definition).is_some() {
                 return Err(Error::InvalidWidget {
                     widget: owner_name.clone(),
@@ -32611,6 +32659,8 @@ impl<'a> Parser<'a> {
                 Ok(self.literal(format!("{value:?}"), Ty::Char, token_span))
             }
             Token::StringConstant(value) => {
+                // A literal is `&'static str`: it borrows nothing of the body.
+                self.flow().set_origins(token_span, Vec::new());
                 Ok(self.literal(format!("{value:?}"), Ty::Str, token_span))
             }
             // `b"…"`: a `&[u8; N]`, an array of its bytes at runtime.
@@ -32829,6 +32879,7 @@ impl<'a> Parser<'a> {
             let end = self.expect(Token::RightParen, "')' after expression")?;
             let before = value.source.as_str().to_string();
             value.source = value.source.surrounded("(", ")");
+            self.flow().same_origins(span(open, end), value.span);
             value.span = span(open, end);
             value.lvalue = None;
             value.source.cover(value.span);
@@ -32853,6 +32904,8 @@ impl<'a> Parser<'a> {
                 .map(|member| self.inference.resolve(&member.ty))
                 .collect(),
         );
+        let parts: Vec<&ParsedExpr> = members.iter().collect();
+        self.compose(span(open, end), &ty, &parts);
         let source = origin::Fragment::join(members.iter().map(ParsedExpr::rendered_source), ", ")
             .surrounded("[", "]");
         Ok(self.operator_expr(source, ty, span(open, end)))
@@ -34605,6 +34658,16 @@ impl<'a> Parser<'a> {
             None => (callee, ty),
         };
         let choice = matches!(ty, Ty::FnChoice { .. });
+        // A crate function's signature says what its value keeps; a
+        // closure's does not yet (T105).
+        let function = match &ty {
+            Ty::FnItem { key, .. } => self
+                .models
+                .functions_by_key
+                .get(&**key)
+                .map(|function| function.definition.clone()),
+            _ => None,
+        };
         let (Ty::Fn { inputs, output }
         | Ty::FnItem { inputs, output, .. }
         | Ty::FnChoice { inputs, output, .. }) = ty
@@ -34659,6 +34722,21 @@ impl<'a> Parser<'a> {
         ));
         source.push_text(")");
         let source = self.copied_call(source, &places)?;
+        let kept = self.inference.resolve(&output);
+        match &function {
+            Some(function) => {
+                let summary = self.function_summary(function);
+                self.kept_by_call(call, &kept, None, &summary);
+            }
+            // A closure's value may keep what it captured (T105).
+            None if self.may_hold_borrow(&kept) => self
+                .flow()
+                .unmodeled("a borrow a closure's value keeps", call),
+            None => {
+                let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+                self.kept_by_call(call, &kept, None, &summary);
+            }
+        }
         Ok(self.operator_expr(source, *output, call))
     }
 
@@ -35620,6 +35698,12 @@ impl<'a> Parser<'a> {
         for value in &mut elements {
             self.move_local(value)?;
         }
+        let parts: Vec<&ParsedExpr> = elements.iter().collect();
+        let array_ty = Ty::Array {
+            element: Box::new(element.clone()),
+            length: None,
+        };
+        self.compose(span(open, end), &array_ty, &parts);
         let source = match (repeat, counted) {
             (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
@@ -35777,6 +35861,7 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         };
+        self.compose(expression, &ty, &[&*value]);
         let source = self.prelude_op(op, [value.rendered_source()]);
         let mut value = self.operator_expr(source, ty, expression);
         value.lvalue = place;
@@ -38612,6 +38697,11 @@ impl<'a> Parser<'a> {
         let inputs: Box<[Ty]> = parameters.into_iter().map(|(_, ty, _)| ty).collect();
         let output = Box::new(annotated.unwrap_or_else(|| body.ty.clone()));
         let expression = span(start.start(), body.span.end());
+        // A closure that captures nothing borrows nothing of the body; one
+        // that captures is left to `cargo check` (T105).
+        if scope.captures.is_empty() {
+            self.flow().set_origins(expression, Vec::new());
+        }
         // `move` moves each capture that is not `Copy` into the closure as
         // it is created, and copies the others. A closure that is not
         // `move` moves in only the captures its body moves out.
@@ -38853,6 +38943,10 @@ impl<'a> Parser<'a> {
                 .map(|parameter| Some(Ty::from_resolved(&parameter.ty)))
                 .collect();
         }
+        // What the call's value keeps of its arguments (D572.4).
+        let summary = function
+            .as_ref()
+            .map(|function| self.function_summary(&function.definition));
         let receiver = function
             .as_ref()
             .and_then(|function| this_parameter(&function.definition));
@@ -38920,6 +39014,10 @@ impl<'a> Parser<'a> {
                 &substitution,
             );
             witnesses = self.witness_arguments(&function.definition.generics, &substitution, call);
+            let kept = self.inference.resolve(&output);
+            if let Some(summary) = &summary {
+                self.kept_by_call(call, &kept, None, summary);
+            }
             name = function.generated;
             let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
@@ -38986,8 +39084,13 @@ impl<'a> Parser<'a> {
             }
             output
         } else {
-            self.native_output(&name, arguments.len())
-                .unwrap_or(Ty::Unknown)
+            let output = self
+                .native_output(&name, arguments.len())
+                .unwrap_or(Ty::Unknown);
+            let kept = self.inference.resolve(&output);
+            let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+            self.kept_by_call(span(name_span.start(), end), &kept, None, &summary);
+            output
         };
         let source = origin::Fragment::call(
             name.as_str(),
@@ -39185,6 +39288,12 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+        let parts: Vec<&ParsedExpr> = values
+            .values()
+            .map(|(value, _)| value)
+            .chain(base.as_ref())
+            .collect();
+        self.compose(span(name_span.start(), end), &struct_ty, &parts);
         let declared_order = base.is_none()
             && order
                 .iter()
@@ -39807,8 +39916,11 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(Token::RightParen, "')' after call arguments")?;
-        let spans: Vec<Span> = arguments.iter().map(|argument| argument.span).collect();
-        self.flow().call_operands(&spans);
+        let operands: Vec<_> = arguments
+            .iter()
+            .map(|argument| self.argument_fact(argument))
+            .collect();
+        self.flow().call_operands(&operands, end);
         Ok((arguments, end))
     }
 
@@ -41576,6 +41688,10 @@ impl<'a> Parser<'a> {
                     .chain(witnesses),
             );
             let source = self.copied_call(source, &places)?;
+            let summary = self.method_summary(&definition);
+            let kept = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+            let kept = self.inference.resolve(&kept);
+            self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
                 source: self.opened_startup(opens_startup, source),
@@ -42807,8 +42923,13 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::Apostrophe) {
             return false;
         }
-        self.next();
-        self.next();
+        let at = self.next().1;
+        // `let r: &'static u32 = &c;`, `f::<&'a u32>(&c)`: a lifetime a
+        // body's type names, which these facts do not read yet.
+        if !matches!(self.next().0, Token::Underscore) {
+            self.flow()
+                .unmodeled("a lifetime written in a body's type", point_span(at));
+        }
         true
     }
 

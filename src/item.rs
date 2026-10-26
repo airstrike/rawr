@@ -519,6 +519,26 @@ pub struct GenericParam {
     pub default: Option<type_ref::Type>,
 }
 
+/// The lifetimes an item declares and the outlives bounds written on them,
+/// which the borrow checker reads (D572.4).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Lifetimes {
+    /// Declared lifetime parameters, in order: `'a` of `<'a, T>`.
+    pub params: Box<[Name]>,
+    /// Outlives bounds, from the parameter list and any `where` clause:
+    /// `('b, 'a)` for `'b: 'a`, and `(T, 'a)` for `T: 'a`.
+    pub bounds: Box<[(Name, Name)]>,
+}
+
+impl Lifetimes {
+    pub(crate) fn new(params: Vec<Name>, bounds: Vec<(Name, Name)>) -> Self {
+        Self {
+            params: params.into_boxed_slice(),
+            bounds: bounds.into_boxed_slice(),
+        }
+    }
+}
+
 /// A nominal struct declaration shell.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Struct {
@@ -528,6 +548,8 @@ pub struct Struct {
     pub name: Name,
     /// Generic type parameters.
     pub generics: Box<[GenericParam]>,
+    /// Lifetime parameters.
+    pub lifetimes: Lifetimes,
     /// Named fields in declaration order; a tuple struct's are named
     /// `0`, `1`, ...
     pub fields: Box<[Field]>,
@@ -569,6 +591,8 @@ pub struct Enum {
     pub name: Name,
     /// Generic type parameters.
     pub generics: Box<[GenericParam]>,
+    /// Lifetime parameters.
+    pub lifetimes: Lifetimes,
     /// Variants in declaration order.
     pub variants: Box<[Variant]>,
     /// Complete item span.
@@ -600,6 +624,8 @@ pub struct Impl {
     pub header: Header,
     /// Generic type parameters of `impl<T> ..`.
     pub generics: Box<[GenericParam]>,
+    /// Lifetime parameters of `impl<'a> ..`.
+    pub lifetimes: Lifetimes,
     /// The implemented trait of `impl Trait for Type`, when present.
     pub trait_: Option<type_ref::Path>,
     /// Type receiving the implementation.
@@ -645,6 +671,10 @@ pub struct Function {
     pub name: Name,
     /// Generic type parameters.
     pub generics: Box<[GenericParam]>,
+    /// Lifetime parameters.
+    pub lifetimes: Lifetimes,
+    /// The receiver's lifetime: `'a` of `&'a self`.
+    pub receiver_lifetime: Option<Name>,
     /// Receiver for an associated function.
     pub receiver: Option<Receiver>,
     /// Named parameters after the receiver.

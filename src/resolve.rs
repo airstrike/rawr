@@ -1890,6 +1890,7 @@ fn resolve_item(
                 key,
                 name: parsed.name,
                 generics,
+                lifetimes: parsed.lifetimes.params.len(),
                 fields: fields.into_boxed_slice(),
                 form: parsed.form,
             })
@@ -1946,6 +1947,7 @@ fn resolve_item(
                 key,
                 name: parsed.name,
                 generics,
+                lifetimes: parsed.lifetimes.params.len(),
                 variants: variants.into_boxed_slice(),
             })
         }
@@ -1970,6 +1972,7 @@ fn resolve_item(
                     )
                 })
                 .transpose()?;
+            let written = parsed.owner.clone();
             let owner = type_ref::resolve(
                 parsed.owner,
                 types,
@@ -1980,14 +1983,18 @@ fn resolve_item(
             let mut functions = Vec::with_capacity(parsed.functions.len());
 
             for function in parsed.functions.into_vec() {
-                functions.push(resolve_function(
+                let mut function = resolve_function(
                     function,
                     types,
                     host,
                     true,
                     #[cfg(feature = "rust-import")]
                     native,
-                )?);
+                )?;
+                function
+                    .lifetimes
+                    .within(&parsed.lifetimes, &written, &owner);
+                functions.push(function);
             }
             let mut associated = Vec::with_capacity(parsed.associated.len());
             for (name, ty) in parsed.associated.into_vec() {
@@ -2193,6 +2200,7 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl { reference });
     }
     erase_trait_generics(&mut parsed, types, host);
+    let lifetimes = item::Lifetimes::of(&parsed);
     let (scope, generics) = generic_scope(
         parsed.generics,
         types,
@@ -2256,6 +2264,7 @@ fn resolve_function(
         header: parsed.header,
         name: parsed.name,
         generics,
+        lifetimes,
         receiver: parsed.receiver,
         parameters: parameters.into_boxed_slice(),
         output,
@@ -3333,6 +3342,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             span: Span::NONE,
         },
         generics: Box::default(),
+        lifetimes: item::Lifetimes::default(),
         receiver: receiver.then_some(crate::item::Receiver::Shared(Span::NONE)),
         parameters: parameters
             .into_iter()

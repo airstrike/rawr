@@ -1429,6 +1429,8 @@ fn bind_previews(
                 },
                 name,
                 generics: Box::default(),
+                lifetimes: crate::item::Lifetimes::default(),
+                receiver_lifetime: None,
                 receiver: None,
                 parameters: Box::default(),
                 output: Some(ty),
@@ -1680,8 +1682,8 @@ fn parse_struct(
 ) -> ParseResult<crate::item::Struct> {
     expect(input, Token::Struct, "to start a struct")?;
     let name = parse_name(input, "after 'struct'")?;
-    let mut generics = parse_generic_params(input)?;
-    parse_where_clause(input, &mut generics, None)?;
+    let (mut generics, mut lifetimes) = parse_generics(input)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
 
     if matches!(input.peek(), Some((Token::SemiColon, _))) {
         let semicolon = expect(input, Token::SemiColon, "to terminate a unit struct")?;
@@ -1694,6 +1696,7 @@ fn parse_struct(
             },
             name,
             generics: generics.into_boxed_slice(),
+            lifetimes: lifetimes.clone(),
             fields: Box::default(),
             form: crate::item::StructForm::Unit,
             span: Span::new(start, end),
@@ -1723,7 +1726,7 @@ fn parse_struct(
             }
             expect(input, Token::RightParen, "to close a tuple struct")?;
         }
-        parse_where_clause(input, &mut generics, None)?;
+        parse_where_with(input, &mut generics, None, &mut lifetimes)?;
         let semicolon = expect(input, Token::SemiColon, "to terminate a tuple struct")?;
         let end = after(semicolon, 1);
         return Ok(crate::item::Struct {
@@ -1734,6 +1737,7 @@ fn parse_struct(
             },
             name,
             generics: generics.into_boxed_slice(),
+            lifetimes: lifetimes.clone(),
             fields: fields.into_boxed_slice(),
             form: crate::item::StructForm::Tuple,
             span: Span::new(start, end),
@@ -1779,6 +1783,7 @@ fn parse_struct(
         },
         name,
         generics: generics.into_boxed_slice(),
+        lifetimes: lifetimes.clone(),
         fields: fields.into_boxed_slice(),
         form: crate::item::StructForm::Named,
         span: Span::new(start, end),
@@ -1846,8 +1851,8 @@ fn parse_enum(
 ) -> ParseResult<crate::item::Enum> {
     expect(input, Token::Enum, "to start an enum")?;
     let name = parse_name(input, "after 'enum'")?;
-    let mut generics = parse_generic_params(input)?;
-    parse_where_clause(input, &mut generics, None)?;
+    let (mut generics, mut lifetimes) = parse_generics(input)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
     let open = expect(input, Token::LeftBrace, "after an enum name")?;
     let header_end = after(open, 1);
     let mut variants = Vec::new();
@@ -1946,6 +1951,7 @@ fn parse_enum(
         },
         name,
         generics: generics.into_boxed_slice(),
+        lifetimes,
         variants: variants.into_boxed_slice(),
         span: Span::new(start, end),
     })
@@ -1959,7 +1965,7 @@ fn parse_impl(
     start: Position,
 ) -> ParseResult<crate::item::Impl> {
     expect(input, Token::Impl, "to start an impl block")?;
-    let mut generics = parse_generic_params(input)?;
+    let (mut generics, mut lifetimes) = parse_generics(input)?;
     let first = parse_type(input)?;
     // `impl Trait for Type`.
     let (trait_, owner) = if matches!(input.peek(), Some((Token::For, _))) {
@@ -1987,7 +1993,7 @@ fn parse_impl(
     } else {
         (None, first)
     };
-    parse_where_clause(input, &mut generics, None)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
     let open = expect(input, Token::LeftBrace, "after an impl owner")?;
     let header_end = after(open, 1);
     let mut functions = Vec::new();
@@ -2080,6 +2086,7 @@ fn parse_impl(
             span: Span::new(start, header_end),
         },
         generics: generics.into_boxed_slice(),
+        lifetimes,
         // `impl Hash for T { fn hash<H: Hasher>(..) }`: Rawr hashes a value
         // by its contents, so the impl only marks `T` as `Hash`.
         functions: if trait_
@@ -2293,7 +2300,7 @@ fn parse_function(
 ) -> ParseResult<crate::item::Function> {
     expect(input, Token::Fn, "to start a function")?;
     let name = parse_name(input, "after 'fn'")?;
-    let generics = parse_generic_params(input)?;
+    let generics = parse_generics(input)?;
     let open = if matches!(input.peek(), Some((Token::Unit, _))) {
         input.next();
         false
@@ -2381,11 +2388,12 @@ fn parse_function_rest(
     header: crate::item::Header,
     start: Position,
     name: crate::item::Name,
-    mut generics: Vec<crate::item::GenericParam>,
+    (mut generics, mut lifetimes): (Vec<crate::item::GenericParam>, crate::item::Lifetimes),
     parameters_open: Option<Option<crate::item::Name>>,
     declaration: bool,
 ) -> ParseResult<crate::item::Function> {
     let mut receiver = None;
+    let mut receiver_lifetime = None;
     let mut parameters = Vec::new();
 
     if let Some(mut first) = parameters_open {
@@ -2418,12 +2426,15 @@ fn parse_function_rest(
                 }
                 (Token::Ampersand, position) => {
                     // `&self`, `&mut self`, or a `&pattern` parameter; a
-                    // receiver's lifetime (`&'a self`) is erased as in types.
+                    // receiver's lifetime (`&'a self`) is kept for the
+                    // borrow checker.
                     let ampersand = *position;
                     input.next();
-                    if matches!(input.peek(), Some((Token::Apostrophe, _))) {
-                        parse_lifetime(input)?;
-                    }
+                    let lifetime = if matches!(input.peek(), Some((Token::Apostrophe, _))) {
+                        Some(parse_lifetime(input)?.name)
+                    } else {
+                        None
+                    };
                     let mutable = matches!(input.peek(), Some((Token::Mut, _)));
                     if mutable {
                         input.next();
@@ -2434,6 +2445,7 @@ fn parse_function_rest(
                         }
                         let span = Span::new(ampersand, after(*position, 4));
                         input.next();
+                        receiver_lifetime = lifetime;
                         receiver = Some(if mutable {
                             crate::item::Receiver::Mutable(span)
                         } else {
@@ -2524,7 +2536,7 @@ fn parse_function_rest(
     } else {
         None
     };
-    parse_where_clause(input, &mut generics, None)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
     lift_impl_parameters(&mut generics, &mut parameters);
     erase_fn_bounds(&mut generics, &mut parameters, &mut output);
 
@@ -2539,6 +2551,8 @@ fn parse_function_rest(
             },
             name,
             generics: generics.into_boxed_slice(),
+            lifetimes,
+            receiver_lifetime,
             receiver,
             parameters: parameters.into_boxed_slice(),
             output,
@@ -2561,6 +2575,8 @@ fn parse_function_rest(
         },
         name,
         generics: generics.into_boxed_slice(),
+        lifetimes,
+        receiver_lifetime,
         receiver,
         parameters: parameters.into_boxed_slice(),
         output,
@@ -2572,33 +2588,47 @@ fn parse_function_rest(
     })
 }
 
-/// `<T, U: Clone + Debug, 'a>` after an item name, when present. Lifetime
-/// parameters are erased.
+/// `<T, U: Clone + Debug, 'a>` after an item name, when present.
 fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item::GenericParam>> {
+    parse_generics(input).map(|(generics, _)| generics)
+}
+
+/// [`parse_generic_params`], with the lifetime parameters and the outlives
+/// bounds written on them (`'b: 'a`, `T: 'a`).
+fn parse_generics(
+    input: &mut TokenStream,
+) -> ParseResult<(Vec<crate::item::GenericParam>, crate::item::Lifetimes)> {
     let mut generics = Vec::new();
+    let mut lifetimes = Vec::new();
+    let mut outlives = Vec::new();
     if !matches!(input.peek(), Some((Token::LessThan, _))) {
-        return Ok(generics);
+        return Ok((generics, crate::item::Lifetimes::default()));
     }
     input.next();
     // The second `>` of a `>>` closing a bound's arguments closes the list.
     let mut split = None;
     while !matches!(input.peek(), Some((Token::GreaterThan, _))) {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
-            parse_lifetime(input)?;
+            let lifetime = parse_lifetime(input)?.name;
             if matches!(input.peek(), Some((Token::Colon, _))) {
                 input.next();
-                parse_lifetime(input)?;
+                outlives.push((lifetime.clone(), parse_lifetime(input)?.name));
                 while matches!(input.peek(), Some((Token::Plus, _))) {
                     input.next();
-                    parse_lifetime(input)?;
+                    outlives.push((lifetime.clone(), parse_lifetime(input)?.name));
                 }
             }
+            lifetimes.push(lifetime);
         } else {
             let name = parse_name(input, "as a generic parameter")?;
             let mut projections = Vec::new();
             let bounds = if matches!(input.peek(), Some((Token::Colon, _))) {
                 input.next();
-                parse_bounds(input, &mut projections, Some(&mut split))?
+                let mut bounded = Vec::new();
+                let bounds =
+                    parse_bounds_with(input, &mut projections, Some(&mut split), &mut bounded)?;
+                outlives.extend(bounded.into_iter().map(|lifetime| (name.clone(), lifetime)));
+                bounds
             } else {
                 Vec::new()
             };
@@ -2617,12 +2647,12 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
             });
         }
         if split.is_some() {
-            return Ok(generics);
+            return Ok((generics, crate::item::Lifetimes::new(lifetimes, outlives)));
         }
         consume_comma_or_end(input, Token::GreaterThan, "between generic parameters")?;
     }
     expect(input, Token::GreaterThan, "to close generic parameters")?;
-    Ok(generics)
+    Ok((generics, crate::item::Lifetimes::new(lifetimes, outlives)))
 }
 
 /// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
@@ -2665,12 +2695,22 @@ fn skip_precise_capture(
 fn parse_bounds(
     input: &mut TokenStream,
     projections: &mut Vec<(crate::item::Name, crate::item::Name, type_ref::Type)>,
+    closing: Option<&mut Option<Position>>,
+) -> ParseResult<Vec<type_ref::Path>> {
+    parse_bounds_with(input, projections, closing, &mut Vec::new())
+}
+
+/// [`parse_bounds`], with the lifetimes among them: `'a` of `T: Clone + 'a`.
+fn parse_bounds_with(
+    input: &mut TokenStream,
+    projections: &mut Vec<(crate::item::Name, crate::item::Name, type_ref::Type)>,
     mut closing: Option<&mut Option<Position>>,
+    lifetimes: &mut Vec<crate::item::Name>,
 ) -> ParseResult<Vec<type_ref::Path>> {
     let mut bounds = Vec::new();
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
-            parse_lifetime(input)?;
+            lifetimes.push(parse_lifetime(input)?.name);
         } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
@@ -2720,17 +2760,52 @@ fn parse_bounds(
 fn parse_where_clause(
     input: &mut TokenStream,
     generics: &mut [crate::item::GenericParam],
+    self_bounds: Option<&mut Vec<type_ref::Path>>,
+) -> ParseResult<()> {
+    parse_where_with(
+        input,
+        generics,
+        self_bounds,
+        &mut crate::item::Lifetimes::default(),
+    )
+}
+
+/// [`parse_where_clause`], adding its outlives bounds (`'b: 'a`, `T: 'a`)
+/// to `lifetimes`.
+fn parse_where_with(
+    input: &mut TokenStream,
+    generics: &mut [crate::item::GenericParam],
     mut self_bounds: Option<&mut Vec<type_ref::Path>>,
+    lifetimes: &mut crate::item::Lifetimes,
 ) -> ParseResult<()> {
     if !matches!(input.peek(), Some((Token::Identifier(name), _)) if name.as_str() == "where") {
         return Ok(());
     }
     input.next();
+    let mut outlives = lifetimes.bounds.to_vec();
     while !matches!(input.peek(), Some((Token::LeftBrace | Token::SemiColon, _))) {
+        // `'b: 'a + 'c`.
+        if matches!(input.peek(), Some((Token::Apostrophe, _))) {
+            let lifetime = parse_lifetime(input)?.name;
+            expect(input, Token::Colon, "after a `where` clause lifetime")?;
+            loop {
+                outlives.push((lifetime.clone(), parse_lifetime(input)?.name));
+                if !matches!(input.peek(), Some((Token::Plus, _))) {
+                    break;
+                }
+                input.next();
+            }
+            if matches!(input.peek(), Some((Token::Comma, _))) {
+                input.next();
+            }
+            continue;
+        }
         let name = parse_name(input, "as a `where` clause parameter")?;
         expect(input, Token::Colon, "after a `where` clause parameter")?;
         let mut projections = Vec::new();
-        let bounds = parse_bounds(input, &mut projections, None)?;
+        let mut bounded = Vec::new();
+        let bounds = parse_bounds_with(input, &mut projections, None, &mut bounded)?;
+        outlives.extend(bounded.into_iter().map(|lifetime| (name.clone(), lifetime)));
         if name.text == "Self"
             && let Some(supertraits) = self_bounds.as_deref_mut()
         {
@@ -2768,6 +2843,7 @@ fn parse_where_clause(
             input.next();
         }
     }
+    lifetimes.bounds = outlives.into_boxed_slice();
     Ok(())
 }
 
@@ -2977,6 +3053,8 @@ fn parse_associated_const(
             },
             name,
             generics: Box::default(),
+            lifetimes: crate::item::Lifetimes::default(),
+            receiver_lifetime: None,
             receiver: None,
             parameters: Box::default(),
             output: Some(output),
@@ -3038,6 +3116,8 @@ fn finish_associated_const(
         },
         name,
         generics: Box::default(),
+        lifetimes: crate::item::Lifetimes::default(),
+        receiver_lifetime: None,
         receiver: None,
         parameters: Box::default(),
         output: Some(output),
@@ -3088,6 +3168,8 @@ fn parse_const_rest(
         },
         name,
         generics: Box::default(),
+        lifetimes: crate::item::Lifetimes::default(),
+        receiver_lifetime: None,
         receiver: None,
         parameters: Box::default(),
         output: Some(output),
@@ -4494,6 +4576,8 @@ fn parse_callback_closure(
             span: Span::new(start, after(start, 1)),
         },
         generics: Box::default(),
+        lifetimes: crate::item::Lifetimes::default(),
+        receiver_lifetime: None,
         receiver: None,
         parameters: parameters.into_boxed_slice(),
         output: output
@@ -4525,9 +4609,9 @@ fn parse_private_function(
         span: Span::NONE,
     };
     let generics = if matches!(input.peek(), Some((Token::LessThan, _))) {
-        parse_generic_params(input)?
+        parse_generics(input)?
     } else {
-        Vec::new()
+        (Vec::new(), crate::item::Lifetimes::default())
     };
     let open = if matches!(input.peek(), Some((Token::Unit, _))) {
         input.next();

@@ -1,0 +1,67 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+slice2/array_of_refs.rs	E0506:5
+slice2/associated_new_ended.rs	ok	0	"1\n2\n"
+slice2/associated_new_keeps_input.rs	E0506:14
+slice2/fn_elided_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+slice2/fn_elided_mut_then_read.rs	E0502:9
+slice2/fn_elided_then_push.rs	E0502:8
+slice2/fn_generic_copied_out.rs	ok	0	"2 2\n"
+slice2/fn_generic_identity.rs	E0502:8
+slice2/fn_generic_identity_ended.rs	ok	0	"[1]\n[1, 2]\n"
+slice2/fn_named_both_kept.rs	E0502:9
+slice2/fn_named_one_kept.rs	ok	0	"kept free!\n"
+slice2/fn_named_one_kept_conflict.rs	E0502:9
+slice2/fn_named_second_kept.rs	E0502:9
+slice2/fn_outlives_bound.rs	E0502:9
+slice2/fn_owned_output.rs	ok	0	"[1, 2, 3]\n"
+slice2/fn_static_input.rs	E0597:5
+slice2/fn_static_output.rs	ok	0	"vec [1, 2]\n"
+slice2/fn_where_outlives_bound.rs	E0502:12
+slice2/for_over_iter_push.rs	E0502:5
+slice2/map_get_ended.rs	ok	0	"Some(\"one\") 2\n"
+slice2/map_get_then_insert.rs	E0502:7
+slice2/map_insert_ref_then_mutate.rs	E0502:7
+slice2/method_elided_self.rs	E0502:14
+slice2/method_elided_self_ended.rs	ok	0	"1\n3\n"
+slice2/method_impl_lifetime_not_self.rs	ok	0	"abc other\n"
+slice2/method_impl_lifetime_source_changed.rs	E0502:15
+slice2/method_mut_self_kept.rs	E0502:14
+slice2/method_owned_output.rs	ok	0	"2\n"
+slice2/nested_get_push.rs	E0502:4
+slice2/option_as_ref_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+slice2/option_as_ref_then_take.rs	E0502:4
+slice2/option_in_struct.rs	E0506:8
+slice2/option_reassigned.rs	ok	0	"Some(1)\nSome(2) 2\n"
+slice2/option_some_ref_ended.rs	ok	0	"Some(1)\n2\n"
+slice2/option_some_ref_then_mutate.rs	E0506:4
+slice2/option_unwrap_keeps.rs	E0506:5
+slice2/option_unwrap_or_keeps_default.rs	E0506:6
+slice2/str_trim_of_holder_reassigned.rs	ok	0	"a b\n"
+slice2/string_as_str_then_push.rs	E0502:4
+slice2/string_trim_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+slice2/struct_field_assigned_then_mutated.rs	E0506:12
+slice2/struct_field_overwritten_still_live.rs	E0506:12
+slice2/struct_field_read_keeps.rs	E0506:10
+slice2/struct_literal_ended.rs	ok	0	"a\nb\n"
+slice2/struct_literal_then_assign.rs	E0506:8
+slice2/struct_moved_into_another.rs	E0506:9
+slice2/struct_reassigned_whole.rs	ok	0	"1\n2 2\n"
+slice2/struct_static_field.rs	E0597:7
+slice2/struct_static_field_literal.rs	ok	0	"x\n"
+slice2/tuple_of_refs.rs	E0506:5
+slice2/tuple_of_refs_ended.rs	ok	0	"1 2\n2\n"
+slice2/vec_first_ended_before_push.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+slice2/vec_first_then_push.rs	E0502:4
+slice2/vec_get_unwrap_then_clear.rs	E0502:4
+slice2/vec_iter_counted_first.rs	ok	0	"2 [1, 2, 3]\n"
+slice2/vec_iter_then_push.rs	E0502:4
+slice2/vec_last_mut_ended.rs	ok	0	"3 [1, 2, 9]\n"
+slice2/vec_last_mut_then_read.rs	E0502:4
+slice2/vec_len_owned.rs	ok	0	"2 [1, 2, 3]\n"
+slice2/vec_literal_of_refs.rs	E0506:5
+slice2/vec_literal_of_refs_ended.rs	ok	0	"[1, 2]\n5\n"
+slice2/vec_of_refs_element_read.rs	E0506:5
+slice2/vec_push_ref_ended.rs	ok	0	"[1]\n2\n"
+slice2/vec_push_ref_then_mutate.rs	E0506:5
+slice2/vec_ref_first_through_two.rs	E0506:5
+slice2/vec_to_vec_owns.rs	ok	0	"[1, 2] [1, 2, 3]\n"

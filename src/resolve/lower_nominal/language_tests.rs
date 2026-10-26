@@ -4484,7 +4484,7 @@ fn language_maps_and_sets() {
             let replaced = m.insert(3, "C");
             m.insert(2, "b");
             let got = m.get(&2).cloned();
-            let missing = m.get(&9);
+            let missing = m.get(&9).cloned();
             let has = m.contains_key(&1);
             let removed = m.remove(&1);
             let indexed = m[&3];
