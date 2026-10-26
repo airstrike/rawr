@@ -9906,3 +9906,44 @@ pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, 
     // A capture renamed: its fingerprint differs.
     assert!(!recaptured.rebinds(&closure, first.as_ref()));
 }
+
+/// `write!` and `writeln!` into a `String` through `std::fmt::Write`: a
+/// local, `&mut s`, a field, an element and a `&mut String` parameter, each
+/// returning a `fmt::Result`.
+#[test]
+fn language_write_into_a_string() {
+    assert_eq!(
+        printed(
+            r#"
+use std::fmt::{self, Write};
+struct Log { buf: String }
+impl Log {
+    fn add(&mut self, n: i32) { writeln!(self.buf, "n={n}").unwrap(); }
+}
+fn fill(out: &mut String, k: u8) -> fmt::Result {
+    write!(out, "[{k:02}]")?;
+    writeln!(out)?;
+    Ok(())
+}
+fn main() {
+    let mut s = String::new();
+    write!(s, "{}-{}", 1, 2).unwrap();
+    writeln!(s, " end").unwrap();
+    write!(&mut s, "{:>4}", 7).unwrap();
+    let _ = write!(s, ".");
+    println!("{s:?}");
+    let mut l = Log { buf: String::new() };
+    l.add(1);
+    print!("{}", l.buf);
+    let mut t = String::from("x");
+    println!("{} {t:?}", fill(&mut t, 3).is_ok());
+    let mut v = vec![String::new()];
+    write!(v[0], "{}", 9).unwrap();
+    println!("{v:?}");
+}
+main();
+"#
+        ),
+        "\"1-2 end\\n   7.\"\nn=1\ntrue \"x[03]\\n\"\n[\"9\"]\n"
+    );
+}

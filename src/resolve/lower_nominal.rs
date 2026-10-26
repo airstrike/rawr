@@ -1,6 +1,7 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
 pub(crate) mod cell;
+mod fmt_write;
 mod iterator;
 mod keyed;
 mod location;
@@ -29959,6 +29960,15 @@ impl<'a> Parser<'a> {
             && self.models.import(&name).is_none()
         {
             return self.parse_print(stream, name_span);
+        }
+        // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
+        // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
+        if matches!(self.peek(), Token::Bang)
+            && matches!(name.as_str(), "write" | "writeln")
+            && self.models.import(&name).is_none()
+            && !self.writes_into_formatter()
+        {
+            return self.parse_write_string(&name, name_span);
         }
         // `write!(f, ..)` and `writeln!(f, ..)` into a `fmt` body's formatter.
         if matches!(self.peek(), Token::Bang)

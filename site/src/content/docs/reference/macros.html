@@ -8,7 +8,7 @@
   <tr><td><code>println!</code> <code>print!</code></td><td>Write to stdout.</td></tr>
   <tr><td><code>eprintln!</code> <code>eprint!</code></td><td>Write to stderr.</td></tr>
   <tr><td><code>format!</code></td><td>Builds a <code>String</code>.</td></tr>
-  <tr><td><code>write!</code></td><td>Writes to a <code>Formatter</code> in a <code>Display</code> or <code>Debug</code> impl.</td></tr>
+  <tr><td><code>write!</code> <code>writeln!</code></td><td>Write to a <code>Formatter</code> in a <code>Display</code> or <code>Debug</code> impl. After <code>use std::fmt::Write;</code> they also write to a <code>String</code>. Each returns a <code>fmt::Result</code>.</td></tr>
   <tr><td><code>panic!</code></td><td>Exits with status 101.</td></tr>
   <tr><td><code>assert!</code> <code>assert_eq!</code> <code>assert_ne!</code></td><td>Panic when the condition fails. They take an optional message.</td></tr>
   <tr><td><code>debug_assert!</code> <code>debug_assert_eq!</code></td><td>Behave as in a Rust debug build.</td></tr>
@@ -27,6 +27,16 @@ let os = if cfg!(target_os = "macos") { "mac" } else { "other" };
 let zeros = vec![0u8; 4];
 println!("{os} {zeros:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-macros" data-out="out-macros" aria-label="Run macros.rs" hidden></button><b>rawr run macros.rs</b><span id="out-macros" aria-live="polite">other [0, 0, 0, 0]</span></div>
+</div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="write.rs" id="src-write">use std::fmt::Write;
+let mut s = String::new();
+for i in 1..4 {
+    write!(s, "{i},").unwrap();
+}
+writeln!(&amp;mut s, " done").unwrap();
+print!("{s}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-write" data-out="out-write" aria-label="Run write.rs" hidden></button><b>rawr run write.rs</b><span id="out-write" aria-live="polite">1,2,3, done</span></div>
 </div>
 <h2 id="format">Format strings</h2>
 <p>Format strings follow Rust&rsquo;s rules. Positional, numbered, named and captured arguments work. So do fill, alignment, width, precision, signs, radix, <code>{:?}</code> and <code>{:#?}</code>. Hex debug output, <code>{:x?}</code>, isn&rsquo;t supported yet.</p>
