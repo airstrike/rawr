@@ -453,3 +453,43 @@ fn main() {
         "stderr:\n{stderr}"
     );
 }
+
+/// Freya's crate-doc builder chain: methods that take `impl Into<T>` of a
+/// native `T`, as default methods through a blanket implementation
+/// (`width`, `height`) or an empty one (`padding`, and `background` on a
+/// trait whose supertrait gives the storage), and as an inherent method
+/// (`color`). The argument is a native `T`, an associated constant, a
+/// tuple whose literals take their types from `T`'s one `From` of that
+/// shape, or a float or integer `T` converts from.
+#[test]
+fn a_method_taking_impl_into_a_native_type_takes_what_converts_into_it() {
+    let (success, stdout, stderr) = run_at(
+        "builders",
+        "
+use natives::*;
+
+fn main() {
+    let made = rect()
+        .width(Size::fill())
+        .height(Size::px(20.0))
+        .background((35, 35, 35))
+        .color(Color::WHITE)
+        .padding(Gaps::new_all(12.))
+        .child(\"Hi\");
+    println!(\"{}\", made.styled());
+    let other = rect()
+        .padding(4.0)
+        .background(Color::BLACK)
+        .color((1, 2, 3, 0.5));
+    println!(\"{}\", other.styled());
+}
+",
+    );
+    assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "Fill Pixels(20.0) Gaps { top: 12.0, right: 12.0 } Color(Color(4280492835)) Color(Color(4294967295))\n\
+         Inner Inner Gaps { top: 4.0, right: 4.0 } Color(Color(4278190080)) Color(Color(2130772483))\n",
+        "stderr:\n{stderr}"
+    );
+}

@@ -765,6 +765,19 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
         },
+        // A tuple of Rust's own types is that tuple, as Freya's
+        // `background((35, 35, 35))` takes `(u8, u8, u8)`.
+        Ty::Tuple(members)
+            if instance_surface_type(inference, ty).is_some_and(|ty| !is_erased(&ty)) =>
+        {
+            let mut converted = imported.entries(members.len())?;
+            for member in members.iter() {
+                converted.push(imported_surface_type(
+                    inference, member, operation, imported,
+                )?);
+            }
+            Type::Tuple(converted.into_boxed_slice())
+        }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
@@ -846,12 +859,43 @@ fn instance_surface_type(
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
         },
+        Ty::Tuple(members)
+            if let Some(converted) = members
+                .iter()
+                .map(|member| instance_surface_type(inference, member))
+                .collect::<Option<Box<[_]>>>()
+                .filter(|converted| !converted.iter().any(is_erased)) =>
+        {
+            Type::Tuple(converted)
+        }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
         },
         _ => return None,
     })
+}
+
+/// Whether an instance type holds a value Rust takes as `rawr::Value`.
+#[cfg(feature = "rust-import")]
+fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> bool {
+    use rawr_import::classify::representability::convert::Type;
+    match ty {
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            *definition == rawr_import::surface::identity::Definition::value()
+                || arguments.iter().any(is_erased)
+        }
+        Type::Tuple(members) => members.iter().any(is_erased),
+        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+            is_erased(element)
+        }
+        Type::Result(ok, err) => is_erased(ok) || is_erased(err),
+        Type::ProfileMessage { payload, .. } => is_erased(payload),
+        Type::Unit | Type::Builtin(_) | Type::FunctionItem { .. } | Type::Parameter(_) => false,
+    }
 }
 
 pub(super) fn lower(
@@ -5913,6 +5957,18 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
     FuncRegistration::new(name)
         .in_internal_namespace()
         .set_into_module_raw(module, arg_types, func);
+}
+
+/// Whether `member` of the imported enum `definition` is one of its
+/// variants. Any other member is an associated item, as torin's
+/// `Size::fill()` is beside its variant `Size::Fill`.
+#[cfg(feature = "rust-import")]
+fn names_variant(definition: &crate::host::type_def::Definition, member: &str) -> bool {
+    matches!(
+        definition.shape(),
+        crate::host::type_def::Shape::Enum(variants)
+            if variants.iter().any(|variant| variant.name() == member)
+    )
 }
 
 fn invariant(message: &str) -> Box<EvalAltResult> {
@@ -15011,6 +15067,14 @@ impl<'a> Parser<'a> {
         parameters: &mut BTreeMap<ImmutableString, Ty>,
     ) -> Result<(), Error> {
         let signature = item.signature();
+        // The facade a case's imported type is read through: the item's
+        // type's, as `instantiate_host_signature` reads its own types.
+        let item_path = item.path();
+        let owner = item_path
+            .rsplit_once("::")
+            .and_then(|(path, _)| self.models.host.type_owner(path))
+            .or_else(|| self.models.host.item_owner(&item_path))
+            .cloned();
         for relation in signature.relations() {
             let Some(argument) =
                 signature
@@ -15029,11 +15093,12 @@ impl<'a> Parser<'a> {
                 continue;
             };
             let actual = self.inference.resolve(&argument.ty);
+            let owner = owner.as_ref();
             let mut matched = None;
             let mut ambiguous = false;
             for case in relation.cases() {
                 let mut bindings = BTreeMap::new();
-                if self.pattern_matches(case.this(), &actual, &mut bindings) {
+                if self.pattern_matches(case.this(), &actual, &mut bindings, owner) {
                     ambiguous |= matched.is_some();
                     matched = Some((case, bindings));
                 }
@@ -15041,12 +15106,22 @@ impl<'a> Parser<'a> {
             let (Some((case, mut bindings)), false) = (matched, ambiguous) else {
                 continue;
             };
-            let item_path = item.path();
+            // The one case the argument fits is its type, so its literals
+            // take the case's kinds: `(35, 35, 35)` is `(u8, u8, u8)` where
+            // the only three-tuple `Fill` comes from is.
+            let this =
+                self.pattern_type(case.this(), &mut bindings, parameters, &item_path, owner)?;
+            let _ = self.unify_type(&actual, &this);
             for (implemented, declared) in case.arguments().iter().zip(relation.arguments()) {
                 let implemented =
-                    self.pattern_type(implemented, &mut bindings, parameters, &item_path)?;
-                let declared =
-                    self.pattern_type(declared, &mut BTreeMap::new(), parameters, &item_path)?;
+                    self.pattern_type(implemented, &mut bindings, parameters, &item_path, owner)?;
+                let declared = self.pattern_type(
+                    declared,
+                    &mut BTreeMap::new(),
+                    parameters,
+                    &item_path,
+                    owner,
+                )?;
                 // A mismatch is rustc's to report where it compiles the call.
                 let _ = self.unify_type(&declared, &implemented);
             }
@@ -15054,16 +15129,50 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Whether `ty` is a type of `pattern`, binding its variables.
+    /// Whether `ty` is a type of `pattern`, binding its variables. An
+    /// integer or float literal whose kind is still open is a type of each
+    /// builtin of its kind, as rustc's `{integer}` is.
     fn pattern_matches(
-        &self,
+        &mut self,
         pattern: &crate::host::signature::Pattern,
         ty: &Ty,
         bindings: &mut BTreeMap<u32, Ty>,
+        owner: Option<&crate::host::facade::Dependency>,
     ) -> bool {
         use crate::host::signature::Pattern;
+        use crate::host::type_ref::Builtin;
         let ty = self.inference.resolve(ty);
         match (pattern, &ty) {
+            (
+                Pattern::Builtin(
+                    Builtin::I8
+                    | Builtin::I16
+                    | Builtin::I32
+                    | Builtin::I64
+                    | Builtin::Isize
+                    | Builtin::U8
+                    | Builtin::U16
+                    | Builtin::U32
+                    | Builtin::U64
+                    | Builtin::Usize,
+                ),
+                Ty::Int(Int::Var(_)),
+            )
+            | (Pattern::Builtin(Builtin::F32 | Builtin::F64), Ty::Float(Float::Var(_))) => true,
+            (Pattern::Tuple(members), Ty::Tuple(actual)) => {
+                members.len() == actual.len()
+                    && members.iter().zip(actual.iter()).all(|(member, actual)| {
+                        self.pattern_matches(member, actual, bindings, owner)
+                    })
+            }
+            (Pattern::Type(expected), _) => {
+                let checkpoint = self.inference.checkpoint();
+                let fits = self
+                    .instantiate_host_type(expected, &mut BTreeMap::new(), "", owner, None)
+                    .is_ok_and(|expected| self.unify_type(&expected, &ty));
+                self.inference.rollback(checkpoint);
+                fits
+            }
             (Pattern::Variable(index), _) => match bindings.get(index) {
                 Some(bound) => *bound == ty,
                 None => {
@@ -15074,7 +15183,7 @@ impl<'a> Parser<'a> {
             (Pattern::Unit, Ty::Unit) => true,
             (Pattern::Range(element), Ty::Range(actual))
             | (Pattern::Option(element), Ty::Option(actual)) => {
-                self.pattern_matches(element, actual, bindings)
+                self.pattern_matches(element, actual, bindings, owner)
             }
             (Pattern::Builtin(builtin), _) => builtin
                 .name()
@@ -15091,6 +15200,7 @@ impl<'a> Parser<'a> {
         bindings: &mut BTreeMap<u32, Ty>,
         parameters: &mut BTreeMap<ImmutableString, Ty>,
         operation: &str,
+        owner: Option<&crate::host::facade::Dependency>,
     ) -> Result<Ty, Error> {
         use crate::host::signature::Pattern;
         Ok(match pattern {
@@ -15115,11 +15225,20 @@ impl<'a> Parser<'a> {
                 None,
             )?,
             Pattern::Range(element) => Ty::Range(Box::new(
-                self.pattern_type(element, bindings, parameters, operation)?,
+                self.pattern_type(element, bindings, parameters, operation, owner)?,
             )),
             Pattern::Option(element) => Ty::Option(Box::new(
-                self.pattern_type(element, bindings, parameters, operation)?,
+                self.pattern_type(element, bindings, parameters, operation, owner)?,
             )),
+            Pattern::Tuple(members) => Ty::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.pattern_type(member, bindings, parameters, operation, owner))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Pattern::Type(ty) => {
+                self.instantiate_host_type(ty, &mut BTreeMap::new(), operation, owner, None)?
+            }
         })
     }
 
@@ -36974,7 +37093,7 @@ impl<'a> Parser<'a> {
             }
             #[cfg(feature = "rust-import")]
             if let item::Import::Type { definition, owner } = &binding.target
-                && matches!(definition.shape(), crate::host::type_def::Shape::Enum(_))
+                && names_variant(definition, &member)
             {
                 return self.parse_imported_variant(
                     binding.qualified,
@@ -37159,7 +37278,7 @@ impl<'a> Parser<'a> {
             )? {
                 return Ok(value);
             }
-            if matches!(definition.shape(), crate::host::type_def::Shape::Enum(_)) {
+            if names_variant(&definition, &member) {
                 return self.parse_imported_variant(
                     owner,
                     definition,

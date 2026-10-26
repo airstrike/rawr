@@ -2864,7 +2864,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         const RELATION_IMPLEMENTATIONS: usize = 64;
         // `P: Into<T>`, as Freya's `WindowConfig::new(impl Into<AppComponent>)`:
         // `T`'s implementations of `From<F>` for a parameter `F`, so the
-        // classifier can read the callable one (D551.6).
+        // classifier can read the callable one (D551.6), and those for a
+        // concrete `S`, as Freya's `From<(u8, u8, u8)> for Fill`, so it can
+        // read which argument shapes give `T`.
         if obligation.polarity == ty::PredicatePolarity::Positive
             && obligation.associated.is_none()
             && Some(obligation.trait_id) == self.tcx.get_diagnostic_item(rustc_span::sym::Into)
@@ -2883,22 +2885,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             });
             for impl_id in implementations.into_iter().take(RELATION_IMPLEMENTATIONS) {
                 self.budget.edge(1)?;
-                let generic_source =
-                    self.tcx
-                        .impl_opt_trait_ref(impl_id)
-                        .is_some_and(|reference| {
-                            matches!(
-                                reference
-                                    .instantiate_identity()
-                                    .skip_norm_wip()
-                                    .args
-                                    .get(1)
-                                    .and_then(|argument| argument.as_type())
-                                    .map(|source| source.kind()),
-                                Some(ty::Param(_))
-                            )
-                        });
-                if generic_source && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
+                if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
                     self.request_implementation(impl_id, obligation.relevance, None)?;
                 }
             }

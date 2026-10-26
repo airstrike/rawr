@@ -6319,12 +6319,15 @@ fn render_function_arguments(
                         output,
                     )?;
                 } else {
-                    let ty = substitute(ty, signature, substitutions)?;
-                    if let Some(profile) = profile {
-                        render_take_profile(position, runtime, ty, profile, output)?;
-                    } else {
-                        render_take(position, runtime, ty, output)?;
-                    }
+                    render_take_input(
+                        position,
+                        runtime,
+                        ty,
+                        signature,
+                        substitutions,
+                        profile,
+                        output,
+                    )?;
                 }
                 runtime = runtime.checked_add(1).ok_or(request::Error::Limit {
                     resource: "adapter argument cardinality",
@@ -6561,14 +6564,58 @@ fn render_arguments_with(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     for (index, ty) in signature.inputs().iter().enumerate() {
-        render_take(
+        render_take_input(
             index,
             index + offset,
-            substitute(ty, signature, substitutions)?,
+            ty,
+            signature,
+            substitutions,
+            None,
             output,
         )?;
     }
     Ok(())
+}
+
+/// [`render_take`] of an input declared `ty`, at its instance's type. An
+/// input of a type parameter names that type where it is taken: an
+/// argument's `impl Trait` has no turbofish to name it (E0632), as
+/// Freya's `width(impl Into<Size>)` has none.
+fn render_take_input(
+    local: usize,
+    index: usize,
+    ty: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    profile: Option<&crate::profile::Proof>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let generic = matches!(ty, convert::Type::Parameter(_));
+    let ty = substitute(ty, signature, substitutions)?;
+    let mut taken = Vec::new();
+    match profile {
+        Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
+        None => render_take(local, index, ty, &mut taken)?,
+    }
+    let annotation = generic
+        .then(|| concrete_type(ty))
+        .flatten()
+        .filter(|_| !is_value(ty));
+    let Some(annotation) = annotation else {
+        return output
+            .write_all(&taken)
+            .map_err(|_| request::Error::Encoding);
+    };
+    let taken = String::from_utf8(taken)
+        .map_err(|_| request::Error::Encoding)?
+        .replacen(
+            &format!("let argument_{local} = "),
+            &format!("let argument_{local}: {annotation} = "),
+            1,
+        );
+    output
+        .write_all(taken.as_bytes())
+        .map_err(|_| request::Error::Encoding)
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -6713,15 +6760,18 @@ fn render_take(
                 field: "static function item entered runtime argument decoding",
             });
         }
-        convert::Type::Sequence { .. } | convert::Type::Tuple(_) => {
+        convert::Type::Sequence { .. } => {
             return Err(request::Error::Drift {
-                field: "output-only sequence or tuple entered runtime argument decoding",
+                field: "output-only sequence entered runtime argument decoding",
             });
         }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_take(local, index, payload, output);
         }
-        convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Range(_) => {
+        convert::Type::Option(_)
+        | convert::Type::Result(..)
+        | convert::Type::Range(_)
+        | convert::Type::Tuple(_) => {
             // A Rawr `Option` of the converted `T`, a Rawr `Result` of the
             // converted `T` and `E`, or a float range.
             let mut converted = String::new();
@@ -6889,9 +6939,31 @@ fn render_from_dynamic(
                 field: "static function item entered runtime argument decoding",
             });
         }
-        convert::Type::Sequence { .. } | convert::Type::Tuple(_) => {
+        // A Rawr tuple, an array of its members, as Rust's tuple of their
+        // converted values.
+        convert::Type::Tuple(members) => {
+            let items = format!("items_{depth}");
+            write!(
+                output,
+                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|{items}| {{ if {items}.len() != {} {{ return Err(Error::TypeMismatch); }} let mut {items} = {items}.into_iter(); Ok::<_, Error>((",
+                members.len()
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            for (member, ty) in members.iter().enumerate() {
+                let inner = format!("inner_{depth}_{member}");
+                let mut converted = String::new();
+                render_from_dynamic(ty, &inner, depth + 1, &mut converted)?;
+                write!(
+                    output,
+                    "{{ let {inner} = {items}.next().ok_or(Error::TypeMismatch)?; ({converted})? }}, "
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
+            write!(output, ")) }})")
+        }
+        convert::Type::Sequence { .. } => {
             return Err(request::Error::Drift {
-                field: "output-only sequence or tuple entered runtime argument decoding",
+                field: "output-only sequence entered runtime argument decoding",
             });
         }
     }
@@ -7480,7 +7552,7 @@ fn render_generic_arguments(
             continue;
         }
         // An argument's `impl Trait` takes no generic argument (E0632).
-        if parameter.name().starts_with("impl ") {
+        if parameter.name().starts_with("impl ") || parameter.is_argument_impl() {
             if parameter.kind() == crate::classify::representability::signature::Kind::Type {
                 type_index += 1;
             }

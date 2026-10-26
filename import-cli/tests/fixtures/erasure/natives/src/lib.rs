@@ -231,15 +231,173 @@ pub trait LayoutExt: Sized {
 pub struct Layout {
     pub width: i64,
     pub centered: bool,
+    pub size: (Size, Size),
+    pub padding: Gaps,
+}
+
+/// Freya's `Size`, which `width(impl Into<Size>)` takes.
+#[derive(Default, Clone, Debug, PartialEq)]
+pub enum Size {
+    #[default]
+    Inner,
+    Fill,
+    Pixels(f32),
+}
+
+impl Size {
+    pub fn fill() -> Self {
+        Size::Fill
+    }
+
+    pub fn px(px: f32) -> Self {
+        Size::Pixels(px)
+    }
+}
+
+/// Freya's `Gaps`, which `padding(impl Into<Gaps>)` takes, also from an
+/// `f32` or a pair.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct Gaps {
+    pub top: f32,
+    pub right: f32,
+}
+
+impl Gaps {
+    pub const fn new_all(gaps: f32) -> Self {
+        Gaps {
+            top: gaps,
+            right: gaps,
+        }
+    }
+}
+
+impl From<f32> for Gaps {
+    fn from(gaps: f32) -> Self {
+        Gaps::new_all(gaps)
+    }
+}
+
+impl From<(f32, f32)> for Gaps {
+    fn from((top, right): (f32, f32)) -> Self {
+        Gaps { top, right }
+    }
+}
+
+/// Freya's `Color`, with associated constants.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct Color(u32);
+
+impl Color {
+    pub const WHITE: Self = Color::new(0xFFFFFFFF);
+    pub const BLACK: Color = Color::new(0xFF000000);
+
+    pub const fn new(value: u32) -> Self {
+        Color(value)
+    }
+
+    pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+        Color(0xFF000000 | (r as u32) << 16 | (g as u32) << 8 | b as u32)
+    }
+}
+
+impl From<(u8, u8, u8)> for Color {
+    fn from((r, g, b): (u8, u8, u8)) -> Self {
+        Color::from_rgb(r, g, b)
+    }
+}
+
+/// Freya's `Fill`, which `background(impl Into<Fill>)` and `color(impl
+/// Into<Fill>)` take, from a `Color`, an RGB or RGBA tuple, or a `u32`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fill {
+    Color(Color),
+}
+
+impl Default for Fill {
+    fn default() -> Self {
+        Fill::Color(Color::default())
+    }
+}
+
+impl From<Color> for Fill {
+    fn from(color: Color) -> Self {
+        Fill::Color(color)
+    }
+}
+
+impl From<(u8, u8, u8)> for Fill {
+    fn from(color: (u8, u8, u8)) -> Self {
+        Fill::Color(color.into())
+    }
+}
+
+impl From<(u8, u8, u8, f32)> for Fill {
+    fn from((r, g, b, a): (u8, u8, u8, f32)) -> Self {
+        let alpha = ((a * 255.0) as u32) << 24;
+        Fill::Color(Color(alpha | Color::from_rgb(r, g, b).0 & 0xFFFFFF))
+    }
+}
+
+impl From<(u8, u8, u8, u8)> for Fill {
+    fn from((r, g, b, a): (u8, u8, u8, u8)) -> Self {
+        Fill::Color(Color(
+            (a as u32) << 24 | Color::from_rgb(r, g, b).0 & 0xFFFFFF,
+        ))
+    }
+}
+
+impl From<u32> for Fill {
+    fn from(color: u32) -> Self {
+        Fill::Color(Color(color))
+    }
+}
+
+/// Freya's `StyleExt`, and `BackgroundExt: StyleExt` implemented empty.
+pub trait StyleExt: Sized {
+    fn style_mut(&mut self) -> &mut Fill;
+}
+
+pub trait BackgroundExt: StyleExt {
+    fn background(mut self, background: impl Into<Fill>) -> Self {
+        *self.style_mut() = background.into();
+        self
+    }
+}
+
+/// Freya's `TextStyleExt`, whose default `color` an inherent `color` of
+/// the same shape shadows, as `Rect::color` does.
+pub trait TextStyleExt: Sized {
+    fn text_color_mut(&mut self) -> &mut Fill;
+
+    fn color(mut self, color: impl Into<Fill>) -> Self {
+        *self.text_color_mut() = Fill::Color(Color::new(0));
+        let _ = color.into();
+        self
+    }
 }
 
 /// Freya's `ContainerExt` and `ContainerSizeExt`: a blanket impl over a
 /// marker trait, with default methods returning `Self`.
-pub trait ContainerExt: LayoutExt {}
+pub trait ContainerExt: LayoutExt {
+    fn padding(mut self, padding: impl Into<Gaps>) -> Self {
+        self.get_layout().padding = padding.into();
+        self
+    }
+}
 
 pub trait ContainerSizeExt: LayoutExt {
     fn expanded(mut self) -> Self {
         self.get_layout().width = 100;
+        self
+    }
+
+    fn width(mut self, width: impl Into<Size>) -> Self {
+        self.get_layout().size.0 = width.into();
+        self
+    }
+
+    fn height(mut self, height: impl Into<Size>) -> Self {
+        self.get_layout().size.1 = height.into();
         self
     }
 }
@@ -268,6 +426,8 @@ pub trait ChildrenExt: Sized {
 #[derive(Default)]
 pub struct Rect {
     layout: Layout,
+    background: Fill,
+    color: Fill,
     children: Vec<Element>,
     presses: Vec<EventHandler<Event<PressEventData>>>,
 }
@@ -277,6 +437,24 @@ pub fn rect() -> Rect {
 }
 
 impl Rect {
+    /// Freya's inherent `Rect::color(impl Into<Fill>)`.
+    pub fn color(mut self, color: impl Into<Fill>) -> Self {
+        self.color = color.into();
+        self
+    }
+
+    /// The styling the builder methods set.
+    pub fn styled(&self) -> String {
+        format!(
+            "{:?} {:?} {:?} {:?} {:?}",
+            self.layout.size.0,
+            self.layout.size.1,
+            self.layout.padding,
+            self.background,
+            self.color
+        )
+    }
+
     pub fn describe(&self) -> String {
         let texts = self
             .children
@@ -299,6 +477,19 @@ impl LayoutExt for Rect {
 }
 
 impl ContainerExt for Rect {}
+impl BackgroundExt for Rect {}
+
+impl TextStyleExt for Rect {
+    fn text_color_mut(&mut self) -> &mut Fill {
+        &mut self.color
+    }
+}
+
+impl StyleExt for Rect {
+    fn style_mut(&mut self) -> &mut Fill {
+        &mut self.background
+    }
+}
 impl ContainerWithContentExt for Rect {}
 
 impl ChildrenExt for Rect {

@@ -14,6 +14,18 @@ pub struct Parameter {
     /// type that fills it must implement them, as rustc requires of the
     /// type it erases to `Value` (review 3).
     bounds: Box<[Box<str>]>,
+    /// An argument's `impl Trait` other than a callable, as Freya's
+    /// `width(impl Into<Size>)` takes: its name is [`argument_impl_name`],
+    /// the call's argument fills it, and no turbofish names it (E0632).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    argument_impl: bool,
+}
+
+/// The name a signature declares an argument's `impl Trait` by. rustc names
+/// it by its bounds, which two arguments can share and no path can spell.
+#[must_use]
+pub fn argument_impl_name(index: u32) -> Box<str> {
+    format!("impl_{index}").into_boxed_str()
 }
 
 /// The std traits a type parameter's bound names that a script type
@@ -164,7 +176,22 @@ impl Parameter {
             kind,
             default: None,
             bounds: Box::new([]),
+            argument_impl: false,
         }
+    }
+
+    /// This parameter as an argument's `impl Trait`, renamed so a
+    /// signature can declare it.
+    pub(crate) fn into_argument_impl(mut self) -> Self {
+        self.name = argument_impl_name(self.index);
+        self.argument_impl = true;
+        self
+    }
+
+    /// Whether this is an argument's `impl Trait` other than a callable.
+    #[must_use]
+    pub const fn is_argument_impl(&self) -> bool {
+        self.argument_impl
     }
 
     pub(crate) fn with_bounds(mut self, bounds: Box<[Box<str>]>) -> Self {

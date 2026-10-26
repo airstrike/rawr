@@ -52,6 +52,10 @@ pub enum Pattern {
     Range(Box<Pattern>),
     /// `Option<T>`.
     Option(Box<Pattern>),
+    /// `(A, B, ..)`.
+    Tuple(Box<[Pattern]>),
+    /// A type without variables, as Freya's `Fill` or `Color` is.
+    Type(host::type_ref::Type),
 }
 
 impl Relation {

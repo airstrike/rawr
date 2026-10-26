@@ -1246,7 +1246,11 @@ fn signature(
                 .cases()
                 .iter()
                 .map(|case| (case.this(), case.arguments())),
-            pattern,
+            |source| {
+                pattern(source, &|nominal| {
+                    ty(facade, nominal, profile, installed).ok()
+                })
+            },
         ) {
             builder.relation(relation)?;
         }
@@ -1254,8 +1258,31 @@ fn signature(
     Ok(builder.finish())
 }
 
-/// A relation's type, when it is one a relation can match.
-fn pattern(source: &facade::Type) -> Option<host::signature::Pattern> {
+/// Whether `source` names an implementation's own type parameter or the
+/// item's.
+fn names_variable(source: &facade::Type) -> bool {
+    match source {
+        facade::Type::Variable(_) | facade::Type::Parameter(_) => true,
+        facade::Type::Nominal { arguments, .. } | facade::Type::Tuple(arguments) => {
+            arguments.iter().any(names_variable)
+        }
+        facade::Type::Option(element)
+        | facade::Type::Array(element)
+        | facade::Type::Range(element) => names_variable(element),
+        facade::Type::Result(ok, err) => names_variable(ok) || names_variable(err),
+        facade::Type::FunctionItem { input, output } | facade::Type::Callable { input, output } => {
+            names_variable(input) || names_variable(output)
+        }
+        _ => false,
+    }
+}
+
+/// A relation's type, when it is one a relation can match. `nominal` gives
+/// a facade type as a host type.
+fn pattern(
+    source: &facade::Type,
+    nominal: &dyn Fn(&facade::Type) -> Option<host::type_ref::Type>,
+) -> Option<host::signature::Pattern> {
     use host::signature::Pattern;
     use host::type_ref::Builtin;
     Some(match source {
@@ -1267,8 +1294,15 @@ fn pattern(source: &facade::Type) -> Option<host::signature::Pattern> {
         facade::Type::Primitive(name) => Pattern::Builtin(Builtin::primitive(name)?),
         facade::Type::Parameter(name) => Pattern::Parameter(name.as_ref().into()),
         facade::Type::Variable(index) => Pattern::Variable(*index),
-        facade::Type::Range(element) => Pattern::Range(Box::new(pattern(element)?)),
-        facade::Type::Option(element) => Pattern::Option(Box::new(pattern(element)?)),
+        facade::Type::Range(element) => Pattern::Range(Box::new(pattern(element, nominal)?)),
+        facade::Type::Option(element) => Pattern::Option(Box::new(pattern(element, nominal)?)),
+        facade::Type::Tuple(members) => Pattern::Tuple(
+            members
+                .iter()
+                .map(|member| pattern(member, nominal))
+                .collect::<Option<_>>()?,
+        ),
+        facade::Type::Nominal { .. } if !names_variable(source) => Pattern::Type(nominal(source)?),
         _ => return None,
     })
 }

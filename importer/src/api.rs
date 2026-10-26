@@ -26,7 +26,7 @@ pub(crate) mod retained;
 #[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
 
-const CANONICALIZER_VERSION: u32 = 14;
+const CANONICALIZER_VERSION: u32 = 15;
 
 /// Uninhabited marker proving compiler sidecars were captured and canonicalized.
 pub enum Captured {}

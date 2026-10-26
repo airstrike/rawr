@@ -2065,8 +2065,37 @@ fn converted_pattern(
         }
         Type::Range(element) => Pattern::Range(Box::new(converted_pattern(element, parameters)?)),
         Type::Option(element) => Pattern::Option(Box::new(converted_pattern(element, parameters)?)),
+        Type::Tuple(members) => Pattern::Tuple(
+            members
+                .iter()
+                .map(|member| converted_pattern(member, parameters))
+                .collect::<Option<_>>()?,
+        ),
+        Type::Nominal { .. } if !names_impl_parameter(ty) => {
+            Pattern::Type(Types::convert_charged(ty, parameters).ok()?)
+        }
         _ => return None,
     })
+}
+
+/// Whether `ty` names an implementation's own type parameter.
+fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
+        Type::Unit | Type::Builtin(_) => false,
+        Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
+            arguments.iter().any(names_impl_parameter)
+        }
+        Type::Option(element) | Type::Range(element) | Type::Sequence { element, .. } => {
+            names_impl_parameter(element)
+        }
+        Type::Result(ok, err) => names_impl_parameter(ok) || names_impl_parameter(err),
+        Type::FunctionItem { input, output } => {
+            names_impl_parameter(input) || names_impl_parameter(output)
+        }
+        Type::ProfileMessage { payload, .. } => names_impl_parameter(payload),
+    }
 }
 
 /// The signature of a generic item whose callable parameter takes a script

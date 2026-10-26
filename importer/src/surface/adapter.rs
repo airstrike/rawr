@@ -862,11 +862,18 @@ fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::P
         .try_reserve_exact(source.len())
         .map_err(|_| Error::Allocation)?;
     for parameter in source {
-        parameters.push(signature::Parameter::new(
+        let cloned = signature::Parameter::new(
             parameter.index(),
             clone_str(parameter.name())?,
             parameter.kind(),
-        ));
+        );
+        // An argument's `impl Trait` keeps its mark, so no turbofish names
+        // it (E0632).
+        parameters.push(if parameter.is_argument_impl() {
+            cloned.into_argument_impl()
+        } else {
+            cloned
+        });
     }
     Ok(parameters.into_boxed_slice())
 }

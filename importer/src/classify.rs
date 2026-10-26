@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 20;
+const CLASSIFIER_VERSION: u32 = 21;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -700,14 +700,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        self.declared_parameters(generics, &[])
+        self.declared_parameters(generics, &[], false)
     }
 
     /// The generic parameters, but those in `strings`, which take a `String`.
+    /// `function` admits a function's argument `impl Trait`, which no type
+    /// has.
     fn declared_parameters(
         &self,
         generics: &model::Generics,
         strings: &[u32],
+        function: bool,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
         for parameter in generics
             .parameters()
@@ -717,10 +720,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
             // An argument's `impl Fn(..)` takes a script closure, and no
-            // signature names it.
+            // signature names it. Any other argument's `impl Trait` is a
+            // type parameter the call's argument fills, as `<T: Trait>` is
+            // (`argument_impl_name`).
             if !facade_segment_nameable(parameter.name())
-                && !(parameter.name().starts_with("impl ")
-                    && self.callable_bound(generics, parameter.index()))
+                && !(function && parameter.name().starts_with("impl "))
             {
                 return Err(representability::reject::Kind::UnnameableType.into());
             }
@@ -758,14 +762,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 },
                 model::Default::Absent => None,
             };
-            parameters.push(
-                representability::signature::Parameter::new(
-                    parameter.index(),
-                    parameter.name().into(),
-                    kind,
-                )
-                .with_default(default),
+            let declared = representability::signature::Parameter::new(
+                parameter.index(),
+                parameter.name().into(),
+                kind,
             );
+            let declared = if parameter.name().starts_with("impl ")
+                && !self.callable_bound(generics, parameter.index())
+            {
+                declared.into_argument_impl()
+            } else {
+                declared
+            };
+            parameters.push(declared.with_default(default));
         }
         Ok(parameters.into_boxed_slice())
     }
@@ -845,7 +854,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         generics: &model::Generics,
         strings: &[u32],
     ) -> Result<FunctionParameters, Failure> {
-        let mut parameters = self.declared_parameters(generics, strings)?;
+        let mut parameters = self.declared_parameters(generics, strings, true)?;
         if generics.predicates().len() == 0 {
             return Ok(FunctionParameters {
                 parameters,
@@ -1310,6 +1319,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
+            // `P: Into<T>` of a concrete `T`, as Freya's `background(impl
+            // Into<Fill>)`: `T`'s implementations of `From<S>` for a
+            // concrete `S` are the cases, each `S` a self type that gives
+            // `T`. An argument of one case's shape is that `S`, so
+            // `(35, 35, 35)` is `(u8, u8, u8)` and `12.` an `f32`, as
+            // rustc's trait selection infers it.
+            if let [target] = &*converted
+                && !names_other_parameter(target, u32::MAX)
+                && self.is_core_trait(trait_id, "Into")
+            {
+                let cases = self.conversion_cases(target)?;
+                if !cases.is_empty() {
+                    self.retain_array::<Case>(cases.len())?;
+                    relations.push(Relation::new(*index, converted, cases));
+                }
+                continue;
+            }
             // `T: Mul<T>` ties nothing new; `R: SampleRange<T>` ties `T`.
             if !converted.iter().any(|ty| names_other_parameter(ty, *index)) {
                 continue;
@@ -1360,6 +1386,51 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         self.retain_array::<Relation>(relations.len())?;
         Ok(relations.into_boxed_slice())
+    }
+
+    /// The cases of `P: Into<target>`: each implementation of `From<S>`
+    /// for `target` whose `S` names no parameter, as a self type `S` with
+    /// the trait argument `target`, once each. rustc's reflexive `From<T>
+    /// for T` is none of them: an argument that is already `target` needs
+    /// nothing inferred.
+    fn conversion_cases(
+        &self,
+        target: &representability::convert::Type,
+    ) -> Result<Box<[representability::signature::Case]>, Failure> {
+        use representability::signature::Case;
+        /// More implementations than this are not read as cases.
+        const CASES: usize = 64;
+        let mut cases = Vec::<Case>::new();
+        for implementation in self.graph.implementations() {
+            let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+                continue;
+            };
+            let [_, model::Argument::Type(source)] = arguments.as_ref() else {
+                continue;
+            };
+            if implementation.polarity() != model::Polarity::Positive
+                || !self.is_core_trait(id, "From")
+                || self.convert(implementation.self_type()).ok().as_ref() != Some(target)
+            {
+                continue;
+            }
+            // A tuple, as `(u8, u8, u8)`, is a value Rawr holds.
+            let Ok(source) = self.convert_value(source) else {
+                continue;
+            };
+            if names_other_parameter(&source, u32::MAX) {
+                continue;
+            }
+            let case = Case::new(source, Box::new([target.clone()]));
+            if !cases.contains(&case) {
+                if cases.len() == CASES {
+                    return Ok(Box::default());
+                }
+                cases.try_reserve(1).map_err(|_| Error::Allocation)?;
+                cases.push(case);
+            }
+        }
+        Ok(cases.into_boxed_slice())
     }
 
     fn definition_name(&self, definition: &api::identity::Definition) -> Option<&str> {
@@ -3653,15 +3724,23 @@ impl<P: api::Phase> Context<'_, P> {
         ty: &model::Type,
         value: &model::Default<model::Const>,
     ) -> Result<representability::constant::Plan, Failure> {
+        use representability::convert::Type;
         let model::Default::Present(value) = value else {
             return Err(representability::reject::Kind::MissingConstantValue.into());
         };
+        let ty = self.convert_value(ty)?;
+        // A constant of another type, as Freya's `Color::WHITE: Color =
+        // Color::new(..)`, is read by its path where the bridge runs, as a
+        // static is: each read is a new value, as Rust's is.
+        if !matches!(ty, Type::Unit | Type::Builtin(_)) {
+            return Ok(representability::constant::Plan::new(ty, None));
+        }
         if let model::Const::Literal { ty, value } = value {
             self.retain_str(ty)?;
             self.retain_str(value)?;
         }
         Ok(representability::constant::Plan::new(
-            self.convert_value(ty)?,
+            ty,
             Some(constant(value)?),
         ))
     }
