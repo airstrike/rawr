@@ -141,9 +141,10 @@ pub(crate) struct Recorder {
     /// Where each tuple struct's or variant's constructor ends (`Some(1)`),
     /// which is no call that makes a value at run time.
     constructors: BTreeSet<Position>,
-    /// The value each part (a field, an element) is read from, and whether
-    /// that value is a reference, by the part's span.
-    projections: BTreeMap<Span, (Span, bool)>,
+    /// The value each part (a field, an element) is read from, whether that
+    /// value is a reference, and whether it is made at run time, by the
+    /// part's span.
+    projections: BTreeMap<Span, (Span, bool, bool)>,
 }
 
 impl Default for Recorder {
@@ -1335,9 +1336,26 @@ impl Recorder {
     }
 
     /// The value spanning `part` is a part of the one spanning `base`, read
-    /// through it when it is a `reference`.
-    pub(crate) fn projected(&mut self, part: Span, base: Span, reference: bool) {
-        self.projections.insert(part, (base, reference));
+    /// through it when it is a `reference`. `made` when that value is made
+    /// at run time rather than a constant.
+    pub(crate) fn projected(&mut self, part: Span, base: Span, reference: bool, made: bool) {
+        // Each step reads from a value written within the part, so a chain
+        // of them ends. One spanning what it reads from adds none.
+        if base != part && part.start() <= base.start() && base.end() <= part.end() {
+            self.projections.insert(part, (base, reference, made));
+        }
+    }
+
+    /// Whether the part spanning `span` is read from a value made at run
+    /// time (`vec![1, 2][0]`), which no constant promotes.
+    pub(crate) fn part_of_made(&self, mut span: Span) -> bool {
+        while let Some(&(base, _, made)) = self.projections.get(&span) {
+            if made {
+                return true;
+            }
+            span = base;
+        }
+        false
     }
 
     /// Whether the part spanning `span` is a place in Rust: a part of a
@@ -1345,7 +1363,7 @@ impl Recorder {
     /// call made is a part of a temporary.
     pub(crate) fn in_place(&self, mut span: Span) -> bool {
         let mut projected = false;
-        while let Some(&(base, reference)) = self.projections.get(&span) {
+        while let Some(&(base, reference, _)) = self.projections.get(&span) {
             if reference {
                 return true;
             }

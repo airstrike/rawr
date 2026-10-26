@@ -667,6 +667,9 @@ impl Parser<'_> {
     /// time, rather than a constant promoted to `'static`: it reads a local
     /// or calls something, or only a call makes a value of its type.
     fn made_here(&self, span: Span, ty: &Ty) -> bool {
+        if self.flow().part_of_made(span) {
+            return true;
+        }
         matches!(
             ty,
             Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
@@ -679,8 +682,10 @@ impl Parser<'_> {
     /// holds that reference's inner borrows, which these facts can't tell
     /// apart from its own loan yet.
     pub(super) fn part_of(&self, base: (Span, &Ty), whole: Span, ty: &Ty) {
-        let reference = is_reference(&self.inference.resolve(base.1));
-        self.flow().projected(whole, base.0, reference);
+        let base_ty = self.inference.resolve(base.1);
+        let reference = is_reference(&base_ty);
+        let made = self.made_here(base.0, &base_ty);
+        self.flow().projected(whole, base.0, reference, made);
         if self.may_hold_borrow(ty) && !reference {
             self.flow().same_origins(whole, base.0);
         }

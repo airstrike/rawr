@@ -1,6 +1,8 @@
 # rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
 signatures/branch_call_borrows.rs	E0502:10
 signatures/branch_call_borrows_ok.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/common_signatures_ok.rs	ok	0	"hello world hello world a Some(\"v\")\n1\nab (\"x\", \"y\")\n"
+signatures/common_temporaries_ok.rs	ok	0	"3\nyes\nrwar\n2 6 RAWR 4 rawrrawr rawr 3\n"
 signatures/elided_hidden_input_ok.rs	ok	0	"4 Some(\"b\") n 4\n"
 signatures/elided_input_named_output.rs	E0621:2
 signatures/elided_input_static_output.rs	lifetime:2
@@ -57,9 +59,13 @@ signatures/temporary_call_argument_ok.rs	ok	0	"1 b\n"
 signatures/temporary_extended_ok.rs	ok	0	"a b\n"
 signatures/temporary_extended_sum_ok.rs	ok	0	"3 [2] 2\n"
 signatures/temporary_function_value.rs	E0716:6
+signatures/temporary_index_assigned.rs	E0716:58
+signatures/temporary_index_extended.rs	ok	0	"1 b\n"
+signatures/temporary_index_returned.rs	E0515:2
 signatures/temporary_inner_let.rs	E0716:4
 signatures/temporary_inner_let_ok.rs	ok	0	"\na\n"
 signatures/temporary_iter.rs	E0716:58
+signatures/temporary_let_else.rs	E0716:6
 signatures/temporary_match_arm_extended_ok.rs	ok	0	"b d\n"
 signatures/temporary_method_ref.rs	E0716:16
 signatures/temporary_method_ref_ok.rs	ok	0	"1 s s\n"
