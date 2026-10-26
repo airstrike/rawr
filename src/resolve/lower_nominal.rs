@@ -3492,6 +3492,10 @@ enum PreludeOp {
     CellRelease,
     CellReplace,
     CellClone,
+    /// `cell.update(place, rhs, apply)`: a borrow guard's place given
+    /// `apply(value, rhs)` of its value, through one call of the guard's
+    /// method, as rustc's `*state.write() += rhs` is (D554.7(f)).
+    CellUpdate,
     /// A string's `lines()`, `split_whitespace()` and `split(pattern)` (a
     /// `char` or a string): the array of its pieces.
     StrLines,
@@ -3614,6 +3618,7 @@ impl PreludeOp {
             Self::CellRelease => "cell.release",
             Self::CellReplace => "cell.replace",
             Self::CellClone => "cell.clone",
+            Self::CellUpdate => "cell.update",
             Self::ReverseInner => "reverse.0",
             Self::StrLines => "str.lines",
             Self::StrSplitWhitespace => "str.split-whitespace",
@@ -3688,6 +3693,11 @@ impl PreludeOp {
             Self::CellBorrow | Self::CellSet | Self::CellReplace => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
+            Self::CellUpdate => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::FnPtr>(),
+            ],
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
@@ -4085,6 +4095,7 @@ impl PreludeOp {
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
+            Self::CellUpdate => return cell::update(context, args),
             Self::Join => {
                 let array = args[0]
                     .as_array_ref()
@@ -7719,10 +7730,44 @@ enum PlaceStep {
     },
     /// A `RefCell` borrow's value: read from the borrow, stored back into
     /// the cell, and the borrow released after the statement when it was
-    /// made in it.
+    /// made in it. A `native` one is an imported method's borrow guard
+    /// (`island::place::Place`), which `op=` updates through one call.
     Cell {
         release: bool,
+        native: bool,
     },
+}
+
+/// Whether `op=` on `nested` opens it ([`Parser::open_compound`]): it
+/// passes through a `RefCell` borrow or a borrow guard.
+fn opens_compound(nested: &NestedLvalue) -> bool {
+    nested
+        .steps
+        .iter()
+        .any(|step| matches!(step, PlaceStep::Cell { .. }))
+}
+
+/// A nested place `op=` opened: the statements before the leaf's change,
+/// the leaf's place, and the statements after it.
+struct OpenedPlace {
+    opening: origin::Fragment,
+    place: origin::Fragment,
+    store: origin::Fragment,
+}
+
+impl OpenedPlace {
+    /// The statement storing `replacement` in the leaf.
+    fn store(self, replacement: origin::Fragment) -> origin::Fragment {
+        let mut rendered = origin::Fragment::plain("{ ");
+        rendered.push(self.opening);
+        rendered.push(self.place);
+        rendered.push_text(" = ");
+        rendered.push(replacement);
+        rendered.push_text("; ");
+        rendered.push(self.store);
+        rendered.push_text("}");
+        rendered
+    }
 }
 
 #[derive(Clone)]
@@ -9048,9 +9093,9 @@ struct Parser<'a> {
     /// `let` keeps (`cell.rs`).
     last_cell_borrow: Option<cell::CellBorrow>,
     /// The locals bound to a `RefCell` borrow, by name: their declaration,
-    /// the hidden local holding the borrow, whether it is mutable and the
-    /// value's type.
-    cell_guards: BTreeMap<ImmutableString, (Span, String, bool, Ty)>,
+    /// the hidden local holding the borrow, whether it is mutable, the
+    /// value's type, and whether it is an imported method's borrow guard.
+    cell_guards: BTreeMap<ImmutableString, (Span, String, bool, Ty, bool)>,
     /// The second field of `t.0.1`, read with the first.
     pending_member: Option<(ImmutableString, Span)>,
     /// The elements of mutable loops by name: their declaration, their
@@ -18144,7 +18189,10 @@ impl<'a> Parser<'a> {
         expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
             binding: place.as_str().into(),
             base: borrow.clone(),
-            steps: vec![PlaceStep::Cell { release: true }],
+            steps: vec![PlaceStep::Cell {
+                release: true,
+                native: true,
+            }],
             ty: inner.clone(),
         })));
         self.last_cell_borrow = Some(cell::CellBorrow {
@@ -18152,6 +18200,7 @@ impl<'a> Parser<'a> {
             borrow,
             mutable: true,
             inner,
+            native: true,
         });
         expression
     }
@@ -20468,21 +20517,13 @@ impl<'a> Parser<'a> {
             });
         }
         let mut replacement = self.parse_expr()?;
-        // `*cell.borrow_mut() += 1` and `*state.write() += 1`: the place's
-        // own read gives the value the operator changes, so a borrow
-        // guard's method is called once to read it and once to store it.
         let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
             let target = match &lvalue {
-                Lvalue::Nested(nested)
-                    if nested
-                        .steps
-                        .iter()
-                        .any(|step| matches!(step, PlaceStep::Cell { .. })) =>
-                {
-                    let (read, place, store) = self.nested_parts(nested);
-                    opened = Some((read, place.clone(), store));
-                    self.operator_expr(place, lvalue.ty().clone(), value.span)
+                Lvalue::Nested(nested) if opens_compound(nested) => {
+                    let (target, parts) = self.open_compound(nested, value.span, &mut replacement);
+                    opened = Some(parts);
+                    target
                 }
                 _ => self.operator_expr(value.source, lvalue.ty().clone(), value.span),
             };
@@ -20532,17 +20573,7 @@ impl<'a> Parser<'a> {
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
             Lvalue::Nested(nested) => match opened {
-                Some((read, place, store)) => {
-                    let mut rendered = origin::Fragment::plain("{ ");
-                    rendered.push(read);
-                    rendered.push(place);
-                    rendered.push_text(" = ");
-                    rendered.push(replacement.rendered_source());
-                    rendered.push_text("; ");
-                    rendered.push(store);
-                    rendered.push_text("}");
-                    rendered
-                }
+                Some(parts) => parts.store(replacement.rendered_source()),
                 None => self.store_nested(&nested, replacement.rendered_source()),
             },
         };
@@ -24786,8 +24817,16 @@ impl<'a> Parser<'a> {
             });
         }
         let mut replacement = self.parse_expr()?;
+        let mut opened = None;
         if let Some(operator) = compound_operator(&assignment) {
-            let target = self.operator_expr(value.source, lvalue.ty().clone(), value.span);
+            let target = match &lvalue {
+                Lvalue::Nested(nested) if opens_compound(nested) => {
+                    let (target, parts) = self.open_compound(nested, value.span, &mut replacement);
+                    opened = Some(parts);
+                    target
+                }
+                _ => self.operator_expr(value.source, lvalue.ty().clone(), value.span),
+            };
             replacement = self.compound_assignment(operator, target, replacement)?;
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
@@ -24818,7 +24857,10 @@ impl<'a> Parser<'a> {
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
             Lvalue::Nested(nested) => {
-                let stored = self.store_nested(&nested, replacement.rendered_source());
+                let stored = match opened {
+                    Some(parts) => parts.store(replacement.rendered_source()),
+                    None => self.store_nested(&nested, replacement.rendered_source()),
+                };
                 source.push(stored);
                 source.push_text(" }");
             }
@@ -25586,7 +25628,7 @@ impl<'a> Parser<'a> {
         nested: &NestedLvalue,
         replacement: origin::Fragment,
     ) -> origin::Fragment {
-        let (read, place, store) = self.nested_parts_with(nested, true);
+        let (read, place, store) = self.nested_parts_with(nested, true, None);
         let mut rendered = origin::Fragment::plain("{ ");
         rendered.push(read);
         rendered.push(place);
@@ -25598,6 +25640,52 @@ impl<'a> Parser<'a> {
         rendered
     }
 
+    /// The left operand of `place op= value` through a `RefCell` borrow
+    /// or a borrow guard, and the statement's parts. The place's own read
+    /// gives the value the operator changes, so `*cell.borrow_mut() += 1`
+    /// borrows once. Through a borrow guard (D554.7(f)) the right operand
+    /// is evaluated first, as rustc evaluates a primitive `op=`'s, and the
+    /// guard's method is called once to read, change and store the value.
+    fn open_compound(
+        &mut self,
+        nested: &NestedLvalue,
+        at: Span,
+        replacement: &mut ParsedExpr,
+    ) -> (ParsedExpr, OpenedPlace) {
+        let native = nested
+            .steps
+            .iter()
+            .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }));
+        let mut evaluated = origin::Fragment::default();
+        let rhs = native.then(|| {
+            let rhs = self.temporary("rhs");
+            evaluated.push_text(format!("let {rhs} = "));
+            evaluated.push(replacement.rendered_source());
+            evaluated.push_text("; ");
+            let mut operand = self.operator_expr(
+                rhs.as_str().into(),
+                replacement.ty.clone(),
+                replacement.span,
+            );
+            operand.outcome = replacement.outcome;
+            operand.evaluation = replacement.evaluation;
+            *replacement = operand;
+            rhs
+        });
+        let (read, place, store) = self.nested_parts_with(nested, false, rhs.as_deref());
+        let target = self.operator_expr(place.clone(), nested.ty.clone(), at);
+        let mut opening = evaluated;
+        opening.push(read);
+        (
+            target,
+            OpenedPlace {
+                opening,
+                place,
+                store,
+            },
+        )
+    }
+
     /// A nested place as one the runtime assigns and calls methods on: the
     /// statements copying each field on the way into a local, the leaf's
     /// place, and the statements storing the fields back, innermost first.
@@ -25605,16 +25693,20 @@ impl<'a> Parser<'a> {
         &mut self,
         nested: &NestedLvalue,
     ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
-        self.nested_parts_with(nested, false)
+        self.nested_parts_with(nested, false, None)
     }
 
     /// [`Self::nested_parts`] of a place the statement `overwrite`s: a
     /// cell's or a borrow guard's value at the leaf is stored without being
     /// read first, so `*state.write() = v` calls the guard's method once.
+    /// A place an `op=` `updates` with its evaluated right operand, so named,
+    /// changes a borrow guard's value inside one call of its method
+    /// ([`Self::cell_update_step`]).
     fn nested_parts_with(
         &mut self,
         nested: &NestedLvalue,
         overwrite: bool,
+        updates: Option<&str>,
     ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
         let mut place = nested.base.clone();
         let mut read = origin::Fragment::default();
@@ -25647,9 +25739,12 @@ impl<'a> Parser<'a> {
                     stores.push(store);
                     place = origin::Fragment::plain(local);
                 }
-                PlaceStep::Cell { release } => {
+                PlaceStep::Cell { release, native } => {
                     let reads = !(overwrite && index == leaf);
-                    let (cell_read, cell_store, local) = self.cell_step(&place, *release, reads);
+                    let (cell_read, cell_store, local) = match updates {
+                        Some(rhs) if *native => self.cell_update_step(&place, rhs),
+                        _ => self.cell_step(&place, *release, reads),
+                    };
                     read.push(cell_read);
                     stores.push(cell_store);
                     place = origin::Fragment::plain(local);

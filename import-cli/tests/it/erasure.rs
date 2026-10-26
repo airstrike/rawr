@@ -401,6 +401,10 @@ fn main() {
 /// `State::write` give. `*guard` reads a copy of the target and `*guard
 /// op= v` stores the result back, each inside a call that drops the guard
 /// before it returns, so the borrow the guard holds never reaches Rawr.
+/// `op=` calls the guard's method once, after its right operand, as rustc
+/// does (D554.7(f)): the tally's `+= tally.guards()` adds the two guards
+/// made before it. A script `AddAssign` runs inside the guard, and its own
+/// native calls reach the arena the update lends.
 #[test]
 fn a_method_that_gives_a_borrow_guard_is_read_and_written_through_it() {
     let (success, stdout, stderr) = run_at(
@@ -412,6 +416,13 @@ struct Point {
     x: i64,
 }
 
+impl std::ops::AddAssign for Point {
+    fn add_assign(&mut self, other: Point) {
+        let meter = Meter::new(other.x);
+        self.x += *meter.borrow();
+    }
+}
+
 fn main() {
     let meter = Meter::new(1);
     *meter.borrow_mut() += 2;
@@ -420,6 +431,7 @@ fn main() {
     let mut tally = Tally::new();
     *tally.lock() = 10;
     *tally.lock() += 5;
+    *tally.lock() += tally.guards();
     let total = *tally.lock();
     println!(\"tally {} after {} guards\", total, tally.guards());
 
@@ -439,17 +451,19 @@ fn main() {
 
     let mut text = Signal::new(String::from(\"a\"));
     text.write().push_str(\"b\");
+    *text.write() += \"c\";
     println!(\"text {} {}\", *text.read(), text.read().len());
 
     let mut point = Signal::new(Point { x: 1 });
     point.write().x += 2;
+    *point.write() += Point { x: 4 };
     println!(\"point {}\", point.read().x);
 }
 ",
     );
     assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(
-        stdout, "meter 3\ntally 15 after 4 guards\ncount 7\nbumped 25\ntext ab 2\npoint 3\n",
+        stdout, "meter 3\ntally 17 after 4 guards\ncount 7\nbumped 25\ntext abc 3\npoint 7\n",
         "stderr:\n{stderr}"
     );
 }
