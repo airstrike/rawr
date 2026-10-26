@@ -9,7 +9,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Input, Textarea } from "../components/ui/input.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
-import { onTheme, setTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
+import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { cn } from "../lib/utils.ts";
 import { createEditor, setDoc } from "./editor.ts";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
@@ -165,16 +165,6 @@ export default function Playground() {
             )}
           </SelectContent>
         </Select>
-        <ToggleGroup
-          type="single"
-          className="theme-toggle"
-          aria-label="Theme"
-          value={state.theme}
-          onValueChange={(value) => value && setTheme(value as Theme)}
-        >
-          <ToggleGroupItem value="dark" data-theme-item="dark">Dark</ToggleGroupItem>
-          <ToggleGroupItem value="light" data-theme-item="light">Light</ToggleGroupItem>
-        </ToggleGroup>
         <Input
           className="order-3 w-[9em] flex-1 md:flex-none"
           placeholder="size: auto"
