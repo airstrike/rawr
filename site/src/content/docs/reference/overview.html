@@ -8,7 +8,7 @@
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
-  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them. Borrows kept through calls, structs, closures and reference patterns <a href="#lenient">aren&rsquo;t checked yet</a>, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
+  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them. Borrows kept through calls, structs and closures <a href="#lenient">aren&rsquo;t checked yet</a>, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
 </ul>
 
 <h2 id="overview">How a program runs</h2>
@@ -107,7 +107,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
 <ul>
   <li>A borrow that a call&rsquo;s result keeps isn&rsquo;t checked. <code>let first = v.first(); v.push(1); println!("{first:?}");</code> is accepted.</li>
-  <li>A borrow stored in a struct, a collection or an <code>Option</code>, kept by a closure past its statement, or bound by a pattern by reference (<code>ref x</code>, or a match through <code>&amp;T</code>) isn&rsquo;t checked.</li>
+  <li>A borrow stored in a struct, a collection or an <code>Option</code>, or kept by a closure past its statement, isn&rsquo;t checked.</li>
+  <li>A slice pattern&rsquo;s <code>rest @ ..</code> binding and the bindings of a pattern on an imported value aren&rsquo;t checked.</li>
   <li>Lifetimes in signatures and in type annotations aren&rsquo;t checked. <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted. So are returning a reference to a local and <code>let x: &amp;'static i32 = &amp;n;</code>.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
