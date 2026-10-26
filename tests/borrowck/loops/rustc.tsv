@@ -1,0 +1,5 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+loops/while_condition_break_reassigned.rs	ok	0	"2 [1, 3]\n"
+loops/while_condition_break_rest_of_condition.rs	E0502:10
+loops/while_condition_continue_inner_head.rs	ok	0	"1\n1\n1\n[1, 0, 2, 4]\n"
+loops/while_condition_continue_next_iteration.rs	E0502:8
