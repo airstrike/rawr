@@ -211,11 +211,12 @@ A native crate root may call marked modules, and a save reaches the running
 program at its next call. The native `main` runs on the process's main
 thread, so a winit app works. `examples/invaders` is a space-invaders game
 whose rules and drawing reload while you play. A ratatui app works the same
-way with no extra crate. `examples/tui` is a to-do list whose saves repaint
-the terminal at once, and rawr leaves the terminal as it found it. The
-[ratatui docs](https://rawr.airstrike.fyi/docs/ratatui) say how. Planned and
-not built yet: calls from native modules other than the root, and marked
-ratatui code that draws on the `Frame` itself.
+way with no extra crate. `examples/tui` is a to-do list whose marked
+`ui::draw` takes ratatui's `&mut Frame`, which rawr lends it for the call.
+A save repaints the terminal at once, and rawr leaves the terminal as it
+found it. The [ratatui docs](https://rawr.airstrike.fyi/docs/ratatui) say
+how. Planned and not built yet: calls from native modules other than the
+root.
 
 The examples are packages of this repository's Cargo workspace. From its
 root, `cargo run -p invaders` plays the game natively, and `rawr run -p

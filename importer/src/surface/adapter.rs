@@ -909,6 +909,10 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
             payload: Box::new(clone_type(payload)?),
         },
         convert::Type::Option(element) => convert::Type::Option(Box::new(clone_type(element)?)),
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(clone_type(ty)?),
+        },
         convert::Type::Range(element) => convert::Type::Range(Box::new(clone_type(element)?)),
         convert::Type::Result(ok, err) => {
             convert::Type::Result(Box::new(clone_type(ok)?), Box::new(clone_type(err)?))
@@ -1013,6 +1017,7 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
             .checked_add(mem::size_of::<convert::Type>())
             .and_then(|bytes| bytes.checked_add(16)),
         convert::Type::Option(element)
+        | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => {
             type_dynamic_bytes(element)?.checked_add(mem::size_of::<convert::Type>())

@@ -63,11 +63,36 @@ pub fn __rawr_island_start_v1(entry: fn() -> i32) {
 /// with `1` and holds a message to panic with.
 #[unsafe(no_mangle)]
 pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
+    __rawr_island_call_v2(path, arguments, &[])
+}
+
+/// [`__rawr_island_call_v1`] with the arguments native code lends for the
+/// call (D558.3), as ratatui's `&mut Frame<'_>`: each its key, its type's
+/// name, its place, and the accessors the generated runner reaches it by,
+/// a mutable one only when it is lent `&mut`. Only those accessors claim
+/// the key. The trampoline's thread waits for the reply, and each place
+/// stays borrowed until then.
+///
+/// [`__rawr_scope_claim_v1`] and [`__rawr_scope_release_v1`] are what the
+/// accessors claim a lend by.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_call_v2(
+    path: &str,
+    arguments: &[u8],
+    lent: &[(
+        std::any::TypeId,
+        &'static str,
+        *mut (),
+        Option<crate::scope::Accessor>,
+        crate::scope::Accessor,
+    )],
+) -> Vec<u8> {
+    let lent = lent.iter().map(|&lent| Loan(lent)).collect::<Vec<_>>();
     // On the thread that serves calls (native code called from marked code),
     // the call runs here and now.
     if let Some(current) = current() {
         let _entry = crate::future::entry();
-        return current.answer(path, arguments);
+        return current.answer(path, arguments, &lent);
     }
     let Some(forward) = SERVER.get() else {
         return failure(&format!("rawr: no runner serves the call of `{path}`"));
@@ -76,6 +101,7 @@ pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
     forward(Call(Work::Native {
         path: path.into(),
         arguments: arguments.to_vec(),
+        lent,
         reply,
     }));
     answer.recv().unwrap_or_else(|_| {
@@ -93,10 +119,48 @@ enum Work {
     Native {
         path: Box<str>,
         arguments: Vec<u8>,
+        lent: Vec<Loan>,
         reply: mpsc::SyncSender<Vec<u8>>,
     },
     Step(crate::future::Job),
 }
+
+/// One argument a trampoline lends: its key, name, place and accessors.
+#[derive(Clone, Copy)]
+struct Loan(
+    (
+        std::any::TypeId,
+        &'static str,
+        *mut (),
+        Option<crate::scope::Accessor>,
+        crate::scope::Accessor,
+    ),
+);
+
+/// Claim the lend `nonce` names under `key` for one access by a
+/// trampoline's accessor, which ends it with [`__rawr_scope_release_v1`].
+/// `Err` holds a [`crate::scope::Error`]'s code.
+#[unsafe(no_mangle)]
+pub fn __rawr_scope_claim_v1(
+    nonce: u64,
+    key: std::any::TypeId,
+    shared: bool,
+) -> Result<*mut (), u8> {
+    crate::scope::claim(crate::scope::nonce(nonce), key, shared)
+        .map(crate::scope::Claim::keep)
+        .map_err(crate::scope::Error::code)
+}
+
+/// End an access [`__rawr_scope_claim_v1`] began.
+#[unsafe(no_mangle)]
+pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
+    crate::scope::end_claim(crate::scope::nonce(nonce), shared);
+}
+
+// SAFETY: a trampoline lends only a `Send` value mutably and a `Sync` value
+// shared (`Call::lend` in the shadow crate's support), and its thread waits
+// for the reply, so the place is reached by one thread at a time.
+unsafe impl Send for Loan {}
 
 impl Call {
     /// Run this call in the generation published on this thread and send
@@ -106,11 +170,12 @@ impl Call {
             Work::Native {
                 path,
                 arguments,
+                lent,
                 reply,
             } => {
                 let _entry = crate::future::entry();
                 let answer = match current() {
-                    Some(current) => current.answer(&path, &arguments),
+                    Some(current) => current.answer(&path, &arguments, &lent),
                     None => failure(&format!("rawr: no generation is published for `{path}`")),
                 };
                 let _ = reply.send(answer);
@@ -283,6 +348,35 @@ pub fn start(forward: impl Fn(Call) + Send + Sync + 'static) -> bool {
         std::process::exit(101);
     }
     true
+}
+
+/// Run `body` with each of `lent` lent, outermost first, and the script
+/// values that stand for them. Every lend ends before this returns.
+fn lend_all<R>(
+    lent: &[Loan],
+    values: &mut Vec<crate::scope::Lent>,
+    body: &mut dyn FnMut(&[crate::scope::Lent]) -> R,
+) -> R {
+    let Some((Loan((key, name, place, mutable, shared)), rest)) = lent.split_first() else {
+        return body(values);
+    };
+    // SAFETY: the trampoline that sent this call made `place` from its
+    // argument's borrow for the call (`Call::lend`): a `&mut` of a `Send`
+    // value when it has a mutable accessor, and a `&` of a `Sync` one
+    // otherwise. Its thread waits for the reply, which is made inside this
+    // lend, and only its accessors claim `key`, reading the place as the
+    // type it is.
+    unsafe {
+        crate::scope::lend_raw(*key, *place, mutable.is_some(), |nonce| {
+            values.push(crate::scope::Lent::new(
+                nonce,
+                name,
+                *mutable,
+                Some(*shared),
+            ));
+            lend_all(rest, values, body)
+        })
+    }
 }
 
 fn current() -> Option<Rc<Current>> {
@@ -662,12 +756,19 @@ impl Current {
         }
     }
 
-    fn answer(&self, path: &str, arguments: &[u8]) -> Vec<u8> {
-        self.call(path, arguments)
-            .unwrap_or_else(|message| failure(&message))
+    fn answer(&self, path: &str, arguments: &[u8], lent: &[Loan]) -> Vec<u8> {
+        lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
+            self.call(path, arguments, lent)
+        })
+        .unwrap_or_else(|message| failure(&message))
     }
 
-    fn call(&self, path: &str, arguments: &[u8]) -> Result<Vec<u8>, String> {
+    fn call(
+        &self,
+        path: &str,
+        arguments: &[u8],
+        lent: &[crate::scope::Lent],
+    ) -> Result<Vec<u8>, String> {
         let malformed = |error: String| format!("rawr: the call of `{path}` is malformed: {error}");
         let mut reader = Reader { bytes: arguments };
         let owned = reader.byte().map_err(malformed)? != 0;
@@ -682,13 +783,52 @@ impl Current {
         for _ in 0..count {
             values.push(
                 model
-                    .island_read(&self.types, &mut reader, 0)
+                    .island_read(&self.types, lent, &mut reader, 0)
                     .map_err(malformed)?,
             );
         }
-        let result = catalog
+        let mut result = catalog
             .invoke_item(item, &mut values)
             .map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
+        // A function changes its first `&mut` parameter in place and copies
+        // the others back out after its value, as `[value, ..copied]`; a
+        // method or an associated function copies all but its receiver
+        // (`resolve::lower_nominal::copied_parameters`). A lent `&mut` is
+        // one of them, as `draw(frame: &mut Frame, app: &mut App)` changes
+        // `frame` in place and copies `app` out.
+        let references = values
+            .iter()
+            .enumerate()
+            .filter(|(index, value)| {
+                (*index < 64 && mutable & (1 << index) != 0)
+                    || value
+                        .read_lock::<crate::scope::Lent>()
+                        .is_some_and(|lent| lent.writable())
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let copied = match item.kind() {
+            item::Kind::Function => references.get(1..).unwrap_or_default(),
+            item::Kind::Method => references
+                .iter()
+                .position(|index| *index != 0)
+                .map_or(&[][..], |at| &references[at..]),
+            _ => &references[..],
+        };
+        if !copied.is_empty() {
+            let returned = result
+                .into_array()
+                .ok()
+                .filter(|returned| returned.len() == copied.len() + 1)
+                .ok_or_else(|| {
+                    format!("rawr: `{path}` gave back no copies of its `&mut` arguments")
+                })?;
+            let mut returned = returned.into_iter();
+            result = returned.next().unwrap_or(Dynamic::UNIT);
+            for (index, value) in copied.iter().zip(returned) {
+                values[*index] = value;
+            }
+        }
         let mut reply = vec![0];
         let unsent = |error: String| {
             format!("rawr: `{path}` gave back a value native code can't take: {error}")
@@ -706,6 +846,32 @@ impl Current {
 #[cfg(all(test, feature = "sync"))]
 mod tests {
     use crate::{host, Dynamic, Engine, Shared};
+
+    /// A value native code lent a call can't go back to native code in the
+    /// result or in an argument it takes back, which would keep the borrow
+    /// past the call (D558.3).
+    #[test]
+    fn a_lent_value_given_back_is_refused_by_the_borrow_rule() {
+        let engine = Shared::new(Engine::new());
+        let authority = engine
+            .compile_authority("pub fn keep() {}")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let lent = crate::scope::Lent::new(crate::scope::nonce(1), "ratatui::Frame", None, None);
+        for value in [
+            Dynamic::from(lent),
+            Dynamic::from_array(vec![Dynamic::from(1_i64), Dynamic::from(lent)]),
+        ] {
+            let error = authority
+                .model()
+                .island_write(&value, &mut Vec::new(), 0)
+                .unwrap_err();
+            assert!(
+                error.contains("keeps the `ratatui::Frame` native code lent it")
+                    && error.contains("(E0515, E0521)"),
+                "{error}"
+            );
+        }
+    }
 
     /// Native code that clones or prints a script value it holds as
     /// `rawr::Value` gets the script type's own `Clone` and its derived

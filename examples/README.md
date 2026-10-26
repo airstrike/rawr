@@ -24,7 +24,7 @@ marked files, and `rawr run examples/<name>` does the same. `rawr check -p
 | [`islands`](islands)   | a native `main` that calls one marked module each tick                                                      | `cargo run -p islands`           | `rawr run -p islands`             |
 | [`grep`](grep)         | a marked command-line tool with flags, files and stdin                                                      | `cargo run -p grep -- -n pie`    | `rawr run -p grep -- -n pie`      |
 | [`invaders`](invaders) | a space-invaders game on winit and softbuffer, whose rules and drawing are marked and reload while you play | `cargo run -p invaders`          | `rawr run -p invaders`            |
-| [`tui`](tui)           | a to-do list on ratatui, whose keys and view model are marked and repaint the terminal on save             | `cargo run -p tui`               | `rawr run -p tui`                 |
+| [`tui`](tui)           | a to-do list on ratatui, whose keys and drawing on the lent `Frame` are marked and repaint on save          | `cargo run -p tui`               | `rawr run -p tui`                 |
 
 `cargo build --release -p <name>` builds one with no rawr in it.
 

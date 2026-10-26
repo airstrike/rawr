@@ -112,6 +112,13 @@ pub enum Type {
     },
     /// An output tuple: a Rawr tuple of the converted members.
     Tuple(Box<[Type]>),
+    /// An input `&T` or `&mut T` of a type a runner's arena holds, as
+    /// ratatui's `render_stateful_widget` takes `&mut ListState`: the call
+    /// leases the value from its slot for its length (D558.5).
+    Borrowed {
+        mutable: bool,
+        ty: Box<Type>,
+    },
     /// Rust's `core::ops::Range<T>` of a float, as rand's `random_range`
     /// takes: a Rawr `Range<f64>` value.
     Range(Box<Type>),

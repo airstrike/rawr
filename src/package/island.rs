@@ -145,7 +145,7 @@ struct Source<'a> {
 }
 
 /// How a value crosses for one parameter.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Pass {
     /// By value: a copy goes to the interpreter.
     Value,
@@ -154,6 +154,10 @@ enum Pass {
     /// `&mut T`: the value is copied, and the interpreter's copy comes
     /// back into the reference after the call.
     Mutable,
+    /// `&T` or `&mut T` of a type that doesn't cross, as ratatui's `&mut
+    /// Frame<'_>`: lent to the interpreter for the call (D558.3), written
+    /// with each named lifetime as `'_`.
+    Lend { mutable: bool, referent: String },
 }
 
 /// The crate's own struct or enum that native code sees, by name.
@@ -360,16 +364,35 @@ impl<'a> Generator<'a> {
             .trim_start_matches("mut ")
             .trim_start();
         let view = referent.starts_with('[') || referent == "str";
-        if *mutable {
-            if view {
-                return Err(format!("`{}` can't cross yet", text.trim()));
-            }
-            return self.crosses(target, owner).map(|()| Pass::Mutable);
+        if *mutable && view {
+            return Err(format!("`{}` can't cross yet", text.trim()));
         }
         if referent == "str" {
             return Ok(Pass::Borrow);
         }
-        self.crosses(target, owner).map(|()| Pass::Borrow)
+        match self.crosses(target, owner) {
+            Ok(()) if *mutable => Ok(Pass::Mutable),
+            Ok(()) => Ok(Pass::Borrow),
+            // A type the marked crate doesn't declare, as ratatui's `Frame`,
+            // is lent for the call (D558.3).
+            Err(_) if self.lendable(target) => Ok(Pass::Lend {
+                mutable: *mutable,
+                referent: unnamed_lifetimes(referent),
+            }),
+            Err(reason) => Err(reason),
+        }
+    }
+
+    /// Whether a borrow of `ty` is lent for a call: a path to a type the
+    /// marked crate doesn't declare.
+    fn lendable(&self, ty: &type_ref::Type) -> bool {
+        let type_ref::Type::Path(path) = ty else {
+            return false;
+        };
+        path.segments.last().is_some_and(|last| {
+            let name = last.name.text.as_str();
+            !self.types.contains_key(name) && !matches!(name, "Self" | "Vec" | "Option")
+        })
     }
 
     /// The generated text of `file` with its inline modules `group`.
@@ -712,6 +735,9 @@ impl<'a> Generator<'a> {
                 let _ = writeln!(text, "    __call.mutable(&*{name});");
                 mutable.push(name.to_owned());
             }
+            Pass::Lend { mutable, referent } => {
+                lend(name, mutable, &referent, &island, text);
+            }
         };
         if let Some(pass) = receiver {
             argument("self", pass, &mut text);
@@ -906,6 +932,72 @@ fn without_rawr_attributes(text: &str) -> String {
     kept
 }
 
+/// The statements that lend the parameter `name`, a `&mut referent` or a
+/// `&referent`, for the call (D558.3). The lend's key is a type of its own,
+/// and its accessors, which the generated runner reaches the value through,
+/// claim that key and hand a visitor the value at every lifetime. Only
+/// these accessors read the place, as the type it is.
+fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut String) {
+    let result = "::std::result::Result<(), u8>";
+    let key = "::std::any::TypeId::of::<Key>()";
+    let _ = writeln!(
+        text,
+        "    let {name}_lend = {{
+        struct Key;"
+    );
+    if mutable {
+        let _ = writeln!(
+            text,
+            "        #[allow(unsafe_code)]\n        \
+             fn mutable(nonce: u64, visit: &mut dyn FnMut(&mut {referent})) -> {result} {{\n            \
+             {island}::reach(nonce, {key}, false, |place| {{\n                \
+             // SAFETY: `Key`'s lend is this call's `&mut {referent}`, claimed exclusively.\n                \
+             visit(unsafe {{ &mut *place.cast::<{referent}>() }})\n            }})\n        }}\n        \
+             static MUTABLE: fn(u64, &mut dyn FnMut(&mut {referent})) -> {result} = mutable;"
+        );
+    }
+    let _ = writeln!(
+        text,
+        "        #[allow(unsafe_code)]\n        \
+         fn shared(nonce: u64, visit: &mut dyn FnMut(&{referent})) -> {result} {{\n            \
+         {island}::reach(nonce, {key}, true, |place| {{\n                \
+         // SAFETY: `Key`'s lend is this call's `{referent}`, claimed shared.\n                \
+         visit(unsafe {{ &*place.cast_const().cast::<{referent}>() }})\n            }})\n        }}\n        \
+         static SHARED: fn(u64, &mut dyn FnMut(&{referent})) -> {result} = shared;\n        \
+         {island}::Lend::new({key}, {}, &SHARED)\n    }};",
+        if mutable { "Some(&MUTABLE)" } else { "None" }
+    );
+    let method = if mutable { "lend" } else { "lend_ref" };
+    let _ = writeln!(
+        text,
+        "    // SAFETY: the lend's accessors read its key's place as `{referent}`.\n    \
+         #[allow(unsafe_code)]\n    \
+         let () = unsafe {{ __call.{method}({name}, {name}_lend, ::std::any::type_name::<{referent}>()) }};"
+    );
+}
+
+/// `text` with each named lifetime but `'static` written `'_`, so a type
+/// written in a signature names its `'static` form where it is inferred.
+fn unnamed_lifetimes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\'') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let end = after
+            .find(|c: char| !(c == '_' || c.is_alphanumeric()))
+            .unwrap_or(after.len());
+        if &after[..end] == "static" {
+            out.push_str("'static");
+        } else {
+            out.push_str("'_");
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Every identifier in `text`.
 fn identifiers(text: &str) -> BTreeSet<&str> {
     text.split(|c: char| !(c == '_' || c.is_alphanumeric()))
@@ -936,7 +1028,23 @@ const SUPPORT: &str = r#"
 pub mod __rawr_island {
     // Defined by the `rawr` crate the runner links.
     unsafe extern "Rust" {
-        fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> ::std::vec::Vec<u8>;
+        fn __rawr_island_call_v2(
+            path: &str,
+            arguments: &[u8],
+            lent: &[(
+                ::std::any::TypeId,
+                &'static str,
+                *mut (),
+                ::std::option::Option<&'static (dyn ::std::any::Any + Sync)>,
+                &'static (dyn ::std::any::Any + Sync),
+            )],
+        ) -> ::std::vec::Vec<u8>;
+        fn __rawr_scope_claim_v1(
+            nonce: u64,
+            key: ::std::any::TypeId,
+            shared: bool,
+        ) -> ::std::result::Result<*mut (), u8>;
+        fn __rawr_scope_release_v1(nonce: u64, shared: bool);
         fn __rawr_island_start_v1(entry: fn() -> i32);
     }
 
@@ -984,6 +1092,7 @@ pub mod __rawr_island {
     const SOME: u8 = 11;
     const STRUCT: u8 = 15;
     const ENUM: u8 = 16;
+    const LENT: u8 = 20;
 
     /// A value on its way to the interpreter.
     pub struct Out(::std::vec::Vec<u8>);
@@ -1262,16 +1371,70 @@ pub mod __rawr_island {
         }
     }
 
-    /// One call of a marked function.
-    pub struct Call {
+    type Accessor = &'static (dyn ::std::any::Any + Sync);
+
+    /// What a trampoline lends one argument by (D558.3): the key its
+    /// accessors claim, and the accessors, which the generated runner
+    /// reaches the value through. A mutable one only for a `&mut`.
+    pub struct Lend {
+        key: ::std::any::TypeId,
+        mutable: ::std::option::Option<Accessor>,
+        shared: Accessor,
+    }
+
+    impl Lend {
+        pub fn new(
+            key: ::std::any::TypeId,
+            mutable: ::std::option::Option<Accessor>,
+            shared: Accessor,
+        ) -> Self {
+            Self { key, mutable, shared }
+        }
+    }
+
+    /// Claim the lend `nonce` under `key` (shared, or exclusively) for
+    /// `visit`, which receives the lent value's place, and end the claim
+    /// however `visit` ends. `Err` holds `rawr::scope::Error`'s code.
+    pub fn reach(
+        nonce: u64,
+        key: ::std::any::TypeId,
+        shared: bool,
+        visit: impl FnOnce(*mut ()),
+    ) -> ::std::result::Result<(), u8> {
+        struct Release(u64, bool);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                // SAFETY: the runner links `rawr`, which defines the
+                // function with this exact signature.
+                unsafe { __rawr_scope_release_v1(self.0, self.1) }
+            }
+        }
+        // SAFETY: as above.
+        let place = unsafe { __rawr_scope_claim_v1(nonce, key, shared) }?;
+        let _release = Release(nonce, shared);
+        visit(place);
+        Ok(())
+    }
+
+    /// One call of a marked function. `'c` is what its lent arguments
+    /// borrow: they stay borrowed until the call is sent and answered.
+    pub struct Call<'c> {
         path: &'static str,
         owned: bool,
         count: u32,
         mutable: u64,
         values: Out,
+        lent: ::std::vec::Vec<(
+            ::std::any::TypeId,
+            &'static str,
+            *mut (),
+            ::std::option::Option<Accessor>,
+            Accessor,
+        )>,
+        borrows: ::std::marker::PhantomData<&'c mut ()>,
     }
 
-    impl Call {
+    impl<'c> Call<'c> {
         /// A call of the function at `path` from the crate root; `owned`
         /// when its last segment is a member of the type before it.
         pub fn new(path: &'static str, owned: bool) -> Self {
@@ -1281,7 +1444,36 @@ pub mod __rawr_island {
                 count: 0,
                 mutable: 0,
                 values: Out(::std::vec::Vec::new()),
+                lent: ::std::vec::Vec::new(),
+                borrows: ::std::marker::PhantomData,
             }
+        }
+        /// An argument lent to the interpreter for the call (D558.3), as
+        /// ratatui's `&mut Frame<'_>` is. The interpreter's thread reaches
+        /// it while this one waits for the answer, so it is `Send`.
+        ///
+        /// # Safety
+        ///
+        /// `lend`'s accessors read its key's place as a `T`, and no other
+        /// lend uses its key. `name` is `T`'s name.
+        pub unsafe fn lend<T: Send>(&mut self, value: &'c mut T, lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_some());
+            self.lent_value(::std::ptr::from_mut(value).cast(), lend, name);
+        }
+        /// [`Call::lend`] of a shared borrow, which is `Sync`.
+        ///
+        /// # Safety
+        ///
+        /// As for [`Call::lend`], and `lend` has no mutable accessor.
+        pub unsafe fn lend_ref<T: Sync>(&mut self, value: &'c T, lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_none());
+            self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
+        }
+        fn lent_value(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+            self.values.byte(LENT);
+            self.values.count(self.lent.len());
+            self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
+            self.count += 1;
         }
         pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
             value.put(&mut self.values);
@@ -1299,8 +1491,10 @@ pub mod __rawr_island {
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
             bytes.extend_from_slice(&self.values.0);
             // SAFETY: the runner links `rawr`, which defines the function
-            // with this exact signature.
-            let reply = unsafe { __rawr_island_call_v1(self.path, &bytes) };
+            // with this exact signature. Each lent place is borrowed for
+            // `'c`, which outlives this call, and is reached only while the
+            // call runs.
+            let reply = unsafe { __rawr_island_call_v2(self.path, &bytes, &self.lent) };
             match reply.first() {
                 Some(0) => Reply { bytes: reply, at: 1, path: self.path },
                 Some(_) => {
@@ -1431,6 +1625,41 @@ mod tests {
                 "physics::render",
                 "physics::scale",
             ]
+        );
+    }
+
+    /// A borrow of a type the marked crate doesn't declare, as ratatui's
+    /// `&mut Frame<'_>`, is lent for the call with accessors of its own
+    /// (D558.3); a `&` one is lent shared.
+    #[test]
+    fn a_borrow_of_another_crates_type_is_lent_with_its_accessors() {
+        let shadow = generate(
+            "// rawr\nuse ratatui::Frame;\npub struct App { pub n: i64 }\n\
+             pub fn draw<'a>(frame: &mut Frame<'a>, app: &mut App) {}\n\
+             pub fn look(frame: &Frame) -> i64 { 0 }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        assert!(text.contains("use ratatui::Frame;\n"), "{text}");
+        for expected in [
+            "    let __a0_lend = {\n        struct Key;\n",
+            "fn mutable(nonce: u64, visit: &mut dyn FnMut(&mut Frame<'_>)) -> ::std::result::Result<(), u8> {",
+            "visit(unsafe { &mut *place.cast::<Frame<'_>>() })",
+            "static SHARED: fn(u64, &mut dyn FnMut(&Frame<'_>)) -> ::std::result::Result<(), u8> = shared;",
+            "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), Some(&MUTABLE), &SHARED)",
+            "let () = unsafe { __call.lend(__a0, __a0_lend, ::std::any::type_name::<Frame<'_>>()) };",
+            "    __call.mutable(&*__a1);\n",
+            "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED)",
+            "let () = unsafe { __call.lend_ref(__a0, __a0_lend, ::std::any::type_name::<Frame>()) };",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("fn mutable(nonce: u64, visit: &mut dyn FnMut(&mut Frame))"));
+        assert_eq!(
+            unnamed_lifetimes("Cow<'static, Frame<'a>>"),
+            "Cow<'static, Frame<'_>>"
         );
     }
 
