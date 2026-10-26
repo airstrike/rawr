@@ -11,12 +11,6 @@ body.play .bar a:hover, body.play .bar a[aria-current] { color: var(--text); }
 .playcap, .playfoot { font: 11px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
 .playfoot a { color: var(--ink); }
 
-/* The theme's control is the page's theme, so it reads <html data-theme> before the island runs. */
-[data-theme="light"] .theme-toggle [data-theme-item="light"],
-[data-theme="dark"] .theme-toggle [data-theme-item="dark"] { background: var(--pink); border-color: var(--pink); color: var(--on-pink); }
-[data-theme="light"] .theme-toggle [data-theme-item="dark"],
-[data-theme="dark"] .theme-toggle [data-theme-item="light"] { background: var(--raised); border-color: var(--line); color: var(--text); }
-
 .editor { display: flex; flex-direction: column; min-width: 0; }
 .editor > .cm-editor { flex: 1; min-height: 0; }
 

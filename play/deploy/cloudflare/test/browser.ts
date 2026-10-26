@@ -235,7 +235,7 @@ try {
     addEventListener("pointerup", () => { const handled = performance.now() - t; requestAnimationFrame(() => requestAnimationFrame(() => window.clicks.push([handled, performance.now() - t]))); });`);
   check(await evaluate(`!document.querySelector("script[src*=rawr_web]")`), "nothing loads rawr-web in the HTML");
   check(await evaluate(`${checked("Where it runs")} === "Run in browser"`), "the browser is the default");
-  check(await evaluate(`document.documentElement.dataset.theme === "dark" && ${checked("Theme")} === "Dark"`), "the page and the playground's control follow the system's dark theme");
+  check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the page follows the system's dark theme");
   check(await evaluate(`(${editorText}).includes("struct Counter")`), "the editor holds the page's snippet");
   check(await evaluate(`document.querySelectorAll("#playground .cm-content .k").length > 10`), "the editor highlights Rust in the site's classes");
   await evaluate(`document.getElementById("run").click()`);
@@ -281,14 +281,14 @@ try {
   await sleep(1500);
   const light = await out();
   await shot("counter-light.png");
-  check(await evaluate(`document.documentElement.dataset.theme === "light" && ${checked("Theme")} === "Light"`), "the header's switch sets the page's theme and the playground's control");
+  check(await evaluate(`document.documentElement.dataset.theme === "light"`), "the header's switch sets the page's theme");
   check(await evaluate(`getComputedStyle(document.body).backgroundColor === "rgb(247, 247, 248)"`), "the page draws in the light palette");
   check(dark !== light && !!(await evaluate(`!!document.querySelector("#out .live canvas")`)), "the running app follows the theme");
   check(await evaluate(`localStorage.getItem("rawr-theme") === "light"`), "the choice is remembered");
-  // And back, from the playground's own control.
-  await clickOn(radio("Theme", "Dark"));
+  // And back, from the header's switch.
+  await clickOn(`document.querySelector("[data-theme-switch]")`);
   await sleep(300);
-  check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the playground's Dark sets the page's theme");
+  check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the header's switch sets dark again");
 
   // The Stopwatch, started by its Toggle message. An edit while it runs keeps
   // it running from its elapsed time: a bar 50 px a second shows the time.

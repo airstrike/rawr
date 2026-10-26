@@ -185,6 +185,36 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     }
 }
 
+/// `cell.update(place, rhs, apply)`: the place's value replaced by
+/// `apply(value, rhs)`. A borrow guard's place does it inside one call of
+/// the guard's method, so `*state.write() += 1` calls `write` once, as rustc
+/// does. A cell's borrow reads and stores its cell.
+pub(super) fn update(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) -> RawrResult {
+    let context = context.ok_or_else(|| invariant("a place is updated outside a call"))?;
+    let apply = args[2]
+        .take()
+        .try_cast::<crate::FnPtr>()
+        .ok_or_else(|| invariant("a place's update is no function"))?;
+    let mut rhs = Some(args[1].take());
+    let mut call = |value: Dynamic| {
+        let rhs = rhs.take().unwrap_or(Dynamic::UNIT);
+        apply.call_raw(context, None, [value, rhs])
+    };
+    #[cfg(feature = "rust-import")]
+    {
+        let place = args[0]
+            .read_lock::<crate::island::place::Place>()
+            .map(|place| place.clone());
+        if let Some(place) = place {
+            return place.update(&mut call).map(|_| Dynamic::UNIT);
+        }
+    }
+    let inner = cell(args[0]).ok_or_else(|| invariant("a `RefCell` is not one at runtime"))?;
+    let value = call(inner.value())?;
+    let _ = inner.set(value);
+    Ok(Dynamic::UNIT)
+}
+
 impl Parser<'_> {
     /// Which cell the path `path` names in a body: `RefCell` by any of its
     /// spellings, and `Cell` by its module path or as imported from
@@ -321,7 +351,10 @@ impl Parser<'_> {
                     expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
                         binding: place.as_str().into(),
                         base: borrow.clone(),
-                        steps: vec![PlaceStep::Cell { release: true }],
+                        steps: vec![PlaceStep::Cell {
+                            release: true,
+                            native: false,
+                        }],
                         ty: inner.clone(),
                     })));
                 }
@@ -330,6 +363,7 @@ impl Parser<'_> {
                     borrow,
                     mutable,
                     inner,
+                    native: false,
                 });
                 Ok(expression)
             }
@@ -531,7 +565,10 @@ impl Parser<'_> {
         expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
             binding: place.as_str().into(),
             base: borrow.clone(),
-            steps: vec![PlaceStep::Cell { release: true }],
+            steps: vec![PlaceStep::Cell {
+                release: true,
+                native: false,
+            }],
             ty: inner.clone(),
         })));
         self.last_cell_borrow = Some(CellBorrow {
@@ -539,6 +576,7 @@ impl Parser<'_> {
             borrow,
             mutable: true,
             inner,
+            native: false,
         });
         Ok(expression)
     }
@@ -560,6 +598,7 @@ impl Parser<'_> {
                 guard.clone(),
                 borrow.mutable,
                 borrow.inner.clone(),
+                borrow.native,
             ),
         );
         self.bindings.insert(
@@ -590,7 +629,7 @@ impl Parser<'_> {
         at: Span,
     ) -> Option<ParsedExpr> {
         let declaration = self.bindings.get(name.as_str())?.declaration;
-        let (_, guard, mutable, inner) = self
+        let (_, guard, mutable, inner, native) = self
             .cell_guards
             .get(name)
             .filter(|(guard_declaration, ..)| *guard_declaration == declaration)?
@@ -608,7 +647,10 @@ impl Parser<'_> {
             value.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
                 binding: name.clone(),
                 base: origin::Fragment::plain(guard),
-                steps: vec![PlaceStep::Cell { release: false }],
+                steps: vec![PlaceStep::Cell {
+                    release: false,
+                    native,
+                }],
                 ty: inner,
             })));
         }
@@ -642,6 +684,25 @@ impl Parser<'_> {
         }
         (read, store, local)
     }
+
+    /// One borrow guard step of a nested place that `op=` changes: the
+    /// statement's opening, which hands the guard's place, the evaluated
+    /// right operand `rhs` and the change to `cell.update`, and its close.
+    /// The change runs inside one call of the guard's method, on `local`,
+    /// with `rhs` its parameter, so it captures nothing of its own.
+    pub(super) fn cell_update_step(
+        &mut self,
+        place: &origin::Fragment,
+        rhs: &str,
+    ) -> (origin::Fragment, origin::Fragment, String) {
+        let local = self.temporary("cellvalue");
+        let update = self.push_op(Op::Prelude(PreludeOp::CellUpdate));
+        let mut read = origin::Fragment::plain(format!("{update}("));
+        read.push(place.clone());
+        read.push_text(format!(", {rhs}, |{local}, {rhs}| {{ "));
+        let store = origin::Fragment::plain(format!("{local} }}); "));
+        (read, store, local)
+    }
 }
 
 /// The borrow an expression just made, which a `let` may keep.
@@ -651,4 +712,6 @@ pub(super) struct CellBorrow {
     pub(super) borrow: origin::Fragment,
     pub(super) mutable: bool,
     pub(super) inner: Ty,
+    /// An imported method's borrow guard, not a `RefCell`'s.
+    pub(super) native: bool,
 }

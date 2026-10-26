@@ -373,7 +373,7 @@ impl std::fmt::Debug for Error {
             Self::Stale => f.write_str("Stale"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
             Self::Leased => f.write_str(
-                "cannot borrow this value: a future that borrows it mutably is still running (E0499)",
+                "cannot borrow this value: a future or a borrow guard that borrows it mutably is still running (E0499)",
             ),
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
             Self::NotClone(ty) => write!(
@@ -746,6 +746,40 @@ impl Arena {
             .and_then(|value| value.downcast_mut::<T>())
             .ok_or(Error::TypeMismatch)?;
         Ok(call(value))
+    }
+
+    /// `call` with the value of `handle` out of its slot, so the arena it
+    /// is also given can be lent while the value is borrowed, as an update
+    /// through a borrow guard lends it to the script change it runs. The
+    /// slot refuses every use meanwhile, and the value goes back after,
+    /// unless its last handle went.
+    #[allow(dead_code)]
+    fn held<T: 'static, R>(
+        &mut self,
+        handle: NativeHandle,
+        call: impl FnOnce(&mut Self, &mut T) -> R,
+    ) -> Result<R, Error> {
+        let index = self.index::<T>(&handle)?;
+        let mut value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        self.slots[index].leased = true;
+        let result = match value.downcast_mut::<T>() {
+            Some(target) => Ok(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                call(self, target)
+            }))),
+            None => Err(Error::TypeMismatch),
+        };
+        if let Some(entry) = self.slots.get_mut(index)
+            && entry.generation == handle.generation
+            && entry.leased
+            && entry.value.is_none()
+        {
+            entry.value = Some(value);
+            entry.leased = false;
+        }
+        match result? {
+            Ok(output) => Ok(output),
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 }
 
@@ -5303,10 +5337,14 @@ fn render_adapter(
 /// and `State::write` give. The guard borrows the receiver, which lives in
 /// the arena, so it never leaves the one call that holds the receiver.
 /// A `Deref` guard gives a copy of its target. A `DerefMut` guard gives a
-/// place (`island::place::Place`) whose reads and stores each call the
-/// method again, read the target or assign it through the guard, and drop
-/// the guard before they return. The method's inputs are taken first, so
-/// they are owned values the call borrows.
+/// place (`island::place::Place`) whose accesses each call the method
+/// again and drop the guard before they return: a read copies the target,
+/// a store assigns it, and an update (`op=`, D554.7(f)) copies it, has the
+/// script change the copy and assigns the result, all through one guard.
+/// An update takes the receiver out of its slot while the script runs, so
+/// the arena can be lent to the native calls the change makes. The
+/// method's inputs are taken first, so they are owned values the call
+/// borrows.
 #[allow(clippy::too_many_arguments)]
 fn render_guard(
     plan: &Plan,
@@ -5322,14 +5360,19 @@ fn render_guard(
     use crate::classify::representability::signature::Guard;
     let encoding = |_| request::Error::Encoding;
     let borrow = if matches!(receiver, Receiver::Mutable) {
-        "mutable"
+        "arguments.arena.mutable"
     } else {
-        "shared"
+        "arguments.arena.shared"
     };
     let target = substituted(signature.output(), signature, substitutions)?;
-    // `arena.shared::<Receiver, _>(handle, |receiver| receiver.method(..)`.
-    let call = |handle: &str, output: &mut Vec<u8>| -> Result<(), request::Error> {
-        write!(output, "arguments.arena.{borrow}::<").map_err(encoding)?;
+    // `arena.shared::<Receiver, _>(handle, |receiver| { let mut guard =
+    // receiver.method(..); ` through `access`, whose closure takes `taking`.
+    let call = |access: &str,
+                handle: &str,
+                taking: &str,
+                output: &mut Vec<u8>|
+     -> Result<(), request::Error> {
+        write!(output, "{access}::<").map_err(encoding)?;
         render_container_path(
             path,
             signature,
@@ -5341,7 +5384,7 @@ fn render_guard(
         )?;
         write!(
             output,
-            ", _>({handle}, |receiver| {{ let mut guard = receiver.{}",
+            ", _>({handle}, |{taking}| {{ let mut guard = receiver.{}",
             plan.name()
         )
         .map_err(encoding)?;
@@ -5358,6 +5401,12 @@ fn render_guard(
             .write_all(b"); let _ = &mut guard; ")
             .map_err(encoding)
     };
+    let indented = |lines: &[u8], indent: &str, output: &mut Vec<u8>| {
+        for line in String::from_utf8_lossy(lines).lines() {
+            writeln!(output, "{indent}{line}").map_err(encoding)?;
+        }
+        Ok::<_, request::Error>(())
+    };
     writeln!(
         output,
         "    let receiver = native_handle(arguments, 0, false)?;"
@@ -5366,7 +5415,7 @@ fn render_guard(
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
-            call("receiver", output)?;
+            call(borrow, "receiver", "receiver", output)?;
             output
                 .write_all(b"guard_copy!(&*guard) })??;\n")
                 .map_err(encoding)?;
@@ -5378,36 +5427,74 @@ fn render_guard(
                     field: "a mutable borrow guard's method takes inputs",
                 });
             }
+            let mut give = Vec::new();
+            render_give(&target, "output", &mut give)?;
+            let mut take = Vec::new();
+            render_take(0, 0, &target, &mut take)?;
             output
                 .write_all(
-                    b"    let place = __rawr_internal::island::place::Place::new(move |stored: Option<Dynamic>| {
+                    b"    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
+        use __rawr_internal::island::place::Access;
+        let mut stored = match access {
+            Access::Read => None,
+            Access::Store(value) => Some(value),
+            Access::Update(apply) => {
+                return with_arena(|arena| {
+                    ",
+                )
+                .map_err(encoding)?;
+            call("arena.held", "receiver.clone()", "arena, receiver", output)?;
+            output
+                .write_all(
+                    b"
+                        let output = guard_copy!(&*guard)?;
+                        let value = {
+                            #[allow(unused_variables)]
+                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&give, "                        ", output)?;
+            output
+                .write_all(
+                    b"                        }?;
+                        let mut stored = match lend(arena, || apply(value)) {
+                            Ok(stored) => stored,
+                            Err(error) => return Ok(Err(error)),
+                        };
+                        let mut values = [&mut stored];
+                        let arguments = &mut Arguments { values: &mut values, arena };
+",
+                )
+                .map_err(encoding)?;
+            indented(&take, "                    ", output)?;
+            output
+                .write_all(
+                    b"                        *guard = argument_0;
+                        Ok(Ok(Dynamic::UNIT))
+                    })?
+                })
+                .map_err(runtime_error)?;
+            }
+        };
         with_arena(|arena| {
-            let mut stored = stored;
             let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
             let arguments = &mut Arguments { values: values.as_mut_slice(), arena };
             if arguments.values.is_empty() {
                 let output = ",
                 )
                 .map_err(encoding)?;
-            call("receiver.clone()", output)?;
+            call(borrow, "receiver.clone()", "receiver", output)?;
             output
                 .write_all(b"guard_copy!(&*guard) })??;\n")
                 .map_err(encoding)?;
-            let mut give = Vec::new();
-            render_give(&target, "output", &mut give)?;
-            for line in String::from_utf8_lossy(&give).lines() {
-                writeln!(output, "            {line}").map_err(encoding)?;
-            }
+            indented(&give, "            ", output)?;
             output
                 .write_all(b"            } else {\n")
                 .map_err(encoding)?;
-            let mut take = Vec::new();
-            render_take(0, 0, &target, &mut take)?;
-            for line in String::from_utf8_lossy(&take).lines() {
-                writeln!(output, "            {line}").map_err(encoding)?;
-            }
+            indented(&take, "            ", output)?;
             output.write_all(b"                ").map_err(encoding)?;
-            call("receiver.clone()", output)?;
+            call(borrow, "receiver.clone()", "receiver", output)?;
             output
                 .write_all(
                     b"*guard = argument_0; })?;
