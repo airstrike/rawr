@@ -119,3 +119,28 @@ pub mod grid {
         }
     }
 }
+
+/// A value whose methods lend a `&str` from it, as url's `Url::scheme`
+/// does.
+pub mod label {
+    #[derive(Debug, Clone)]
+    pub struct Label {
+        text: String,
+    }
+
+    impl Label {
+        pub fn new(text: &str) -> Self {
+            Label {
+                text: text.to_owned(),
+            }
+        }
+
+        pub fn text(&self) -> &str {
+            &self.text
+        }
+
+        pub fn set(&mut self, text: &str) {
+            self.text = text.to_owned();
+        }
+    }
+}

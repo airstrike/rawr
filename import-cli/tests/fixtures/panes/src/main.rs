@@ -81,6 +81,13 @@ impl Example {
 }
 
 fn main() {
+    // A `&str` a method lends: borrowed for the call, and the value
+    // changes after its last use, as non-lexical lifetimes allow.
+    let mut label = natives::label::Label::new("left");
+    let text: &str = label.text();
+    println!("{text} {}", label.text() == "left");
+    label.set("right");
+    println!("{}", label.text().len());
     let mut example = Example::new();
     let first = example.panes.maximized().unwrap_or_else(|| {
         let (_, pane) = grid::State::new(0_u8);

@@ -16455,6 +16455,12 @@ impl<'a> Parser<'a> {
                 owner,
                 originating,
             )?)),
+            // A `&str` an imported method lends, as url's `Url::scheme`:
+            // the `&str` rustc sees.
+            Shape::Reference {
+                mutable: false,
+                target,
+            } if matches!(target.shape(), Shape::Builtin(Builtin::String)) => Ty::Str,
             Shape::Reference { mutable, target } => Ty::Reference {
                 mutable: *mutable,
                 target: Box::new(self.instantiate_host_type(

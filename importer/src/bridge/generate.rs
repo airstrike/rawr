@@ -8428,6 +8428,14 @@ fn render_give(
         } if matches!(**lent, convert::Type::Sequence { .. }) => {
             return render_give(lent, value, output);
         }
+        // A `&str` a method lends, as url's `Url::scheme`: the text,
+        // copied where the borrow ends (`lent_copy`).
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if **lent == convert::Type::Builtin(convert::Builtin::Str) => {
+            writeln!(output, "    Ok(Dynamic::from(String::from({value})))")
+        }
         // A `&T` given to a script closure: a copy.
         convert::Type::Borrowed {
             mutable: false,
@@ -8739,6 +8747,12 @@ fn render_to_dynamic(
             if matches!(**lent, convert::Type::Sequence { .. }) =>
         {
             return render_to_dynamic(lent, value, depth, output);
+        }
+        // A `&str`: its text.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if **lent == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from(String::from({value})))")
         }
         // A `&T` native code gives a script closure, as pane_grid's
         // `view(pane, &state, ..)` gives `&S`: a copy.
@@ -9391,13 +9405,22 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
 }
 
 /// `.to_vec()` after a call whose output is a `&[T]` it lends: the copy
-/// Rawr's array is made of, before the borrow ends (D558 slice 2).
+/// Rawr's array is made of, before the borrow ends (D558 slice 2). And
+/// `.to_owned()` after one whose output is a `&str` it lends, as url's
+/// `Url::scheme`: Rawr's strings can't point into native memory, so the
+/// text is copied there, and the receiver is borrowed for the call only
+/// (D568).
 fn lent_copy(signature: &crate::classify::representability::signature::Signature) -> &'static str {
     match signature.output() {
         convert::Type::Borrowed { mutable: false, ty }
             if matches!(**ty, convert::Type::Sequence { .. }) =>
         {
             ".to_vec()"
+        }
+        convert::Type::Borrowed { mutable: false, ty }
+            if **ty == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            ".to_owned()"
         }
         _ => "",
     }
