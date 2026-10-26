@@ -9906,3 +9906,32 @@ pub fn view(j: i64) -> Button { button().style(move |base, pressed| shade(base, 
     // A capture renamed: its fingerprint differs.
     assert!(!recaptured.rebinds(&closure, first.as_ref()));
 }
+
+#[test]
+fn language_circle_std_string_and_vec_methods() {
+    // `rsplitn`, `String::retain`, `Vec::capacity` and the chunk methods
+    // give rustc's results.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let parts: Vec<&str> = "a,b,c,d".rsplitn(2, ',').collect();
+            let mut s = String::from("héllo wörld");
+            s.retain(|c| c.is_ascii() && c != 'l');
+            let mut v: Vec<i32> = Vec::with_capacity(3);
+            let reserved = v.capacity();
+            for i in 0..4 { v.push(i); }
+            let exact: Vec<&[i32]> = v.chunks_exact(3).collect();
+            let back: Vec<&[i32]> = v.rchunks(3).collect();
+            format!("{:?} {s} {reserved} {} {:?} {:?}", parts, v.capacity(), exact, back)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        r#"["d", "a,b,c"] ho wrd 3 6 [[0, 1, 2]] [[1, 2, 3], [0]]"#
+    );
+    let refused =
+        rejected("fn cap(v: &Vec<i64>) -> usize { v.capacity() } pub fn run() -> i64 { 0 } run()");
+    assert!(refused.contains("`capacity()`"), "{refused}");
+}

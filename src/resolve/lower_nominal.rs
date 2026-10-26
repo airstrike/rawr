@@ -3531,6 +3531,8 @@ enum PreludeOp {
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
+    /// `v.capacity()`: the runtime `Vec`'s own capacity, read by reference.
+    VecCapacity,
     /// A set's `union`, `intersection`, `difference`,
     /// `symmetric_difference` (the keys, in order), `is_subset`,
     /// `is_superset` or `is_disjoint` with another, by code
@@ -3558,7 +3560,9 @@ enum PreludeOp {
     StrChange,
     /// A string's pieces or bytes (`STR_PIECES`): `pieces(text, code, a, b)`.
     StrPieces,
-    /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
+    /// `v.chunks(n)`, `windows(n)`, `chunks_exact(n)`, `rchunks(n)` or
+    /// `rchunks_exact(n)`, by its code in `SLICE_CHUNKS`: the array of its
+    /// slices.
     SliceChunks,
 }
 
@@ -3630,6 +3634,7 @@ impl PreludeOp {
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
             Self::VecMethod => "vec.method",
+            Self::VecCapacity => "vec.capacity",
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
@@ -3660,6 +3665,7 @@ impl PreludeOp {
             | Self::MapSlot
             | Self::SetContains
             | Self::SetAlgebra
+            | Self::VecCapacity
             | Self::KeyedRange => Some(false),
             _ => None,
         }
@@ -3745,7 +3751,7 @@ impl PreludeOp {
             Self::SliceChunks => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
-                TypeId::of::<bool>(),
+                TypeId::of::<crate::INT>(),
             ],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
@@ -3784,6 +3790,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::VecCapacity => vec![TypeId::of::<crate::Array>()],
             Self::VecMethod => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::INT>(),
@@ -4000,14 +4007,19 @@ impl PreludeOp {
             }
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::VecCapacity => {
+                let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
+                return Ok(Dynamic::from(capacity as crate::INT));
+            }
             Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
                 let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
-                let windows = args[2].as_bool().unwrap_or(false);
+                let code = usize::try_from(args[2].as_int().unwrap_or(0)).unwrap_or(0);
+                let name = SLICE_CHUNKS.get(code).copied().unwrap_or_default();
                 if size == 0 {
-                    return panic(if windows {
+                    return panic(if name == "windows" {
                         "window size must be non-zero".into()
                     } else {
                         "chunk size must be non-zero".into()
@@ -4016,16 +4028,13 @@ impl PreludeOp {
                 let array = args[0]
                     .as_array_ref()
                     .map_err(|_| invariant("a slice is not an array at runtime"))?;
-                let slices: crate::Array = if windows {
-                    array
-                        .windows(size)
-                        .map(|window| Dynamic::from_array(window.to_vec()))
-                        .collect()
-                } else {
-                    array
-                        .chunks(size)
-                        .map(|chunk| Dynamic::from_array(chunk.to_vec()))
-                        .collect()
+                let slice = |items: &[Dynamic]| Dynamic::from_array(items.to_vec());
+                let slices: crate::Array = match name {
+                    "windows" => array.windows(size).map(slice).collect(),
+                    "chunks_exact" => array.chunks_exact(size).map(slice).collect(),
+                    "rchunks" => array.rchunks(size).map(slice).collect(),
+                    "rchunks_exact" => array.rchunks_exact(size).map(slice).collect(),
+                    _ => array.chunks(size).map(slice).collect(),
                 };
                 return Ok(Dynamic::from_array(slices));
             }
@@ -4521,11 +4530,14 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "into_bytes"
                 | "char_indices"
                 | "splitn"
+                | "rsplitn"
+                | "retain"
         ),
         Ty::Array { .. } => matches!(
             member,
             "len"
                 | "is_empty"
+                | "capacity"
                 | "iter"
                 | "clone"
                 | "to_vec"
@@ -4642,7 +4654,7 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         Ty::Float(_) => 0,
         Ty::String | Ty::Str | Ty::Array { .. } => match member {
             "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
-            | "truncate" | "split_off" => 2,
+            | "truncate" | "split_off" | "retain" => 2,
             _ => 1,
         },
         Ty::Option(_) => match member {
@@ -27865,12 +27877,39 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
-        let (mut arguments, end) = self.parse_call_arguments("string method arguments")?;
+        // `retain`'s closure takes each `char`.
+        if member.as_str() == "retain" {
+            self.closure_hints = vec![Some(Box::new([Ty::Char]))];
+        }
+        let arguments = self.parse_call_arguments("string method arguments");
+        self.closure_hints = Vec::new();
+        let (mut arguments, end) = arguments?;
         for argument in &mut arguments {
             self.strip_string_reference(argument);
         }
         let receiver = value.rendered_source().surrounded("(", ")");
         let expression = span(value.span.start(), end);
+        // `s.retain(f)`: the chars `f` keeps, in order, stored back as `s`.
+        if let ("retain", [filter]) = (member.as_str(), arguments.as_mut_slice()) {
+            let expected = Ty::Fn {
+                inputs: Box::new([Ty::Char]),
+                output: Box::new(Ty::Bool),
+            };
+            self.coerce_expr(&expected, filter)?;
+            let (keep, kept, c) = (
+                self.temporary("keep"),
+                self.temporary("kept"),
+                self.temporary("char"),
+            );
+            let mut source = origin::Fragment::plain(format!("{{ let {keep} = "));
+            source.push(filter.rendered_source());
+            source.push_text(format!("; let {kept} = \"\"; for {c} in "));
+            source.push(receiver.clone());
+            source.push_text(format!(" {{ if {keep}.call({c}) {{ {kept} += {c}; }} }} "));
+            source.push(self.store_into(&value, &kept)?);
+            source.push_text(" }");
+            return Ok(self.operator_expr(source, Ty::Unit, expression));
+        }
         if let ("split_at", [mid]) = (member.as_str(), arguments.as_mut_slice()) {
             self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
             let source = self.prelude_op(PreludeOp::SplitAt, [receiver, mid.rendered_source()]);
@@ -28015,10 +28054,11 @@ impl<'a> Parser<'a> {
                 };
                 (source, ty)
             }
-            // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
+            // `bytes()`, `char_indices()`, `splitn(n, pattern)` and `rsplitn(n, pattern)`: iterators
             // over the string's pieces; `as_bytes()` a `&[u8]` and
             // `into_bytes()` a `Vec<u8>`.
-            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", []) | ("splitn", [_, _]) => {
+            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", [])
+            | ("splitn" | "rsplitn", [_, _]) => {
                 let code = STR_PIECES
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -30132,12 +30172,25 @@ impl<'a> Parser<'a> {
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
             let mut arguments = arguments;
-            // `Vec::with_capacity(n)`: an empty `Vec`.
+            // `Vec::with_capacity(n)`: an empty `Vec` with room for `n`.
             if member.as_str() == "with_capacity"
                 && let [capacity] = arguments.as_mut_slice()
             {
                 self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
-                arguments.clear();
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let code = vec_method_code("with_capacity");
+                let mut source = origin::Fragment::plain(format!("{helper}([], {code}, "));
+                source.push(capacity.rendered_source());
+                source.push_text(", (), false)");
+                let element = Box::new(self.inference.fresh());
+                return Ok(self.operator_expr(
+                    source,
+                    Ty::Array {
+                        element,
+                        length: None,
+                    },
+                    span(name_span.start(), end),
+                ));
             } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
@@ -33950,6 +34003,33 @@ impl<'a> Parser<'a> {
         let (source, ty) = match (member.as_str(), arguments.as_mut_slice()) {
             ("len", []) => (receiver.surrounded("", ".len()"), Ty::Int(Int::Usize)),
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
+            // `v.capacity()` of a local or a temporary: the runtime `Vec`'s.
+            // A field, an element or a borrowed `Vec` is read through a
+            // copy, whose capacity is its length. Rust grows a `Vec` of
+            // one-byte items from 8, not 4, and gives a `Vec` of zero-size
+            // items `usize::MAX`.
+            ("capacity", []) => {
+                if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. })
+                    || !matches!(value.lvalue, None | Some(Lvalue::Binding { .. }))
+                    || matches!(
+                        self.inference.resolve(&element),
+                        Ty::Int(Int::U8 | Int::I8) | Ty::Bool | Ty::Unit
+                    )
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct:
+                            "`capacity()` of a `Vec` of one-byte or zero-size items, or of one \
+                                    other than a local or a temporary"
+                                .into(),
+                        source: member_span,
+                    });
+                }
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecCapacity));
+                (
+                    receiver.surrounded("", &format!(".{helper}()")),
+                    Ty::Int(Int::Usize),
+                )
+            }
             // `v.iter()` borrows the elements, through any reference to
             // `v`; `v.into_iter()` takes them, or borrows them through `&v`.
             ("iter", []) => {
@@ -34018,13 +34098,15 @@ impl<'a> Parser<'a> {
                     }),
                 },
             ),
-            // `windows(n)` and `chunks(n)`: an iterator over `&[T]` slices.
-            ("windows" | "chunks", [size]) => {
+            // `windows(n)`, `chunks(n)` and the other `SLICE_CHUNKS`: an
+            // iterator over `&[T]` slices.
+            (name, [size]) if SLICE_CHUNKS.contains(&name) => {
                 self.coerce_expr(&Ty::Int(Int::Usize), size)?;
-                let windows = (member.as_str() == "windows").to_string();
+                let code = SLICE_CHUNKS.iter().position(|chunks| *chunks == name);
+                let code = code.unwrap_or_default().to_string();
                 let slices = self.prelude_op(
                     PreludeOp::SliceChunks,
-                    [receiver, size.rendered_source(), windows.into()],
+                    [receiver, size.rendered_source(), code.into()],
                 );
                 let slice = Ty::Array {
                     element: Box::new(element),
@@ -42734,6 +42816,15 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult 
     }
 }
 
+/// The slice methods `SliceChunks` runs, by code: each gives the slices.
+const SLICE_CHUNKS: &[&str] = &[
+    "chunks",
+    "windows",
+    "chunks_exact",
+    "rchunks",
+    "rchunks_exact",
+];
+
 /// The `Vec` methods `VecMethod` runs in place, by code.
 const VEC_METHODS: &[&str] = &[
     "insert",
@@ -42747,6 +42838,7 @@ const VEC_METHODS: &[&str] = &[
     "copy_from_slice",
     "split_off",
     "swap_remove",
+    "with_capacity",
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -42999,6 +43091,9 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             "swap_remove index (is {a}) should be < len (is {len})"
         )),
         Some("swap_remove") => Ok(array.swap_remove(a)),
+        // A new `Vec` with room for `a` items, as `VecCapacity` reads it
+        // back; it grows by doubling from 4, as Rust's does.
+        Some("with_capacity") => Ok(Dynamic::from_array(crate::Array::with_capacity(a))),
         Some("swap") => match [a, b].into_iter().find(|index| *index >= len) {
             Some(index) => fail(format!(
                 "index out of bounds: the len is {len} but the index is {index}"
@@ -43186,6 +43281,7 @@ const STR_PIECES: &[&str] = &[
     "from_utf8",
     "debug",
     "utf8_display",
+    "rsplitn",
 ];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
@@ -43248,6 +43344,16 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
                 Err(_) => {
                     let pattern = args[3].clone_cast::<ImmutableString>();
                     text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        "rsplitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.rsplitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.rsplitn(count, pattern.as_str()).map(string).collect()
                 }
             }
         }

@@ -3,7 +3,7 @@
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
 <h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
-<p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
+<p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>retain</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>rsplitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="strings.rs" id="src-strings">let line = "  id=7, name=rawr ";
 let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
@@ -12,7 +12,7 @@ println!("{fields:?} {id}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
-<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
+<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>chunks_exact</code>, <code>rchunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code>, <code>capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="find-retain.rs" id="src-find-retain">struct Item {
     id: u32,

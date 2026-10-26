@@ -96,6 +96,7 @@ Error: "\"forty\": invalid digit found in string"
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
 <ul>
   <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
+  <li><code>capacity()</code> of a <code>Vec</code> in a field, in an element or behind a reference. It works on a local or a temporary <code>Vec</code>. It is also refused for a <code>Vec</code> of <code>u8</code>, <code>i8</code>, <code>bool</code> or <code>()</code>, whose growth rawr doesn&rsquo;t follow.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
