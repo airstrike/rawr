@@ -3420,6 +3420,12 @@ enum PreludeOp {
     GenericEqual,
     /// `{:?}` of a value of a generic type, by its runtime value.
     GenericDebug,
+    /// A number's, `bool`'s or `()`'s `Debug` under a `{:?}` spec
+    /// (`DebugSpec`): `leaf(value, spec, code)` (`DebugLeaf::from_code`).
+    FormatDebugLeaf,
+    /// A derived `Debug` under a `{:?}` spec, which it passes to each
+    /// field: `debug(value, spec)`.
+    FormatSpecDebug,
     /// `a.partial_cmp(&b)` by the runtime values (`compare_value`): an
     /// `Option` of `Ordering`'s discriminant.
     Compare,
@@ -3583,6 +3589,8 @@ impl PreludeOp {
             Self::ExpectErr => "result.expect-err",
             Self::GenericEqual => "generic.eq",
             Self::GenericDebug => "generic.debug",
+            Self::FormatDebugLeaf => "format.debug-leaf",
+            Self::FormatSpecDebug => "format.spec-debug",
             Self::Compare => "generic.partial-cmp",
             Self::TypeIndex => "generic.type-index",
             Self::Discriminant => "enum.discriminant",
@@ -3703,6 +3711,12 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
             ],
             Self::FormatRadix => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::FormatDebugLeaf => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::FormatSpecDebug => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
             Self::FormatBits => vec![
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
@@ -3851,6 +3865,17 @@ impl PreludeOp {
             Self::Err => return Ok(crate::result::err(args[0].take())),
             Self::GenericEqual => return Ok(comparison.equal(args[0], args[1])?.into()),
             Self::GenericDebug => return Ok(debug_value(args[0], models).into()),
+            Self::FormatDebugLeaf => {
+                let spec = DebugSpec::read(args[1]);
+                let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
+                return Ok(ImmutableString::from(spec.leaf(args[0], leaf)).into());
+            }
+            Self::FormatSpecDebug => {
+                let spec = DebugSpec::read(args[1]);
+                return Ok(
+                    ImmutableString::from(debug_value_spec(args[0], models, Some(&spec))).into(),
+                );
+            }
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -9006,6 +9031,9 @@ struct Parser<'a> {
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
     closure_hints: Vec<Option<Box<[Ty]>>>,
+    /// The local holding a `{:?}` spec (`DebugSpec`) that `debug_source`
+    /// passes down to each leaf, as Rust's `Formatter` does.
+    debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
@@ -9291,6 +9319,7 @@ impl<'a> Parser<'a> {
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
+            debug_spec: None,
             closure_hint: None,
             closure_outputs: Vec::new(),
             closure_output: None,
@@ -26746,78 +26775,143 @@ impl<'a> Parser<'a> {
             } else {
                 0
             };
-            let value = match spec.kind {
-                FormatKind::Exp { upper } => {
-                    if !number {
-                        return Err(mismatch("a number for `{:e}`"));
-                    }
-                    let unsigned = int.is_some_and(|kind| !kind.signed());
-                    let mode = i64::from(upper)
-                        + f32_mode
-                        + if int.is_some() { 4 } else { 0 }
-                        + if unsigned { 8 } else { 0 };
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatExp,
-                        [name, precision.into(), mode.to_string().into()],
-                    )
+            // A spec on `{:?}` of a value other than a number, which Rust's
+            // `Formatter` passes down to each leaf, as in `Some(       1)`.
+            let hex = match spec.kind {
+                FormatKind::HexDebug(radix) => Some(radix),
+                _ => None,
+            };
+            let spread = matches!(spec.kind, FormatKind::Debug | FormatKind::HexDebug(_))
+                && !number
+                && !matches!(ty, Ty::Infer(_))
+                && (hex.is_some()
+                    || width.is_some()
+                    || precision.is_some()
+                    || spec.sign
+                    || spec.zero);
+            let value = if spread {
+                // `pretty_debug` reads brackets, commas and quotes, so a fill
+                // of one would be read as structure.
+                if spec.alternate && width.is_some() && "{}[](),'\"".contains(spec.fill) {
+                    return Err(self.unsupported("a bracket, comma or quote fill in `{:#?}`"));
                 }
-                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
-                    let Some(kind) = int else {
-                        return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
-                            "an integer for this `format!` spec"
+                let parts = self.temporary("spec");
+                let align = spec
+                    .align
+                    .map_or_else(|| "()".to_string(), |align| format!("{align:?}"));
+                let flags =
+                    i64::from(spec.sign) + 2 * i64::from(spec.alternate) + 4 * i64::from(spec.zero);
+                source.push_text(format!(
+                    "let {parts} = [{}, {:?}, {align}, {flags}, {}, {}];\n",
+                    hex.unwrap_or(0),
+                    spec.fill,
+                    width.as_deref().unwrap_or("-1"),
+                    precision.as_deref().unwrap_or("-1"),
+                ));
+                self.debug_spec = Some(parts);
+                let rendered = self.debug_source(&ty, name, at);
+                self.debug_spec = None;
+                let rendered = rendered?;
+                if spec.alternate {
+                    self.prelude_op(PreludeOp::PrettyDebug, [rendered])
+                } else {
+                    rendered
+                }
+            } else {
+                match spec.kind {
+                    FormatKind::Exp { upper } => {
+                        if !number {
+                            return Err(mismatch("a number for `{:e}`"));
+                        }
+                        let unsigned = int.is_some_and(|kind| !kind.signed());
+                        let mode = i64::from(upper)
+                            + f32_mode
+                            + if int.is_some() { 4 } else { 0 }
+                            + if unsigned { 8 } else { 0 };
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatExp,
+                            [name, precision.into(), mode.to_string().into()],
+                        )
+                    }
+                    FormatKind::HexDebug(_) if float => {
+                        let debug = 1 + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
+                        let Some(kind) = int else {
+                            return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
+                                "an integer for this `format!` spec"
+                            } else {
+                                "an integer for `{:x?}`"
+                            }));
+                        };
+                        self.prelude_op(
+                            PreludeOp::FormatBits,
+                            [
+                                name,
+                                radix.to_string().into(),
+                                (if matches!(kind, Int::Var(_)) {
+                                    32
+                                } else {
+                                    kind.bits()
+                                })
+                                .to_string()
+                                .into(),
+                            ],
+                        )
+                    }
+                    FormatKind::Debug | FormatKind::Display if float => {
+                        let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
+                        let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                        self.prelude_op(
+                            PreludeOp::FormatFloat,
+                            [name, precision.into(), debug.to_string().into()],
+                        )
+                    }
+                    FormatKind::Debug => {
+                        if spec.width.is_some()
+                            && !matches!(
+                                ty,
+                                Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool
+                            )
+                        {
+                            return Err(self.unsupported("a `{:?}` width on a compound value"));
+                        }
+                        let rendered = self.debug_source(&ty, name, at)?;
+                        if spec.alternate {
+                            self.prelude_op(PreludeOp::PrettyDebug, [rendered])
                         } else {
-                            "an integer for `{:x?}`"
-                        }));
-                    };
-                    self.prelude_op(
-                        PreludeOp::FormatBits,
-                        [
-                            name,
-                            radix.to_string().into(),
-                            kind.bits().to_string().into(),
-                        ],
-                    )
-                }
-                FormatKind::Debug | FormatKind::Display if float => {
-                    let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
-                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
-                    self.prelude_op(
-                        PreludeOp::FormatFloat,
-                        [name, precision.into(), debug.to_string().into()],
-                    )
-                }
-                FormatKind::Debug => {
-                    if spec.width.is_some()
-                        && !matches!(ty, Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool)
-                    {
-                        return Err(self.unsupported("a `{:?}` width on a compound value"));
+                            rendered
+                        }
                     }
-                    let rendered = self.debug_source(&ty, name, at)?;
-                    if spec.alternate {
-                        self.prelude_op(PreludeOp::PrettyDebug, [rendered])
-                    } else {
-                        rendered
-                    }
+                    FormatKind::Display => match self.display_piece(&ty, name) {
+                        Some(text) => text,
+                        None => {
+                            return Err(Error::TypeMismatch {
+                                expected: "a type with `Display` in `format!`".into(),
+                                actual: ty.name(&self.models),
+                                expression: at,
+                            });
+                        }
+                    },
                 }
-                FormatKind::Display => match self.display_piece(&ty, name) {
-                    Some(text) => text,
-                    None => {
-                        return Err(Error::TypeMismatch {
-                            expected: "a type with `Display` in `format!`".into(),
-                            actual: ty.name(&self.models),
-                            expression: at,
-                        });
-                    }
-                },
             };
             let prefixed = spec.alternate
+                && int.is_some()
                 && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));
             let truncated = precision.is_some() && !number && spec.kind == FormatKind::Display;
             // `str`'s and `char`'s `Debug` ignore width and precision.
             let quoted =
                 spec.kind == FormatKind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
-            if !quoted && (width.is_some() || spec.sign && number || prefixed || truncated) {
+            if !quoted
+                && !spread
+                && (width.is_some() || spec.sign && number || prefixed || truncated)
+            {
                 let temporary = self.temporary("format");
                 source.push_text(format!("let {temporary} = "));
                 source.push(value);
@@ -30236,6 +30330,24 @@ impl<'a> Parser<'a> {
                     span(name_span.start(), member_span.end()),
                 ));
             }
+            // An `Rc` or `Arc` is its value at runtime (D492.3), so nothing
+            // counts its clones.
+            if pointer != Pointer::Box
+                && matches!(
+                    member.as_str(),
+                    "strong_count" | "weak_count" | "ptr_eq" | "downgrade"
+                )
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "`{}::{member}`: an `{0}` is its value in Rawr, without a count or an \
+                         address",
+                        pointer.name()
+                    )
+                    .into(),
+                    source: member_span,
+                });
+            }
             let (arguments, end) =
                 self.parse_call_arguments(&format!("`{}` arguments", pointer.name()))?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
@@ -33637,6 +33749,52 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
+        if let Some(spec) = self.debug_spec.clone() {
+            // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
+            let leaf = match &ty {
+                // An integer literal's type defaults to `i32`.
+                Ty::Int(Int::Var(_)) => Some(1032),
+                Ty::Int(kind) => {
+                    Some(i64::from(kind.bits()) + if kind.signed() { 1000 } else { 2000 })
+                }
+                Ty::Float(Float::F32) => Some(1),
+                Ty::Float(_) => Some(2),
+                Ty::Bool => Some(3),
+                Ty::Unit => Some(4),
+                _ => None,
+            };
+            if let Some(code) = leaf {
+                return Ok(self.prelude_op(
+                    PreludeOp::FormatDebugLeaf,
+                    [value, spec.as_str().into(), code.to_string().into()],
+                ));
+            }
+            match &ty {
+                Ty::Script(id, ..) if self.models.std_impl(*id, "Debug", "fmt").is_none() => {
+                    let model = self.models.definition(*id).clone();
+                    self.require_capability(&model, capability::Kind::Debug, span)?;
+                    return Ok(
+                        self.prelude_op(PreludeOp::FormatSpecDebug, [value, spec.as_str().into()])
+                    );
+                }
+                Ty::Script(..)
+                | Ty::Param(_)
+                | Ty::Projection(..)
+                | Ty::Time(_)
+                | Ty::Host { .. } => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "a width, precision, sign or `x?` in `{{:?}}` of `{}`, whose `Debug` \
+                             is its own or generic",
+                            ty.name(&self.models)
+                        )
+                        .into(),
+                        source: span,
+                    });
+                }
+                _ => {}
+            }
+        }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
                 self.debug_source(target, value, span)?
@@ -33660,7 +33818,11 @@ impl<'a> Parser<'a> {
             Ty::Int(Int::U64 | Int::Usize) => {
                 self.prelude_op(PreludeOp::FormatRadix, [value, "10".into()])
             }
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) => value.surrounded("(\"\" + ", ")"),
+            Ty::Float(kind) => {
+                let mode = if *kind == Float::F32 { "3" } else { "1" };
+                self.prelude_op(PreludeOp::FormatFloat, [value, "-1".into(), mode.into()])
+            }
+            Ty::Bool | Ty::Int(_) => value.surrounded("(\"\" + ", ")"),
             // A `ParseIntError` and kin: its `Debug` by its message.
             Ty::ParseError(error) => {
                 let message = self.temporary("debug");
@@ -36577,8 +36739,18 @@ impl<'a> Parser<'a> {
                 (Ty::Int(kind), "MIN") => kind.range().0.to_string(),
                 (Ty::Float(Float::F32), "MAX") => format!("{:?}", f64::from(f32::MAX)),
                 (Ty::Float(Float::F32), "MIN") => format!("{:?}", f64::from(f32::MIN)),
+                (Ty::Float(Float::F32), "MIN_POSITIVE") => {
+                    format!("{:?}", f64::from(f32::MIN_POSITIVE))
+                }
+                (Ty::Float(Float::F32), "EPSILON") => format!("{:?}", f64::from(f32::EPSILON)),
                 (Ty::Float(_), "MAX") => format!("{:?}", f64::MAX),
                 (Ty::Float(_), "MIN") => format!("{:?}", f64::MIN),
+                (Ty::Float(_), "MIN_POSITIVE") => format!("{:?}", f64::MIN_POSITIVE),
+                (Ty::Float(_), "EPSILON") => format!("{:?}", f64::EPSILON),
+                // IEEE division by zero, as rustc folds these.
+                (Ty::Float(_), "INFINITY") => "(1.0 / 0.0)".into(),
+                (Ty::Float(_), "NEG_INFINITY") => "(-1.0 / 0.0)".into(),
+                (Ty::Float(_), "NAN") => "(0.0 / 0.0)".into(),
                 // `String::from`, `f64::sqrt`, `char::is_alphanumeric`: a
                 // function as a value.
                 (_, "from" | "try_from") => {
@@ -41678,14 +41850,17 @@ fn default_value(
 }
 
 /// Rust's `{:#?}` from the one-line `Debug` text: a `{`, `[` or `(` with
-/// members opens an indented line per member, each ending in `,`.
+/// members opens an indented line per member, each ending in `,`. Only the
+/// one space the one-line text writes after a `{` or a `,` goes, so a
+/// member's padding (`{:#6?}`) stays.
 fn pretty_debug(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let skip_spaces = |mut at: usize| {
-        while chars.get(at) == Some(&' ') {
-            at += 1;
+    let skip_spaces = |at: usize| {
+        if chars.get(at) == Some(&' ') {
+            at + 1
+        } else {
+            at
         }
-        at
     };
     let newline = |out: &mut String, depth: usize| {
         out.push('\n');
@@ -41694,6 +41869,8 @@ fn pretty_debug(text: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
     let mut at = 0;
+    // Whether each open bracket is a struct's `{ `.
+    let mut open = Vec::new();
     while let Some(&character) = chars.get(at) {
         match character {
             // A string or char literal, with its escapes, as it is.
@@ -41717,12 +41894,19 @@ fn pretty_debug(text: &str) -> String {
                     '[' => ']',
                     _ => ')',
                 };
-                let next = skip_spaces(at + 1);
+                // A struct's `S { a: 1 }` writes a space after its `{`; a
+                // map's or set's `{1: 2}` does not.
+                let named = at >= 2
+                    && chars[at - 1] == ' '
+                    && (chars[at - 2].is_alphanumeric() || chars[at - 2] == '_');
+                let named = character == '{' && named;
+                let next = if named { skip_spaces(at + 1) } else { at + 1 };
                 out.push(character);
                 if chars.get(next) == Some(&close) {
                     out.push(close);
                     at = next;
                 } else {
+                    open.push(named);
                     depth += 1;
                     newline(&mut out, depth);
                     at = next;
@@ -41740,8 +41924,9 @@ fn pretty_debug(text: &str) -> String {
                 }
                 continue;
             }
-            ' ' if chars.get(at + 1) == Some(&'}') => {}
+            ' ' if chars.get(at + 1) == Some(&'}') && open.last() == Some(&true) => {}
             '}' | ']' | ')' => {
+                open.pop();
                 out.push(',');
                 depth = depth.saturating_sub(1);
                 newline(&mut out, depth);
@@ -41757,7 +41942,14 @@ fn pretty_debug(text: &str) -> String {
 /// `value`'s `Debug` text, names Rawr keeps under another spelling written
 /// as Rust's (`demangle_names`).
 fn debug_value(value: &Dynamic, models: &Models) -> String {
-    let text = debug_text(value, models);
+    debug_value_spec(value, models, None)
+}
+
+/// `value`'s `Debug` text under a `{:?}` spec (`DebugSpec`), which Rust's
+/// derives pass down to each field: a width pads each number, as in
+/// `Some(       1)`, and `{:x?}` writes each integer in hexadecimal.
+fn debug_value_spec(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    let text = debug_text(value, models, spec);
     if text.contains("__rawr_") {
         crate::tokenizer::demangle_names(&text).into_owned()
     } else {
@@ -41765,23 +41957,26 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
     }
 }
 
-fn debug_text(value: &Dynamic, models: &Models) -> String {
+fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
     if let Some(inner) = cell::value(value) {
-        return format!("RefCell {{ value: {} }}", debug_value(&inner, models));
+        return format!(
+            "RefCell {{ value: {} }}",
+            debug_value_spec(&inner, models, spec)
+        );
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
-        return format!("Reverse({})", debug_value(&reverse.0, models));
+        return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
     }
     if let Some(option) = crate::option::read(value) {
         return match option {
-            Some(inner) => format!("Some({})", debug_value(&inner, models)),
+            Some(inner) => format!("Some({})", debug_value_spec(&inner, models, spec)),
             None => "None".to_string(),
         };
     }
     if let Some(result) = crate::result::read(value) {
         return match result {
-            Ok(inner) => format!("Ok({})", debug_value(&inner, models)),
-            Err(inner) => format!("Err({})", debug_value(&inner, models)),
+            Ok(inner) => format!("Ok({})", debug_value_spec(&inner, models, spec)),
+            Err(inner) => format!("Err({})", debug_value_spec(&inner, models, spec)),
         };
     }
     match &value.0 {
@@ -41797,7 +41992,8 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
             // `W(1, "a")`, as Rust's `debug_tuple`.
             if item.form == crate::item::StructForm::Tuple {
                 let fields = item.fields.iter().zip(value.fields());
-                let fields = fields.map(|(field, value)| debug_typed(value, &field.ty, models));
+                let fields =
+                    fields.map(|(field, value)| debug_typed(value, &field.ty, models, spec));
                 return format!(
                     "{}({})",
                     item.name.text,
@@ -41813,7 +42009,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     output,
                     "{}: {}",
                     field.name.text,
-                    debug_typed(value, &field.ty, models)
+                    debug_typed(value, &field.ty, models, spec)
                 )
                 .expect("writing debug output into String cannot fail");
             }
@@ -41841,7 +42037,7 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .iter()
                     .zip(value.payload().iter().zip(variant.payload.iter()))
                     .map(|(field, (value, ty))| {
-                        format!("{}: {}", field.text, debug_typed(value, ty, models))
+                        format!("{}: {}", field.text, debug_typed(value, ty, models, spec))
                     });
                 return format!(
                     "{} {{ {} }}",
@@ -41856,25 +42052,33 @@ fn debug_text(value: &Dynamic, models: &Models) -> String {
                     .payload()
                     .iter()
                     .zip(variant.payload.iter())
-                    .map(|(value, ty)| debug_typed(value, ty, models))
+                    .map(|(value, ty)| debug_typed(value, ty, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         }
-        _ => format!("{value:?}"),
+        _ => match spec {
+            Some(spec) => spec.leaf(value, DebugLeaf::of_value(value)),
+            None => format!("{value:?}"),
+        },
     }
 }
 
 /// `{:?}` of a field or payload of declared type `ty`: an `Ordering`,
 /// an integer at runtime, prints its variant, also inside an `Option`,
-/// `Vec`, `Box` or tuple.
-fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String {
+/// `Vec`, `Box` or tuple; a builtin number prints as its declared type.
+fn debug_typed(
+    value: &Dynamic,
+    ty: &type_ref::Type,
+    models: &Models,
+    spec: Option<&DebugSpec>,
+) -> String {
     match (ty, &value.0) {
-        (type_ref::Type::Path(path), Union::Int(value, ..))
+        (type_ref::Type::Path(path), Union::Int(..) | Union::Float(..))
             if path.target == type_ref::Target::Builtin
-                && matches!(path.name.as_str(), "u64" | "usize") =>
+                && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>
         {
-            (*value as u64).to_string()
+            spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
         }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>
@@ -41892,7 +42096,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             let members = values
                 .iter()
                 .zip(members.iter())
-                .map(|(value, ty)| debug_typed(value, ty, models))
+                .map(|(value, ty)| debug_typed(value, ty, models, spec))
                 .collect::<Vec<_>>();
             if members.len() == 1 {
                 format!("({},)", members[0])
@@ -41904,18 +42108,18 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
             if let Some(inner) = ty.reverse_element()
                 && let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() =>
         {
-            format!("Reverse({})", debug_typed(&reverse.0, inner, models))
+            format!("Reverse({})", debug_typed(&reverse.0, inner, models, spec))
         }
         // `{k: v}` and `{k}`, as Rust's maps and sets print.
         (_, Union::Array(values, ..)) if let Some((_, arguments)) = ty.keyed_arguments() => {
             let entries = values.iter().map(|entry| match (&arguments[..], &entry.0) {
                 ([key, value], Union::Array(pair, ..)) if pair.len() == 2 => format!(
                     "{}: {}",
-                    debug_typed(&pair[0], key, models),
-                    debug_typed(&pair[1], value, models)
+                    debug_typed(&pair[0], key, models, spec),
+                    debug_typed(&pair[1], value, models, spec)
                 ),
-                ([key], _) => debug_typed(entry, key, models),
-                _ => debug_value(entry, models),
+                ([key], _) => debug_typed(entry, key, models, spec),
+                _ => debug_value_spec(entry, models, spec),
             });
             format!("{{{}}}", entries.collect::<Vec<_>>().join(", "))
         }
@@ -41928,7 +42132,7 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
                 "[{}]",
                 values
                     .iter()
-                    .map(|value| debug_typed(value, element, models))
+                    .map(|value| debug_typed(value, element, models, spec))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -41936,10 +42140,227 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
         _ if let Some(element) = ty.option_element()
             && let Some(Some(inner)) = crate::option::read(value) =>
         {
-            format!("Some({})", debug_typed(&inner, element, models))
+            format!("Some({})", debug_typed(&inner, element, models, spec))
         }
-        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models),
-        _ => debug_value(value, models),
+        _ if let Some(element) = ty.box_element() => debug_typed(value, element, models, spec),
+        _ => debug_value_spec(value, models, spec),
+    }
+}
+
+/// A builtin leaf of a `Debug` text, which a `{:?}` spec formats.
+#[derive(Clone, Copy)]
+enum DebugLeaf {
+    /// An integer of `bits` bits, signed or not.
+    Int {
+        bits: u32,
+        signed: bool,
+    },
+    Float {
+        single: bool,
+    },
+    Bool,
+    Unit,
+    /// A string, a char or another value, which ignore the spec.
+    Other,
+}
+
+impl DebugLeaf {
+    /// The leaf of a builtin type's name, for a declared field type.
+    fn of_name(name: &str) -> Option<Self> {
+        let int = |bits, signed| Some(Self::Int { bits, signed });
+        match name {
+            "i8" => int(8, true),
+            "u8" => int(8, false),
+            "i16" => int(16, true),
+            "u16" => int(16, false),
+            "i32" => int(32, true),
+            "u32" => int(32, false),
+            "i64" | "isize" => int(64, true),
+            "u64" | "usize" => int(64, false),
+            "f32" => Some(Self::Float { single: true }),
+            "f64" => Some(Self::Float { single: false }),
+            _ => None,
+        }
+    }
+
+    /// The leaf of a runtime value of unknown declared type.
+    fn of_value(value: &Dynamic) -> Self {
+        match &value.0 {
+            Union::Int(..) => Self::Int {
+                bits: 64,
+                signed: true,
+            },
+            Union::Float(..) => Self::Float { single: false },
+            Union::Bool(..) => Self::Bool,
+            Union::Unit(..) => Self::Unit,
+            _ => Self::Other,
+        }
+    }
+
+    /// A leaf by the code `PreludeOp::DebugLeaf` takes: 1 an `f32`, 2 an
+    /// `f64`, 3 a `bool`, 4 `()`, and 1000 plus the bits for a signed
+    /// integer or 2000 plus the bits for an unsigned one.
+    fn from_code(code: INT) -> Self {
+        match code {
+            1 => Self::Float { single: true },
+            2 => Self::Float { single: false },
+            3 => Self::Bool,
+            4 => Self::Unit,
+            1000.. => Self::Int {
+                bits: u32::try_from(code % 1000).unwrap_or(64),
+                signed: code < 2000,
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A `{:?}` spec as Rust's `Formatter` carries it through a derived
+/// `Debug`: `[hex, fill, align, flags, width, precision]` at runtime, with
+/// `hex` 16 or -16 for `{:x?}` or `{:X?}`, `align` a char or `()`, `flags`
+/// 1 for `+`, 2 for `#` and 4 for `0`, and -1 for no width or precision.
+struct DebugSpec {
+    hex: Option<bool>,
+    fill: char,
+    align: Option<char>,
+    sign: bool,
+    alternate: bool,
+    zero: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+}
+
+impl DebugSpec {
+    const PLAIN: Self = Self {
+        hex: None,
+        fill: ' ',
+        align: None,
+        sign: false,
+        alternate: false,
+        zero: false,
+        width: None,
+        precision: None,
+    };
+
+    fn read(spec: &Dynamic) -> Self {
+        let Ok(parts) = spec.as_array_ref() else {
+            return Self::PLAIN;
+        };
+        let int = |at: usize| parts.get(at).and_then(|part| part.as_int().ok());
+        let count = |at: usize| int(at).and_then(|value| usize::try_from(value).ok());
+        let flags = int(3).unwrap_or_default();
+        Self {
+            hex: match int(0) {
+                Some(16) => Some(false),
+                Some(-16) => Some(true),
+                _ => None,
+            },
+            fill: parts
+                .get(1)
+                .and_then(|fill| fill.as_char().ok())
+                .unwrap_or(' '),
+            align: parts.get(2).and_then(|align| align.as_char().ok()),
+            sign: flags & 1 != 0,
+            alternate: flags & 2 != 0,
+            zero: flags & 4 != 0,
+            width: count(4),
+            precision: count(5),
+        }
+    }
+
+    /// `text` cut to the precision and padded to the width, as
+    /// `Formatter::pad` does, aligned left by default.
+    fn pad(&self, text: &str) -> String {
+        let text: String = match self.precision {
+            Some(precision) => text.chars().take(precision).collect(),
+            None => text.to_string(),
+        };
+        self.align_text(&text, '<')
+    }
+
+    fn align_text(&self, text: &str, default: char) -> String {
+        let length = text.chars().count();
+        let Some(width) = self.width.filter(|width| *width > length) else {
+            return text.to_string();
+        };
+        let padding = width - length;
+        let (before, after) = match self.align.unwrap_or(default) {
+            '<' => (0, padding),
+            '^' => (padding / 2, padding - padding / 2),
+            _ => (padding, 0),
+        };
+        let fill = |count: usize| std::iter::repeat_n(self.fill, count).collect::<String>();
+        format!("{}{text}{}", fill(before), fill(after))
+    }
+
+    /// A number's sign, prefix and digits, padded as
+    /// `Formatter::pad_integral` does: `0` pads between the sign and the
+    /// digits.
+    fn pad_number(&self, negative: bool, prefix: &str, digits: &str) -> String {
+        let mut head = if negative {
+            "-".to_string()
+        } else if self.sign {
+            "+".to_string()
+        } else {
+            String::new()
+        };
+        head.push_str(prefix);
+        if self.zero
+            && let Some(width) = self.width
+        {
+            let length = head.chars().count() + digits.chars().count();
+            let zeros = "0".repeat(width.saturating_sub(length));
+            return format!("{head}{zeros}{digits}");
+        }
+        self.align_text(&format!("{head}{digits}"), '>')
+    }
+
+    /// `value`'s `Debug` text as a leaf of kind `leaf`.
+    fn leaf(&self, value: &Dynamic, leaf: DebugLeaf) -> String {
+        match (leaf, &value.0) {
+            (DebugLeaf::Int { bits, signed }, Union::Int(value, ..)) => {
+                let value = *value;
+                if let Some(upper) = self.hex {
+                    let all = value as u64;
+                    let masked = if bits >= 64 {
+                        all
+                    } else {
+                        all & ((1 << bits) - 1)
+                    };
+                    let digits = if upper {
+                        format!("{masked:X}")
+                    } else {
+                        format!("{masked:x}")
+                    };
+                    let prefix = if self.alternate { "0x" } else { "" };
+                    return self.pad_number(false, prefix, &digits);
+                }
+                if signed {
+                    self.pad_number(value < 0, "", &value.unsigned_abs().to_string())
+                } else {
+                    self.pad_number(false, "", &(value as u64).to_string())
+                }
+            }
+            (DebugLeaf::Float { single }, Union::Float(value, ..)) => {
+                let value = **value;
+                let text = match (self.precision, single) {
+                    (Some(precision), true) => format!("{:.precision$}", value as f32),
+                    (Some(precision), false) => format!("{value:.precision$}"),
+                    (None, true) => format!("{:?}", value as f32),
+                    (None, false) => format!("{value:?}"),
+                };
+                if value.is_nan() {
+                    return self.align_text(&text, '>');
+                }
+                match text.strip_prefix('-') {
+                    Some(digits) => self.pad_number(true, "", digits),
+                    None => self.pad_number(false, "", &text),
+                }
+            }
+            (DebugLeaf::Bool, Union::Bool(value, ..)) => self.pad(&value.to_string()),
+            (DebugLeaf::Unit, Union::Unit(..)) => self.pad("()"),
+            _ => format!("{value:?}"),
+        }
     }
 }
 

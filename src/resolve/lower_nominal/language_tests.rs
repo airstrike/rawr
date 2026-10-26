@@ -9935,3 +9935,61 @@ fn language_circle_std_string_and_vec_methods() {
         rejected("fn cap(v: &Vec<i64>) -> usize { v.capacity() } pub fn run() -> i64 { 0 } run()");
     assert!(refused.contains("`capacity()`"), "{refused}");
 }
+
+#[test]
+fn language_circle_std_debug_specs_reach_each_leaf() {
+    // A `{:?}` width, precision, sign or `x?` applies to each number
+    // inside, as Rust's derives pass the formatter down; strings ignore it.
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct P { a: i32, b: &'static str, f: f32 }
+        pub fn run() -> String {
+            let p = P { a: -1, b: "q", f: 0.1 };
+            format!(
+                "[{:>8?}] [{:<5?}] [{:x?}] [{:X?}] [{:4?}] [{:.2?}] [{:#6?}] {:?}",
+                Some(1), (1, "ab"), vec![10, 255], p, p, Some(1.5), Some(1), vec![0.1f32]
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "[Some(       1)] [(1    , \"ab\")] [[a, ff]] [P { a: FFFFFFFF, b: \"q\", f: 0.1 }] \
+         [P { a:   -1, b: \"q\", f:  0.1 }] [Some(1.50)] [Some(\n         1,\n)] [0.1]"
+    );
+}
+
+#[test]
+fn language_circle_std_float_constants_and_rc_counts() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            format!(
+                "{} {} {:?} {} {} {} {}",
+                f64::MIN_POSITIVE, f32::EPSILON, f64::EPSILON, f64::INFINITY,
+                f32::NEG_INFINITY, f64::NAN.is_nan(), f32::MAX
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        format!(
+            "{} {} {:?} {} {} {} {}",
+            f64::MIN_POSITIVE,
+            f32::EPSILON,
+            f64::EPSILON,
+            f64::INFINITY,
+            f32::NEG_INFINITY,
+            f64::NAN.is_nan(),
+            f32::MAX
+        )
+    );
+    let refused = rejected(
+        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); Rc::strong_count(&a) as i64 } run()",
+    );
+    assert!(refused.contains("Rc::strong_count"), "{refused}");
+}

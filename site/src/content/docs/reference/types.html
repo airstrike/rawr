@@ -13,7 +13,7 @@ println!("{b:?} {c} {d}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-integers" data-out="out-integers" aria-label="Run integers.rs" hidden></button><b>rawr run integers.rs</b><span id="out-integers" aria-live="polite">None 4 255</span></div>
 </div>
 <h2 id="floats">Floats</h2>
-<p><code>f32</code> and <code>f64</code>, with methods such as <code>sqrt</code>, <code>powi</code>, <code>floor</code>, <code>round</code> and <code>trunc</code>.</p>
+<p><code>f32</code> and <code>f64</code>, with methods such as <code>sqrt</code>, <code>powi</code>, <code>floor</code>, <code>round</code> and <code>trunc</code>. Their constants <code>MAX</code>, <code>MIN</code>, <code>MIN_POSITIVE</code>, <code>EPSILON</code>, <code>INFINITY</code>, <code>NEG_INFINITY</code> and <code>NAN</code> work. <code>f64::MAX</code> prints all its digits, as rustc does.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="sqrt.rs" id="src-sqrt">let side = 2.0_f64.sqrt();
 let area = side.powi(2).round(); // 2.0
@@ -51,7 +51,7 @@ println!("{:?} {:?}", first_even(&amp;[1, 4]), first_even(&amp;[3]));</code></pr
   <div class="run"><button type="button" class="runbtn" data-source="src-option" data-out="out-option" aria-label="Run option.rs" hidden></button><b>rawr run option.rs</b><span id="out-option" aria-live="polite">Some(40) None</span></div>
 </div>
 <h2 id="pointers"><code>Box</code>, <code>Rc</code> and <code>Arc</code></h2>
-<p><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code> work. <code>Rc</code> and <code>Arc</code> are imported with <code>use</code>. Fields and methods reach through them, and <code>&amp;Arc&lt;String&gt;</code> passes where <code>&amp;str</code> is expected. Cloning one gives another handle to the same value.</p>
+<p><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code> work. <code>Rc</code> and <code>Arc</code> are imported with <code>use</code>. Fields and methods reach through them, and <code>&amp;Arc&lt;String&gt;</code> passes where <code>&amp;str</code> is expected. Cloning one gives another handle to the same value. An <code>Rc</code> is its value in rawr, so <code>Rc::strong_count</code> and <code>Rc::ptr_eq</code> are refused.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="rc.rs" id="src-rc">use std::rc::Rc;
 
