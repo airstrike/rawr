@@ -1205,7 +1205,7 @@ fn prelude_arity(parsed: &item::type_ref::Path) -> Option<usize> {
             Some(1)
         }
         // `fn(A, ..) -> B`: its inputs, then its output.
-        [segment] if segment.name.text.as_str() == item::type_ref::FN_TYPE => {
+        [segment] if item::type_ref::is_fn_type(&segment.name.text) => {
             Some(segment.arguments.len())
         }
         _ => None,
@@ -1436,12 +1436,19 @@ impl Type {
             .collect()
     }
 
+    /// Whether this is a function type whose call borrows it only shared:
+    /// `fn(..)` or `Fn(..)`, not `FnMut` or `FnOnce`.
+    pub(crate) fn is_shared_call_fn(&self) -> bool {
+        matches!(self, Type::Path(path)
+            if path.target == Target::Builtin && path.name.as_str() == item::type_ref::FN_TYPE)
+    }
+
     /// The inputs and output of a function type `fn(A, ..) -> B`.
     pub(crate) fn fn_signature(&self) -> Option<(Vec<&Type>, &Type)> {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || path.name.as_str() != item::type_ref::FN_TYPE {
+        if path.target != Target::Builtin || !item::type_ref::is_fn_type(&path.name) {
             return None;
         }
         let mut types = path

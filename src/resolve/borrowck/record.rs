@@ -64,6 +64,8 @@ struct Temporary {
     span: Span,
     /// Made by `&` in a place a `let` may extend: not a call's receiver.
     extendable: bool,
+    /// Its value's drop uses the borrows it holds: a use where it ends.
+    drops: bool,
     /// Where it ends unless a `let` extends it: the end of the innermost
     /// scope it outlived because that scope's value may borrow it (a
     /// block's tail), held by a [`Fact::Nop`] until then.
@@ -337,6 +339,16 @@ impl Recorder {
                 path,
                 at,
             });
+        }
+    }
+
+    /// `held` is used here: what a macro borrowed of its arguments lasts
+    /// until it has read them all (`format!("{} {}", p, f(p))` borrows `p`
+    /// over `f(p)`).
+    pub(crate) fn use_held(&mut self, held: &[(Path, Origin)]) {
+        for &(_, origin) in held {
+            let local = self.origin_local(origin);
+            self.push(Fact::Use(local));
         }
     }
 
@@ -1309,7 +1321,7 @@ impl Recorder {
         for block in body.blocks.clone() {
             for fact in &mut self.body.blocks[block as usize].facts {
                 match fact {
-                    Fact::Use(local) | Fact::Def(local) => {
+                    Fact::Use(local) | Fact::Def(local) | Fact::DropUse(local) => {
                         if let Some((upvar, _)) = upvars.get(local) {
                             *local = *upvar;
                         }
@@ -1582,6 +1594,10 @@ impl Recorder {
                 }
                 ScopeEnd::Value if goes_on && !self.temporary_scopes.is_empty() => {
                     if temporary.ends.is_none() {
+                        // The drop's use goes before the end.
+                        if temporary.drops {
+                            self.push(Fact::Nop);
+                        }
                         temporary.ends = Some(self.push(Fact::Nop));
                     }
                     if let Some(outer) = self.temporary_scopes.last_mut() {
@@ -1593,7 +1609,8 @@ impl Recorder {
         }
     }
 
-    /// The temporary ends: here, or where the scope it outlived ended.
+    /// The temporary drops and ends: here, or where the scope it outlived
+    /// ended.
     fn temporary_dead(&mut self, temporary: Temporary) {
         let fact = Fact::Access {
             place: local_place(temporary.local),
@@ -1601,9 +1618,22 @@ impl Recorder {
             span: temporary.span,
             loan: None,
         };
+        let drop = Fact::DropUse(temporary.local);
         match temporary.ends {
-            Some(point) => *self.fact_mut(point) = fact,
+            Some(point) => {
+                if temporary.drops {
+                    let before = Point {
+                        block: point.block,
+                        index: point.index - 1,
+                    };
+                    *self.fact_mut(before) = drop;
+                }
+                *self.fact_mut(point) = fact;
+            }
             None => {
+                if temporary.drops {
+                    self.push(drop);
+                }
                 self.push(fact);
             }
         }
@@ -1687,13 +1717,14 @@ impl Recorder {
     /// here and held in a temporary: the reference, its loan at its own
     /// region and the temporary's value below it. The value holds `held`.
     /// `extendable` when a `let` may extend it (`&value`), not when it is a
-    /// call's receiver.
+    /// call's receiver. `drops` when the value's drop uses what it holds.
     pub(crate) fn borrow_temporary(
         &mut self,
         value: Span,
         mutable: bool,
         held: &[(Path, Origin)],
         extendable: bool,
+        drops: bool,
     ) -> Held {
         let local = self.hidden(super::TEMPORARY, value);
         self.push(Fact::Def(local));
@@ -1726,6 +1757,7 @@ impl Recorder {
                 local,
                 span: value,
                 extendable,
+                drops,
                 ends: None,
             });
         }
@@ -1747,13 +1779,36 @@ impl Recorder {
 
     /// The locals declared at `declared` end here, with their block: a loan
     /// of one still live is rustc's E0597. The temporaries a `let` in the
-    /// block extended end with them.
-    pub(crate) fn storage_dead(&mut self, declared: &[Span], end: Span) {
+    /// block extended end with them. The locals declared at `drops` drop
+    /// first, each with a use of what it holds ([`Recorder::drop_use`]).
+    /// Each local drops and then ends in reverse order of declaration, as
+    /// rustc's do.
+    pub(crate) fn storage_dead(&mut self, declared: &[Span], drops: &[Span], end: Span) {
         for temporary in self.blocks.pop().unwrap_or_default().into_iter().rev() {
             self.temporary_dead(temporary);
         }
-        for declaration in declared {
-            let Some(&local) = self.locals.get(declaration) else {
+        self.locals_end(declared, drops, end);
+    }
+
+    /// The function body's locals and parameters, declared at `declared`,
+    /// end here, the locals declared at `drops` dropping first, as at a
+    /// block's end ([`Recorder::storage_dead`]).
+    pub(crate) fn body_end(&mut self, declared: &[Span], drops: &[Span], end: Span) {
+        self.locals_end(declared, drops, end);
+    }
+
+    fn locals_end(&mut self, declared: &[Span], drops: &[Span], end: Span) {
+        let mut ending: Vec<Span> = declared.iter().chain(drops).copied().collect();
+        ending.sort_by_key(|declaration| std::cmp::Reverse(declaration.start()));
+        ending.dedup();
+        for declaration in ending {
+            if drops.contains(&declaration) {
+                self.drop_use(declaration);
+            }
+            if !declared.contains(&declaration) {
+                continue;
+            }
+            let Some(&local) = self.locals.get(&declaration) else {
                 continue;
             };
             self.push(Fact::Access {
@@ -1765,6 +1820,14 @@ impl Recorder {
                 span: end,
                 loan: None,
             });
+        }
+    }
+
+    /// The local declared at `declaration` drops here, and its type's
+    /// `Drop` may use the borrows it holds.
+    pub(crate) fn drop_use(&mut self, declaration: Span) {
+        if let Some(&local) = self.locals.get(&declaration) {
+            self.push(Fact::DropUse(local));
         }
     }
 }

@@ -158,7 +158,8 @@ fn run(
                     }
                 }
             },
-            Fact::Use(_) | Fact::Nop => {}
+            // A drop moves nothing, and a moved value is not dropped.
+            Fact::Use(_) | Fact::DropUse(_) | Fact::Nop => {}
         }
     }
 }

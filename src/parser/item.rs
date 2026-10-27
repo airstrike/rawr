@@ -2727,8 +2727,9 @@ fn parse_bounds_with(
         {
             // `F: Fn(A) -> B`: a function type bound.
             let start = *position;
+            let mutable = name.as_str() != "Fn";
             input.next();
-            bounds.push(parse_fn_signature(input, start)?);
+            bounds.push(parse_fn_signature(input, start, mutable)?);
         } else {
             let mut split = None;
             let mut bindings = Vec::new();
@@ -3366,8 +3367,9 @@ fn parse_type_split(
         if let Some((Token::Identifier(name) | Token::Reserved(name), _)) = input.peek()
             && is_fn_trait(name)
         {
+            let mutable = name.as_str() != "Fn";
             input.next();
-            let path = parse_fn_signature(input, start)?;
+            let path = parse_fn_signature(input, start, mutable)?;
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
@@ -3492,8 +3494,8 @@ fn parse_type_split(
     // `fn(A) -> B`, `impl Fn(A) -> B` and `dyn Fn(A) -> B`: Rawr's one
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
-        Some(ImplStart::Fn(start)) => {
-            let path = parse_fn_signature(input, start)?;
+        Some(ImplStart::Fn(start, mutable)) => {
+            let path = parse_fn_signature(input, start, mutable)?;
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         Some(ImplStart::Iterator(name, start)) => {
@@ -3577,8 +3579,9 @@ fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
 
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
-    /// `fn(..)` or `impl Fn*(..)`, its head consumed.
-    Fn(Position),
+    /// `fn(..)` or `impl Fn*(..)`, its head consumed, and whether its
+    /// call takes it `&mut` (`FnMut`, `FnOnce`).
+    Fn(Position, bool),
     /// `impl Iterator` (or another iterator trait), its builtin name.
     Iterator(&'static str, Position),
     /// `impl Bound + Bound` of other traits, after `impl`.
@@ -3592,7 +3595,7 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Fn, position)) => {
             let position = *position;
             input.next();
-            return Ok(Some(ImplStart::Fn(position)));
+            return Ok(Some(ImplStart::Fn(position, false)));
         }
         Some((Token::Impl, position)) => *position,
         _ => return Ok(None),
@@ -3600,8 +3603,9 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
     input.next();
     let iterator = match input.peek() {
         Some((Token::Identifier(name) | Token::Reserved(name), _)) if is_fn_trait(name) => {
+            let mutable = name.as_str() != "Fn";
             input.next();
-            return Ok(Some(ImplStart::Fn(start)));
+            return Ok(Some(ImplStart::Fn(start, mutable)));
         }
         Some((Token::Identifier(name), _)) => iterator_trait(name),
         _ => None,
@@ -3867,7 +3871,11 @@ fn is_fn_trait(name: &str) -> bool {
 
 /// `(A, B) -> C` after a function type's head: the builtin path `fn` whose
 /// arguments are the inputs, then the output (`()` when omitted).
-fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<type_ref::Path> {
+fn parse_fn_signature(
+    input: &mut TokenStream,
+    start: Position,
+    mutable: bool,
+) -> ParseResult<type_ref::Path> {
     let mut arguments = Vec::new();
     let mut end = if let Some((Token::Unit, position)) = input.peek() {
         let position = *position;
@@ -3897,7 +3905,12 @@ fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<t
     Ok(type_ref::Path {
         segments: Box::new([type_ref::Segment {
             name: crate::item::Name {
-                text: type_ref::FN_TYPE.into(),
+                text: if mutable {
+                    type_ref::FN_MUT_TYPE
+                } else {
+                    type_ref::FN_TYPE
+                }
+                .into(),
                 span: token_span(start, "fn"),
             },
             arguments: arguments.into_boxed_slice(),
@@ -3950,7 +3963,7 @@ fn erase_fn_bounds(
             return false;
         }
         let Some(bound) = generic.bounds.iter().find(|bound| {
-            matches!(&bound.segments[..], [segment] if segment.name.text.as_str() == type_ref::FN_TYPE)
+            matches!(&bound.segments[..], [segment] if type_ref::is_fn_type(&segment.name.text))
         }) else {
             return true;
         };

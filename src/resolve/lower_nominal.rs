@@ -4015,7 +4015,6 @@ impl PreludeOp {
             | Self::UnwrapErr
             | Self::GenericDebug
             | Self::TypeIndex
-            | Self::DropParts
             | Self::Discriminant
             | Self::ReverseWrap
             | Self::DisplayText
@@ -4024,7 +4023,8 @@ impl PreludeOp {
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
-            Self::CellBorrow
+            Self::DropParts
+            | Self::CellBorrow
             | Self::CellSet
             | Self::CellReplace
             | Self::ErrorNew
@@ -4227,7 +4227,7 @@ impl PreludeOp {
                     ImmutableString::from(debug_value_spec(args[0], models, Some(&spec))).into(),
                 );
             }
-            Self::DropParts => return Ok(drops::parts(args[0], models)),
+            Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -9607,6 +9607,13 @@ struct Parser<'a> {
     /// The closures that move out a capture: `FnOnce`, so a call moves
     /// the closure.
     once_closures: BTreeSet<crate::item::Key>,
+    /// The `Copy` closures that change what they captured by value, with
+    /// those captures: a copy of one has its own (`KEYWORD_COPY_CLOSURE`).
+    copied_state: BTreeMap<crate::item::Key, Vec<ImmutableString>>,
+    /// Calls whose value is a function a call borrows shared (`impl Fn`,
+    /// `fn`), by their span, and the locals declared with one, by their
+    /// declaration (T179).
+    shared_call_fns: BTreeSet<Span>,
     closure_count: usize,
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
@@ -9758,6 +9765,10 @@ struct Parser<'a> {
     /// While resolving a pattern below a `&T` it matched through: bindings
     /// are references (`Some(mutable)`), Rust's default binding mode.
     binding_mode: std::cell::Cell<Option<bool>>,
+    /// A name an or-pattern binds, with its type in the first alternative
+    /// and in a later one, the subject's name and the later alternative's
+    /// span. The root pattern makes the two one type, as rustc does.
+    or_binding_types: std::cell::RefCell<Vec<(Ty, Ty, String, Span)>>,
     /// The most elements any slice pattern names: a slice's lengths up to
     /// it are told apart for coverage (`coverage_constructors`).
     slice_arity: std::cell::Cell<usize>,
@@ -9855,6 +9866,9 @@ struct Parser<'a> {
     /// The temporary scopes being read (`drops.rs`), innermost last: the
     /// hidden locals holding the values made in each that nothing moves.
     temporary_scopes: Vec<Vec<String>>,
+    /// The `drops::Shape` of each temporary there whose type needs more
+    /// than the walk of every part.
+    temporary_shapes: BTreeMap<String, String>,
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
@@ -9990,6 +10004,8 @@ impl<'a> Parser<'a> {
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),
+            copied_state: BTreeMap::new(),
+            shared_call_fns: BTreeSet::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -10044,6 +10060,7 @@ impl<'a> Parser<'a> {
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
+            or_binding_types: std::cell::RefCell::new(Vec::new()),
             slice_arity: std::cell::Cell::new(0),
             host_checks: std::cell::RefCell::new(Vec::new()),
             host_binding_mode: std::cell::Cell::new(None),
@@ -10076,6 +10093,7 @@ impl<'a> Parser<'a> {
             loop_drop_depth: None,
             subject_deref: false,
             temporary_scopes: Vec::new(),
+            temporary_shapes: BTreeMap::new(),
             borrowed: BTreeSet::new(),
             deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
@@ -19900,6 +19918,20 @@ impl<'a> Parser<'a> {
         }
         let declaration = binding.declaration;
         if !self.moves_by_value(&value.ty) {
+            // A copy of a `Copy` closure has its own copies of what it
+            // changes, as Rust copies the closure's captured values.
+            if let Ty::FnItem { key, .. } = self.inference.resolve(&value.ty)
+                && let Some(state) = self.copied_state.get(&*key)
+            {
+                let mut operands = vec![value.source.clone()];
+                operands.extend(
+                    state
+                        .iter()
+                        .map(|name| origin::Fragment::plain(format!("\"{name}\""))),
+                );
+                value.source =
+                    origin::Fragment::call(crate::engine::KEYWORD_COPY_CLOSURE, operands);
+            }
             return Ok(());
         }
         // A closure that moves out a capture is `FnOnce`. One that is not
@@ -20479,6 +20511,10 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.expect_name("binding name")?;
         let annotation = if matches!(self.peek(), Token::Colon) {
             self.next();
+            // `let mut f: fn(i32) -> i32`: a call of `f` borrows it shared.
+            if matches!(self.peek(), Token::Fn) {
+                self.shared_call_fns.insert(name_span);
+            }
             Some(self.parse_local_type()?)
         } else {
             None
@@ -20522,6 +20558,11 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr_expecting(annotation.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
+        // borrows it shared, as `Fn::call` does (T179).
+        if self.shared_call_fns.contains(&value.span) {
+            self.shared_call_fns.insert(name_span);
+        }
         // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
         if let Some(borrow) = self.last_cell_borrow.take()
             && borrow.span == value.span
@@ -21334,7 +21375,10 @@ impl<'a> Parser<'a> {
         if let Some(otherwise) = otherwise {
             rendered.push_text(",\n_ => ");
             if made {
-                rendered.push_text(format!("{{ {}", drops::glue_call(&scrutinee)));
+                rendered.push_text(format!(
+                    "{{ {}",
+                    drops::glue_call(&scrutinee, &self.drop_shape(&written_ty))
+                ));
                 rendered.push(otherwise.value.rendered_block());
                 rendered.push_text(" }");
             } else {
@@ -21372,7 +21416,7 @@ impl<'a> Parser<'a> {
             )?;
             rendered.push_text(format!("\n{clears}"));
             if made {
-                rendered.push_text(drops::glue_call(&scrutinee));
+                rendered.push_text(drops::glue_call(&scrutinee, &self.drop_shape(&written_ty)));
             }
         }
         // Copies of the outer locals the bindings shadow, once the moves
@@ -22006,10 +22050,7 @@ impl<'a> Parser<'a> {
                 }
                 block.push(statement);
                 block.push_text(" ");
-                for temporary in temporaries.iter().rev() {
-                    block.push_text(drops::glue_call(temporary));
-                    block.push_text(" ");
-                }
+                block.push_text(self.temporary_drops(temporaries));
                 block.push_text("}\n");
                 self.output.push(block);
             }
@@ -23476,16 +23517,24 @@ impl<'a> Parser<'a> {
                             first = Some(bound);
                         }
                         Some(first) => {
+                            // A name has one type in every alternative. The
+                            // root pattern makes them one, as rustc does with
+                            // `(Some(x), _) | (None, Some(x))` on literals'
+                            // `{integer}`s and `None`'s unknown type.
                             let same = first.len() == bound.len()
-                                && first.iter().all(|(name, ty)| {
-                                    bound.get(name).is_some_and(|other| {
-                                        same_inferred(
-                                            &self.inference.resolve(ty),
-                                            &self.inference.resolve(other),
+                                && first.keys().all(|name| bound.contains_key(name));
+                            if same {
+                                self.or_binding_types.borrow_mut().extend(first.iter().map(
+                                    |(name, ty)| {
+                                        (
+                                            ty.clone(),
+                                            bound[name].clone(),
+                                            owner.to_string(),
+                                            alternative.span(),
                                         )
-                                    })
-                                });
-                            if !same {
+                                    },
+                                ));
+                            } else {
                                 return Err(Error::InvalidMatch {
                                     owner: owner.into(),
                                     reason: "every alternative of an or-pattern must bind the \
@@ -23611,6 +23660,34 @@ impl<'a> Parser<'a> {
     /// The root pattern of a `match` arm, `if let` or `while let` on a value
     /// of `subject` type.
     fn resolve_root_pattern(
+        &mut self,
+        syntax: &PatternSyntax,
+        subject: &Ty,
+    ) -> Result<ResolvedRootPattern, Error> {
+        let outer_or_types = self.or_binding_types.take();
+        let resolved = self.resolve_root_pattern_parts(syntax, subject);
+        let or_types = self.or_binding_types.replace(outer_or_types);
+        let resolved = resolved?;
+        for (first, other, owner, span) in or_types {
+            if !(self.unify_type(&first, &other)
+                && same_inferred(
+                    &self.inference.resolve(&first),
+                    &self.inference.resolve(&other),
+                ))
+            {
+                return Err(Error::InvalidMatch {
+                    owner: owner.into(),
+                    reason: "every alternative of an or-pattern must bind the same names with \
+                             the same types"
+                        .into(),
+                    pattern: span,
+                });
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_root_pattern_parts(
         &self,
         syntax: &PatternSyntax,
         subject: &Ty,
@@ -24674,7 +24751,7 @@ impl<'a> Parser<'a> {
             drops::Holder::Local(place, _)
                 if place == scrutinee && self.needs_drop(&subject.ty, subject.span)? =>
             {
-                drops::glue_call(scrutinee)
+                drops::glue_call(scrutinee, &self.drop_shape(&subject.ty))
             }
             _ => String::new(),
         };
@@ -25139,13 +25216,15 @@ impl<'a> Parser<'a> {
             let Some(target) = self.loops.len().checked_sub(1) else {
                 return Err(self.unsupported("`break` or `continue` outside a loop"));
             };
-            // rustc's E0590.
             if self.loops[target].condition.is_some() {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "`break` or `continue` with no label in the condition of a \
-                                `while` loop"
-                        .into(),
-                    source: start,
+                return Err(Error::UnlabeledJumpInWhileCondition {
+                    keyword: if token == Token::Break {
+                        "break"
+                    } else {
+                        "continue"
+                    }
+                    .into(),
+                    at: start,
                 });
             }
             target
@@ -25177,6 +25256,7 @@ impl<'a> Parser<'a> {
             }
         }
         let flow_depth = self.loops[target].flow_depth;
+        self.exit_drop_uses(self.loops[target].drop_depth);
         self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
         let drops =
@@ -25244,6 +25324,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let copied = self.copied_return("()".into());
                 source = self.jump_with_drops(&drops, "return", copied);
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25267,6 +25348,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let returned = self.copied_return(returned.clone()).unwrap_or(returned);
                 source = self.jump_with_drops(&drops, "return", Some(returned));
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25274,6 +25356,7 @@ impl<'a> Parser<'a> {
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         }
         source.push_text("; }");
+        self.exit_drop_uses(self.drop_base);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
     }
@@ -25332,6 +25415,11 @@ impl<'a> Parser<'a> {
     /// `value` stored into the `&mut` place `place`: a local, an element or
     /// a field.
     fn store_into(&mut self, place: &ParsedExpr, value: &str) -> Result<origin::Fragment, Error> {
+        // A closure written in place (`&mut |x| ..`) is a temporary: its
+        // captures are where it reaches them, and nothing is stored back.
+        if place.lvalue.is_none() {
+            return Ok(origin::Fragment::default());
+        }
         if let Some(Lvalue::Slice(slice)) = &place.lvalue {
             self.require_mutable_binding(&slice.binding, place.span)?;
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
@@ -25400,6 +25488,18 @@ impl<'a> Parser<'a> {
                 });
             }
             let place = &place;
+            // `twice(&mut |x| v.push(x))`: the closure is a temporary the
+            // callee calls where it is; nothing is stored back.
+            if place.lvalue.is_none()
+                && let Ty::Reference {
+                    mutable: true,
+                    target,
+                } = self.inference.resolve(&place.ty)
+                && matches!(self.inference.resolve(&target), Ty::FnItem { .. })
+            {
+                places.push(place.clone());
+                continue;
+            }
             if !matches!(
                 self.inference.resolve(&place.ty),
                 Ty::Reference { mutable: true, .. }
@@ -27358,7 +27458,9 @@ impl<'a> Parser<'a> {
                 .map(|binding| binding.declaration)
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
-            self.flow().storage_dead(&declared, point_span(end));
+            let drop_uses = self.block_drop_uses();
+            self.flow()
+                .storage_dead(&declared, &drop_uses, point_span(end));
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
             let ty = std::mem::replace(&mut self.last_type, outer_last_type);
             let inner_last_expression =
@@ -29398,6 +29500,7 @@ impl<'a> Parser<'a> {
             }
         };
         let mut arguments = Vec::<(Option<ImmutableString>, ParsedExpr)>::new();
+        let mut borrowed = Vec::new();
         while matches!(self.peek(), Token::Comma) {
             self.next();
             if matches!(self.peek(), Token::RightParen) {
@@ -29413,13 +29516,16 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            // A format argument is borrowed.
+            // A format argument is borrowed, and the borrow lasts until the
+            // macro has read every argument, as rustc's `format_args!` has
+            // it: a later argument that moves or changes it is refused.
             let mut argument = self.parse_expr()?;
-            self.call_on_place(&argument);
+            self.format_argument_borrow(&argument, &mut borrowed);
             self.hold_temporary(&mut argument)?;
             arguments.push((name, argument));
         }
         let end = self.expect(Token::RightParen, "')' after `format!` arguments")?;
+        self.flow().use_held(&borrowed);
         let expression = span(start.start(), end);
         let positional = arguments
             .iter()
@@ -31237,10 +31343,24 @@ impl<'a> Parser<'a> {
                 }
                 self.next();
                 let mut operand = self.parse_operand()?;
-                if operand.lvalue.is_none() {
-                    return Err(self.unsupported("`&mut` of a value that is not a place"));
-                }
                 let whole = span(start, operand.span.end());
+                if operand.lvalue.is_none() {
+                    // `twice(&mut |x| v.push(x))`: the closure is the
+                    // borrowed temporary, and the callee calls it where it
+                    // is, as its captures are where the closure reaches them.
+                    if !matches!(self.inference.resolve(&operand.ty), Ty::FnItem { .. }) {
+                        return Err(self.unsupported("`&mut` of a value that is not a place"));
+                    }
+                    self.borrow_temporary_mut(&operand, whole);
+                    operand.source = operand.rendered_source().surrounded("(", ")");
+                    operand.prelude = origin::Fragment::default();
+                    operand.ty = Ty::Reference {
+                        mutable: true,
+                        target: Box::new(self.inference.resolve(&operand.ty)),
+                    };
+                    operand.span = whole;
+                    return Ok(operand.retain_origin());
+                }
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
                 self.flow().borrow(
@@ -34959,13 +35079,14 @@ impl<'a> Parser<'a> {
                 .flow()
                 .closure(&key)
                 .is_some_and(|closure| closure.mutable),
-            // A closure a function returned, as `impl FnMut(i32)`: its type
-            // doesn't say which `Fn` trait it has, and a call of one
-            // declared `mut` is an `FnMut` call, which borrows it `&mut`.
+            // A closure a function returned, as `impl FnMut(i32)`: a call of
+            // one declared `mut` is an `FnMut` call, which borrows it `&mut`,
+            // unless its type is `impl Fn` or `fn` (T179).
             Ty::Fn { .. } => {
                 binding.mutable
                     && matches!(binding.kind, BindingKind::Local)
                     && !self.parameter_declarations.contains(&binding.declaration)
+                    && !self.shared_call_fns.contains(&binding.declaration)
             }
             _ => false,
         };
@@ -35011,12 +35132,16 @@ impl<'a> Parser<'a> {
             ty = self.inference.resolve(&target);
         }
         self.reject_invocation(&ty, name_span, "called as a function")?;
-        self.call_function_value(
-            origin::Fragment::plain(name.to_string()),
-            ty,
-            name,
-            name_span,
-        )
+        // `f: &mut impl FnMut(i32)` is the closure where the caller has it
+        // (`this`, or a place a closure reaches): the call goes through it.
+        let declaration = self.bindings[name.as_str()].declaration;
+        let reference = self.bindings[name.as_str()].ty.clone();
+        self.reject_shadowed_root(&name, declaration, name_span)?;
+        let callee = match self.aliased_element(&name, declaration, &reference, name_span)? {
+            Some(place) => place.rendered_source().surrounded("(", ")"),
+            None => origin::Fragment::plain(name.to_string()),
+        };
+        self.call_function_value(callee, ty, name, name_span)
     }
 
     /// A call of a function value of type `ty` (a closure, `fn` pointer or
@@ -36561,7 +36686,7 @@ impl<'a> Parser<'a> {
                 source.push(test);
                 source.push_text(" { ");
                 if self.needs_drop(&element, member_span)? {
-                    source.push_text(drops::glue_call("__rawr_or"));
+                    source.push_text(drops::glue_call("__rawr_or", &self.drop_shape(&element)));
                     source.push_text(" ");
                 }
                 let unwrapped = unwrap(self);
@@ -38300,10 +38425,11 @@ impl<'a> Parser<'a> {
                         Vec::new()
                     };
                     source.push(self.mutation_call(&value, member.as_str(), operands)?);
+                    let drop =
+                        drops::glue_call(&format!("{kept}[{at}]"), &self.drop_shape(&element));
                     source.push_text(format!(
-                        "; let {at} = {length}; while {at} < {kept}.len() {{ {}({kept}[{at}]); \
-                         {at} += 1; }} }}",
-                        drops::GLUE
+                        "; let {at} = {length}; while {at} < {kept}.len() {{ {drop} \
+                         {at} += 1; }} }}"
                     ));
                     return Ok(self.operator_expr(source, Ty::Unit, expression));
                 }
@@ -38994,6 +39120,7 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), Token::LeftBrace) {
             self.parse_match_action().map(|branch| branch.value)
         } else {
+            let pending = self.field_entries.len();
             self.open_temporaries();
             self.flow().open_temporaries();
             // A closure's body opens its own scope frames (D558 tier 1).
@@ -39031,6 +39158,30 @@ impl<'a> Parser<'a> {
                     Ty::Unit,
                     span(start.start(), end.end()),
                 ))
+            })
+            // A place the body changes through a field (`|x| p.b.push(x)`)
+            // is reached in the body, at each call, not where the closure
+            // is made.
+            .map(|mut value| {
+                if self.field_entries.len() > pending {
+                    let entries = self.field_entries.split_off(pending);
+                    let result = self.temporary("body");
+                    let mut block = origin::Fragment::plain("{ ");
+                    for (read, _) in &entries {
+                        block.push(read.clone());
+                    }
+                    block.push_text(format!(" let {result} = "));
+                    block.push(value.rendered_source());
+                    block.push_text("; ");
+                    for (_, store) in entries {
+                        block.push(store);
+                    }
+                    block.push_text(format!(" {result} }}"));
+                    value.source = block;
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
+                }
+                value
             })
         };
         let parameter_drops = self.close_drops();
@@ -39318,6 +39469,25 @@ impl<'a> Parser<'a> {
             // A closure that isn't `move` takes by value only what its body
             // moves out, such as a field (T152).
             let moves_out = !moved && closure.by_value.iter().any(|(.., copy)| !copy);
+            // A `Copy` closure changes only what it captured by value: a
+            // copy of it copies those, and changes its own (T150).
+            if moved && copy && closure.mutable && !scope.asynchronous {
+                let state: Vec<ImmutableString> = scope
+                    .captures
+                    .iter()
+                    .filter(|name| {
+                        name.as_str() != "this"
+                            && !self.aliases.contains_key(name.as_str())
+                            && self.bindings.get(name.as_str()).is_some_and(|binding| {
+                                !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
+                            })
+                    })
+                    .cloned()
+                    .collect();
+                if !state.is_empty() {
+                    self.copied_state.insert((**key).clone(), state);
+                }
+            }
             if !scope.asynchronous {
                 self.flow().set_closure((**key).clone(), closure);
             }
@@ -39469,12 +39639,12 @@ impl<'a> Parser<'a> {
             }
             self.move_local(argument)?;
             // A value with drop glue runs it here.
-            let dropping = if self.needs_drop(&argument.ty, argument.span)? {
-                drops::GLUE
+            let source = if self.needs_drop(&argument.ty, argument.span)? {
+                let shape = origin::Fragment::plain(self.drop_shape(&argument.ty));
+                origin::Fragment::call(drops::GLUE, [argument.rendered_source(), shape])
             } else {
-                crate::engine::KEYWORD_DROP
+                origin::Fragment::call(crate::engine::KEYWORD_DROP, [argument.rendered_source()])
             };
-            let source = origin::Fragment::call(dropping, [argument.rendered_source()]);
             return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the
@@ -39572,6 +39742,14 @@ impl<'a> Parser<'a> {
                 self.kept_by_call(call, &kept, None, summary);
             }
             name = function.generated;
+            if function
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(type_ref::Type::is_shared_call_fn)
+            {
+                self.shared_call_fns.insert(call);
+            }
             let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
@@ -39615,6 +39793,15 @@ impl<'a> Parser<'a> {
                         source.push_text("); ");
                         source.push(store);
                         source.push_text(format!("{result} }})"));
+                        source
+                    }
+                    // A closure written in place (`&mut |x| ..`) is called
+                    // where it is.
+                    None => {
+                        let mut source = place.rendered_source();
+                        source.push_text(format!(".{name}("));
+                        source.push(origin::Fragment::join(operands, ", "));
+                        source.push_text(")");
                         source
                     }
                     _ => self.mutation_call(&place, &name, operands)?,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | moved | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | drops | moved | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -20,11 +20,15 @@ captures `x`, and the variants go to `closure-moves/mutations`. With
 (`vec![&x].to_vec()`), and the variants go to `signatures/mutations`. With
 `regions`, the borrow is held at one region position of a value: an item a
 container gives, one lifetime of a type with two, or what an `Option`'s
-`map` returns, and the variants go to `regions/mutations`. With
-`moved`, `x` is moved before the statement, on a branch, in a loop, by a
-block's tail or a `match`, moved and given its value back, or bound by
-`ref` only, and the variants go to `moves/mutations`. rustc decides which
-are errors: run `record.py` on the folder afterwards.
+`map` returns, and the variants go to `regions/mutations`. With `drops`,
+the borrow is held by a value whose type has a `Drop` impl and is used
+only where that value drops (at its scope's end, or not at all once it is
+moved out), or by a `Vec`, whose drop does not use it, and the variants go
+to `drops/mutations`. With `moved`, `x` is moved before the statement, on
+a branch, in a loop, by a block's tail or a `match`, moved and given its
+value back, or bound by `ref` only, and the variants go to
+`moves/mutations`. rustc decides which are errors: run `record.py` on the
+folder afterwards.
 """
 
 import glob
@@ -40,6 +44,7 @@ CLOSURES = sys.argv[1:] == ["closures"]
 MOVES = sys.argv[1:] == ["moves"]
 TEMPORARIES = sys.argv[1:] == ["temporaries"]
 REGIONS = sys.argv[1:] == ["regions"]
+DROPS = sys.argv[1:] == ["drops"]
 MOVED = sys.argv[1:] == ["moved"]
 OUT = os.path.join(
     HERE,
@@ -53,6 +58,8 @@ OUT = os.path.join(
     if TEMPORARIES
     else "regions/mutations"
     if REGIONS
+    else "drops/mutations"
+    if DROPS
     else "moves/mutations"
     if MOVED
     else "mutations",
@@ -65,6 +72,7 @@ SOURCES = sorted(
     + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES or MOVES else [])
     + (glob.glob(os.path.join(HERE, "closure-moves/*.rs")) if MOVES else [])
     + (glob.glob(os.path.join(HERE, "regions/*.rs")) if REGIONS else [])
+    + (glob.glob(os.path.join(HERE, "drops/*.rs")) if DROPS else [])
     + (glob.glob(os.path.join(HERE, "moves/*.rs")) if MOVED else [])
 )
 HELPERS = """
@@ -90,6 +98,17 @@ fn __c() -> bool { false }
 REGION_HELPERS = """
 fn __see<T>(_: &T) {}
 struct __Two<'a, 'b, A, B>(&'a A, &'b B);
+"""
+DROP_HELPERS = """
+fn __c() -> bool { false }
+fn __eat<T>(_: T) {}
+struct __See<'a, T>(&'a T);
+impl<T> Drop for __See<'_, T> {
+    fn drop(&mut self) {}
+}
+struct __Hold<'a, T> {
+    s: __See<'a, T>,
+}
 """
 DECLARATION = re.compile(r"^(\s*)let mut (\w+)\b[^=]*=.*;\s*$")
 PER_LOCAL = 2
@@ -301,6 +320,22 @@ def region_variants(indent, name, statement):
     }
 
 
+def drop_variants(indent, name, statement):
+    """A borrow held by a value with a `Drop` impl, used only where it drops."""
+    i = indent
+    see = f"{i}let __d = __See(&{name});"
+    return {
+        "drop_across": [see, statement],
+        "drop_ended": [see, f"{i}drop(__d);", statement],
+        "drop_moved_out": [see, f"{i}__eat(__d);", statement],
+        "drop_maybe_moved": [see, f"{i}if __c() {{ drop(__d); }}", statement],
+        "drop_in_block": [f"{i}{{", f"    {see}", f"{i}}}", statement],
+        "drop_in_option": [f"{i}let __o = Some(__See(&{name}));", statement],
+        "drop_in_holder": [f"{i}let __h = __Hold {{ s: __See(&{name}) }};", statement],
+        "vec_no_drop_use": [f"{i}let __v = vec![&{name}];", statement],
+    }
+
+
 def moved_variants(indent, name, statement):
     """`name` moved, on some path or all, before `statement`, or moved and given back."""
     i = indent
@@ -358,6 +393,8 @@ def main():
                     if TEMPORARIES
                     else region_variants
                     if REGIONS
+                    else drop_variants
+                    if DROPS
                     else moved_variants
                     if MOVED
                     else variants
@@ -374,6 +411,8 @@ def main():
                             if TEMPORARIES
                             else REGION_HELPERS
                             if REGIONS
+                            else DROP_HELPERS
+                            if DROPS
                             else MOVED_HELPERS
                             if MOVED
                             else HELPERS

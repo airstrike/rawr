@@ -419,10 +419,17 @@ fn language_break_values_and_labels() {
     rejected("pub fn run() -> i64 { let mut i = 0; while i < 3 { i += 1; break 5; } i } run()");
     rejected("pub fn run() -> i64 { loop { break 'nowhere; } 1 } run()");
     // rustc's E0590: an unlabeled jump in a `while` condition.
-    rejected(
+    for source in [
         "pub fn run() -> i64 { let mut n = 0; loop { while { n += 1; if n > 2 { break; } true } {} \
          break; } n } run()",
-    );
+        "pub fn run() -> i64 { let mut n = 0; while continue { n += 1; } n } run()",
+    ] {
+        let error = rejected(source);
+        assert!(
+            error.contains("`break` or `continue` with no label in the condition of a `while` loop"),
+            "{error}"
+        );
+    }
     rejected("pub fn run() -> i64 { loop { if true { break 1; } break true; } } run()");
 }
 
@@ -2250,7 +2257,7 @@ fn language_hand_written_std_trait_impls() {
                 "{} {} {:?} {} {} {} {} {} {} {} {} {} {} {}",
                 p, q, d, equal, unequal, Tag::B, show(&p), show(&Tag::A), show(&5),
                 same(&p, &Point { x: 1, y: 0 }), dup(&p).x, dbg(&p), dbg(&Tag::A),
-                shout(p) + &d.to_string()
+                shout(Point { x: 1, y: 2 }) + &d.to_string()
             )
         }
         run()
@@ -2276,6 +2283,17 @@ fn language_hand_written_std_trait_impls() {
     rejected(
         "fn show<T: std::fmt::Display>(x: T) -> String { format!(\"{}\", x) } struct P { x: i64 } \
          pub fn run() -> i64 { show(P { x: 1 }).len() } run()",
+    );
+    // `format!` borrows `p` until it has read every argument: a later one
+    // that moves it is rustc's E0505.
+    let moved = rejected(
+        "fn shout<T: std::fmt::Display>(x: T) -> String { x.to_string() } \
+         pub fn run() -> i64 { let p = String::from(\"a\"); format!(\"{} {}\", p, shout(p)).len() as i64 } \
+         run()",
+    );
+    assert!(
+        moved.contains("E0505") || moved.contains("borrowed"),
+        "{moved}"
     );
 }
 

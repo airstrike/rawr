@@ -1025,3 +1025,5 @@ moves/mutations/word_count_top_16_moved_by_match.rs	E0382:19
 moves/mutations/word_count_top_16_moved_in_loop.rs	E0382:21
 moves/mutations/word_count_top_16_moved_on_branch.rs	E0382:19
 moves/mutations/word_count_top_16_moved_on_diverging_branch.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/drop_moved_not_reassigned.rs	ok	0	"bx\n"
+moves/drop_reassigned_after_move.rs	E0502:13

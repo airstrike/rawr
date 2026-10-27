@@ -207,3 +207,72 @@ fn native_calls_reach_their_values_without_a_copy() {
         assert_eq!(copies(body), (expected, 0), "{body}");
     }
 }
+
+/// A closure passed as a function's `&mut impl FnMut` argument, named or
+/// written in place, is called where the caller has it: a thousand calls
+/// through each copy no `Tally` beyond what the same calls by name copy
+/// (T175). Before, the call didn't find the parameter, and a closure
+/// written in place was refused.
+#[test]
+fn closures_passed_by_mut_reference_copy_nothing() {
+    let items = "fn twice(f: &mut impl FnMut(i64)) {
+        f(1);
+        f(2);
+    }";
+    let through = copies_with(
+        items,
+        "let mut t = Tally::new();
+        let mut u = Tally::new();
+        let mut add = |k| t.add(k);
+        for _ in 0..1000 {
+            twice(&mut add);
+            twice(&mut |k| u.add(k * 10));
+        }
+        t.total() + u.total()",
+    );
+    let named = copies(
+        "let mut t = Tally::new();
+        let mut u = Tally::new();
+        let mut add = |k| t.add(k);
+        let mut add_ten = |k| u.add(k * 10);
+        for _ in 0..1000 {
+            add(1);
+            add(2);
+            add_ten(1);
+            add_ten(2);
+        }
+        t.total() + u.total()",
+    );
+    assert_eq!(
+        through,
+        (33000, 0),
+        "a copy stood in for a closure's borrow"
+    );
+    assert_eq!(named, (33000, 0));
+}
+
+/// A local a closure captured is shared, and a `&self` call on it, inside
+/// a closure or after one, is lent the value under its lock: a thousand
+/// reads copy no `Tally` (T178). Before, each read copied it.
+#[test]
+fn captured_locals_are_read_without_a_copy() {
+    for (body, expected) in [
+        (
+            "let mut t = Tally::new(); let mut sum = 0;
+            for n in 0..1000 { let mut add = |k| t.add(k); add(n); sum += t.total(); } sum",
+            166666500,
+        ),
+        (
+            "let mut t = Tally::new(); t.add(2); let show = || t.total();
+            let mut sum = 0; for _ in 0..1000 { sum += show(); } sum",
+            2000,
+        ),
+        (
+            "let mut t = Tally::new(); { let mut add = |k| t.add(k); add(5); }
+            let mut sum = 0; for _ in 0..1000 { sum += t.total(); } sum",
+            5000,
+        ),
+    ] {
+        assert_eq!(copies(body), (expected, 0), "{body}");
+    }
+}

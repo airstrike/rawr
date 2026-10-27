@@ -70,36 +70,178 @@ pub(super) struct Scope {
     /// Outer locals this scope's bindings shadow, by scope and position,
     /// whose own names read them again once it ends.
     shadowed: Vec<(usize, usize)>,
+    /// The borrow facts have the uses its drops make at its end already
+    /// ([`Parser::block_drop_uses`]).
+    uses_recorded: bool,
+}
+
+/// Which of the borrows a value holds its drop uses, as rustc's drop check
+/// has it: a type's own `Drop` may use all of them, and a reference or
+/// `std`'s containers (whose `Drop` is `#[may_dangle]`) use none of their
+/// own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DropUse {
+    None,
+    All,
+    /// Some and not others, which these facts do not tell apart.
+    Some,
 }
 
 /// The parts of `value` the glue goes on to after the value's own `drop`:
 /// a struct's fields, an enum variant's payload, an array's (`Vec`, array,
 /// tuple) elements, or what an `Option` or `Result` holds, in that order,
-/// each that holds a value of a type with `impl Drop`.
-pub(super) fn parts(value: &Dynamic, models: &Models) -> Dynamic {
+/// each that holds a value of a type with `impl Drop`, as `[part, shape]`
+/// pairs. `shape` is the value's [`Shape`], as `Shape::text` writes it:
+/// a part its type says is a reference is passed over, since what it
+/// refers to is not the value's to drop.
+pub(super) fn parts(value: &Dynamic, shape: &Dynamic, models: &Models) -> Dynamic {
     let mut parts = crate::Array::new();
-    each_part(value, &mut |part| {
-        if holds(part, models) {
-            parts.push(part.clone());
+    each_part(value, shape, models, &mut |part, shape| {
+        if !matches!(shape.0, Union::Bool(false, ..)) && holds(part, models) {
+            parts.push(vec![part.clone(), shape].into());
         }
     });
     parts.into()
 }
 
-fn each_part(value: &Dynamic, each: &mut dyn FnMut(&Dynamic)) {
+/// Each part of `value` with its shape, from `shape`, the value's. Under
+/// `()`, the walk of every part, a crate type's field or payload its
+/// declaration types as a reference is passed over: only a generic
+/// argument that is a reference is still walked.
+fn each_part(
+    value: &Dynamic,
+    shape: &Dynamic,
+    models: &Models,
+    each: &mut dyn FnMut(&Dynamic, Dynamic),
+) {
+    let declared = |identity: &type_def::Identity, variant: Option<&str>| {
+        let types: Vec<&type_ref::Type> = match models.by_identity.get(identity) {
+            Some(Nominal::Struct { item, .. }) => {
+                item.fields.iter().map(|field| &field.ty).collect()
+            }
+            Some(Nominal::Enum { item, .. }) => item
+                .variants
+                .iter()
+                .filter(|candidate| Some(candidate.name.text.as_str()) == variant)
+                .flat_map(|candidate| candidate.payload.iter())
+                .collect(),
+            None => Vec::new(),
+        };
+        let shapes: crate::Array = types
+            .into_iter()
+            .map(|ty| match ty {
+                type_ref::Type::Reference { .. } => false.into(),
+                _ => Dynamic::UNIT,
+            })
+            .collect();
+        Dynamic::from(shapes)
+    };
+    let at = |shape: &Dynamic, index: usize| match &shape.0 {
+        Union::Array(shapes, ..) => shapes.get(index).cloned().unwrap_or(Dynamic::UNIT),
+        Union::Map(shapes, ..) => shapes.get("e").cloned().unwrap_or(Dynamic::UNIT),
+        _ => Dynamic::UNIT,
+    };
+    let key = |shape: &Dynamic, key: &str| match &shape.0 {
+        Union::Map(shapes, ..) => shapes.get(key).cloned().unwrap_or(Dynamic::UNIT),
+        _ => Dynamic::UNIT,
+    };
+    let walk = shape.is_unit();
     match &value.0 {
-        Union::Struct(value, ..) => value.fields().iter().for_each(each),
-        Union::Enum(value, ..) => value.payload().iter().for_each(each),
-        Union::Array(value, ..) => value.iter().for_each(each),
-        Union::Shared(..) => each_part(&value.flatten_clone(), each),
+        Union::Struct(value, ..) => {
+            let shape = if walk {
+                &declared(value.identity(), None)
+            } else {
+                shape
+            };
+            for (index, field) in value.fields().iter().enumerate() {
+                each(field, at(shape, index));
+            }
+        }
+        Union::Enum(value, ..) => {
+            let payload = if walk {
+                declared(value.identity(), Some(value.variant().name()))
+            } else {
+                key(shape, value.variant().name())
+            };
+            for (index, part) in value.payload().iter().enumerate() {
+                each(part, at(&payload, index));
+            }
+        }
+        Union::Array(value, ..) => {
+            for (index, element) in value.iter().enumerate() {
+                each(element, at(shape, index));
+            }
+        }
+        Union::Shared(..) => each_part(&value.flatten_clone(), shape, models, each),
         Union::Variant(..) => {
             if let Some(Some(inner)) = crate::option::read(value) {
-                each(&inner);
-            } else if let Some(Ok(inner) | Err(inner)) = crate::result::read(value) {
-                each(&inner);
+                each(&inner, shape.clone());
+            } else if let Some(Ok(inner)) = crate::result::read(value) {
+                each(&inner, key(shape, "ok"));
+            } else if let Some(Err(inner)) = crate::result::read(value) {
+                each(&inner, key(shape, "err"));
             }
         }
         _ => {}
+    }
+}
+
+/// How the glue walks a value of a type: rustc's drop glue follows the
+/// type, and a reference's referent is not dropped with what holds the
+/// reference, though at run time a reference reads the referent's value.
+/// Only a type holding a reference to a value with drop glue needs more
+/// than [`Shape::Walk`].
+enum Shape {
+    /// Every part the glue finds at run time.
+    Walk,
+    /// Nothing: a reference.
+    Skip,
+    /// A struct's fields or a tuple's members, by position.
+    Parts(Vec<Shape>),
+    /// Each element alike.
+    Elements(Box<Shape>),
+    /// Each variant's payload, by the variant's name.
+    Variants(Vec<(ImmutableString, Vec<Shape>)>),
+    /// `Ok`'s and `Err`'s.
+    Result(Box<Shape>, Box<Shape>),
+}
+
+impl Shape {
+    fn walks(&self) -> bool {
+        matches!(self, Self::Walk)
+    }
+
+    fn parts(parts: Vec<Self>) -> Self {
+        if parts.iter().all(Self::walks) {
+            Self::Walk
+        } else {
+            Self::Parts(parts)
+        }
+    }
+
+    /// The shape as the glue reads it: `()`, `false`, an array by
+    /// position, or a map by element (`e`), variant, or `ok` and `err`.
+    fn text(&self) -> String {
+        let list = |parts: &[Self]| {
+            let parts: Vec<String> = parts.iter().map(Self::text).collect();
+            format!("[{}]", parts.join(", "))
+        };
+        match self {
+            Self::Walk => "()".into(),
+            Self::Skip => "false".into(),
+            Self::Parts(parts) => list(parts),
+            Self::Elements(element) => format!("#{{\"e\": {}}}", element.text()),
+            Self::Variants(variants) => {
+                let variants: Vec<String> = variants
+                    .iter()
+                    .map(|(name, payload)| format!("\"{name}\": {}", list(payload)))
+                    .collect();
+                format!("#{{{}}}", variants.join(", "))
+            }
+            Self::Result(ok, err) => {
+                format!("#{{\"ok\": {}, \"err\": {}}}", ok.text(), err.text())
+            }
+        }
     }
 }
 
@@ -118,12 +260,15 @@ fn holds(value: &Dynamic, models: &Models) -> bool {
         return true;
     }
     let mut found = false;
-    each_part(value, &mut |part| found = found || holds(part, models));
+    each_part(value, &Dynamic::UNIT, models, &mut |part, shape| {
+        found = found || !matches!(shape.0, Union::Bool(false, ..)) && holds(part, models);
+    });
     found
 }
 
-/// The glue: `__rawr_drop_glue(value)` runs the `drop` of the value's type,
-/// when it has one, then the glue of each part, as rustc's drop glue does.
+/// The glue: `__rawr_drop_glue(value, shape)` runs the `drop` of the
+/// value's type, when it has one, then the glue of each part, as rustc's
+/// drop glue does. `shape` is the value's [`Shape`].
 pub(super) fn write_glue(
     output: &mut location::Generated,
     models: &Models,
@@ -135,7 +280,8 @@ pub(super) fn write_glue(
     let parts = format!("{SENTINEL}{}", ops.len());
     ops.push(ExecutableOp::Prelude(PreludeOp::DropParts));
     let mut text = format!(
-        "private fn {GLUE}(__rawr_value) {{\nlet __rawr_type = {type_index}(__rawr_value);\n"
+        "private fn {GLUE}(__rawr_value, __rawr_shape) {{\nlet __rawr_type = \
+         {type_index}(__rawr_value);\n"
     );
     for ((owner, _), definitions) in models
         .trait_methods
@@ -156,7 +302,8 @@ pub(super) fn write_glue(
     }
     let _ = write!(
         text,
-        "for __rawr_part in {parts}(__rawr_value) {{ {GLUE}(__rawr_part); }}\n}}\n"
+        "for __rawr_part in {parts}(__rawr_value, __rawr_shape) {{ \
+         {GLUE}(__rawr_part[0], __rawr_part[1]); }}\n}}\n"
     );
     output.declaration(source, declaration, &text);
 }
@@ -236,19 +383,14 @@ fn collect_names(syntax: &PatternSyntax, names: &mut Vec<(ImmutableString, Span)
     }
 }
 
-/// The drops of `temporaries`, in reverse order of making.
-fn temporary_drops(temporaries: &[String]) -> String {
-    temporaries
-        .iter()
-        .rev()
-        .map(|temporary| glue_call(temporary) + " ")
-        .collect()
+/// A drop of the value `place` reads, whose type's [`Shape`] is `shape`
+/// ([`Parser::drop_shape`]): the glue's call, as a statement.
+pub(super) fn glue_call(place: &str, shape: &str) -> String {
+    format!("{GLUE}({place}, {shape});")
 }
 
-/// A drop of the value `place` reads: the glue's call, as a statement.
-pub(super) fn glue_call(place: &str) -> String {
-    format!("{GLUE}({place});")
-}
+/// What the glue reads for a type whose drop glue walks every part.
+pub(super) const WALK: &str = "()";
 
 impl Models {
     /// Whether `owner` has `impl Drop`.
@@ -274,6 +416,215 @@ impl Parser<'_> {
             return Ok(false);
         }
         self.needs_drop_in(ty, at, &mut Vec::new())
+    }
+
+    /// How the glue walks a value of `ty` ([`Shape`]), as its second
+    /// argument.
+    pub(super) fn drop_shape(&self, ty: &Ty) -> String {
+        self.shape_in(ty, &mut Vec::new()).text()
+    }
+
+    fn shape_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> Shape {
+        let resolved = self.inference.resolve(ty);
+        match &resolved {
+            // What a reference refers to is not dropped with it.
+            Ty::Reference { target, .. } => {
+                if self
+                    .needs_drop_in(target, Span::NONE, &mut Vec::new())
+                    .unwrap_or(true)
+                {
+                    Shape::Skip
+                } else {
+                    Shape::Walk
+                }
+            }
+            Ty::Script(id, arguments) => {
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return Shape::Walk;
+                }
+                visiting.push(key);
+                let substitution = self.nominal_substitution(*id, arguments);
+                let mut shape = |ty: &type_ref::Type| {
+                    self.shape_in(
+                        &instantiate(&Ty::from_resolved(ty), &substitution),
+                        visiting,
+                    )
+                };
+                let shape = match self.models.definition(*id) {
+                    Nominal::Struct { item, .. } => {
+                        Shape::parts(item.fields.iter().map(|field| shape(&field.ty)).collect())
+                    }
+                    Nominal::Enum { item, .. } => {
+                        let variants: Vec<_> = item
+                            .variants
+                            .iter()
+                            .map(|variant| {
+                                (
+                                    variant.name.text.clone(),
+                                    variant.payload.iter().map(&mut shape).collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect();
+                        if variants
+                            .iter()
+                            .all(|(_, payload)| payload.iter().all(Shape::walks))
+                        {
+                            Shape::Walk
+                        } else {
+                            Shape::Variants(variants)
+                        }
+                    }
+                };
+                visiting.pop();
+                shape
+            }
+            Ty::Array { element, .. } => match self.shape_in(element, visiting) {
+                Shape::Walk => Shape::Walk,
+                element => Shape::Elements(Box::new(element)),
+            },
+            // At run time, a `Box` is the value it holds.
+            Ty::Option(inner) | Ty::Boxed(Pointer::Box, inner) => self.shape_in(inner, visiting),
+            Ty::Result(ok, err) => {
+                let (ok, err) = (self.shape_in(ok, visiting), self.shape_in(err, visiting));
+                if ok.walks() && err.walks() {
+                    Shape::Walk
+                } else {
+                    Shape::Result(Box::new(ok), Box::new(err))
+                }
+            }
+            Ty::Tuple(members) => Shape::parts(
+                members
+                    .iter()
+                    .map(|member| self.shape_in(member, visiting))
+                    .collect(),
+            ),
+            _ => Shape::Walk,
+        }
+    }
+
+    /// Which of the borrows a value of `ty` holds its drop uses.
+    pub(super) fn drop_use(&self, ty: &Ty) -> DropUse {
+        if !self.drops() {
+            return DropUse::None;
+        }
+        match self.drop_uses_in(ty, &mut Vec::new()) {
+            (false, _) => DropUse::None,
+            (true, false) => DropUse::All,
+            (true, true) => DropUse::Some,
+        }
+    }
+
+    /// Whether the drop of a value of `ty` uses some borrow the value
+    /// holds, and whether it leaves some other unused.
+    fn drop_uses_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> (bool, bool) {
+        if !self.may_hold_borrow(ty) {
+            return (false, false);
+        }
+        let any = |parts: &mut dyn Iterator<Item = (bool, bool)>| {
+            parts.fold((false, false), |(used, unused), (a, b)| {
+                (used || a, unused || b)
+            })
+        };
+        match &self.inference.resolve(ty) {
+            Ty::Reference { .. } => (false, true),
+            Ty::Script(id, arguments) => {
+                if self.models.has_drop(*id) {
+                    return (true, false);
+                }
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return (false, false);
+                }
+                visiting.push(key);
+                let substitution = self.nominal_substitution(*id, arguments);
+                let fields: Vec<Ty> = match self.models.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
+                        .collect(),
+                    Nominal::Enum { item, .. } => item
+                        .variants
+                        .iter()
+                        .flat_map(|variant| variant.payload.iter())
+                        .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                        .collect(),
+                };
+                let uses = any(&mut fields
+                    .iter()
+                    .map(|field| self.drop_uses_in(field, visiting)));
+                visiting.pop();
+                uses
+            }
+            Ty::Array { element, .. }
+            | Ty::Option(element)
+            | Ty::Boxed(_, element)
+            | Ty::Cell(_, element)
+            | Ty::Reverse(element) => self.drop_uses_in(element, visiting),
+            Ty::Result(ok, err) => any(&mut [ok, err]
+                .into_iter()
+                .map(|ty| self.drop_uses_in(ty, visiting))),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => any(&mut members
+                .iter()
+                .map(|member| self.drop_uses_in(member, visiting))),
+            // A generic or a trait object may have a `Drop` of its own.
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown => {
+                (true, false)
+            }
+            _ => (false, true),
+        }
+    }
+
+    /// The local's drop here uses the borrows it holds, as rustc's drop
+    /// liveness has it.
+    fn note_drop_use(&self, local: &Local) {
+        match self.drop_use(&local.ty) {
+            DropUse::None => {}
+            DropUse::All => self.flow().drop_use(local.declaration),
+            DropUse::Some => self.flow().unmodeled(
+                "a value whose drop uses some of the borrows it holds and not others",
+                local.declaration,
+            ),
+        }
+    }
+
+    /// The locals of the innermost scope whose drops use the borrows they
+    /// hold, by declaration, for the block's end to record with its
+    /// locals' ends (`Recorder::storage_dead`). A local whose drop uses
+    /// only some is noted here.
+    pub(super) fn block_drop_uses(&mut self) -> Vec<Span> {
+        let mut uses = Vec::new();
+        if !self.drops() {
+            return uses;
+        }
+        let Some(scope) = self.drop_scopes.last() else {
+            return uses;
+        };
+        for local in &scope.locals {
+            match self.drop_use(&local.ty) {
+                DropUse::None => {}
+                DropUse::All => uses.push(local.declaration),
+                DropUse::Some => self.note_drop_use(local),
+            }
+        }
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.uses_recorded = true;
+        }
+        uses
+    }
+
+    /// A jump out of the scopes above `depth`: the uses the drops of their
+    /// locals make, innermost first.
+    pub(super) fn exit_drop_uses(&self, depth: usize) {
+        if !self.drops() {
+            return;
+        }
+        for scope in self.drop_scopes.iter().skip(depth).rev() {
+            for local in scope.locals.iter().rev() {
+                self.note_drop_use(local);
+            }
+        }
     }
 
     fn needs_drop_in(
@@ -487,7 +838,7 @@ impl Parser<'_> {
         let mut text = String::new();
         for local in locals.iter().rev() {
             if self.needs_drop(&local.ty, local.declaration)? {
-                text.push_str(&glue_call(&local.place));
+                text.push_str(&glue_call(&local.place, &self.drop_shape(&local.ty)));
                 text.push(' ');
             }
         }
@@ -510,6 +861,11 @@ impl Parser<'_> {
                 .and_then(|outer| outer.locals.get_mut(*position))
             {
                 local.place = local.name.clone();
+            }
+        }
+        if !scope.uses_recorded {
+            for local in scope.locals.iter().rev() {
+                self.note_drop_use(local);
             }
         }
         self.local_drops(&scope.locals)
@@ -590,9 +946,10 @@ impl Parser<'_> {
         }
         let mut value = value.clone();
         self.move_local(&mut value)?;
+        let shape = origin::Fragment::plain(self.drop_shape(&value.ty));
         Ok(Some(origin::Fragment::call(
             GLUE,
-            [value.rendered_source()],
+            [value.rendered_source(), shape],
         )))
     }
 
@@ -648,6 +1005,19 @@ impl Parser<'_> {
 
     /// Close a body: its scope's drops after its tail's value.
     pub(super) fn close_body_drops(&mut self) -> Result<(), Error> {
+        // The body's locals and parameters end, each after its drop, in
+        // reverse order of declaration: a loan of one that a later one's
+        // drop uses is rustc's E0597.
+        if self.drops() && self.drop_scopes.len() > self.drop_base {
+            let uses = self.block_drop_uses();
+            let declared: Vec<Span> = self
+                .drop_scopes
+                .last()
+                .map(|scope| scope.locals.iter().map(|local| local.declaration).collect())
+                .unwrap_or_default();
+            let end = point_span(self.position());
+            self.flow().body_end(&declared, &uses, end);
+        }
         let drops = self.close_drops()?;
         if drops.is_empty() {
             return Ok(());
@@ -684,7 +1054,7 @@ impl Parser<'_> {
         source.push(replacement.rendered_source());
         source.push_text(format!("; {GLUE}("));
         source.push(read);
-        source.push_text(format!("); {kept} }}"));
+        source.push_text(format!(", {}); {kept} }}", self.drop_shape(ty)));
         replacement.prelude = origin::Fragment::default();
         replacement.source = source;
         Ok(())
@@ -885,7 +1255,7 @@ impl Parser<'_> {
                 source: syntax.span(),
             });
         }
-        text.push_str(&glue_call(whole));
+        text.push_str(&glue_call(whole, &self.drop_shape(ty)));
         Ok((String::new(), text, true))
     }
 
@@ -1145,8 +1515,23 @@ impl Parser<'_> {
         }
         block.push_text(format!("let {kept} = "));
         block.push(value);
-        block.push_text(format!("; {}{kept} }}", temporary_drops(temporaries)));
+        block.push_text(format!("; {}{kept} }}", self.temporary_drops(temporaries)));
         block
+    }
+
+    /// The drops of `temporaries`, in reverse order of making.
+    pub(super) fn temporary_drops(&self, temporaries: &[String]) -> String {
+        temporaries
+            .iter()
+            .rev()
+            .map(|temporary| {
+                let shape = self
+                    .temporary_shapes
+                    .get(temporary)
+                    .map_or(WALK, String::as_str);
+                glue_call(temporary, shape) + " "
+            })
+            .collect()
     }
 
     /// The drops of the current temporary scope's temporaries, made so
@@ -1154,7 +1539,7 @@ impl Parser<'_> {
     pub(super) fn temporary_drops_here(&self) -> String {
         self.temporary_scopes
             .last()
-            .map(|temporaries| temporary_drops(temporaries))
+            .map(|temporaries| self.temporary_drops(temporaries))
             .unwrap_or_default()
     }
 
@@ -1186,6 +1571,10 @@ impl Parser<'_> {
             });
         };
         scope.push(temporary.clone());
+        let shape = self.drop_shape(&value.ty);
+        if shape != WALK {
+            self.temporary_shapes.insert(temporary.clone(), shape);
+        }
         let mut source = origin::Fragment::plain(format!("{{ {temporary} = "));
         source.push(value.rendered_source());
         source.push_text(format!("; {temporary} }}"));

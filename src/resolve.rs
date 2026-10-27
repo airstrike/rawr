@@ -642,7 +642,7 @@ pub(crate) fn lower_resolved(
 /// variant's payload, where no elision gives it one: rustc's E0106. A
 /// function type's or a trait object's own references may leave it out.
 fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
-    use crate::item::type_ref::{Argument, Type, DYN_SEGMENT, FN_TYPE};
+    use crate::item::type_ref::{Argument, Type, DYN_SEGMENT, FN_MUT_TYPE, FN_TYPE};
     match ty {
         Type::Unit(_) => Ok(()),
         Type::Tuple { members, .. } => members.iter().try_for_each(missing_lifetime),
@@ -659,7 +659,10 @@ fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
         Type::Reference { target, .. } => missing_lifetime(target),
         Type::Path(path)
             if path.segments.first().is_some_and(|segment| {
-                matches!(segment.name.text.as_str(), FN_TYPE | DYN_SEGMENT)
+                matches!(
+                    segment.name.text.as_str(),
+                    FN_TYPE | FN_MUT_TYPE | DYN_SEGMENT
+                )
             }) =>
         {
             Ok(())
@@ -4515,7 +4518,10 @@ fn resolve_bounds_with_arguments(
             if let [segment] = &bound.segments[..]
                 && !matches!(
                     segment.name.text.as_str(),
-                    "Fn" | "FnMut" | "FnOnce" | crate::item::type_ref::FN_TYPE
+                    "Fn" | "FnMut"
+                        | "FnOnce"
+                        | crate::item::type_ref::FN_TYPE
+                        | crate::item::type_ref::FN_MUT_TYPE
                 )
                 && segment
                     .arguments
@@ -5124,7 +5130,10 @@ fn borrows_mutably(ty: &type_ref::Type) -> bool {
         type_ref::Type::Path(path)
             if matches!(
                 path.name.as_str(),
-                "Fn" | "FnMut" | "FnOnce" | crate::item::type_ref::FN_TYPE
+                "Fn" | "FnMut"
+                    | "FnOnce"
+                    | crate::item::type_ref::FN_TYPE
+                    | crate::item::type_ref::FN_MUT_TYPE
             ) =>
         {
             false

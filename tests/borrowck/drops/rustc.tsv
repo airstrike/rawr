@@ -1,0 +1,1066 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+drops/box_of_guard.rs	E0502:12
+drops/enum_ref_payload.rs	ok	0	"3\ndrop b\nend\ndrop a\n"
+drops/field_ref_guard.rs	ok	0	"locked\nunlock owner\nend\ndrop owner\n"
+drops/generic_field_ref.rs	ok	0	"made\ndrop wrap\ndrop wrap\ndrop owned\nend\ndrop wrap\ndrop inner\n"
+drops/guard_break.rs	E0502:14
+drops/guard_dropped_then_push.rs	ok	0	"guard drops with 0\n1\n"
+drops/guard_in_holder.rs	E0502:16
+drops/guard_in_option.rs	E0502:12
+drops/guard_in_tuple.rs	E0502:12
+drops/guard_in_vec.rs	E0502:12
+drops/guard_inner_block.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/guard_loop_fresh.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/guard_maybe_moved.rs	E0502:15
+drops/guard_moved_then_push.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/guard_param_dropped_at_end.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/guard_reassigned.rs	E0502:17
+drops/guard_reassigned_old_used.rs	E0502:13
+drops/guard_return_early.rs	ok	0	"guard drops with 0\nguard drops with 0\n0 1\n"
+drops/guard_shadowed.rs	E0502:13
+drops/mixed_lifetimes.rs	ok	0	"2\nguard drops with 0\n"
+drops/mut_guard_then_push.rs	E0499:12
+drops/option_of_refs_no_drop_use.rs	ok	0	"2\n"
+drops/see_block_tail.rs	ok	0	"see 1\n2\n"
+drops/see_declared_after.rs	ok	0	"see 1\n1 2\nsee 1\n"
+drops/see_declared_first.rs	E0597:13
+drops/see_in_closure_body.rs	ok	0	"see 1\n2\n"
+drops/see_let_underscore.rs	ok	0	"see 1\n2\n"
+drops/see_loop_continue.rs	E0506:14
+drops/see_match_arm.rs	E0506:14
+drops/see_outlives_block.rs	E0597:14
+drops/see_returned_ended.rs	ok	0	"see 1\n2\n"
+drops/see_returned_value.rs	E0506:16
+drops/see_temporary_in_statement.rs	E0502:22
+drops/see_temporary_method.rs	ok	0	"see 1\n2\n"
+drops/see_then_assign.rs	E0506:12
+drops/see_then_read.rs	ok	0	"2\nsee 1\n"
+drops/struct_of_refs_no_drop.rs	ok	0	"1\n"
+drops/temporary_ref_field.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/tuple_and_option_refs.rs	ok	0	"a true\nend\ndrop o\ndrop t\ndrop a\n"
+drops/vec_of_refs_in_drop.rs	ok	0	"made 2\nholder of 2\ndrop own\ndrop b\ndrop a\n"
+drops/vec_of_refs_no_drop_use.rs	ok	0	"2\n"
+drops/mutations/assign_after_last_use_x_5_drop_across.rs	E0506:6
+drops/mutations/assign_after_last_use_x_5_drop_ended.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_5_drop_in_block.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_5_drop_in_holder.rs	E0506:6
+drops/mutations/assign_after_last_use_x_5_drop_in_option.rs	E0506:6
+drops/mutations/assign_after_last_use_x_5_drop_maybe_moved.rs	E0506:9
+drops/mutations/assign_after_last_use_x_5_drop_moved_out.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_5_vec_no_drop_use.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_across.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_ended.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_in_block.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_in_holder.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_in_option.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_maybe_moved.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_drop_moved_out.rs	ok	0	"3\n"
+drops/mutations/assign_after_last_use_x_6_vec_no_drop_use.rs	ok	0	"3\n"
+drops/mutations/assign_borrowed_x_4_drop_across.rs	E0506:5
+drops/mutations/assign_borrowed_x_4_drop_ended.rs	E0506:6
+drops/mutations/assign_borrowed_x_4_drop_in_block.rs	E0506:7
+drops/mutations/assign_borrowed_x_4_drop_in_holder.rs	E0506:5
+drops/mutations/assign_borrowed_x_4_drop_in_option.rs	E0506:5
+drops/mutations/assign_borrowed_x_4_drop_maybe_moved.rs	E0506:8
+drops/mutations/assign_borrowed_x_4_drop_moved_out.rs	E0506:6
+drops/mutations/assign_borrowed_x_4_vec_no_drop_use.rs	E0506:5
+drops/mutations/assign_borrowed_x_5_drop_across.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_ended.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_in_block.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_in_holder.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_in_option.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_maybe_moved.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_drop_moved_out.rs	E0506:4
+drops/mutations/assign_borrowed_x_5_vec_no_drop_use.rs	E0506:4
+drops/mutations/block_scope_dead_v_7_drop_across.rs	E0502:8
+drops/mutations/block_scope_dead_v_7_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_7_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_7_drop_in_holder.rs	E0502:8
+drops/mutations/block_scope_dead_v_7_drop_in_option.rs	E0502:8
+drops/mutations/block_scope_dead_v_7_drop_maybe_moved.rs	E0502:11
+drops/mutations/block_scope_dead_v_7_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_7_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_across.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_in_holder.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_in_option.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_maybe_moved.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/block_scope_dead_v_8_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/box_of_guard_v_12_drop_across.rs	E0502:13
+drops/mutations/box_of_guard_v_12_drop_ended.rs	E0502:14
+drops/mutations/box_of_guard_v_12_drop_in_block.rs	E0502:15
+drops/mutations/box_of_guard_v_12_drop_in_holder.rs	E0502:13
+drops/mutations/box_of_guard_v_12_drop_in_option.rs	E0502:13
+drops/mutations/box_of_guard_v_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/box_of_guard_v_12_drop_moved_out.rs	E0502:14
+drops/mutations/box_of_guard_v_12_vec_no_drop_use.rs	E0502:13
+drops/mutations/branch_value_after_last_use_b_7_drop_across.rs	E0502:8
+drops/mutations/branch_value_after_last_use_b_7_drop_ended.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_7_drop_in_block.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_7_drop_in_holder.rs	E0502:8
+drops/mutations/branch_value_after_last_use_b_7_drop_in_option.rs	E0502:8
+drops/mutations/branch_value_after_last_use_b_7_drop_maybe_moved.rs	E0502:11
+drops/mutations/branch_value_after_last_use_b_7_drop_moved_out.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_7_vec_no_drop_use.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_across.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_ended.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_in_block.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_in_holder.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_in_option.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_maybe_moved.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_drop_moved_out.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_after_last_use_b_8_vec_no_drop_use.rs	ok	0	"1\n[2, 3]\n"
+drops/mutations/branch_value_holds_both_b_6_drop_across.rs	E0502:7
+drops/mutations/branch_value_holds_both_b_6_drop_ended.rs	E0502:8
+drops/mutations/branch_value_holds_both_b_6_drop_in_block.rs	E0502:9
+drops/mutations/branch_value_holds_both_b_6_drop_in_holder.rs	E0502:7
+drops/mutations/branch_value_holds_both_b_6_drop_in_option.rs	E0502:7
+drops/mutations/branch_value_holds_both_b_6_drop_maybe_moved.rs	E0502:10
+drops/mutations/branch_value_holds_both_b_6_drop_moved_out.rs	E0502:8
+drops/mutations/branch_value_holds_both_b_6_vec_no_drop_use.rs	E0502:7
+drops/mutations/break_continue_end_paths_v_16_drop_across.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_ended.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_in_block.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_in_holder.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_in_option.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_maybe_moved.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_drop_moved_out.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/break_continue_end_paths_v_16_vec_no_drop_use.rs	ok	0	"[1, 1, 3, 9]\n"
+drops/mutations/closure_inline_use_v_5_drop_across.rs	E0502:6
+drops/mutations/closure_inline_use_v_5_drop_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_5_drop_in_block.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_5_drop_in_holder.rs	E0502:6
+drops/mutations/closure_inline_use_v_5_drop_in_option.rs	E0502:6
+drops/mutations/closure_inline_use_v_5_drop_maybe_moved.rs	E0502:9
+drops/mutations/closure_inline_use_v_5_drop_moved_out.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_5_vec_no_drop_use.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_in_block.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_in_holder.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_in_option.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_maybe_moved.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_drop_moved_out.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/closure_inline_use_v_6_vec_no_drop_use.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+drops/mutations/element_method_cs_12_drop_across.rs	E0502:13
+drops/mutations/element_method_cs_12_drop_ended.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_12_drop_in_block.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_12_drop_in_holder.rs	E0502:13
+drops/mutations/element_method_cs_12_drop_in_option.rs	E0502:13
+drops/mutations/element_method_cs_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/element_method_cs_12_drop_moved_out.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_12_vec_no_drop_use.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_across.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_ended.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_in_block.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_in_holder.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_in_option.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_maybe_moved.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_drop_moved_out.rs	ok	0	"[1]\n"
+drops/mutations/element_method_cs_13_vec_no_drop_use.rs	ok	0	"[1]\n"
+drops/mutations/element_method_while_borrowed_cs_12_drop_across.rs	E0502:13
+drops/mutations/element_method_while_borrowed_cs_12_drop_ended.rs	E0502:14
+drops/mutations/element_method_while_borrowed_cs_12_drop_in_block.rs	E0502:15
+drops/mutations/element_method_while_borrowed_cs_12_drop_in_holder.rs	E0502:13
+drops/mutations/element_method_while_borrowed_cs_12_drop_in_option.rs	E0502:13
+drops/mutations/element_method_while_borrowed_cs_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/element_method_while_borrowed_cs_12_drop_moved_out.rs	E0502:14
+drops/mutations/element_method_while_borrowed_cs_12_vec_no_drop_use.rs	E0502:13
+drops/mutations/field_conflict_s_10_drop_across.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_ended.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_in_block.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_in_holder.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_in_option.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_maybe_moved.rs	E0503:8
+drops/mutations/field_conflict_s_10_drop_moved_out.rs	E0503:8
+drops/mutations/field_conflict_s_10_vec_no_drop_use.rs	E0503:8
+drops/mutations/field_conflict_s_8_drop_across.rs	E0502:8 E0503:9
+drops/mutations/field_conflict_s_8_drop_ended.rs	E0502:8 E0503:10
+drops/mutations/field_conflict_s_8_drop_in_block.rs	E0502:9 E0503:11
+drops/mutations/field_conflict_s_8_drop_in_holder.rs	E0502:8 E0503:9
+drops/mutations/field_conflict_s_8_drop_in_option.rs	E0502:8 E0503:9
+drops/mutations/field_conflict_s_8_drop_maybe_moved.rs	E0502:8 E0503:12
+drops/mutations/field_conflict_s_8_drop_moved_out.rs	E0502:8 E0503:10
+drops/mutations/field_conflict_s_8_vec_no_drop_use.rs	E0502:8 E0503:9
+drops/mutations/fields_apart_s_10_drop_across.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_ended.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_in_block.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_in_holder.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_in_option.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_maybe_moved.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_drop_moved_out.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_10_vec_no_drop_use.rs	ok	0	"101 12\n"
+drops/mutations/fields_apart_s_8_drop_across.rs	E0502:8 E0506:9
+drops/mutations/fields_apart_s_8_drop_ended.rs	E0502:8
+drops/mutations/fields_apart_s_8_drop_in_block.rs	E0502:9
+drops/mutations/fields_apart_s_8_drop_in_holder.rs	E0502:8 E0506:9
+drops/mutations/fields_apart_s_8_drop_in_option.rs	E0502:8 E0506:9
+drops/mutations/fields_apart_s_8_drop_maybe_moved.rs	E0502:8 E0506:12
+drops/mutations/fields_apart_s_8_drop_moved_out.rs	E0502:8
+drops/mutations/fields_apart_s_8_vec_no_drop_use.rs	E0502:8
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_across.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_ended.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_in_block.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_in_holder.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_in_option.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_maybe_moved.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_drop_moved_out.rs	E0502:5
+drops/mutations/for_over_shared_borrow_mutated_v_8_vec_no_drop_use.rs	E0502:5
+drops/mutations/for_over_shared_borrow_total_7_drop_across.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_in_holder.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_in_option.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_maybe_moved.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_total_7_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_7_drop_across.rs	E0502:8
+drops/mutations/for_over_shared_borrow_v_7_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_7_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_7_drop_in_holder.rs	E0502:8
+drops/mutations/for_over_shared_borrow_v_7_drop_in_option.rs	E0502:8
+drops/mutations/for_over_shared_borrow_v_7_drop_maybe_moved.rs	E0502:11
+drops/mutations/for_over_shared_borrow_v_7_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_7_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_across.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_in_holder.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_in_option.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_maybe_moved.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/for_over_shared_borrow_v_8_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/guard_dropped_then_push_v_13_drop_across.rs	E0502:14
+drops/mutations/guard_dropped_then_push_v_13_drop_ended.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_13_drop_in_block.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_13_drop_in_holder.rs	E0502:14
+drops/mutations/guard_dropped_then_push_v_13_drop_in_option.rs	E0502:14
+drops/mutations/guard_dropped_then_push_v_13_drop_maybe_moved.rs	E0502:17
+drops/mutations/guard_dropped_then_push_v_13_drop_moved_out.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_13_vec_no_drop_use.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_across.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_ended.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_in_block.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_in_holder.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_in_option.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_maybe_moved.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_drop_moved_out.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_dropped_then_push_v_14_vec_no_drop_use.rs	ok	0	"guard drops with 0\n1\n"
+drops/mutations/guard_in_holder_v_16_drop_across.rs	E0502:17
+drops/mutations/guard_in_holder_v_16_drop_ended.rs	E0502:18
+drops/mutations/guard_in_holder_v_16_drop_in_block.rs	E0502:19
+drops/mutations/guard_in_holder_v_16_drop_in_holder.rs	E0502:17
+drops/mutations/guard_in_holder_v_16_drop_in_option.rs	E0502:17
+drops/mutations/guard_in_holder_v_16_drop_maybe_moved.rs	E0502:20
+drops/mutations/guard_in_holder_v_16_drop_moved_out.rs	E0502:18
+drops/mutations/guard_in_holder_v_16_vec_no_drop_use.rs	E0502:17
+drops/mutations/guard_in_option_v_12_drop_across.rs	E0502:13
+drops/mutations/guard_in_option_v_12_drop_ended.rs	E0502:14
+drops/mutations/guard_in_option_v_12_drop_in_block.rs	E0502:15
+drops/mutations/guard_in_option_v_12_drop_in_holder.rs	E0502:13
+drops/mutations/guard_in_option_v_12_drop_in_option.rs	E0502:13
+drops/mutations/guard_in_option_v_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/guard_in_option_v_12_drop_moved_out.rs	E0502:14
+drops/mutations/guard_in_option_v_12_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_in_tuple_v_12_drop_across.rs	E0502:13
+drops/mutations/guard_in_tuple_v_12_drop_ended.rs	E0502:14
+drops/mutations/guard_in_tuple_v_12_drop_in_block.rs	E0502:15
+drops/mutations/guard_in_tuple_v_12_drop_in_holder.rs	E0502:13
+drops/mutations/guard_in_tuple_v_12_drop_in_option.rs	E0502:13
+drops/mutations/guard_in_tuple_v_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/guard_in_tuple_v_12_drop_moved_out.rs	E0502:14
+drops/mutations/guard_in_tuple_v_12_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_in_vec_v_12_drop_across.rs	E0502:13
+drops/mutations/guard_in_vec_v_12_drop_ended.rs	E0502:14
+drops/mutations/guard_in_vec_v_12_drop_in_block.rs	E0502:15
+drops/mutations/guard_in_vec_v_12_drop_in_holder.rs	E0502:13
+drops/mutations/guard_in_vec_v_12_drop_in_option.rs	E0502:13
+drops/mutations/guard_in_vec_v_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/guard_in_vec_v_12_drop_moved_out.rs	E0502:14
+drops/mutations/guard_in_vec_v_12_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_inner_block_v_15_drop_across.rs	E0502:16
+drops/mutations/guard_inner_block_v_15_drop_ended.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_15_drop_in_block.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_15_drop_in_holder.rs	E0502:16
+drops/mutations/guard_inner_block_v_15_drop_in_option.rs	E0502:16
+drops/mutations/guard_inner_block_v_15_drop_maybe_moved.rs	E0502:19
+drops/mutations/guard_inner_block_v_15_drop_moved_out.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_15_vec_no_drop_use.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_across.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_ended.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_in_block.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_in_holder.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_in_option.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_maybe_moved.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_drop_moved_out.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_inner_block_v_16_vec_no_drop_use.rs	ok	0	"0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_15_drop_across.rs	E0502:16
+drops/mutations/guard_loop_fresh_v_15_drop_ended.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_15_drop_in_block.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_15_drop_in_holder.rs	E0502:16
+drops/mutations/guard_loop_fresh_v_15_drop_in_option.rs	E0502:16
+drops/mutations/guard_loop_fresh_v_15_drop_maybe_moved.rs	E0502:19
+drops/mutations/guard_loop_fresh_v_15_drop_moved_out.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_15_vec_no_drop_use.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_across.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_ended.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_in_block.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_in_holder.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_in_option.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_maybe_moved.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_drop_moved_out.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_loop_fresh_v_16_vec_no_drop_use.rs	ok	0	"0 0\nguard drops with 0\n1 0\nguard drops with 0\n2 0\nguard drops with 0\n1\n"
+drops/mutations/guard_maybe_moved_v_15_drop_across.rs	E0502:16
+drops/mutations/guard_maybe_moved_v_15_drop_ended.rs	E0502:17
+drops/mutations/guard_maybe_moved_v_15_drop_in_block.rs	E0502:18
+drops/mutations/guard_maybe_moved_v_15_drop_in_holder.rs	E0502:16
+drops/mutations/guard_maybe_moved_v_15_drop_in_option.rs	E0502:16
+drops/mutations/guard_maybe_moved_v_15_drop_maybe_moved.rs	E0502:19
+drops/mutations/guard_maybe_moved_v_15_drop_moved_out.rs	E0502:17
+drops/mutations/guard_maybe_moved_v_15_vec_no_drop_use.rs	E0502:16
+drops/mutations/guard_moved_then_push_v_17_drop_across.rs	E0502:18
+drops/mutations/guard_moved_then_push_v_17_drop_ended.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_17_drop_in_block.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_17_drop_in_holder.rs	E0502:18
+drops/mutations/guard_moved_then_push_v_17_drop_in_option.rs	E0502:18
+drops/mutations/guard_moved_then_push_v_17_drop_maybe_moved.rs	E0502:21
+drops/mutations/guard_moved_then_push_v_17_drop_moved_out.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_17_vec_no_drop_use.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_across.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_ended.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_in_block.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_in_holder.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_in_option.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_maybe_moved.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_drop_moved_out.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_moved_then_push_v_18_vec_no_drop_use.rs	ok	0	"took 0\nguard drops with 0\n1\n"
+drops/mutations/guard_param_dropped_at_end_b_17_drop_across.rs	E0502:18
+drops/mutations/guard_param_dropped_at_end_b_17_drop_ended.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_17_drop_in_block.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_17_drop_in_holder.rs	E0502:18
+drops/mutations/guard_param_dropped_at_end_b_17_drop_in_option.rs	E0502:18
+drops/mutations/guard_param_dropped_at_end_b_17_drop_maybe_moved.rs	E0502:21
+drops/mutations/guard_param_dropped_at_end_b_17_drop_moved_out.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_17_vec_no_drop_use.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_across.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_ended.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_in_block.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_in_holder.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_in_option.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_maybe_moved.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_drop_moved_out.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_param_dropped_at_end_b_18_vec_no_drop_use.rs	ok	0	"0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_reassigned_a_15_drop_across.rs	E0502:16 E0502:18
+drops/mutations/guard_reassigned_a_15_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_a_15_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_a_15_drop_in_holder.rs	E0502:16 E0502:18
+drops/mutations/guard_reassigned_a_15_drop_in_option.rs	E0502:16 E0502:18
+drops/mutations/guard_reassigned_a_15_drop_maybe_moved.rs	E0502:19 E0502:21
+drops/mutations/guard_reassigned_a_15_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_a_15_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_a_16_drop_across.rs	E0502:18
+drops/mutations/guard_reassigned_a_16_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_a_16_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_a_16_drop_in_holder.rs	E0502:18
+drops/mutations/guard_reassigned_a_16_drop_in_option.rs	E0502:18
+drops/mutations/guard_reassigned_a_16_drop_maybe_moved.rs	E0502:21
+drops/mutations/guard_reassigned_a_16_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_a_16_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_b_14_drop_across.rs	E0502:18
+drops/mutations/guard_reassigned_b_14_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_b_14_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_b_14_drop_in_holder.rs	E0502:18
+drops/mutations/guard_reassigned_b_14_drop_in_option.rs	E0502:18
+drops/mutations/guard_reassigned_b_14_drop_maybe_moved.rs	E0502:21
+drops/mutations/guard_reassigned_b_14_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_b_14_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_b_17_drop_across.rs	E0502:18
+drops/mutations/guard_reassigned_b_17_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_b_17_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_b_17_drop_in_holder.rs	E0502:18
+drops/mutations/guard_reassigned_b_17_drop_in_option.rs	E0502:18
+drops/mutations/guard_reassigned_b_17_drop_maybe_moved.rs	E0502:21
+drops/mutations/guard_reassigned_b_17_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_b_17_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_g_13_drop_across.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_13_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_g_13_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_g_13_drop_in_holder.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_13_drop_in_option.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_13_drop_maybe_moved.rs	E0506:18 E0502:19 E0502:21
+drops/mutations/guard_reassigned_g_13_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_g_13_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_g_14_drop_across.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_14_drop_ended.rs	E0502:19
+drops/mutations/guard_reassigned_g_14_drop_in_block.rs	E0502:20
+drops/mutations/guard_reassigned_g_14_drop_in_holder.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_14_drop_in_option.rs	E0506:15 E0502:16 E0502:18
+drops/mutations/guard_reassigned_g_14_drop_maybe_moved.rs	E0506:18 E0502:19 E0502:21
+drops/mutations/guard_reassigned_g_14_drop_moved_out.rs	E0502:19
+drops/mutations/guard_reassigned_g_14_vec_no_drop_use.rs	E0502:18
+drops/mutations/guard_reassigned_old_used_a_13_drop_across.rs	E0502:14
+drops/mutations/guard_reassigned_old_used_a_13_drop_ended.rs	E0502:15
+drops/mutations/guard_reassigned_old_used_a_13_drop_in_block.rs	E0502:16
+drops/mutations/guard_reassigned_old_used_a_13_drop_in_holder.rs	E0502:14
+drops/mutations/guard_reassigned_old_used_a_13_drop_in_option.rs	E0502:14
+drops/mutations/guard_reassigned_old_used_a_13_drop_maybe_moved.rs	E0502:17
+drops/mutations/guard_reassigned_old_used_a_13_drop_moved_out.rs	E0502:15
+drops/mutations/guard_reassigned_old_used_a_13_vec_no_drop_use.rs	E0502:14
+drops/mutations/guard_reassigned_old_used_b_14_drop_across.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_ended.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_in_block.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_in_holder.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_in_option.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_maybe_moved.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_drop_moved_out.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_b_14_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_14_drop_across.rs	E0502:13 E0506:15
+drops/mutations/guard_reassigned_old_used_g_14_drop_ended.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_14_drop_in_block.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_14_drop_in_holder.rs	E0502:13 E0506:15
+drops/mutations/guard_reassigned_old_used_g_14_drop_in_option.rs	E0502:13 E0506:15
+drops/mutations/guard_reassigned_old_used_g_14_drop_maybe_moved.rs	E0502:13 E0506:18
+drops/mutations/guard_reassigned_old_used_g_14_drop_moved_out.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_14_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_across.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_ended.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_in_block.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_in_holder.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_in_option.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_maybe_moved.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_drop_moved_out.rs	E0502:13
+drops/mutations/guard_reassigned_old_used_g_15_vec_no_drop_use.rs	E0502:13
+drops/mutations/guard_return_early_v_16_drop_across.rs	E0502:17
+drops/mutations/guard_return_early_v_16_drop_ended.rs	ok	0	"guard drops with 0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_return_early_v_16_drop_in_block.rs	ok	0	"guard drops with 0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_return_early_v_16_drop_in_holder.rs	E0502:17
+drops/mutations/guard_return_early_v_16_drop_in_option.rs	E0502:17
+drops/mutations/guard_return_early_v_16_drop_maybe_moved.rs	E0502:20
+drops/mutations/guard_return_early_v_16_drop_moved_out.rs	ok	0	"guard drops with 0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_return_early_v_16_vec_no_drop_use.rs	ok	0	"guard drops with 0\nguard drops with 0\n0 1\n"
+drops/mutations/guard_shadowed_v_13_drop_across.rs	E0502:14
+drops/mutations/guard_shadowed_v_13_drop_ended.rs	E0502:15
+drops/mutations/guard_shadowed_v_13_drop_in_block.rs	E0502:16
+drops/mutations/guard_shadowed_v_13_drop_in_holder.rs	E0502:14
+drops/mutations/guard_shadowed_v_13_drop_in_option.rs	E0502:14
+drops/mutations/guard_shadowed_v_13_drop_maybe_moved.rs	E0502:17
+drops/mutations/guard_shadowed_v_13_drop_moved_out.rs	E0502:15
+drops/mutations/guard_shadowed_v_13_vec_no_drop_use.rs	E0502:14
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_across.rs	E0502:6
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_ended.rs	E0502:7
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_in_block.rs	E0502:8
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_in_holder.rs	E0502:6
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_in_option.rs	E0502:6
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_maybe_moved.rs	E0502:9
+drops/mutations/holder_copy_keeps_borrow_v_5_drop_moved_out.rs	E0502:7
+drops/mutations/holder_copy_keeps_borrow_v_5_vec_no_drop_use.rs	E0502:6
+drops/mutations/holder_reassigned_a_7_drop_across.rs	E0502:8
+drops/mutations/holder_reassigned_a_7_drop_ended.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_7_drop_in_block.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_7_drop_in_holder.rs	E0502:8
+drops/mutations/holder_reassigned_a_7_drop_in_option.rs	E0502:8
+drops/mutations/holder_reassigned_a_7_drop_maybe_moved.rs	E0502:11
+drops/mutations/holder_reassigned_a_7_drop_moved_out.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_7_vec_no_drop_use.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_across.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_ended.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_in_block.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_in_holder.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_in_option.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_maybe_moved.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_drop_moved_out.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_a_8_vec_no_drop_use.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_5_drop_across.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_5_drop_ended.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_5_drop_in_block.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_5_drop_in_holder.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_5_drop_in_option.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_5_drop_maybe_moved.rs	E0506:10 E0502:11
+drops/mutations/holder_reassigned_r_5_drop_moved_out.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_5_vec_no_drop_use.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_6_drop_across.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_6_drop_ended.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_6_drop_in_block.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_6_drop_in_holder.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_6_drop_in_option.rs	E0506:7 E0502:8
+drops/mutations/holder_reassigned_r_6_drop_maybe_moved.rs	E0506:10 E0502:11
+drops/mutations/holder_reassigned_r_6_drop_moved_out.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/holder_reassigned_r_6_vec_no_drop_use.rs	ok	0	"1\n1 [1, 3]\n"
+drops/mutations/index_assign_after_last_use_v_5_drop_across.rs	E0502:6
+drops/mutations/index_assign_after_last_use_v_5_drop_ended.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_5_drop_in_block.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_5_drop_in_holder.rs	E0502:6
+drops/mutations/index_assign_after_last_use_v_5_drop_in_option.rs	E0502:6
+drops/mutations/index_assign_after_last_use_v_5_drop_maybe_moved.rs	E0502:9
+drops/mutations/index_assign_after_last_use_v_5_drop_moved_out.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_5_vec_no_drop_use.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_across.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_ended.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_in_block.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_in_holder.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_in_option.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_maybe_moved.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_drop_moved_out.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_after_last_use_v_6_vec_no_drop_use.rs	ok	0	"1 [5, 2]\n"
+drops/mutations/index_assign_borrowed_v_4_drop_across.rs	E0502:5
+drops/mutations/index_assign_borrowed_v_4_drop_ended.rs	E0502:6
+drops/mutations/index_assign_borrowed_v_4_drop_in_block.rs	E0502:7
+drops/mutations/index_assign_borrowed_v_4_drop_in_holder.rs	E0502:5
+drops/mutations/index_assign_borrowed_v_4_drop_in_option.rs	E0502:5
+drops/mutations/index_assign_borrowed_v_4_drop_maybe_moved.rs	E0502:8
+drops/mutations/index_assign_borrowed_v_4_drop_moved_out.rs	E0502:6
+drops/mutations/index_assign_borrowed_v_4_vec_no_drop_use.rs	E0502:5
+drops/mutations/index_assign_index_reads_v_3_drop_across.rs	E0502:4 E0502:4
+drops/mutations/index_assign_index_reads_v_3_drop_ended.rs	E0502:5
+drops/mutations/index_assign_index_reads_v_3_drop_in_block.rs	E0502:6
+drops/mutations/index_assign_index_reads_v_3_drop_in_holder.rs	E0502:4 E0502:4
+drops/mutations/index_assign_index_reads_v_3_drop_in_option.rs	E0502:4 E0502:4
+drops/mutations/index_assign_index_reads_v_3_drop_maybe_moved.rs	E0502:7 E0502:7
+drops/mutations/index_assign_index_reads_v_3_drop_moved_out.rs	E0502:5
+drops/mutations/index_assign_index_reads_v_3_vec_no_drop_use.rs	E0502:4
+drops/mutations/index_assign_index_reads_v_4_drop_across.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_ended.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_in_block.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_in_holder.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_in_option.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_maybe_moved.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_drop_moved_out.rs	E0502:3
+drops/mutations/index_assign_index_reads_v_4_vec_no_drop_use.rs	E0502:3
+drops/mutations/labeled_break_v_14_drop_across.rs	E0502:15
+drops/mutations/labeled_break_v_14_drop_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_14_drop_in_block.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_14_drop_in_holder.rs	E0502:15
+drops/mutations/labeled_break_v_14_drop_in_option.rs	E0502:15
+drops/mutations/labeled_break_v_14_drop_maybe_moved.rs	E0502:18
+drops/mutations/labeled_break_v_14_drop_moved_out.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_14_vec_no_drop_use.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_across.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_in_block.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_in_holder.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_in_option.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_maybe_moved.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_drop_moved_out.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_break_v_15_vec_no_drop_use.rs	ok	0	"[1, 1, 2, 7]\n"
+drops/mutations/labeled_continue_conflict_v_13_drop_across.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_ended.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_in_block.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_in_holder.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_in_option.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_maybe_moved.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_drop_moved_out.rs	E0499:8
+drops/mutations/labeled_continue_conflict_v_13_vec_no_drop_use.rs	E0499:8
+drops/mutations/last_use_ends_borrow_v_5_drop_across.rs	E0502:6 E0502:7 E0502:9
+drops/mutations/last_use_ends_borrow_v_5_drop_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_5_drop_in_block.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_5_drop_in_holder.rs	E0502:6 E0502:7 E0502:9
+drops/mutations/last_use_ends_borrow_v_5_drop_in_option.rs	E0502:6 E0502:7 E0502:9
+drops/mutations/last_use_ends_borrow_v_5_drop_maybe_moved.rs	E0502:9 E0502:10 E0502:12
+drops/mutations/last_use_ends_borrow_v_5_drop_moved_out.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_5_vec_no_drop_use.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_8_drop_across.rs	E0502:9
+drops/mutations/last_use_ends_borrow_v_8_drop_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_8_drop_in_block.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_8_drop_in_holder.rs	E0502:9
+drops/mutations/last_use_ends_borrow_v_8_drop_in_option.rs	E0502:9
+drops/mutations/last_use_ends_borrow_v_8_drop_maybe_moved.rs	E0502:12
+drops/mutations/last_use_ends_borrow_v_8_drop_moved_out.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/last_use_ends_borrow_v_8_vec_no_drop_use.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_across.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_ended.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_in_block.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_in_holder.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_in_option.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_maybe_moved.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_drop_moved_out.rs	E0499:7
+drops/mutations/loop_borrow_carried_conflict_a_12_vec_no_drop_use.rs	E0499:7
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_in_block.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_in_holder.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_in_option.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_maybe_moved.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_drop_moved_out.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_a_14_vec_no_drop_use.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_across.rs	E0502:14
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_in_block.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_in_holder.rs	E0502:14
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_in_option.rs	E0502:14
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_maybe_moved.rs	E0502:17
+drops/mutations/loop_borrow_carried_into_next_b_13_drop_moved_out.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_13_vec_no_drop_use.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_in_block.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_in_holder.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_in_option.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_maybe_moved.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_drop_moved_out.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_carried_into_next_b_14_vec_no_drop_use.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_across.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_ended.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_in_block.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_in_holder.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_in_option.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_maybe_moved.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_drop_moved_out.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_n_9_vec_no_drop_use.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_across.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_ended.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_in_block.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_in_holder.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_in_option.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_maybe_moved.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_drop_moved_out.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_each_iteration_v_9_vec_no_drop_use.rs	ok	0	"5 [1, 0, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_across.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_ended.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_in_block.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_in_holder.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_in_option.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_maybe_moved.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_drop_moved_out.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/loop_borrow_outlives_iteration_keep_10_vec_no_drop_use.rs	ok	0	"[1, 0, 1, 2]\n"
+drops/mutations/match_arm_conflict_v_10_drop_across.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_ended.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_in_block.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_in_holder.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_in_option.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_maybe_moved.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_drop_moved_out.rs	E0499:6
+drops/mutations/match_arm_conflict_v_10_vec_no_drop_use.rs	E0499:6
+drops/mutations/match_arms_v_9_drop_across.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_ended.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_in_block.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_in_holder.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_in_option.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_maybe_moved.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_drop_moved_out.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/match_arms_v_9_vec_no_drop_use.rs	ok	0	"[1, 2, 2]\n"
+drops/mutations/method_two_phase_c_14_drop_across.rs	E0502:15 E0502:17
+drops/mutations/method_two_phase_c_14_drop_ended.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_14_drop_in_block.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_14_drop_in_holder.rs	E0502:15 E0502:17
+drops/mutations/method_two_phase_c_14_drop_in_option.rs	E0502:15 E0502:17
+drops/mutations/method_two_phase_c_14_drop_maybe_moved.rs	E0502:18 E0502:20
+drops/mutations/method_two_phase_c_14_drop_moved_out.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_14_vec_no_drop_use.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_16_drop_across.rs	E0502:17
+drops/mutations/method_two_phase_c_16_drop_ended.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_16_drop_in_block.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_16_drop_in_holder.rs	E0502:17
+drops/mutations/method_two_phase_c_16_drop_in_option.rs	E0502:17
+drops/mutations/method_two_phase_c_16_drop_maybe_moved.rs	E0502:20
+drops/mutations/method_two_phase_c_16_drop_moved_out.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_two_phase_c_16_vec_no_drop_use.rs	ok	0	"[0, 1]\n"
+drops/mutations/method_while_borrowed_c_15_drop_across.rs	E0502:16
+drops/mutations/method_while_borrowed_c_15_drop_ended.rs	E0502:17
+drops/mutations/method_while_borrowed_c_15_drop_in_block.rs	E0502:18
+drops/mutations/method_while_borrowed_c_15_drop_in_holder.rs	E0502:16
+drops/mutations/method_while_borrowed_c_15_drop_in_option.rs	E0502:16
+drops/mutations/method_while_borrowed_c_15_drop_maybe_moved.rs	E0502:19
+drops/mutations/method_while_borrowed_c_15_drop_moved_out.rs	E0502:17
+drops/mutations/method_while_borrowed_c_15_vec_no_drop_use.rs	E0502:16
+drops/mutations/mixed_lifetimes_n_18_drop_across.rs	E0506:19
+drops/mutations/mixed_lifetimes_n_18_drop_ended.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_18_drop_in_block.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_18_drop_in_holder.rs	E0506:19
+drops/mutations/mixed_lifetimes_n_18_drop_in_option.rs	E0506:19
+drops/mutations/mixed_lifetimes_n_18_drop_maybe_moved.rs	E0506:22
+drops/mutations/mixed_lifetimes_n_18_drop_moved_out.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_18_vec_no_drop_use.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_across.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_ended.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_in_block.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_in_holder.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_in_option.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_maybe_moved.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_drop_moved_out.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mixed_lifetimes_n_19_vec_no_drop_use.rs	ok	0	"2\nguard drops with 0\n"
+drops/mutations/mut_guard_then_push_v_12_drop_across.rs	E0502:12 E0499:13
+drops/mutations/mut_guard_then_push_v_12_drop_ended.rs	E0502:12 E0499:14
+drops/mutations/mut_guard_then_push_v_12_drop_in_block.rs	E0502:13 E0499:15
+drops/mutations/mut_guard_then_push_v_12_drop_in_holder.rs	E0502:12 E0499:13
+drops/mutations/mut_guard_then_push_v_12_drop_in_option.rs	E0502:12 E0499:13
+drops/mutations/mut_guard_then_push_v_12_drop_maybe_moved.rs	E0502:12 E0499:16
+drops/mutations/mut_guard_then_push_v_12_drop_moved_out.rs	E0502:12 E0499:14
+drops/mutations/mut_guard_then_push_v_12_vec_no_drop_use.rs	E0502:12 E0499:13
+drops/mutations/mutable_twice_v_7_drop_across.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_ended.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_in_block.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_in_holder.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_in_option.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_maybe_moved.rs	E0499:4
+drops/mutations/mutable_twice_v_7_drop_moved_out.rs	E0499:4
+drops/mutations/mutable_twice_v_7_vec_no_drop_use.rs	E0499:4
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_across.rs	E0502:5
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_ended.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_in_block.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_in_holder.rs	E0502:5
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_in_option.rs	E0502:5
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_maybe_moved.rs	E0502:8
+drops/mutations/option_of_refs_no_drop_use_v_4_drop_moved_out.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_4_vec_no_drop_use.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_across.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_ended.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_in_block.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_in_holder.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_in_option.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_maybe_moved.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_drop_moved_out.rs	ok	0	"2\n"
+drops/mutations/option_of_refs_no_drop_use_v_5_vec_no_drop_use.rs	ok	0	"2\n"
+drops/mutations/oracle_branch_arms_v_10_drop_across.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_ended.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_in_block.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_in_holder.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_in_option.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_maybe_moved.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_drop_moved_out.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_branch_arms_v_10_vec_no_drop_use.rs	ok	0	"[1, 1]\n"
+drops/mutations/oracle_loop_back_edge_n_12_drop_across.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_ended.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_in_block.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_in_holder.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_in_option.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_maybe_moved.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_drop_moved_out.rs	E0502:7
+drops/mutations/oracle_loop_back_edge_n_12_vec_no_drop_use.rs	E0502:7
+drops/mutations/oracle_stale_shared_v_4_drop_across.rs	E0502:5
+drops/mutations/oracle_stale_shared_v_4_drop_ended.rs	E0502:6
+drops/mutations/oracle_stale_shared_v_4_drop_in_block.rs	E0502:7
+drops/mutations/oracle_stale_shared_v_4_drop_in_holder.rs	E0502:5
+drops/mutations/oracle_stale_shared_v_4_drop_in_option.rs	E0502:5
+drops/mutations/oracle_stale_shared_v_4_drop_maybe_moved.rs	E0502:8
+drops/mutations/oracle_stale_shared_v_4_drop_moved_out.rs	E0502:6
+drops/mutations/oracle_stale_shared_v_4_vec_no_drop_use.rs	E0502:5
+drops/mutations/panic_ends_path_ok_v_10_drop_across.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_ended.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_in_block.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_in_holder.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_in_option.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_maybe_moved.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_drop_moved_out.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_ok_v_10_vec_no_drop_use.rs	ok	0	"[1, 2]\n"
+drops/mutations/panic_ends_path_v_9_drop_across.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_ended.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_in_block.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_in_holder.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_in_option.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_maybe_moved.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_drop_moved_out.rs	E0502:4
+drops/mutations/panic_ends_path_v_9_vec_no_drop_use.rs	E0502:4
+drops/mutations/reborrow_conflict_v_7_drop_across.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_ended.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_in_block.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_in_holder.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_in_option.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_maybe_moved.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_drop_moved_out.rs	E0499:5
+drops/mutations/reborrow_conflict_v_7_vec_no_drop_use.rs	E0499:5
+drops/mutations/reborrow_through_holder_v_7_drop_across.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_ended.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_in_block.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_in_holder.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_in_option.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_maybe_moved.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_drop_moved_out.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/reborrow_through_holder_v_7_vec_no_drop_use.rs	ok	0	"[1, 2, 3]\n"
+drops/mutations/see_block_tail_x_15_drop_across.rs	E0506:16
+drops/mutations/see_block_tail_x_15_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_15_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_15_drop_in_holder.rs	E0506:16
+drops/mutations/see_block_tail_x_15_drop_in_option.rs	E0506:16
+drops/mutations/see_block_tail_x_15_drop_maybe_moved.rs	E0506:19
+drops/mutations/see_block_tail_x_15_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_15_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_across.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_in_holder.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_in_option.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_maybe_moved.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_block_tail_x_16_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_declared_after_s_13_drop_across.rs	E0506:14
+drops/mutations/see_declared_after_s_13_drop_ended.rs	ok	0	"see 1\n1 2\nsee 1\n"
+drops/mutations/see_declared_after_s_13_drop_in_block.rs	ok	0	"see 1\n1 2\nsee 1\n"
+drops/mutations/see_declared_after_s_13_drop_in_holder.rs	E0506:14
+drops/mutations/see_declared_after_s_13_drop_in_option.rs	E0506:14
+drops/mutations/see_declared_after_s_13_drop_maybe_moved.rs	E0506:17
+drops/mutations/see_declared_after_s_13_drop_moved_out.rs	ok	0	"see 1\n1 2\nsee 1\n"
+drops/mutations/see_declared_after_s_13_vec_no_drop_use.rs	ok	0	"see 1\n1 2\nsee 1\n"
+drops/mutations/see_declared_first_s_13_drop_across.rs	E0506:14 E0597:14
+drops/mutations/see_declared_first_s_13_drop_ended.rs	E0597:15
+drops/mutations/see_declared_first_s_13_drop_in_block.rs	E0597:16
+drops/mutations/see_declared_first_s_13_drop_in_holder.rs	E0506:14 E0597:14
+drops/mutations/see_declared_first_s_13_drop_in_option.rs	E0506:14 E0597:14
+drops/mutations/see_declared_first_s_13_drop_maybe_moved.rs	E0506:17 E0597:17
+drops/mutations/see_declared_first_s_13_drop_moved_out.rs	E0597:15
+drops/mutations/see_declared_first_s_13_vec_no_drop_use.rs	E0597:14
+drops/mutations/see_in_closure_body_x_15_drop_across.rs	E0506:16
+drops/mutations/see_in_closure_body_x_15_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_15_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_15_drop_in_holder.rs	E0506:16
+drops/mutations/see_in_closure_body_x_15_drop_in_option.rs	E0506:16
+drops/mutations/see_in_closure_body_x_15_drop_maybe_moved.rs	E0506:19
+drops/mutations/see_in_closure_body_x_15_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_15_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_across.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_in_holder.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_in_option.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_maybe_moved.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_in_closure_body_x_16_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_12_drop_across.rs	E0506:13
+drops/mutations/see_let_underscore_x_12_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_12_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_12_drop_in_holder.rs	E0506:13
+drops/mutations/see_let_underscore_x_12_drop_in_option.rs	E0506:13
+drops/mutations/see_let_underscore_x_12_drop_maybe_moved.rs	E0506:16
+drops/mutations/see_let_underscore_x_12_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_12_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_across.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_in_holder.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_in_option.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_maybe_moved.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_let_underscore_x_13_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_17_drop_across.rs	E0506:18
+drops/mutations/see_returned_ended_x_17_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_17_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_17_drop_in_holder.rs	E0506:18
+drops/mutations/see_returned_ended_x_17_drop_in_option.rs	E0506:18
+drops/mutations/see_returned_ended_x_17_drop_maybe_moved.rs	E0506:21
+drops/mutations/see_returned_ended_x_17_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_17_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_across.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_in_holder.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_in_option.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_maybe_moved.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_ended_x_18_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_returned_value_x_16_drop_across.rs	E0506:17
+drops/mutations/see_returned_value_x_16_drop_ended.rs	E0506:18
+drops/mutations/see_returned_value_x_16_drop_in_block.rs	E0506:19
+drops/mutations/see_returned_value_x_16_drop_in_holder.rs	E0506:17
+drops/mutations/see_returned_value_x_16_drop_in_option.rs	E0506:17
+drops/mutations/see_returned_value_x_16_drop_maybe_moved.rs	E0506:20
+drops/mutations/see_returned_value_x_16_drop_moved_out.rs	E0506:18
+drops/mutations/see_returned_value_x_16_vec_no_drop_use.rs	E0506:17
+drops/mutations/see_temporary_method_x_18_drop_across.rs	E0506:19
+drops/mutations/see_temporary_method_x_18_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_18_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_18_drop_in_holder.rs	E0506:19
+drops/mutations/see_temporary_method_x_18_drop_in_option.rs	E0506:19
+drops/mutations/see_temporary_method_x_18_drop_maybe_moved.rs	E0506:22
+drops/mutations/see_temporary_method_x_18_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_18_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_across.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_ended.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_in_block.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_in_holder.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_in_option.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_maybe_moved.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_drop_moved_out.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_temporary_method_x_19_vec_no_drop_use.rs	ok	0	"see 1\n2\n"
+drops/mutations/see_then_assign_x_12_drop_across.rs	E0506:13
+drops/mutations/see_then_assign_x_12_drop_ended.rs	E0506:14
+drops/mutations/see_then_assign_x_12_drop_in_block.rs	E0506:15
+drops/mutations/see_then_assign_x_12_drop_in_holder.rs	E0506:13
+drops/mutations/see_then_assign_x_12_drop_in_option.rs	E0506:13
+drops/mutations/see_then_assign_x_12_drop_maybe_moved.rs	E0506:16
+drops/mutations/see_then_assign_x_12_drop_moved_out.rs	E0506:14
+drops/mutations/see_then_assign_x_12_vec_no_drop_use.rs	E0506:13
+drops/mutations/string_push_after_last_use_s_5_drop_across.rs	E0502:6
+drops/mutations/string_push_after_last_use_s_5_drop_ended.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_5_drop_in_block.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_5_drop_in_holder.rs	E0502:6
+drops/mutations/string_push_after_last_use_s_5_drop_in_option.rs	E0502:6
+drops/mutations/string_push_after_last_use_s_5_drop_maybe_moved.rs	E0502:9
+drops/mutations/string_push_after_last_use_s_5_drop_moved_out.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_5_vec_no_drop_use.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_across.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_ended.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_in_block.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_in_holder.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_in_option.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_maybe_moved.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_drop_moved_out.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_after_last_use_s_6_vec_no_drop_use.rs	ok	0	"1 ab\n"
+drops/mutations/string_push_while_borrowed_s_4_drop_across.rs	E0502:5
+drops/mutations/string_push_while_borrowed_s_4_drop_ended.rs	E0502:6
+drops/mutations/string_push_while_borrowed_s_4_drop_in_block.rs	E0502:7
+drops/mutations/string_push_while_borrowed_s_4_drop_in_holder.rs	E0502:5
+drops/mutations/string_push_while_borrowed_s_4_drop_in_option.rs	E0502:5
+drops/mutations/string_push_while_borrowed_s_4_drop_maybe_moved.rs	E0502:8
+drops/mutations/string_push_while_borrowed_s_4_drop_moved_out.rs	E0502:6
+drops/mutations/string_push_while_borrowed_s_4_vec_no_drop_use.rs	E0502:5
+drops/mutations/strings_best_21_drop_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_ended.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_in_block.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_in_holder.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_in_option.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_maybe_moved.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_drop_moved_out.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/strings_best_21_vec_no_drop_use.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+drops/mutations/struct_of_refs_no_drop_v_14_drop_across.rs	E0502:15
+drops/mutations/struct_of_refs_no_drop_v_14_drop_ended.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_14_drop_in_block.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_14_drop_in_holder.rs	E0502:15
+drops/mutations/struct_of_refs_no_drop_v_14_drop_in_option.rs	E0502:15
+drops/mutations/struct_of_refs_no_drop_v_14_drop_maybe_moved.rs	E0502:18
+drops/mutations/struct_of_refs_no_drop_v_14_drop_moved_out.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_14_vec_no_drop_use.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_across.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_ended.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_in_block.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_in_holder.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_in_option.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_maybe_moved.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_drop_moved_out.rs	ok	0	"1\n"
+drops/mutations/struct_of_refs_no_drop_v_15_vec_no_drop_use.rs	ok	0	"1\n"
+drops/mutations/temporary_ref_field_s_27_drop_across.rs	E0506:28
+drops/mutations/temporary_ref_field_s_27_drop_ended.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_27_drop_in_block.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_27_drop_in_holder.rs	E0506:28
+drops/mutations/temporary_ref_field_s_27_drop_in_option.rs	E0506:28
+drops/mutations/temporary_ref_field_s_27_drop_maybe_moved.rs	E0506:31
+drops/mutations/temporary_ref_field_s_27_drop_moved_out.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_27_vec_no_drop_use.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_across.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_ended.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_in_block.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_in_holder.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_in_option.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_maybe_moved.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_drop_moved_out.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/temporary_ref_field_s_28_vec_no_drop_use.rs	ok	0	"a\nshow a\nshow a\na\nshow a\ndrop a\n"
+drops/mutations/try_operator_path_v_9_drop_across.rs	E0502:10
+drops/mutations/try_operator_path_v_9_drop_ended.rs	ok	0	"Some(4) [4, 4]\n"
+drops/mutations/try_operator_path_v_9_drop_in_block.rs	ok	0	"Some(4) [4, 4]\n"
+drops/mutations/try_operator_path_v_9_drop_in_holder.rs	E0502:10
+drops/mutations/try_operator_path_v_9_drop_in_option.rs	E0502:10
+drops/mutations/try_operator_path_v_9_drop_maybe_moved.rs	E0502:13
+drops/mutations/try_operator_path_v_9_drop_moved_out.rs	ok	0	"Some(4) [4, 4]\n"
+drops/mutations/try_operator_path_v_9_vec_no_drop_use.rs	ok	0	"Some(4) [4, 4]\n"
+drops/mutations/two_phase_holder_arg_v_4_drop_across.rs	E0502:4 E0502:5
+drops/mutations/two_phase_holder_arg_v_4_drop_ended.rs	E0502:4 E0502:6
+drops/mutations/two_phase_holder_arg_v_4_drop_in_block.rs	E0502:5 E0502:7
+drops/mutations/two_phase_holder_arg_v_4_drop_in_holder.rs	E0502:4 E0502:5
+drops/mutations/two_phase_holder_arg_v_4_drop_in_option.rs	E0502:4 E0502:5
+drops/mutations/two_phase_holder_arg_v_4_drop_maybe_moved.rs	E0502:4 E0502:8
+drops/mutations/two_phase_holder_arg_v_4_drop_moved_out.rs	E0502:4 E0502:6
+drops/mutations/two_phase_holder_arg_v_4_vec_no_drop_use.rs	E0502:4 E0502:5
+drops/mutations/two_phase_holder_arg_v_5_drop_across.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_ended.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_in_block.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_in_holder.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_in_option.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_maybe_moved.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_drop_moved_out.rs	E0502:4
+drops/mutations/two_phase_holder_arg_v_5_vec_no_drop_use.rs	E0502:4
+drops/mutations/two_phase_len_v_3_drop_across.rs	E0502:4 E0502:6
+drops/mutations/two_phase_len_v_3_drop_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_3_drop_in_block.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_3_drop_in_holder.rs	E0502:4 E0502:6
+drops/mutations/two_phase_len_v_3_drop_in_option.rs	E0502:4 E0502:6
+drops/mutations/two_phase_len_v_3_drop_maybe_moved.rs	E0502:7 E0502:9
+drops/mutations/two_phase_len_v_3_drop_moved_out.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_3_vec_no_drop_use.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_5_drop_across.rs	E0502:6
+drops/mutations/two_phase_len_v_5_drop_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_5_drop_in_block.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_5_drop_in_holder.rs	E0502:6
+drops/mutations/two_phase_len_v_5_drop_in_option.rs	E0502:6
+drops/mutations/two_phase_len_v_5_drop_maybe_moved.rs	E0502:9
+drops/mutations/two_phase_len_v_5_drop_moved_out.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_len_v_5_vec_no_drop_use.rs	ok	0	"[1, 2, 2, 3]\n"
+drops/mutations/two_phase_mutable_arg_v_7_drop_across.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_ended.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_in_block.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_in_holder.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_in_option.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_maybe_moved.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_drop_moved_out.rs	E0499:4
+drops/mutations/two_phase_mutable_arg_v_7_vec_no_drop_use.rs	E0499:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_across.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_ended.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_in_block.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_in_holder.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_in_option.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_maybe_moved.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_drop_moved_out.rs	E0503:4
+drops/mutations/use_while_mutably_borrowed_x_6_vec_no_drop_use.rs	E0503:4
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_across.rs	E0506:5
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_ended.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_in_block.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_in_holder.rs	E0506:5
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_in_option.rs	E0506:5
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_maybe_moved.rs	E0506:8
+drops/mutations/vec_of_refs_no_drop_use_x_4_drop_moved_out.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_4_vec_no_drop_use.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_across.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_ended.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_in_block.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_in_holder.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_in_option.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_maybe_moved.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_drop_moved_out.rs	ok	0	"2\n"
+drops/mutations/vec_of_refs_no_drop_use_x_5_vec_no_drop_use.rs	ok	0	"2\n"
+drops/mutations/while_let_borrow_stack_8_drop_across.rs	E0502:9
+drops/mutations/while_let_borrow_stack_8_drop_ended.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_8_drop_in_block.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_8_drop_in_holder.rs	E0502:9
+drops/mutations/while_let_borrow_stack_8_drop_in_option.rs	E0502:9
+drops/mutations/while_let_borrow_stack_8_drop_maybe_moved.rs	E0502:12
+drops/mutations/while_let_borrow_stack_8_drop_moved_out.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_8_vec_no_drop_use.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_across.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_ended.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_in_block.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_in_holder.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_in_option.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_maybe_moved.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_drop_moved_out.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_stack_9_vec_no_drop_use.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_across.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_ended.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_in_block.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_in_holder.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_in_option.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_maybe_moved.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_drop_moved_out.rs	ok	0	"[6]\n"
+drops/mutations/while_let_borrow_total_8_vec_no_drop_use.rs	ok	0	"[6]\n"
+drops/mutations/while_let_conflict_total_11_drop_across.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_ended.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_in_block.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_in_holder.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_in_option.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_maybe_moved.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_drop_moved_out.rs	E0499:8
+drops/mutations/while_let_conflict_total_11_vec_no_drop_use.rs	E0499:8
+drops/mutations/word_count_top_12_drop_across.rs	E0502:13
+drops/mutations/word_count_top_12_drop_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_12_drop_in_block.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_12_drop_in_holder.rs	E0502:13
+drops/mutations/word_count_top_12_drop_in_option.rs	E0502:13
+drops/mutations/word_count_top_12_drop_maybe_moved.rs	E0502:16
+drops/mutations/word_count_top_12_drop_moved_out.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_12_vec_no_drop_use.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_in_block.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_in_holder.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_in_option.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_maybe_moved.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_drop_moved_out.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+drops/mutations/word_count_top_16_vec_no_drop_use.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
