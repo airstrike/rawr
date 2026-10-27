@@ -276,3 +276,101 @@ fn captured_locals_are_read_without_a_copy() {
         assert_eq!(copies(body), (expected, 0), "{body}");
     }
 }
+
+/// A script state that native generic code holds as a proxy (D594) is lent
+/// to the script's `update(&mut State, ..)` and `view(&State)` as itself: a
+/// thousand of each copy no `Tally` it holds, as Rust's calls copy none.
+/// From script code, `view(&state)` copies `state` (a shared borrow is a
+/// copy) and so does every field read in either body, crossing or not:
+/// those are open items of their own, so these bodies read no field.
+#[cfg(feature = "sync")]
+#[test]
+fn a_proxy_lends_its_state_to_script_functions_without_a_copy() {
+    use crate::Dynamic;
+
+    struct Serve(crate::future::Program);
+
+    impl crate::future::Host for Serve {
+        fn invoke(
+            &self,
+            function: &crate::item::Value,
+            arguments: &mut [Dynamic],
+        ) -> crate::RawrResultOf<Dynamic> {
+            self.0.invoke(function, arguments)
+        }
+
+        fn share(&self) -> Option<crate::future::Program> {
+            Some(self.0.clone())
+        }
+    }
+
+    crate::host::debug::register::<Tally>();
+    let mut engine = crate::Engine::new();
+    engine.register_host_facade(facade()).unwrap();
+    let engine = crate::Shared::new(engine);
+    let authority = engine
+        .compile_authority(
+            "use tally::Tally;
+            pub struct State { tally: Tally, count: i64, label: String }
+            pub fn make() -> State {
+                State { tally: Tally::new(), count: 0, label: String::from(\"count\") }
+            }
+            pub fn update(state: &mut State, by: i64) {
+                let _ = by;
+            }
+            pub fn view(state: &State) -> i64 {
+                1005
+            }",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut runtime = crate::host::runtime::Builder::new(facade());
+    runtime
+        .bind("tally::Tally::new", |_| Ok(Dynamic::from(Tally(0))))
+        .unwrap();
+    runtime
+        .bind("tally::Tally::add", |args| {
+            let n = args[1].as_int().expect("an i64");
+            args[0].write_lock::<Tally>().expect("a tally").0 += n;
+            Ok(Dynamic::UNIT)
+        })
+        .unwrap();
+    runtime
+        .bind("tally::Tally::total", |args| {
+            Ok(Dynamic::from_int(
+                args[0].read_lock::<Tally>().expect("a tally").0,
+            ))
+        })
+        .unwrap();
+    let mut registry = crate::host::runtime::Registry::new();
+    registry.install(runtime.finish()).unwrap();
+    let registry = crate::Shared::new(registry);
+    let item = |name: &str| {
+        authority
+            .items()
+            .find(|item| item.key().name() == name)
+            .unwrap()
+            .clone()
+    };
+    let program = crate::island::shared(authority.clone(), registry.clone());
+    crate::future::serve(std::rc::Rc::new(Serve(program)));
+    let made = authority
+        .invoke_bound(&item("make"), &mut [], registry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    COPIES.with(|copies| copies.set(0));
+    let mut state = crate::crossing::Proxy::new(made);
+    let update = crate::crossing::Slot::new();
+    update.set(Dynamic::from(item("update"))).unwrap();
+    let view = crate::crossing::Slot::new();
+    view.set(Dynamic::from(item("view"))).unwrap();
+    let mut shown = 0;
+    for _ in 0..1000 {
+        let mut values = [state.lend_mut(), Dynamic::from_int(1)];
+        let _ = update.invoke(&mut values, &[0]);
+        state.restore(std::mem::take(&mut values[0]));
+    }
+    let after_update = COPIES.with(Cell::get);
+    for _ in 0..1000 {
+        shown = view.invoke(&mut [state.lend()], &[]).as_int().unwrap();
+    }
+    assert_eq!((shown, after_update, COPIES.with(Cell::get)), (1005, 0, 0));
+}

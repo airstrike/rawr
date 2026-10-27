@@ -4,6 +4,7 @@
 //! the project's own tokio, and a save restarts it; a marked `main` in a
 //! native loop takes a body edit at its next call into script code.
 
+mod crossing;
 mod erasure;
 mod islands;
 mod panes;

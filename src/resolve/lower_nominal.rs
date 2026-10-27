@@ -3323,12 +3323,14 @@ impl Models {
         &self.by_definition[&id]
     }
 
-    /// The path of the script type `id` from its crate's root, as the
-    /// runner names its proxy (`State`, `app::State`) (D594).
+    /// The path of the script type `id` with its crate's name first, as
+    /// the runner names its proxy (`counter::State`, `counter::app::State`)
+    /// (D594).
     #[cfg(feature = "rust-import")]
     fn script_path(&self, id: type_def::Id) -> Box<str> {
         let key = self.definition(id).definition().key();
-        let mut path = String::new();
+        let mut path = key.package().replace('-', "_");
+        path.push_str("::");
         for module in key.modules() {
             path.push_str(module);
             path.push_str("::");

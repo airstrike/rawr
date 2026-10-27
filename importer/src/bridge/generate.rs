@@ -17,6 +17,8 @@ const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
 const BUILD_PATH: &str = "build.rs";
 const SOURCE_PATH: &str = "src/main.rs";
+/// The crate name of a runner binary no script type names.
+const RUNNER_BINARY: &str = "rawr_generated_runner";
 const TOP_LEVEL_SOURCE: &[u8] = include_bytes!("generate/top_level.rs");
 const BUILD_SCRIPT: &[u8] = b"use std::{env, fs, path::PathBuf};\n\
 fn main() {\n\
@@ -4125,14 +4127,15 @@ fn render<B: crate::surface::Runner>(
     profile: &crate::profile::Proof,
 ) -> Result<Product, request::Error> {
     let harness = native.runner_harness(request.allocation.limits().1)?;
-    let manifest = runner_manifest(harness.manifest())?;
     let lock = runner_lock(harness.lock())?;
     let mut sources = Vec::new();
     let mut spans = Vec::new();
     spans
         .try_reserve_exact(request.plans.len())
         .map_err(|_| request::Error::Allocation)?;
-    render_source(
+    // A runner whose proxies stand for a script's types is built as a
+    // binary named as the script's crate, so their `type_name` is theirs.
+    let named = render_source(
         &request.plans,
         request.fingerprint,
         profile,
@@ -4141,6 +4144,7 @@ fn render<B: crate::surface::Runner>(
         &mut sources,
         &mut spans,
     )?;
+    let manifest = runner_manifest(harness.manifest(), named.as_deref())?;
     let source = encode_sources(&sources)?;
     let mut source_map = Vec::new();
     super::source_map::write(request, &spans, &mut source_map)?;
@@ -4218,7 +4222,7 @@ fn expected_parts<B>(
     })
 }
 
-fn runner_manifest(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
+fn runner_manifest(bytes: &[u8], binary: Option<&str>) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
         reason: error.to_string().into_boxed_str(),
     })?;
@@ -4245,6 +4249,16 @@ fn runner_manifest(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
     package.insert("edition", value("2024"));
     package.insert("build", value(BUILD_PATH));
     document.remove("lib");
+    // The binary is the script crate's name; the build gives it the name
+    // `rawr-generated-runner` as well (`runner::build::name_binary`).
+    if let Some(binary) = binary.filter(|binary| *binary != RUNNER_BINARY) {
+        let mut target = toml_edit::Table::new();
+        target.insert("name", value(binary));
+        target.insert("path", value(SOURCE_PATH));
+        let mut targets = toml_edit::ArrayOfTables::new();
+        targets.push(target);
+        document.insert("bin", Item::ArrayOfTables(targets));
+    }
     share_harness_units(&mut document)?;
     Ok(normalize(document.to_string().as_bytes()))
 }
@@ -4337,7 +4351,7 @@ fn render_source(
     facade_plan: Option<&[u8]>,
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
-) -> Result<(), request::Error> {
+) -> Result<Option<String>, request::Error> {
     let mut main = Vec::new();
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
@@ -4598,7 +4612,7 @@ fn render_source(
     render_proxies(&mut proxies)?;
     sources.push((PROXIES_PATH.into(), proxies));
     sources.push((SURFACE_PATH.into(), stamps));
-    Ok(())
+    Ok(PROXY_CRATE.with_borrow(Clone::clone))
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
@@ -9874,6 +9888,10 @@ thread_local! {
     /// its proxy (D594).
     static PROXIES: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The name of the script's crate, which the runner's binary takes, so
+    /// a proxy's `type_name` is the script type's (D594).
+    static PROXY_CRATE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
     static FAMILIES: std::cell::RefCell<std::collections::BTreeMap<String, (String, Lifetimes)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// Whether a Rust value being converted lives in a scope frame's
@@ -10343,6 +10361,7 @@ impl TypePaths {
         });
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXY_CRATE.with_borrow_mut(|named| *named = None);
         Self
     }
 }
@@ -10359,6 +10378,7 @@ impl Drop for TypePaths {
         ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXY_CRATE.with_borrow_mut(|named| *named = None);
     }
 }
 
@@ -10403,14 +10423,19 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("Result<{}, {}>", concrete_type(ok)?, concrete_type(err)?)
         }
         convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
-        // A script type's proxy, at the runner's crate root (D594).
+        // A script type's proxy, at the runner's crate root, which is named
+        // as the script's crate is (D594).
         convert::Type::Script { path, arguments } => {
             let arguments = arguments
                 .iter()
                 .map(concrete_type)
                 .collect::<Option<Vec<_>>>()?;
+            let (krate, path) = path.split_once("::")?;
             PROXIES.with_borrow_mut(|proxies| {
-                proxies.entry(path.to_string()).or_insert(arguments.len());
+                proxies.entry(path.to_owned()).or_insert(arguments.len());
+            });
+            PROXY_CRATE.with_borrow_mut(|named| {
+                named.get_or_insert_with(|| krate.to_owned());
             });
             if arguments.is_empty() {
                 format!("crate::{path}")
@@ -11254,7 +11279,7 @@ mod tests {
     #[test]
     fn runner_manifest_makes_only_the_runner_unit_incremental() {
         let harness = b"[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n[dependencies]\niced = \"0.14\"\n";
-        let manifest = super::runner_manifest(harness).unwrap();
+        let manifest = super::runner_manifest(harness, None).unwrap();
         let document = std::str::from_utf8(&manifest)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
@@ -11274,7 +11299,8 @@ mod tests {
         );
         assert!(document.get("lib").is_none());
         assert!(super::runner_manifest(
-            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n"
+            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n",
+            None
         )
         .is_err());
     }

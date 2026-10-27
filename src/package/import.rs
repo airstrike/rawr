@@ -1721,13 +1721,6 @@ fn build(
     }
 
     for entry in &facade.entries {
-        if std::env::var_os("RAWR_DEBUG_ITEMS").is_some() {
-            eprintln!(
-                "DEBUG item {} {:?}",
-                entry.relative,
-                entry.outcome.representability()
-            );
-        }
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
         if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
             builder.item(item)?;
