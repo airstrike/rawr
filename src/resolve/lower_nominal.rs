@@ -9754,6 +9754,10 @@ struct Parser<'a> {
     /// While resolving a pattern below a `&T` it matched through: bindings
     /// are references (`Some(mutable)`), Rust's default binding mode.
     binding_mode: std::cell::Cell<Option<bool>>,
+    /// A name an or-pattern binds, with its type in the first alternative
+    /// and in a later one, the subject's name and the later alternative's
+    /// span. The root pattern makes the two one type, as rustc does.
+    or_binding_types: std::cell::RefCell<Vec<(Ty, Ty, String, Span)>>,
     /// The most elements any slice pattern names: a slice's lengths up to
     /// it are told apart for coverage (`coverage_constructors`).
     slice_arity: std::cell::Cell<usize>,
@@ -10039,6 +10043,7 @@ impl<'a> Parser<'a> {
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
+            or_binding_types: std::cell::RefCell::new(Vec::new()),
             slice_arity: std::cell::Cell::new(0),
             host_checks: std::cell::RefCell::new(Vec::new()),
             host_binding_mode: std::cell::Cell::new(None),
@@ -23431,16 +23436,24 @@ impl<'a> Parser<'a> {
                             first = Some(bound);
                         }
                         Some(first) => {
+                            // A name has one type in every alternative. The
+                            // root pattern makes them one, as rustc does with
+                            // `(Some(x), _) | (None, Some(x))` on literals'
+                            // `{integer}`s and `None`'s unknown type.
                             let same = first.len() == bound.len()
-                                && first.iter().all(|(name, ty)| {
-                                    bound.get(name).is_some_and(|other| {
-                                        same_inferred(
-                                            &self.inference.resolve(ty),
-                                            &self.inference.resolve(other),
+                                && first.keys().all(|name| bound.contains_key(name));
+                            if same {
+                                self.or_binding_types.borrow_mut().extend(first.iter().map(
+                                    |(name, ty)| {
+                                        (
+                                            ty.clone(),
+                                            bound[name].clone(),
+                                            owner.to_string(),
+                                            alternative.span(),
                                         )
-                                    })
-                                });
-                            if !same {
+                                    },
+                                ));
+                            } else {
                                 return Err(Error::InvalidMatch {
                                     owner: owner.into(),
                                     reason: "every alternative of an or-pattern must bind the \
@@ -23566,6 +23579,34 @@ impl<'a> Parser<'a> {
     /// The root pattern of a `match` arm, `if let` or `while let` on a value
     /// of `subject` type.
     fn resolve_root_pattern(
+        &mut self,
+        syntax: &PatternSyntax,
+        subject: &Ty,
+    ) -> Result<ResolvedRootPattern, Error> {
+        let outer_or_types = self.or_binding_types.take();
+        let resolved = self.resolve_root_pattern_parts(syntax, subject);
+        let or_types = self.or_binding_types.replace(outer_or_types);
+        let resolved = resolved?;
+        for (first, other, owner, span) in or_types {
+            if !(self.unify_type(&first, &other)
+                && same_inferred(
+                    &self.inference.resolve(&first),
+                    &self.inference.resolve(&other),
+                ))
+            {
+                return Err(Error::InvalidMatch {
+                    owner: owner.into(),
+                    reason: "every alternative of an or-pattern must bind the same names with \
+                             the same types"
+                        .into(),
+                    pattern: span,
+                });
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_root_pattern_parts(
         &self,
         syntax: &PatternSyntax,
         subject: &Ty,

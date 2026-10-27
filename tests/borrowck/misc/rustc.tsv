@@ -1,0 +1,8 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+misc/or_pattern_alternative_settles_integer_type.rs	ok	0	"1 7\n200 0\n"
+misc/or_pattern_alternatives_differ_in_type.rs	E0308:4
+misc/or_pattern_integers_and_none.rs	ok	0	"small or none\nsmall or none\nsmall or none\nother 7\n"
+misc/or_pattern_mut_none_settles_by_other_alternative.rs	ok	0	"(None, Some(3))\n"
+misc/or_pattern_mut_parts_unannotated.rs	ok	0	"[(Some(11), None), (None, Some(12)), (None, None)]\n"
+misc/or_pattern_none_settles_by_other_alternative.rs	ok	0	"1\n"
+misc/or_pattern_parts_unannotated.rs	ok	0	"1\n2\nnone\n"
