@@ -156,6 +156,34 @@ async fn sum() -> i64 {
     assert_eq!(loaded(&source), 9);
 }
 
+/// A `&mut` pattern binding reaches its part of the place across `.await`,
+/// where the async body's locals move between scopes.
+#[test]
+fn a_mut_pattern_binding_reaches_its_part_across_an_await() {
+    let source = app(
+        r#"
+async fn grow() -> i64 {
+    let mut pair = (Some(vec![1]), 0);
+    if let (Some(v), count) = &mut pair {
+        let a = Task::done(2).await;
+        v.push(a);
+        *count += 1;
+        let b = Task::done(3).await;
+        v.push(b);
+        *count += 1;
+    }
+    let len = match &mut pair.0 {
+        Some(v) => v.len() as i64,
+        None => 0,
+    };
+    len * 10 + pair.1
+}
+"#,
+        "grow()",
+    );
+    assert_eq!(loaded(&source), 32);
+}
+
 #[test]
 fn await_outside_an_async_body_is_rejected() {
     let error = rejected(&app("fn f() -> i64 { Task::done(1).await }", "async { 1 }"));

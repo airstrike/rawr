@@ -11,6 +11,7 @@ mod keyed;
 mod location;
 mod origin;
 mod places;
+use places::PlacePattern;
 mod reborrow;
 mod reverse;
 
@@ -3539,13 +3540,6 @@ pub(crate) struct ClosureCallable {
     pub(crate) source: crate::program::source::Id,
 }
 
-/// A root pattern bound by `&mut` and the names it binds that way.
-#[derive(Clone, Hash)]
-struct Restore {
-    pattern: crate::ast::NominalPattern,
-    names: Box<[ImmutableString]>,
-}
-
 #[derive(Clone)]
 enum Op {
     #[cfg(feature = "rust-import")]
@@ -3638,7 +3632,6 @@ enum Op {
         item: item::Enum,
     },
     /// Write what a pattern bound by `&mut` back into the place it matched.
-    Restore(Box<Restore>),
     Prelude(PreludeOp),
     /// `collect()` whose target inference decides: `CollectString` or
     /// `CollectVec` once the function is checked.
@@ -5264,7 +5257,6 @@ enum ExecutableOp {
         definition: type_def::Definition,
         item: item::Enum,
     },
-    Restore(Box<Restore>),
     Prelude(PreludeOp),
     /// A prelude operation for the kinds (`kind_code`) it was checked at.
     Kinded {
@@ -5592,7 +5584,6 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
-            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. }
             | Self::Shaped { .. } => BTreeSet::new(),
@@ -5624,7 +5615,6 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
-            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. }
             | Self::Shaped { .. } => None,
@@ -5658,7 +5648,6 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
-            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. }
             | Self::Shaped { .. } => None,
@@ -5818,12 +5807,6 @@ impl ExecutableOp {
             Self::Default { definition, .. } => (definition, "default".to_string()),
             Self::Validate { definition } => (definition, "validate".to_string()),
             Self::MatchSubject { definition, .. } => (definition, "match-subject".to_string()),
-            Self::Restore(restore) => {
-                return format!(
-                    "\0rawr.restore.{:016x}",
-                    crate::program::schema::symbol_id(&**restore)
-                );
-            }
         };
 
         format!(
@@ -5928,11 +5911,6 @@ impl ExecutableOp {
                 vec![models.definition(definition.id()).ty().type_id(models)]
             }
             Self::MatchSubject { .. } => vec![TypeId::of::<Dynamic>()],
-            Self::Restore(_) => vec![
-                TypeId::of::<Dynamic>(),
-                TypeId::of::<Dynamic>(),
-                TypeId::of::<crate::Array>(),
-            ],
             // An `i128` or a `u128` past `i64` is boxed.
             Self::Kinded {
                 op: PreludeOp::IntMethod,
@@ -6279,29 +6257,6 @@ impl ExecutableOp {
             Self::Validate { definition } => {
                 validate_dynamic(args[0], definition, models)?;
                 Ok(Dynamic::UNIT)
-            }
-            Self::Restore(restore) => {
-                // `[restored, place]`: the place with the bindings written
-                // back, unless a part they bind changed since it was matched
-                // (it was assigned another value, which the bindings no
-                // longer name).
-                let unchanged =
-                    same_bound_parts(args[0], args[1], &restore.pattern, &restore.names);
-                let mut place = args[0].clone();
-                let values = args[2].as_array_ref().map(|values| values.to_vec());
-                let restored = unchanged
-                    && values.is_ok_and(|values| {
-                        crate::eval::restore_nominal_root(
-                            &mut place,
-                            &restore.pattern,
-                            &restore.names,
-                            &values,
-                        )
-                    });
-                if !restored {
-                    place = args[0].clone();
-                }
-                Ok(Dynamic::from_array(vec![restored.into(), place]))
             }
             Self::MatchSubject {
                 definition, item, ..
@@ -9677,8 +9632,11 @@ struct Parser<'a> {
     field_entries: Vec<(origin::Fragment, origin::Fragment)>,
     /// The engine's global modules: the native functions a call may name.
     native_modules: Vec<crate::SharedModule>,
-    /// Patterns matched on `&mut` places whose bindings are in scope.
-    write_backs: Vec<WriteBack>,
+    /// How a `Some(&mut place)` value finds its place, by its span: the
+    /// statements that find it, and the test that it is `None`
+    /// (`optional_place`, `borrowed_call`), for a pattern matching it
+    /// (`pattern_place`).
+    optional_subjects: BTreeMap<Span, (origin::Fragment, origin::Fragment)>,
     /// The expression depth of a let chain's link being read: `&&` there
     /// ends the link (`parse_chain`).
     chain_link: Option<usize>,
@@ -10024,7 +9982,7 @@ impl<'a> Parser<'a> {
             last_range: None,
             field_entries: Vec::new(),
             native_modules: engine.global_modules.clone(),
-            write_backs: Vec::new(),
+            optional_subjects: BTreeMap::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
@@ -10817,7 +10775,6 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(Token::RightBrace, "'}' to close a function body")?;
-        self.write_backs.clear();
         Ok(())
     }
 
@@ -14818,7 +14775,6 @@ impl<'a> Parser<'a> {
             Op::MatchSubject { definition, item } => {
                 ExecutableOp::MatchSubject { definition, item }
             }
-            Op::Restore(restore) => ExecutableOp::Restore(restore),
         })
     }
 
@@ -19307,8 +19263,8 @@ impl<'a> Parser<'a> {
     /// An imported method's `Option<&mut T>` lent from its receiver, as
     /// pane_grid's `state.get_mut(pane)`: the call gives `Some` of a place
     /// (`island::place::Place`) or `None`. The value is `Some` of a copy of
-    /// the target, whose place a pattern's `&mut` binding writes back
-    /// through the place, as `v.get_mut(i)`'s element is (T012).
+    /// the target, whose place a pattern's `&mut` binding reaches through
+    /// the place at each use (`pattern_place`).
     fn optional_guard(&mut self, value: ParsedExpr) -> ParsedExpr {
         let call = value.span;
         let target = match self.inference.resolve(&value.ty) {
@@ -19337,6 +19293,12 @@ impl<'a> Parser<'a> {
         let read = self.prelude_op(PreludeOp::CellGet, [place.clone()]);
         let some = self.prelude_op(PreludeOp::Some, [read]);
         let none = self.prelude_op(PreludeOp::None, []);
+        // A pattern matching the value makes the call and reaches the place.
+        let mut find = origin::Fragment::plain(format!("{slot} = "));
+        find.push(value.rendered_source());
+        find.push_text("; ");
+        let missing = present.clone().surrounded("!(", ")");
+        self.optional_subjects.insert(call, (find, missing));
         let mut source = origin::Fragment::plain(format!("{{ {slot} = "));
         source.push(value.rendered_source());
         source.push_text("; if ");
@@ -20357,7 +20319,6 @@ impl<'a> Parser<'a> {
 
     fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
-        let touched = self.begin_write_backs();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         let depth = self.temporary_scopes.len();
@@ -20383,7 +20344,6 @@ impl<'a> Parser<'a> {
         bound?;
         self.statement_frames(start, frames, true)?;
         self.end_lend_self(outer_lend, start);
-        self.end_write_backs(touched);
         self.settle_parses()
     }
 
@@ -20594,10 +20554,28 @@ impl<'a> Parser<'a> {
                 return self.consume_terminator(start).map(|_| ());
             }
             // `let r = &mut s.cells[i];`: `r` is the place, reached again
-            // from `s` at each use.
+            // from `s` at each use. When a `let` ahead shadows `s`, `r`
+            // holds the place's path instead, which reaches the first `s`.
             if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
+                }
+                if !self.in_async_body()
+                    && self.root_shadowed_later(lvalue.binding())
+                    && let Some(located) = self.place_located(&lvalue)
+                {
+                    let holder = self.temporary("part");
+                    let mut rendered = origin::Fragment::plain(format!("let {holder} = "));
+                    rendered.push(located);
+                    rendered.push_text(";");
+                    let rendered = self.with_field_entries(pending, rendered);
+                    self.write_output(rendered, span(start, value.span.end()));
+                    self.entry_aliases.remove(&name);
+                    self.bound_value(&name, name_span, &value, value_start);
+                    self.borrow_located(name, name_span, value.ty, &holder);
+                    self.last_type = Ty::Unit;
+                    self.last_expression = None;
+                    return self.consume_terminator(start).map(|_| ());
                 }
                 let rendered = self.with_field_entries(pending, origin::Fragment::default());
                 if !rendered.is_empty() {
@@ -21197,8 +21175,8 @@ impl<'a> Parser<'a> {
 
     /// The bindings of `let pattern = subject`, after the statement. Without
     /// `otherwise` the pattern must be irrefutable. A pattern matched on a
-    /// `&mut` place writes its `&mut` bindings back into the place after
-    /// each statement that uses them, until the block ends (`WriteBack`).
+    /// `&mut` place matches it where it is, and its `&mut` bindings reach
+    /// their parts of it (`PlacePattern`).
     pub(super) fn bind_let_pattern(
         &mut self,
         start: Position,
@@ -21237,8 +21215,7 @@ impl<'a> Parser<'a> {
             }
         }
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
-        let write_back =
-            self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, &scrutinee)?;
+        let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // A value made for the statement drops at its end, or before
         // `else`; a local's moved parts are left `()` in it.
         let made = self.drops()
@@ -21256,20 +21233,26 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|binding| (binding.name.clone(), binding.span, binding.ty.clone()))
             .collect::<Vec<_>>();
-        let subject = self.pattern_subject(subject, &subject_ty)?;
+        let (subject, operand) = match &place {
+            Some(place) => (place.locate.clone(), place.operand(&scrutinee)),
+            None => (
+                self.pattern_subject(subject, &subject_ty)?,
+                scrutinee.clone(),
+            ),
+        };
         let host = self.take_host_checks()?;
-        let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
+        let label = self.push_root_pattern(resolved.proof, &resolved.bindings, place.as_ref());
         // The bindings a facade pattern makes follow the script pattern's.
         let mut bindings = resolved.bindings;
+        bindings.extend(host.binds.iter().cloned());
         let names = bindings
             .iter()
-            .chain(&host.binds)
-            .map(|binding| binding.name.to_string())
+            .map(|binding| PlacePattern::runtime_name(place.as_ref(), &binding.name, binding.span))
             .collect::<Vec<_>>();
         let copies = self.shadow_copies(&drops::pattern_names(syntax))?;
         let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
         rendered.push(subject);
-        rendered.push_text(format!(";\nlet {values} = switch {scrutinee} {{\n{label}"));
+        rendered.push_text(format!(";\nlet {values} = switch {operand} {{\n{label}"));
         if let Some(condition) = host.condition() {
             rendered.push_text(" if ");
             rendered.push(condition);
@@ -21288,33 +21271,24 @@ impl<'a> Parser<'a> {
             }
         }
         rendered.push_text("\n};");
-        bindings.extend(host.binds);
         let mut declared = String::new();
-        for (index, binding) in bindings.iter().enumerate() {
-            let written = write_back.as_ref().is_some_and(|write_back| {
-                write_back
-                    .bindings
-                    .iter()
-                    .any(|(name, at)| *name == binding.name && *at == binding.span)
-            });
-            let mutable = binding.mutable || written;
-            let keyword = if mutable { "let" } else { "const" };
-            let _ = write!(
-                declared,
-                "\n{keyword} {} = {values}[{index}];",
-                binding.name
-            );
+        for (index, (binding, name)) in bindings.iter().zip(&names).enumerate() {
+            let keyword = if binding.mutable { "let" } else { "const" };
+            let _ = write!(declared, "\n{keyword} {name} = {values}[{index}];");
             self.bindings.insert(
                 binding.name.clone(),
                 Binding {
                     ty: binding.ty.clone(),
-                    mutable,
+                    mutable: binding.mutable,
                     available: true,
                     moved_fields: BTreeMap::new(),
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
             );
+        }
+        if let Some(place) = &place {
+            self.bind_parts(place);
         }
         // The moves out of what was matched, then the rest of a value made
         // for it drops, before the bindings are declared.
@@ -21335,7 +21309,6 @@ impl<'a> Parser<'a> {
         // left `()` in them.
         rendered.push_text(copies);
         rendered.push_text(declared);
-        self.write_backs.extend(write_back);
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, end));
         self.last_type = Ty::Unit;
@@ -21910,7 +21883,6 @@ impl<'a> Parser<'a> {
 
     fn parse_statement(&mut self) -> Result<(), Error> {
         let pending = self.field_entries.len();
-        let touched = self.begin_write_backs();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         self.open_temporaries();
@@ -21932,7 +21904,6 @@ impl<'a> Parser<'a> {
         self.statement_temporaries(start, &temporaries);
         self.statement_frames(start, frames, false)?;
         self.end_lend_self(outer_lend, start);
-        self.end_write_backs(touched);
         self.settle_parses()
     }
 
@@ -21998,238 +21969,6 @@ impl<'a> Parser<'a> {
                 self.output.push_text(format!("\nthis = {SELF_CAPTURE};\n"));
             }
         }
-    }
-
-    /// Start a statement: no `&mut` pattern binding is used in it yet. The
-    /// enclosing statement's marks, to restore.
-    fn begin_write_backs(&mut self) -> Vec<bool> {
-        self.write_backs
-            .iter_mut()
-            .map(|write_back| std::mem::replace(&mut write_back.touched, false))
-            .collect()
-    }
-
-    /// End a statement: when it used a `&mut` pattern binding, write the
-    /// bindings back into their place after it (after a block's tail, around
-    /// it), unless a new binding shadows one.
-    fn end_write_backs(&mut self, outer: Vec<bool>) {
-        let visible = self
-            .write_backs
-            .iter()
-            .map(|write_back| {
-                write_back.bindings.iter().all(|(name, at)| {
-                    self.bindings
-                        .get(name)
-                        .is_some_and(|binding| binding.declaration == *at)
-                })
-            })
-            .collect::<Vec<_>>();
-        // A write-back into a binding of an enclosing pattern uses that
-        // binding: the inner one runs first, then the outer one.
-        let mut hooks = origin::Fragment::default();
-        for index in (0..self.write_backs.len()).rev() {
-            if !(self.write_backs[index].touched && visible[index]) {
-                continue;
-            }
-            hooks.push(self.write_backs[index].hook.clone());
-            if let Some(root) = self.write_backs[index].root.clone() {
-                for enclosing in &mut self.write_backs[..index] {
-                    if enclosing.bindings.contains(&root) {
-                        enclosing.touched = true;
-                    }
-                }
-            }
-        }
-        for (write_back, outer) in self.write_backs.iter_mut().zip(outer) {
-            write_back.touched |= outer;
-        }
-        if hooks.is_empty() {
-            return;
-        }
-        match self.last_expression {
-            Some((start, endpoint)) => {
-                let mut tail = self.output.split_off(start);
-                tail.trim_end();
-                let value = self.temporary("tail");
-                let mut source = origin::Fragment::plain(format!("{{ let {value} = "));
-                source.push(tail);
-                source.push_text("; ");
-                source.push(hooks);
-                source.push_text(format!(" {value} }}"));
-                let start = self.write_output(source, endpoint);
-                self.last_expression = Some((start, endpoint));
-            }
-            None => {
-                self.output.push(hooks);
-                self.output.push_text("\n");
-            }
-        }
-    }
-
-    /// For a pattern matched on a `&mut` place: its `&mut` bindings and the
-    /// statement writing them back into the place through `scrutinee`, the
-    /// value matched. `None` for another subject, or no such binding.
-    fn pattern_write_back(
-        &mut self,
-        subject: &ParsedExpr,
-        proof: &crate::ast::NominalPattern,
-        bindings: &[PatternBinding],
-        scrutinee: &str,
-    ) -> Result<Option<WriteBack>, Error> {
-        // A `&mut` place, or a place whose pattern binds `ref mut`.
-        let borrowed = matches!(
-            self.inference.resolve(&subject.ty),
-            Ty::Reference { mutable: true, .. }
-        );
-        if !borrowed && subject.lvalue.is_none() {
-            return Ok(None);
-        }
-        let bound = bindings
-            .iter()
-            .filter(|binding| {
-                matches!(
-                    self.inference.resolve(&binding.ty),
-                    Ty::Reference { mutable: true, .. }
-                )
-            })
-            .map(|binding| (binding.name.clone(), binding.span))
-            .collect::<Vec<_>>();
-        if bound.is_empty() {
-            return Ok(None);
-        }
-        // `match self` in a `&mut self` method matches the receiver.
-        let receiver = subject.lvalue.is_none()
-            && self.closures.is_empty()
-            && subject.source.as_str() == "this"
-            && self.bindings.get("this").is_some_and(|binding| {
-                binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
-            });
-        let lvalue = if receiver {
-            Some(Lvalue::Binding {
-                binding: "this".into(),
-                ty: Ty::Unknown,
-            })
-        } else {
-            subject.lvalue.clone()
-        };
-        let (read, place, store) = match &lvalue {
-            Some(Lvalue::Binding { binding, .. }) => (
-                origin::Fragment::default(),
-                origin::Fragment::plain(binding.to_string()),
-                origin::Fragment::default(),
-            ),
-            Some(Lvalue::Place { place, .. }) => (
-                origin::Fragment::default(),
-                place.clone(),
-                origin::Fragment::default(),
-            ),
-            Some(Lvalue::Field(field)) => {
-                let nested = NestedLvalue {
-                    binding: field.binding.clone(),
-                    base: origin::Fragment::plain(field.binding.to_string()),
-                    steps: vec![PlaceStep::Field {
-                        definition: field.definition.clone(),
-                        slot: field.slot,
-                    }],
-                    ty: field.ty.clone(),
-                };
-                self.nested_parts(&nested)
-            }
-            Some(Lvalue::Nested(nested)) => {
-                let nested = (**nested).clone();
-                self.nested_parts(&nested)
-            }
-            // `&mut v[a..b]`: the range is read again and stored back.
-            Some(Lvalue::Slice(slice)) => {
-                let slice = (**slice).clone();
-                (
-                    origin::Fragment::default(),
-                    self.prelude_op(
-                        PreludeOp::Slice,
-                        [
-                            slice.base.clone(),
-                            slice.low.clone(),
-                            slice.high.clone(),
-                            slice.inclusive.to_string().into(),
-                        ],
-                    ),
-                    origin::Fragment::default(),
-                )
-            }
-            None => {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "binding parts of a `&mut` value that is not a local, a field \
-                                or an element"
-                        .into(),
-                    source: subject.span,
-                })
-            }
-        };
-        if let Some(root) = lvalue.as_ref().map(Lvalue::binding) {
-            let root = root.clone();
-            self.require_mutable_binding(&root, subject.span)?;
-        }
-        let names = bound
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<Box<[_]>>();
-        let values = names
-            .iter()
-            .map(ImmutableString::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let helper = self.push_op(Op::Restore(Box::new(Restore {
-            pattern: proof.clone(),
-            names,
-        })));
-        let written = self.temporary("written");
-        // `Some(&mut place)` (`optional_element`): the pattern matched the
-        // place inside `Some`, and the place takes what is inside again.
-        let optional = !borrowed
-            && matches!(
-                self.inference.resolve(&subject.ty),
-                Ty::Option(inner) if matches!(*inner, Ty::Reference { mutable: true, .. })
-            );
-        let mut hook = origin::Fragment::plain("{ ");
-        hook.push(read);
-        hook.push_text(format!("let {written} = {helper}("));
-        if optional {
-            hook.push(self.prelude_op(PreludeOp::Some, [place.clone()]));
-        } else {
-            hook.push(place.clone());
-        }
-        hook.push_text(format!(", {scrutinee}, [{values}]); if {written}[0] {{ "));
-        if optional {
-            let inner = self.prelude_op(PreludeOp::Unwrap, [format!("{written}[1]").into()]);
-            hook.push(place);
-            hook.push_text(" = ");
-            hook.push(inner);
-            hook.push_text(";");
-        } else if let Some(Lvalue::Slice(_)) = &lvalue {
-            let stored = format!("{written}[1]");
-            let mut place = subject.clone();
-            place.lvalue = lvalue.clone();
-            hook.push(self.store_into(&place, &stored)?);
-        } else {
-            hook.push(place);
-            hook.push_text(format!(" = {written}[1];"));
-        }
-        hook.push_text(format!(
-            " {scrutinee} = {written}[1]; }} else {{ {scrutinee} = (); }} "
-        ));
-        hook.push(store);
-        hook.push_text("}");
-        let root = lvalue.as_ref().map(Lvalue::binding).and_then(|root| {
-            self.bindings
-                .get(root)
-                .map(|binding| (root.clone(), binding.declaration))
-        });
-        Ok(Some(WriteBack {
-            bindings: bound,
-            root,
-            hook,
-            touched: false,
-        }))
     }
 
     /// Each pending `parse` whose target a statement made known gets its
@@ -23482,6 +23221,7 @@ impl<'a> Parser<'a> {
                     NominalPattern::At {
                         name: name.clone(),
                         pattern: Box::new(proof),
+                        part: false,
                     },
                     coverage,
                 ))
@@ -23808,7 +23548,14 @@ impl<'a> Parser<'a> {
 
     /// Retain a root pattern's runtime proof; its legacy switch label, which
     /// names the bindings the arm introduces.
-    fn push_root_pattern(&mut self, proof: NominalPattern, bindings: &[PatternBinding]) -> String {
+    /// The arm label of `proof`, which binds `bindings`: a binding reaching
+    /// a part of a `place` by its runtime name.
+    fn push_root_pattern(
+        &mut self,
+        proof: NominalPattern,
+        bindings: &[PatternBinding],
+        place: Option<&PlacePattern>,
+    ) -> String {
         let placeholder = pattern_name(self.pattern_offset + self.patterns.len());
         self.patterns.push(proof);
         if bindings.is_empty() {
@@ -23816,7 +23563,7 @@ impl<'a> Parser<'a> {
         } else {
             let names = bindings
                 .iter()
-                .map(|binding| binding.name.as_str())
+                .map(|binding| PlacePattern::runtime_name(place, &binding.name, binding.span))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{placeholder}::Case({names})")
@@ -24360,8 +24107,11 @@ impl<'a> Parser<'a> {
         // A catch-all binding arm binds the scrutinee as written, `&T` included.
         let binding_ty = self.inference.resolve(&subject.ty);
         let scrutinee = self.temporary("match");
-        // Kept for the arms whose `&mut` bindings are written back.
+        // Kept for the arms whose `&mut` bindings reach its parts.
         let place = subject.clone();
+        // The match is on the place where it is when an arm binds a part of
+        // it by `&mut` (`PlacePattern`).
+        let mut matched_place: Option<PlacePattern> = None;
         // The match's own scope holds a value made for it.
         self.open_drops();
         let holder = self.subject_holder(&place, &scrutinee, dereferenced)?;
@@ -24396,7 +24146,6 @@ impl<'a> Parser<'a> {
             tested = self.flow().split();
             // The bindings a facade pattern in the arm makes, ahead of it.
             let mut arm_prefix = origin::Fragment::default();
-            let mut write_back = None;
             // The arm's bindings drop at its end; what they move out of the
             // subject is left `()` there first.
             self.open_drops();
@@ -24446,7 +24195,25 @@ impl<'a> Parser<'a> {
                     let (deferred, after) = self.take_deferred_clears();
                     match_copies.push_str(&deferred);
                     match_after.push_str(&after);
-                    Some(Some(name))
+                    // A `&mut` binding of the whole place is the place.
+                    let whole = PatternBinding {
+                        name: name.clone(),
+                        span: declaration,
+                        ty: binding_ty.clone(),
+                        mutable: false,
+                    };
+                    let mut proof = NominalPattern::Binding {
+                        name: name.clone(),
+                        expected: NominalPayloadType::Any,
+                    };
+                    match self.pattern_place(&place, &mut proof, &[whole])? {
+                        Some(whole) => {
+                            self.bind_whole(&whole, name, declaration, &scrutinee);
+                            matched_place.get_or_insert(whole);
+                            Some(None)
+                        }
+                        None => Some(Some(name)),
+                    }
                 }
                 _ => None,
             };
@@ -24502,12 +24269,8 @@ impl<'a> Parser<'a> {
                     });
                 }
 
-                write_back = self.pattern_write_back(
-                    &place,
-                    &resolved.proof,
-                    &resolved.bindings,
-                    &scrutinee,
-                )?;
+                let arm_place =
+                    self.pattern_place(&place, &mut resolved.proof, &resolved.bindings)?;
                 // A pattern that binds a part by value, whose type is not
                 // `Copy`, moves the subject in this arm, as in Rust.
                 if resolved
@@ -24518,23 +24281,20 @@ impl<'a> Parser<'a> {
                     self.move_local(&mut place.clone())?;
                 }
                 for binding in &resolved.bindings {
-                    let written = write_back.as_ref().is_some_and(|write_back| {
-                        write_back
-                            .bindings
-                            .iter()
-                            .any(|(name, at)| *name == binding.name && *at == binding.span)
-                    });
                     self.bindings.insert(
                         binding.name.clone(),
                         Binding {
                             ty: binding.ty.clone(),
-                            mutable: binding.mutable || written,
+                            mutable: binding.mutable,
                             available: true,
                             moved_fields: BTreeMap::new(),
                             declaration: binding.span,
                             kind: BindingKind::Local,
                         },
                     );
+                }
+                if let Some(arm_place) = &arm_place {
+                    self.bind_parts(arm_place);
                 }
                 let bound = resolved
                     .bindings
@@ -24605,51 +24365,25 @@ impl<'a> Parser<'a> {
                     );
                 }
 
-                (
-                    self.push_root_pattern(resolved.proof, &resolved.bindings),
-                    guard,
-                    false,
-                    None,
-                )
+                let label =
+                    self.push_root_pattern(resolved.proof, &resolved.bindings, arm_place.as_ref());
+                if matched_place.is_none() {
+                    matched_place = arm_place;
+                }
+                (label, guard, false, None)
             };
 
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
-            let written = write_back.is_some();
-            self.write_backs.extend(write_back);
-            let touched = self.begin_write_backs();
             let action = self.parse_match_action();
             arm_ends.push(self.flow().arm_end());
-            // An arm that is an expression writes back after it.
-            let hook = match self.write_backs.last() {
-                Some(write_back) if written && write_back.touched && !block_arm => {
-                    Some(write_back.hook.clone())
-                }
-                _ => None,
-            };
-            for (write_back, outer) in self.write_backs.iter_mut().zip(touched) {
-                write_back.touched |= outer;
-            }
-            if written {
-                self.write_backs.pop();
-            }
             let mut action = action?;
             let arm_drops = self.close_drops()?;
             if !clears.is_empty() || !arm_drops.is_empty() {
                 let mut block = origin::Fragment::plain(format!("{{ {clears}"));
                 block.push(self.then_drops(action.value.rendered_source(), &arm_drops));
                 block.push_text(" }");
-                action.value.source = block;
-                action.value.prelude = origin::Fragment::default();
-            }
-            if let Some(hook) = hook {
-                let value = self.temporary("arm");
-                let mut block = origin::Fragment::plain(format!("{{ let {value} = "));
-                block.push(action.value.rendered_source());
-                block.push_text("; ");
-                block.push(hook);
-                block.push_text(format!(" {value} }}"));
                 action.value.source = block;
                 action.value.prelude = origin::Fragment::default();
             }
@@ -24727,12 +24461,27 @@ impl<'a> Parser<'a> {
         } else {
             format!("let {} = ", self.temporary("matched"))
         };
+        let (subject, operand) = match &matched_place {
+            Some(place) => {
+                // A binding of `Some(&mut place)` itself would be a copy.
+                if place.optional() && arms.iter().any(|(.., bound)| bound.is_some()) {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a binding of a whole `Option<&mut T>` beside `&mut` \
+                                    bindings of its value: not supported in Rawr yet"
+                            .into(),
+                        source: span(match_span.start(), end),
+                    });
+                }
+                (place.locate.clone(), place.operand(&scrutinee))
+            }
+            None => (subject, scrutinee.clone()),
+        };
         let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
         source.push(subject);
-        source.push_text(format!(";\n{match_copies}{matched}switch {scrutinee} {{\n"));
+        source.push_text(format!(";\n{match_copies}{matched}switch {operand} {{\n"));
         let mut closers = Vec::new();
         for (label, guard, action, bound) in arms {
-            let bind = bound.map(|name| format!("{{ let {name} = {scrutinee}; "));
+            let bind = bound.map(|name| format!("{{ let {name} = {operand}; "));
             if label == "_"
                 && let Some(guard) = guard
             {
@@ -24742,7 +24491,7 @@ impl<'a> Parser<'a> {
                 source.push(guard);
                 source.push_text(" { ");
                 source.push(action.value.rendered_source());
-                source.push_text(format!(" }} else {{ switch {scrutinee} {{\n"));
+                source.push_text(format!(" }} else {{ switch {operand} {{\n"));
                 closers.push(if bind.is_some() { "} } }\n" } else { "} }\n" });
                 continue;
             }
@@ -24787,9 +24536,9 @@ impl<'a> Parser<'a> {
     }
 
     /// `let pattern = subject` heading an `if let` or `while let`: the
-    /// switch subject and arm label, with the pattern's bindings in scope.
-    /// A pattern matched on a `&mut` place writes its `&mut` bindings back
-    /// through `scrutinee`, the value matched (`WriteBack`).
+    /// value `scrutinee` takes, the arm label, its bindings, and what the
+    /// switch is on, with the pattern's bindings in scope. A pattern matched
+    /// on a `&mut` place matches it where it is (`PlacePattern`).
     fn parse_let_condition(
         &mut self,
         scrutinee: &str,
@@ -24798,7 +24547,7 @@ impl<'a> Parser<'a> {
             origin::Fragment,
             origin::Fragment,
             origin::Fragment,
-            Option<WriteBack>,
+            String,
             drops::Condition,
         ),
         Error,
@@ -24814,8 +24563,7 @@ impl<'a> Parser<'a> {
         let mut resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
         let trace = std::mem::take(&mut resolved.trace);
         self.pattern_facts(trace, &matched, subject.span, &resolved.bindings);
-        let write_back =
-            self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
+        let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // The condition's scope: the value made for it, then its bindings,
         // which the caller closes after the consequent or body.
         self.open_drops();
@@ -24828,26 +24576,29 @@ impl<'a> Parser<'a> {
             }
             _ => String::new(),
         };
-        let subject = self.pattern_subject(subject, &subject_ty)?;
+        let (subject, operand) = match &place {
+            Some(place) => (place.locate.clone(), place.operand(scrutinee)),
+            None => (
+                self.pattern_subject(subject, &subject_ty)?,
+                scrutinee.to_string(),
+            ),
+        };
         let host = self.take_host_checks()?;
         for binding in &resolved.bindings {
-            let written = write_back.as_ref().is_some_and(|write_back| {
-                write_back
-                    .bindings
-                    .iter()
-                    .any(|(name, at)| *name == binding.name && *at == binding.span)
-            });
             self.bindings.insert(
                 binding.name.clone(),
                 Binding {
                     ty: binding.ty.clone(),
-                    mutable: binding.mutable || written,
+                    mutable: binding.mutable,
                     available: true,
                     moved_fields: BTreeMap::new(),
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
             );
+        }
+        if let Some(place) = &place {
+            self.bind_parts(place);
         }
         let bound = resolved
             .bindings
@@ -24865,8 +24616,11 @@ impl<'a> Parser<'a> {
         let (deferred, after) = self.take_deferred_clears();
         let copies = copies + deferred.as_str();
         self.bind_host_pattern(&host);
-        let mut arm =
-            origin::Fragment::plain(self.push_root_pattern(resolved.proof, &resolved.bindings));
+        let mut arm = origin::Fragment::plain(self.push_root_pattern(
+            resolved.proof,
+            &resolved.bindings,
+            place.as_ref(),
+        ));
         if let Some(condition) = host.condition() {
             arm.push_text(" if ");
             arm.push(condition);
@@ -24877,7 +24631,7 @@ impl<'a> Parser<'a> {
             subject,
             arm,
             binds,
-            write_back,
+            operand,
             drops::Condition {
                 otherwise,
                 copies,
@@ -24929,7 +24683,6 @@ impl<'a> Parser<'a> {
             // breaks when a link fails.
             Token::While if self.let_chain_ahead() => {
                 let original = self.bindings.clone();
-                let write_backs = self.write_backs.len();
                 self.enter_while(label.clone());
                 let chain = self.parse_chain();
                 self.leave_while_condition();
@@ -24948,7 +24701,6 @@ impl<'a> Parser<'a> {
                         Some(&original),
                     )
                 });
-                self.write_backs.truncate(write_backs);
                 let inner = std::mem::replace(&mut self.bindings, original);
                 self.keep_moves_from(&inner);
                 return looped;
@@ -24966,7 +24718,7 @@ impl<'a> Parser<'a> {
                 let parsed = self.parse_let_condition(&scrutinee);
                 self.leave_while_condition();
                 let frames = self.close_frames();
-                let (subject, arm, binds, write_back, condition) = parsed?;
+                let (subject, arm, binds, operand, condition) = parsed?;
                 if frames.iter().any(|frame| !frame.after.is_empty()) {
                     return Err(self.unsupported(
                         "a `while let` whose subject borrows a `&mut` buffer its call fills: \
@@ -24993,12 +24745,10 @@ impl<'a> Parser<'a> {
                 }
                 head.push_text(format!("let {scrutinee} = "));
                 head.push(subject);
-                head.push_text(format!(";\n{}switch {scrutinee} {{\n", condition.copies));
+                head.push_text(format!(";\n{}switch {operand} {{\n", condition.copies));
                 head.push(arm);
                 head.push_text(" => { ");
                 head.push(binds);
-                let written = write_back.is_some();
-                self.write_backs.extend(write_back);
                 // Without a match, the value made for the condition drops.
                 let tail = if condition.otherwise.is_empty() {
                     " },\n_ => break\n}\n}".to_string()
@@ -25013,9 +24763,6 @@ impl<'a> Parser<'a> {
                     Some((head, origin::Fragment::plain(tail))),
                     Some(&original),
                 );
-                if written {
-                    self.write_backs.pop();
-                }
                 let inner = std::mem::replace(&mut self.bindings, original);
                 self.keep_moves_from(&inner);
                 return looped;
@@ -27190,8 +26937,8 @@ impl<'a> Parser<'a> {
 
     /// The links of a let chain up to its block: each `let` a switch on
     /// its subject whose bindings the later links and the block see, each
-    /// other condition an `if`. The text that opens them, the text that
-    /// closes them, and the patterns' write-backs, which stay in scope.
+    /// other condition an `if`. The text that opens them and the text that
+    /// closes them.
     fn parse_chain(&mut self) -> Result<(origin::Fragment, String), Error> {
         let mut open = origin::Fragment::default();
         let mut close = String::new();
@@ -27202,7 +26949,7 @@ impl<'a> Parser<'a> {
                 let scrutinee = self.temporary("match");
                 let parsed = self.parse_let_condition(&scrutinee);
                 self.chain_link = outer;
-                let (subject, arm, binds, write_back, condition) = parsed?;
+                let (subject, arm, binds, operand, condition) = parsed?;
                 // A link's drops would need the chain's scopes.
                 let link_drops = self.close_drops()?;
                 if !link_drops.is_empty()
@@ -27218,10 +26965,9 @@ impl<'a> Parser<'a> {
                         source: point_span(self.position()),
                     });
                 }
-                self.write_backs.extend(write_back);
                 open.push_text(format!("{{ let {scrutinee} = "));
                 open.push(subject);
-                open.push_text(format!("; switch {scrutinee} {{ "));
+                open.push_text(format!("; switch {operand} {{ "));
                 open.push(arm);
                 open.push_text(" => { ");
                 open.push(binds);
@@ -27247,7 +26993,6 @@ impl<'a> Parser<'a> {
     /// that it ran; otherwise the alternative runs.
     fn parse_if_chain(&mut self, if_span: Span) -> Result<ParsedExpr, Error> {
         let original_bindings = self.bindings.clone();
-        let write_backs = self.write_backs.len();
         let chain = self.parse_chain();
         let split = self.flow().split();
         self.flow().arm(split);
@@ -27259,7 +27004,6 @@ impl<'a> Parser<'a> {
             }
         });
         let consequent = chain.and_then(|chain| Ok((chain, self.parse_match_action()?)));
-        self.write_backs.truncate(write_backs);
         let ((open, close), consequent) = consequent?;
         let consequent_bindings = std::mem::replace(&mut self.bindings, original_bindings.clone());
         let consequent_end = self.flow().arm_end();
@@ -27332,19 +27076,18 @@ impl<'a> Parser<'a> {
         } else {
             String::new()
         };
-        let mut written = false;
+        let mut operand = scrutinee.clone();
         let mut otherwise = None;
         let mut copies = String::new();
         let mut after = String::new();
         let (pattern, condition, original_bindings) = if matches!(self.peek(), Token::Let) {
             let original_bindings = self.bindings.clone();
-            let (subject, arm, binds, write_back, condition) =
+            let (subject, arm, binds, switched, condition) =
                 self.parse_let_condition(&scrutinee)?;
             otherwise = Some(condition.otherwise);
             copies = condition.copies;
             after = condition.after;
-            written = write_back.is_some();
-            self.write_backs.extend(write_back);
+            operand = switched;
             let condition = self.literal("true", Ty::Bool, if_span);
             (Some((subject, arm, binds)), condition, original_bindings)
         } else {
@@ -27370,12 +27113,7 @@ impl<'a> Parser<'a> {
         }
         let split = self.flow().split();
         self.flow().arm(split);
-        let consequent = self.parse_match_action();
-        // The pattern's bindings go out of scope with the consequent.
-        if written {
-            self.write_backs.pop();
-        }
-        let mut consequent = consequent?;
+        let mut consequent = self.parse_match_action()?;
         // The condition's scope ends with the consequent; without a match,
         // the value made for it drops before the alternative, as in Rust
         // 2024.
@@ -27439,7 +27177,7 @@ impl<'a> Parser<'a> {
             };
             let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
             source.push(subject);
-            source.push_text(format!(";\n{copies}{matched}switch {scrutinee} {{\n"));
+            source.push_text(format!(";\n{copies}{matched}switch {operand} {{\n"));
             source.push(arm);
             source.push_text(" => { ");
             source.push(binds);
@@ -27485,8 +27223,6 @@ impl<'a> Parser<'a> {
     fn parse_match_action(&mut self) -> Result<Branch, Error> {
         if matches!(self.peek(), Token::LeftBrace) {
             let start = self.next().1;
-            // A `let` in the block writes back until the block ends.
-            let write_backs = self.write_backs.len();
             let outer_output = std::mem::take(&mut self.output);
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
@@ -27523,7 +27259,6 @@ impl<'a> Parser<'a> {
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
             self.flow().storage_dead(&declared, point_span(end));
-            self.write_backs.truncate(write_backs);
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
             let ty = std::mem::replace(&mut self.last_type, outer_last_type);
             let inner_last_expression =
@@ -35643,15 +35378,6 @@ impl<'a> Parser<'a> {
         else {
             return;
         };
-        for write_back in &mut self.write_backs {
-            if write_back
-                .bindings
-                .iter()
-                .any(|(bound, at)| bound == name && *at == declaration)
-            {
-                write_back.touched = true;
-            }
-        }
         for scope in &mut self.closures {
             if scope.outer.get(name) == Some(&declaration) {
                 scope.captures.insert(name.clone());
@@ -37949,7 +37675,7 @@ impl<'a> Parser<'a> {
             "back" => "last".into(),
             _ => member,
         };
-        // `v.as_mut_slice()` is the place `v`, which a pattern writes back.
+        // `v.as_mut_slice()` is the place `v`, whose parts a pattern reaches.
         let whole = (member.as_str() == "as_mut_slice")
             .then(|| value.lvalue.clone())
             .flatten();
@@ -46428,20 +46154,6 @@ fn contains_inference(ty: &Ty) -> bool {
     }
 }
 
-/// The `&mut` bindings of a pattern matched on a place (`if let Some(v) =
-/// &mut x`, `match &mut self.state`). Each statement that uses one is
-/// followed by `hook`, which writes the bindings back into the place.
-struct WriteBack {
-    /// Each binding's name and declaration.
-    bindings: Vec<(ImmutableString, Span)>,
-    /// The local the place is in, with its declaration: writing the place
-    /// uses it, so a pattern binding it writes back after this one.
-    root: Option<(ImmutableString, Span)>,
-    hook: origin::Fragment,
-    /// The statement being read uses a binding.
-    touched: bool,
-}
-
 /// A loop being parsed. A `break` or `continue` to an enclosing loop sets
 /// that loop's jump flag and breaks out of every loop in between.
 struct LoopFrame {
@@ -47418,105 +47130,8 @@ fn facade_output(item: &crate::host::item::Definition, output: &Ty) -> Ty {
 }
 
 pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
-    value_matches(lhs, rhs, false)
-}
-
-/// Whether `lhs` is still `rhs`, the value it was copied from: `==` that
-/// is reflexive. A float equals itself bit for bit, NaN too, and a host
-/// value with no `PartialEq` is the same while its type is. A `&mut`
-/// pattern's write-back asks this to tell an untouched place from one the
-/// body assigned.
-pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
-    value_matches(lhs, rhs, true)
-}
-
-/// Whether the parts of `place` that `pattern` binds by `&mut` (`names`)
-/// are still what they were in `matched`, the place as last written back.
-/// Only those bindings change those parts, so a part that differs was
-/// given a new value with its place, and the bindings no longer name it.
-/// The other parts may differ: the body changes them beside the bindings,
-/// as Rust lets it (`r.other = 3` while `field` borrows `r.field`). The
-/// parts are compared where they are, not copied.
-fn same_bound_parts(
-    place: &Dynamic,
-    matched: &Dynamic,
-    pattern: &NominalPattern,
-    names: &[ImmutableString],
-) -> bool {
-    let each = |places: &[Dynamic], matched: &[Dynamic], patterns: &[NominalPattern]| {
-        places.len() == matched.len()
-            && places
-                .iter()
-                .zip(matched)
-                .zip(patterns)
-                .all(|((place, matched), pattern)| same_bound_parts(place, matched, pattern, names))
-    };
-    match pattern {
-        NominalPattern::Binding { name, .. } => !names.contains(name) || same_value(place, matched),
-        NominalPattern::Discard { .. }
-        | NominalPattern::Literal(_)
-        | NominalPattern::Range { .. }
-        | NominalPattern::Option(None) => true,
-        NominalPattern::At { name, pattern } => {
-            if names.contains(name) {
-                same_value(place, matched)
-            } else {
-                same_bound_parts(place, matched, pattern, names)
-            }
-        }
-        NominalPattern::Option(Some(child)) => {
-            match (
-                place.read_lock::<crate::option::Value>(),
-                matched.read_lock::<crate::option::Value>(),
-            ) {
-                (Some(place), Some(matched)) => match (&*place, &*matched) {
-                    (Some(place), Some(matched)) => same_bound_parts(place, matched, child, names),
-                    _ => false,
-                },
-                _ => false,
-            }
-        }
-        NominalPattern::Result(variant) => {
-            match (
-                place.read_lock::<crate::result::Value>(),
-                matched.read_lock::<crate::result::Value>(),
-            ) {
-                (Some(place), Some(matched)) => match (&*place, &*matched, variant) {
-                    (Ok(place), Ok(matched), Ok(child))
-                    | (Err(place), Err(matched), Err(child)) => {
-                        same_bound_parts(place, matched, child, names)
-                    }
-                    _ => false,
-                },
-                _ => false,
-            }
-        }
-        NominalPattern::Enum(child) => match (&place.0, &matched.0) {
-            (Union::Enum(place, ..), Union::Enum(matched, ..)) => {
-                place.variant() == matched.variant()
-                    && each(place.payload(), matched.payload(), &child.payload)
-            }
-            _ => same_value(place, matched),
-        },
-        NominalPattern::Struct(members) => match (&place.0, &matched.0) {
-            (Union::Struct(place, ..), Union::Struct(matched, ..)) => {
-                each(place.fields(), matched.fields(), members)
-            }
-            _ => same_value(place, matched),
-        },
-        NominalPattern::Tuple(members) => match (place.as_array_ref(), matched.as_array_ref()) {
-            (Ok(place), Ok(matched)) => each(&place, &matched, members),
-            _ => same_value(place, matched),
-        },
-        // A slice's parts move with its length, and an alternative is
-        // picked by the value: the whole place is compared.
-        NominalPattern::Slice { .. } | NominalPattern::Or(_) => same_value(place, matched),
-    }
-}
-
-fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
     if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
-        return value_matches(&lhs, &rhs, same);
+        return equal_value(&lhs, &rhs);
     }
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::time::Duration>(),
@@ -47534,17 +47149,17 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
     ) {
-        return value_matches(&lhs.0, &rhs.0, same);
+        return equal_value(&lhs.0, &rhs.0);
     }
     if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
         return match (lhs, rhs) {
-            (Some(lhs), Some(rhs)) => value_matches(&lhs, &rhs, same),
+            (Some(lhs), Some(rhs)) => equal_value(&lhs, &rhs),
             (lhs, rhs) => lhs.is_none() && rhs.is_none(),
         };
     }
     if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
         return match (lhs, rhs) {
-            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => value_matches(&lhs, &rhs, same),
+            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => equal_value(&lhs, &rhs),
             _ => false,
         };
     }
@@ -47554,7 +47169,6 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
         (Union::Char(lhs, ..), Union::Char(rhs, ..)) => lhs == rhs,
         (Union::Int(lhs, ..), Union::Int(rhs, ..)) => lhs == rhs,
         (Union::Str(lhs, ..), Union::Str(rhs, ..)) => lhs == rhs,
-        (Union::Float(lhs, ..), Union::Float(rhs, ..)) if same => lhs.to_bits() == rhs.to_bits(),
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) => lhs == rhs,
         (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) => {
             lhs.identity() == rhs.identity()
@@ -47564,7 +47178,7 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .fields()
                     .iter()
                     .zip(rhs.fields())
-                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
         }
         (Union::Enum(lhs, ..), Union::Enum(rhs, ..)) => {
             lhs.identity() == rhs.identity()
@@ -47575,7 +47189,7 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .payload()
                     .iter()
                     .zip(rhs.payload())
-                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
         }
         // Vectors, arrays and tuples compare element by element.
         (Union::Array(lhs, ..), Union::Array(rhs, ..)) => {
@@ -47583,7 +47197,7 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                 && lhs
                     .iter()
                     .zip(rhs.iter())
-                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
         }
         // An `i128` or a `u128` past `i64`, boxed.
         (Union::Variant(..), Union::Variant(..) | Union::Int(..))
@@ -47593,13 +47207,7 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
             ordering == std::cmp::Ordering::Equal
         }
         (Union::Variant(..), Union::Variant(..)) => {
-            match crate::host::value::host_equal(lhs, rhs) {
-                Some(equal) => equal,
-                None => same && lhs.type_id() == rhs.type_id(),
-            }
-        }
-        (Union::Shared(..), _) | (_, Union::Shared(..)) if same => {
-            value_matches(&lhs.flatten_clone(), &rhs.flatten_clone(), same)
+            crate::host::value::host_equal(lhs, rhs).unwrap_or(false)
         }
         _ => false,
     }

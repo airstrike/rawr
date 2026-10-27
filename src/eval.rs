@@ -25,6 +25,5 @@ pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;
 pub use global_state::SharedGlobalConstants;
-pub(crate) use stmt::restore_nominal_root;
 pub use target::calc_offset_len;
 pub use target::{calc_index, Target};

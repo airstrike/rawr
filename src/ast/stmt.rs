@@ -367,6 +367,12 @@ pub(crate) enum NominalPattern {
         name: ImmutableString,
         expected: NominalPayloadType,
     },
+    /// A `&mut` binding of a part of the place matched: the binding holds
+    /// the part's path, which reaches the part itself (`KEYWORD_THROUGH`).
+    Part {
+        name: ImmutableString,
+        expected: NominalPayloadType,
+    },
     /// Validate and discard one payload value.
     Discard { expected: NominalPayloadType },
     /// Recursively match one exact nominal enum payload.
@@ -397,9 +403,12 @@ pub(crate) enum NominalPattern {
     /// `p | q`: the first alternative that matches binds.
     Or(Box<[NominalPattern]>),
     /// `name @ pattern`: binds the whole value when `pattern` matches.
+    /// With `part`, `name` is a `&mut` binding of a part of the place
+    /// matched, which holds the part's path as [`Self::Part`] does.
     At {
         name: ImmutableString,
         pattern: Box<NominalPattern>,
+        part: bool,
     },
 }
 
