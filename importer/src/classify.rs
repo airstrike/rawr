@@ -41,6 +41,9 @@ pub(crate) struct OutcomeRecord {
     origin: Option<representability::origin::Set>,
     evidence: OutcomeEvidence,
     implementations: Box<[ImplementationRecord]>,
+    /// The variant of its enum this path re-exports, as `pub use
+    /// Alignment::Center;` does.
+    variant: Option<Box<str>>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -201,6 +204,8 @@ struct StoredOutcome {
     definition_plan: Option<crate::surface::identity::Definition>,
     representability: Option<representability::Representability>,
     implementations: Box<[StoredImplementation]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<Box<str>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1649,6 +1654,13 @@ impl<'contract> Outcome<'contract> {
         self.representability
     }
 
+    /// The variant of its enum this path re-exports, as `pub use
+    /// Alignment::Center;` does: the outcome is otherwise its enum's.
+    #[must_use]
+    pub fn variant(&self) -> Option<&'contract str> {
+        self.record.variant.as_deref()
+    }
+
     /// Return the export/declaration positions for a definition-backed outcome.
     #[must_use]
     pub const fn origin(&self) -> Option<&'contract representability::origin::Set> {
@@ -2006,6 +2018,9 @@ impl DriverAudit {
     fn outcome(&mut self, outcome: &OutcomeRecord) -> Option<()> {
         self.add(0, outcome.export.retained_bytes()?)?;
         self.add(0, outcome.name.len())?;
+        if let Some(variant) = &outcome.variant {
+            self.add(0, variant.len())?;
+        }
         if let Some(origin) = &outcome.origin {
             self.add(0, outcome.identity.selector().retained_bytes()?)?;
             self.span(origin.source())?;
@@ -2177,7 +2192,7 @@ impl Serialize for OutcomeRecord {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Outcome", 7)?;
+        let mut state = serializer.serialize_struct("Outcome", 8)?;
         state.serialize_field("export", &self.export)?;
         state.serialize_field("identity", &self.identity)?;
         state.serialize_field("name", &self.name)?;
@@ -2193,6 +2208,10 @@ impl Serialize for OutcomeRecord {
         };
         state.serialize_field("representability", &inline)?;
         state.serialize_field("implementations", &self.implementations)?;
+        match &self.variant {
+            Some(variant) => state.serialize_field("variant", variant)?,
+            None => state.skip_field("variant")?,
+        }
         state.end()
     }
 }
@@ -2532,6 +2551,7 @@ impl StoredOutcome {
             origin: self.origin,
             evidence,
             implementations: implementations.into_boxed_slice(),
+            variant: self.variant,
         })
     }
 }
@@ -3180,6 +3200,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ),
                     )),
                     implementations: Box::default(),
+                    variant: None,
                 })
             }
             ledger::Path::Rejected { reason, span, .. } => {
@@ -3199,6 +3220,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ),
                     )),
                     implementations: Box::default(),
+                    variant: None,
                 })
             }
             ledger::Path::Imported(export) => {
@@ -3245,7 +3267,20 @@ impl<P: api::Phase> Context<'_, P> {
                     definition.span().clone(),
                 );
                 let evidence = plan_evidence(definitions, definition)?;
-                let implementations = self.implementations(export, definitions)?;
+                // A re-exported variant is its enum's variant, whose members
+                // are the enum's.
+                let variant = match export.variant() {
+                    Some(variant) => {
+                        self.retain_str(variant)?;
+                        Some(Box::from(variant))
+                    }
+                    None => None,
+                };
+                let implementations = if variant.is_some() {
+                    Box::default()
+                } else {
+                    self.implementations(export, definitions)?
+                };
                 Ok(OutcomeRecord {
                     export: export.key().clone(),
                     identity,
@@ -3253,6 +3288,7 @@ impl<P: api::Phase> Context<'_, P> {
                     origin: Some(origin),
                     evidence,
                     implementations,
+                    variant,
                 })
             }
         }
@@ -3339,6 +3375,7 @@ impl<P: api::Phase> Context<'_, P> {
                     origin: Some(origin),
                     evidence,
                     implementations: Box::default(),
+                    variant: None,
                 });
             }
             self.retain_span(implementation.span())?;

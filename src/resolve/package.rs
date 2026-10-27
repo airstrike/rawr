@@ -1131,9 +1131,18 @@ impl<'a> Resolver<'a> {
                 // `use Shape::Circle;`: a variant of a crate enum.
                 let variant = path.split_last().and_then(|(last, prefix)| {
                     let Some((definition, identity)) = self.script_enum(context, prefix) else {
-                        return (super::std_ordering(&prefix.join("::"))
-                            && ORDERING_VARIANTS.contains(&last.as_str()))
-                        .then_some(item::Import::OrderingVariant);
+                        if super::std_ordering(&prefix.join("::"))
+                            && ORDERING_VARIANTS.contains(&last.as_str())
+                        {
+                            return Some(item::Import::OrderingVariant);
+                        }
+                        // A variant of a crate's enum, as `use
+                        // iced::Alignment::Center;` or the re-exported `use
+                        // iced::Center;`.
+                        return self
+                            .host
+                            .enum_variant(&super::std_reexport(&path.join("::"), self.host))
+                            .map(|owner| item::Import::HostVariant { owner });
                     };
                     self.enum_variants[&definition].contains(last).then_some(
                         item::Import::Variant {
@@ -1242,6 +1251,7 @@ impl<'a> Resolver<'a> {
                         | item::Import::Endpoint { .. }
                         | item::Import::Variant { .. }
                         | item::Import::OrderingVariant
+                        | item::Import::HostVariant { .. }
                 );
                 let previous = if value {
                     occupied.insert(name.text.clone(), (context.source, name.span))

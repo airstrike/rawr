@@ -1330,6 +1330,11 @@ fn resolve_import_binding(
         },
         // A facade's alias of a builtin, as iced's `markdown::Uri`.
         Some(host::Entry::Builtin(_)) => item::Import::Alias,
+        // A variant of a crate's enum, as `use iced::Alignment::Center;` or
+        // the re-exported `use iced::Center;`.
+        None if let Some(owner) = host.enum_variant(&qualified) => {
+            item::Import::HostVariant { owner }
+        }
         Some(host::Entry::Endpoint(contract)) => {
             let (_, owner) =
                 host.operation_endpoint(&qualified)

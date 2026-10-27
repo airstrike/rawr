@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, DefKind, Namespace as RustNamespace, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace as RustNamespace, Res};
 use rustc_hir::definitions::DefPathData;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::metadata::Reexport as RustReexport;
@@ -57,7 +57,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 20 adds the selected crate's name index for demanded units. Schema 21
 // keeps a Future impl's `Output`; schema 22 keeps an Iterator impl's `Item` and
 // `next`; schema 23 keeps an AsRef impl's `as_ref`.
-const PROTOCOL_SCHEMA: u32 = 23;
+const PROTOCOL_SCHEMA: u32 = 24;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -588,6 +588,10 @@ struct Export {
     aliases: Vec<Alias>,
     reexports: Vec<Reexport>,
     span: Span,
+    /// A re-exported enum variant, as `pub use Alignment::Center;`: the
+    /// variant's name, and `target` is its enum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -2014,8 +2018,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if !child.vis.is_public() {
                 continue;
             }
+            // A re-exported variant's constructor, in the value namespace,
+            // is the variant the type namespace re-exports.
+            if matches!(child.res, Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)) {
+                continue;
+            }
+            // A re-exported variant, as `pub use Alignment::Center;`, names
+            // its enum's variant: the export is the enum's, with the
+            // variant's name.
+            let (res, variant) = match child.res {
+                Res::Def(DefKind::Variant, variant) => {
+                    let owner = self.tcx.parent(variant);
+                    (
+                        Res::Def(DefKind::Enum, owner),
+                        Some(self.budget.owned(self.tcx.item_name(variant).as_str())?),
+                    )
+                }
+                res => (res, None),
+            };
             if names_only {
-                match child.res {
+                match res {
                     Res::Def(DefKind::Mod, _) => {}
                     Res::Def(kind, def_id)
                         if kind.ns().is_some_and(|ns| {
@@ -2040,7 +2062,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             } else {
                 Binding::Nameable
             };
-            let (namespace, target, aliases, nested, named) = match child.res {
+            let (namespace, target, aliases, nested, named) = match res {
                 Res::Def(kind, def_id) => {
                     let Some(namespace) = kind.ns().map(namespace) else {
                         return Err(format!(
@@ -2189,6 +2211,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     aliases: aliases.clone(),
                     reexports: reexports.clone(),
                     span: span.clone(),
+                    variant: variant.clone(),
                 });
             }
             let depth = depth.saturating_add(1);
@@ -2245,6 +2268,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             let Res::Def(kind, def_id) = child.res else {
                 continue;
+            };
+            // A re-exported variant, as `pub use Alignment::Center;`, selects
+            // its enum.
+            let (kind, def_id) = match kind {
+                DefKind::Variant => (DefKind::Enum, tcx.parent(def_id)),
+                DefKind::Ctor(CtorOf::Variant, _) => {
+                    (DefKind::Enum, tcx.parent(tcx.parent(def_id)))
+                }
+                _ => (kind, def_id),
             };
             let Some(ns) = kind.ns() else {
                 continue;

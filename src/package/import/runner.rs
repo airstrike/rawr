@@ -1052,6 +1052,13 @@ fn build(
             .builtin_alias(path, builtin)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
+    // A re-exported variant, as `pub use Alignment::Center;`, names its
+    // enum's variant.
+    for (path, variant) in facade.variants() {
+        builder
+            .variant_alias(path, variant)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
     // A trait the program names is a module (`use rand::Rng;`), unless the
     // profile already gives its path a meaning (iced's `Widget`).
     for path in facade.traits() {

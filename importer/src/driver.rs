@@ -37,7 +37,7 @@ mod compiler;
 mod attempt_protocol;
 
 const PLAN_SCHEMA: u32 = 8;
-const PROTOCOL_SCHEMA: u32 = 23;
+const PROTOCOL_SCHEMA: u32 = 24;
 const COMPILER_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ITEMS: usize = 2_500_000;

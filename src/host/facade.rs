@@ -342,6 +342,32 @@ impl Builder {
         Ok(self)
     }
 
+    /// Re-export this facade's enum variant `variant` at `path`, as Rust's
+    /// `pub use Alignment::Center;`: `variant` is the variant's path through
+    /// its enum (`alignment::Alignment::Center`). Both are relative.
+    #[cfg(feature = "rust-import")]
+    pub fn variant_alias(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        variant: &str,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(variant)?);
+        self.ensure_vacant(&path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path, target));
+        Ok(self)
+    }
+
     /// Name the builtin type `builtin` at `path`, as Rust's `pub type Uri =
     /// String;` in iced's `markdown` names `String`. `path` is relative.
     #[cfg(feature = "rust-import")]
@@ -1254,11 +1280,15 @@ impl Builder {
         // A re-export names one of this facade's types at another path, or a
         // builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
+            let declared = |path: &host::path::Path| {
+                self.types
+                    .binary_search_by(|definition| definition.path_ref().cmp(path))
+                    .is_ok()
+            };
+            // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
-                && self
-                    .types
-                    .binary_search_by(|definition| definition.path_ref().cmp(target))
-                    .is_err()
+                && !declared(target)
+                && !target.parent().is_some_and(|owner| declared(&owner))
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),
@@ -1368,11 +1398,15 @@ impl Builder {
         // A carried re-export names one of this facade's types at another
         // path, or a builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
+            let declared = |path: &host::path::Path| {
+                self.types
+                    .binary_search_by(|definition| definition.path_ref().cmp(path))
+                    .is_ok()
+            };
+            // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
-                && self
-                    .types
-                    .binary_search_by(|definition| definition.path_ref().cmp(target))
-                    .is_err()
+                && !declared(target)
+                && !target.parent().is_some_and(|owner| declared(&owner))
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),

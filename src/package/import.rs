@@ -1152,6 +1152,13 @@ struct Facade<'contract> {
     entries: Vec<Entry<'contract>>,
     /// The traits the program names: modules, as in the facade plan.
     traits: Vec<Box<str>>,
+    /// The re-exported enum variants, as `pub use Alignment::Center;`: each
+    /// path, its enum and the variant's name.
+    variants: Vec<(
+        Box<str>,
+        rawr_import::surface::identity::Definition,
+        &'contract str,
+    )>,
 }
 
 struct Entry<'contract> {
@@ -1323,6 +1330,7 @@ fn install(
                             root,
                             entries: Vec::new(),
                             traits: Vec::new(),
+                            variants: Vec::new(),
                         },
                     );
                     index
@@ -1357,12 +1365,25 @@ fn install(
                         root,
                         entries: Vec::new(),
                         traits: Vec::new(),
+                        variants: Vec::new(),
                     },
                 );
                 index
             }
         };
         let facade = &mut facades[facade_index];
+        // A re-exported variant, as `pub use Alignment::Center;`, is its
+        // enum's variant.
+        if let Some(variant) = outcome.variant() {
+            facade
+                .variants
+                .try_reserve(1)
+                .map_err(|_| Error::Allocation)?;
+            facade
+                .variants
+                .push((relative.into_boxed_str(), definition, variant));
+            continue;
+        }
         facade
             .entries
             .try_reserve(1)
@@ -1682,6 +1703,20 @@ fn build(
                 builder.item(item)?;
             }
         }
+    }
+    // A re-exported variant names its enum's variant, through a path the
+    // facade declares the enum at. One of an enum it does not declare is
+    // unavailable.
+    for (path, definition, variant) in &facade.variants {
+        let Some(owner) = facade.entries.iter().find(|entry| {
+            entry.definition == *definition
+                && matches!(entry.outcome.representability(), Representability::Enum(_))
+        }) else {
+            continue;
+        };
+        let target = format!("{}::{variant}", owner.relative);
+        allocation.retain(1, target.len())?;
+        builder.variant_alias(path.as_ref(), &target)?;
     }
     builder.finish_imported(allocation).map_err(Error::from)
 }

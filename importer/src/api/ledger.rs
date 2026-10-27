@@ -20,6 +20,10 @@ pub struct Export {
     aliases: Box<[Alias]>,
     reexports: Box<[Reexport]>,
     span: model::Span,
+    /// A re-exported enum variant, as `pub use Alignment::Center;`: the
+    /// variant's name, and `target` is its enum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<Box<str>>,
 }
 
 /// One compiler-authenticated anonymous import retained only as support evidence.
@@ -254,6 +258,9 @@ impl Export {
         for reexport in &self.reexports {
             reexport.retain(retained)?;
         }
+        if let Some(variant) = &self.variant {
+            retained.string(variant)?;
+        }
         self.span.retain(retained)
     }
 
@@ -270,7 +277,22 @@ impl Export {
             aliases,
             reexports,
             span,
+            variant: None,
         }
+    }
+
+    /// This path as a re-export of `target`'s variant `variant`, as `pub
+    /// use Alignment::Center;` is.
+    pub(crate) fn with_variant(mut self, variant: Option<Box<str>>) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// The variant of `target` this path re-exports, as `pub use
+    /// Alignment::Center;` does.
+    #[must_use]
+    pub fn variant(&self) -> Option<&str> {
+        self.variant.as_deref()
     }
 
     /// This path to `target` instead: a type alias's path to the type it

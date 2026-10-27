@@ -148,6 +148,11 @@ pub struct Facade {
     /// Rust name, in path order.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     builtins: Box<[(Box<str>, Box<str>)]>,
+    /// The re-exported enum variants, as `pub use Alignment::Center;`:
+    /// each path, relative to the root, and the variant's path through one
+    /// of the facade's paths to its enum, in path order.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    variants: Box<[(Box<str>, Box<str>)]>,
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -439,6 +444,9 @@ impl Plan {
         limits: &crate::cargo::Limits,
     ) -> Result<Box<[u8]>, super::Error> {
         let mut facades = Vec::<Facade>::new();
+        // Each re-exported variant: its root, its path, its enum and its
+        // name, named through a path to the enum once every type is in.
+        let mut variants = Vec::<(Box<str>, Box<str>, [u8; 32], Box<str>)>::new();
         for outcome in outcomes {
             let named_trait = matches!(
                 outcome.representability(),
@@ -468,6 +476,7 @@ impl Plan {
                             items: Box::default(),
                             traits: Box::default(),
                             builtins: Box::default(),
+                            variants: Box::default(),
                         },
                     );
                     index
@@ -502,6 +511,22 @@ impl Plan {
                     builtins.insert(position, (copy(&relative)?, copy(builtin)?));
                 }
                 facade.builtins = builtins.into_boxed_slice();
+                continue;
+            }
+            // A re-exported variant, as `pub use Alignment::Center;`, is its
+            // enum's variant.
+            if let Some(variant) = outcome.variant() {
+                if let Some(definition) = outcome.identity().definition() {
+                    variants
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    variants.push((
+                        copy(root)?,
+                        relative,
+                        *definition.as_bytes(),
+                        copy(variant)?,
+                    ));
+                }
                 continue;
             }
             if let Some(ty) = type_definition(&relative, outcome)? {
@@ -556,6 +581,25 @@ impl Plan {
             items.retain(|item| item.signature.declared(&declared));
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
+        }
+        for (root, path, identity, variant) in variants {
+            let Ok(index) = facades.binary_search_by(|facade| facade.root.cmp(&root)) else {
+                continue;
+            };
+            let facade = &mut facades[index];
+            // A variant of an enum the facade does not declare is unavailable.
+            let Some(owner) = facade.types.iter().find(|ty| ty.identity == identity) else {
+                continue;
+            };
+            let target = copy(&format!("{}::{variant}", owner.path))?;
+            let mut named = std::mem::take(&mut facade.variants).into_vec();
+            if let Err(position) =
+                named.binary_search_by(|(candidate, _)| candidate.as_ref().cmp(path.as_ref()))
+            {
+                named.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                named.insert(position, (path, target));
+            }
+            facade.variants = named.into_boxed_slice();
         }
         let mut aliases = Vec::new();
         let mut sources = Vec::<ProjectionSourceSite>::new();
@@ -891,6 +935,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             items: Box::default(),
             traits: Box::default(),
             builtins: Box::default(),
+            variants: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -1009,6 +1054,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 items: Box::default(),
                 traits: Box::default(),
                 builtins: Box::default(),
+                variants: Box::default(),
             },
             iced,
         ]),
@@ -1148,6 +1194,15 @@ impl Facade {
         self.builtins
             .iter()
             .map(|(path, builtin)| (path.as_ref(), builtin.as_ref()))
+    }
+
+    /// Iterate the re-exported enum variants: each path, relative to the
+    /// root, and the variant's path through its enum's
+    /// (`alignment::Alignment::Center`).
+    pub fn variants(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.variants
+            .iter()
+            .map(|(path, variant)| (path.as_ref(), variant.as_ref()))
     }
 }
 

@@ -69,3 +69,11 @@ fn runs_as_cargo_does(main: &str, expected: &str) {
 fn impl_fn_parameters_of_a_generic_builder_take_script_closures() {
     runs_as_cargo_does("button", "pressed 2\nwidths 3 6\n");
 }
+
+/// A crate's `pub use Alignment::Center;` re-exports the variant, as
+/// `iced::Center` is, and `use Enum::Variant;` imports one: each name is
+/// the variant in expressions and patterns.
+#[test]
+fn a_re_exported_variant_and_a_used_variant_are_the_enums_variants() {
+    runs_as_cargo_does("alignment", "Center\ncenter end start\ntrue\ntrue\n");
+}

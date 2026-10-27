@@ -824,8 +824,18 @@ impl Registry {
                     .filter(|(_, target)| is_builtin_alias_target(target))
                     .map(|(alias, _)| alias),
             )
+            .chain(
+                self.aliases
+                    .iter()
+                    .filter(|(alias, _)| inside(alias))
+                    .filter(|(alias, _)| self.enum_variant(&alias.to_string()).is_some())
+                    .map(|(alias, _)| alias),
+            )
             .filter(|path| inside(path))
-            .filter(|path| self.entry(&path.segments().join("::")).is_some())
+            .filter(|path| {
+                let qualified = path.segments().join("::");
+                self.entry(&qualified).is_some() || self.enum_variant(&qualified).is_some()
+            })
             .map(|path| ImmutableString::from(path.name()))
             .collect::<Vec<_>>();
         names.sort_unstable();
@@ -1019,6 +1029,26 @@ impl Registry {
                 .map(|index| &self.types[index])
         };
         found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
+    /// The enum whose variant `qualified` names, as `Enum::Variant` or
+    /// through a facade's re-export of the variant: `iced::Center` is
+    /// `iced::Alignment::Center`. The enum's path, as the facade spells it.
+    pub(crate) fn enum_variant(&self, qualified: &str) -> Option<ImmutableString> {
+        let path = path::Path::parse(qualified).ok()?;
+        let path = self.canonical(&path).unwrap_or(path);
+        let owner = path.parent()?;
+        let ty = self.type_by_path(&owner)?;
+        if ty.visibility() != type_def::Visibility::Public {
+            return None;
+        }
+        let type_def::Shape::Enum(variants) = ty.shape() else {
+            return None;
+        };
+        variants
+            .iter()
+            .any(|variant| variant.name() == path.name())
+            .then(|| ty.path_ref().to_string().into())
     }
 
     /// The builtin a facade names at `path` (`Entry::Builtin`).

@@ -2624,6 +2624,10 @@ struct Tables {
     /// The enum variants each source imports by name (`use Shape::*;`), with
     /// the name of their enum in that source.
     variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
+    /// The crate enums' variants each source imports by name (`use
+    /// iced::Center;`), each as the hidden name its enum is imported under
+    /// and the variant's own name, which a renamed import keeps.
+    host_variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
     by_definition: BTreeMap<type_def::Id, Nominal>,
     by_identity: BTreeMap<type_def::Identity, Nominal>,
     qualified_functions: BTreeMap<(crate::program::source::Id, Span), crate::item::Key>,
@@ -2893,6 +2897,7 @@ impl Models {
 
         let mut imported_variants = Vec::new();
         let mut ordering_variants = Vec::new();
+        let mut host_variants = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
@@ -2923,6 +2928,14 @@ impl Models {
                     }
                     item::Import::OrderingVariant => {
                         ordering_variants.push((shell.source, binding.name.text.clone()));
+                    }
+                    item::Import::HostVariant { owner } => {
+                        host_variants.push((
+                            shell.source,
+                            binding.name.text.clone(),
+                            owner.clone(),
+                            binding.qualified.clone(),
+                        ));
                     }
                     item::Import::Module
                     | item::Import::ModuleItem { .. }
@@ -2963,6 +2976,44 @@ impl Models {
                 Box::from(["std".into(), "cmp".into(), "Ordering".into()]),
             );
         }
+        // A crate enum's variant reads as its enum's variant,
+        // `Alignment::Center`, with the enum imported under a name no source
+        // can write. A renamed import keeps the variant's own name.
+        let mut variant_owners =
+            BTreeMap::<(crate::program::source::Id, ImmutableString), ImmutableString>::new();
+        let mut host_variants_by_name = BTreeMap::new();
+        for (source, name, owner, qualified) in host_variants {
+            let Some(crate::host::Entry::Type(definition)) = host.entry(&owner) else {
+                continue;
+            };
+            let canonical = host.canonical_str(&qualified);
+            let Some(variant) = canonical.rsplit("::").next() else {
+                continue;
+            };
+            let count = variant_owners.len();
+            let hidden = variant_owners
+                .entry((source, owner.clone()))
+                .or_insert_with(|| format!("\u{2}{count}").into())
+                .clone();
+            imports
+                .entry((source, hidden.clone()))
+                .or_insert_with(|| item::Binding {
+                    name: crate::item::Name {
+                        text: hidden.clone(),
+                        span: Span::NONE,
+                    },
+                    qualified: owner.clone(),
+                    target: item::Import::Type {
+                        definition: definition.clone(),
+                        owner: host.type_owner(&owner).cloned(),
+                    },
+                });
+            host_variants_by_name.insert(
+                (source, name),
+                Box::from([hidden, ImmutableString::from(variant)]),
+            );
+        }
+        let host_variants: BTreeMap<_, Box<[ImmutableString]>> = host_variants_by_name;
 
         let mut associated = AssociatedTypes::default();
         let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
@@ -3109,6 +3160,7 @@ impl Models {
             imports,
             by_name,
             variants,
+            host_variants,
             by_definition,
             by_identity,
             qualified_functions: program.qualified_functions.clone(),
@@ -3200,10 +3252,22 @@ impl Models {
     }
 
     fn imports_variants(&self) -> bool {
-        self.variants
-            .range((self.context, ImmutableString::new())..)
-            .next()
-            .is_some_and(|((source, _), _)| *source == self.context)
+        [&self.variants, &self.host_variants]
+            .into_iter()
+            .any(|variants| {
+                variants
+                    .range((self.context, ImmutableString::new())..)
+                    .next()
+                    .is_some_and(|((source, _), _)| *source == self.context)
+            })
+    }
+
+    /// The whole path of the crate enum variant a name stands for in this
+    /// source (`use iced::Center;`).
+    fn imported_host_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+        self.host_variants
+            .get(&(self.context, name.into()))
+            .map(AsRef::as_ref)
     }
 
     fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
@@ -26515,7 +26579,19 @@ impl<'a> Parser<'a> {
         };
         let owner_path = proof.definition.path();
         let written = self.host_pattern_owner(&pattern.owner);
-        if written != owner_path.as_str() {
+        // A crate type re-exported at another path is the same type, as
+        // `iced::Alignment` is `iced::alignment::Alignment`.
+        let reexported = || {
+            proof.definition.identity().imported().is_some()
+                && self
+                    .models
+                    .host
+                    .source_type(&written)
+                    .is_some_and(|definition| {
+                        definition.identity().imported() == proof.definition.identity().imported()
+                    })
+        };
+        if written != owner_path.as_str() && !reexported() {
             return Err(Error::TypeMismatch {
                 expected: owner_path.as_str().into(),
                 actual: written.into(),
@@ -46506,7 +46582,7 @@ fn expand_imported_variants(
     let mut expanded = Vec::with_capacity(tokens.len());
     for index in 0..tokens.len() {
         let (token, position) = &tokens[index];
-        let owner = match token {
+        let name = match token {
             Token::Identifier(name)
                 if !matches!(
                     expanded.last(),
@@ -46520,10 +46596,21 @@ fn expand_imported_variants(
                         )
                 ) =>
             {
-                models.imported_variant(name)
+                Some(name)
             }
             _ => None,
         };
+        // A crate enum's variant is its enum's, `Alignment::Center`.
+        if let Some(path) = name.and_then(|name| models.imported_host_variant(name)) {
+            for (segment, name) in path.iter().enumerate() {
+                if segment > 0 {
+                    expanded.push((Token::DoubleColon, *position));
+                }
+                expanded.push((Token::Identifier(Box::new(name.as_str().into())), *position));
+            }
+            continue;
+        }
+        let owner = name.and_then(|name| models.imported_variant(name));
         for segment in owner.into_iter().flatten() {
             expanded.push((
                 Token::Identifier(Box::new(segment.as_str().into())),
