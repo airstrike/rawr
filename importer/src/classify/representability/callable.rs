@@ -161,6 +161,13 @@ impl Item {
 }
 
 impl Item {
+    /// This item with the parameters at `indices` inferred at the call
+    /// (`Signature::with_inferred`).
+    pub(crate) fn with_inferred(mut self, indices: &[u32], container: usize) -> Self {
+        self.signature = self.signature.with_inferred(indices, container);
+        self
+    }
+
     /// This item of an impl that fixes some of its type's arguments, at
     /// that instance.
     pub(crate) fn with_instance(mut self, instance: super::convert::Type) -> Self {

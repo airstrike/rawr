@@ -80,6 +80,12 @@ pub(crate) enum Import {
     },
     /// A variant of `std::cmp::Ordering`: `use std::cmp::Ordering::*;`.
     OrderingVariant,
+    /// A variant of a Rust crate's enum, as `use iced::Alignment::Center;`
+    /// or the re-exported `use iced::Center;` binds it: `owner` is the
+    /// enum's path, as its facade spells it.
+    HostVariant {
+        owner: crate::ImmutableString,
+    },
 }
 
 /// A generic type parameter and its bounds: built-in derivable traits as

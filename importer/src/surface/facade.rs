@@ -148,9 +148,57 @@ pub struct Facade {
     /// Rust name, in path order.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     builtins: Box<[(Box<str>, Box<str>)]>,
+    /// The re-exported enum variants, as `pub use Alignment::Center;`:
+    /// each path, relative to the root, and the variant's path through one
+    /// of the facade's paths to its enum, in path order.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    variants: Box<[(Box<str>, Box<str>)]>,
+    /// The crate's type aliases, as `pub type Result = std::result::Result<
+    /// (), Error>;`, other than those of a builtin, in path order.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    type_aliases: Box<[TypeAlias]>,
     /// The `macro_rules!` macros the root exports, sorted by path.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     macros: Box<[Macro]>,
+}
+
+/// One crate type alias: its path, relative to the root, its type
+/// parameters with their defaults, and the type it names.
+#[derive(Deserialize, Serialize)]
+pub struct TypeAlias {
+    path: Box<str>,
+    parameters: Box<[Box<str>]>,
+    /// Each parameter's default type, by position, or none when no
+    /// parameter has one.
+    #[serde(default)]
+    defaults: Box<[Option<Type>]>,
+    target: Type,
+}
+
+impl TypeAlias {
+    /// The alias's path, relative to the root.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Its type parameters, in order.
+    pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.parameters.iter().map(AsRef::as_ref)
+    }
+
+    /// Each parameter's default type, by position, or none when no
+    /// parameter has one.
+    #[must_use]
+    pub fn defaults(&self) -> &[Option<Type>] {
+        &self.defaults
+    }
+
+    /// The type it names, in which each parameter is a [`Type::Parameter`].
+    #[must_use]
+    pub const fn target(&self) -> &Type {
+        &self.target
+    }
 }
 
 /// One `macro_rules!` macro a dependency exports: its path below the
@@ -514,6 +562,9 @@ impl Plan {
         limits: &crate::cargo::Limits,
     ) -> Result<Box<[u8]>, super::Error> {
         let mut facades = Vec::<Facade>::new();
+        // Each re-exported variant: its root, its path, its enum and its
+        // name, named through a path to the enum once every type is in.
+        let mut variants = Vec::<(Box<str>, Box<str>, [u8; 32], Box<str>)>::new();
         for outcome in outcomes {
             let named_trait = matches!(
                 outcome.representability(),
@@ -543,6 +594,8 @@ impl Plan {
                             items: Box::default(),
                             traits: Box::default(),
                             builtins: Box::default(),
+                            variants: Box::default(),
+                            type_aliases: Box::default(),
                             macros: Box::default(),
                         },
                     );
@@ -578,6 +631,43 @@ impl Plan {
                     builtins.insert(position, (copy(&relative)?, copy(builtin)?));
                 }
                 facade.builtins = builtins.into_boxed_slice();
+                continue;
+            }
+            // Any other type alias, as `pub type Result = std::result::Result<
+            // (), Error>;`, names its target with its own parameters.
+            if let Representability::Value(plan) = outcome.representability() {
+                let alias = TypeAlias {
+                    path: copy(&relative)?,
+                    parameters: parameters(plan.parameters())?,
+                    defaults: defaults(plan.parameters())?,
+                    target: ty(plan.ty(), plan.parameters())?,
+                };
+                let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
+                if let Err(position) =
+                    aliases.binary_search_by(|alias| alias.path.as_ref().cmp(relative.as_ref()))
+                {
+                    aliases
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    aliases.insert(position, alias);
+                }
+                facade.type_aliases = aliases.into_boxed_slice();
+                continue;
+            }
+            // A re-exported variant, as `pub use Alignment::Center;`, is its
+            // enum's variant.
+            if let Some(variant) = outcome.variant() {
+                if let Some(definition) = outcome.identity().definition() {
+                    variants
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    variants.push((
+                        copy(root)?,
+                        relative,
+                        *definition.as_bytes(),
+                        copy(variant)?,
+                    ));
+                }
                 continue;
             }
             if let Some(ty) = type_definition(&relative, outcome)? {
@@ -631,6 +721,8 @@ impl Plan {
                             items: Box::default(),
                             traits: Box::default(),
                             builtins: Box::default(),
+                            variants: Box::default(),
+                            type_aliases: Box::default(),
                             macros: Box::default(),
                         },
                     );
@@ -660,6 +752,36 @@ impl Plan {
             items.retain(|item| item.signature.declared(&declared));
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
+            // So is a type alias of such a type.
+            let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
+            aliases.retain(|alias| {
+                alias.target.declared(&declared)
+                    && alias
+                        .defaults
+                        .iter()
+                        .flatten()
+                        .all(|default| default.declared(&declared))
+            });
+            facade.type_aliases = aliases.into_boxed_slice();
+        }
+        for (root, path, identity, variant) in variants {
+            let Ok(index) = facades.binary_search_by(|facade| facade.root.cmp(&root)) else {
+                continue;
+            };
+            let facade = &mut facades[index];
+            // A variant of an enum the facade does not declare is unavailable.
+            let Some(owner) = facade.types.iter().find(|ty| ty.identity == identity) else {
+                continue;
+            };
+            let target = copy(&format!("{}::{variant}", owner.path))?;
+            let mut named = std::mem::take(&mut facade.variants).into_vec();
+            if let Err(position) =
+                named.binary_search_by(|(candidate, _)| candidate.as_ref().cmp(path.as_ref()))
+            {
+                named.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                named.insert(position, (path, target));
+            }
+            facade.variants = named.into_boxed_slice();
         }
         let mut aliases = Vec::new();
         let mut sources = Vec::<ProjectionSourceSite>::new();
@@ -995,6 +1117,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             items: Box::default(),
             traits: Box::default(),
             builtins: Box::default(),
+            variants: Box::default(),
+            type_aliases: Box::default(),
             macros: Box::default(),
         }]),
     })
@@ -1114,6 +1238,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 items: Box::default(),
                 traits: Box::default(),
                 builtins: Box::default(),
+                variants: Box::default(),
+                type_aliases: Box::default(),
                 macros: Box::default(),
             },
             iced,
@@ -1255,6 +1381,22 @@ impl Facade {
             .iter()
             .map(|(path, builtin)| (path.as_ref(), builtin.as_ref()))
     }
+
+    /// Iterate the crate's type aliases other than those of a builtin, in
+    /// path order.
+    pub fn type_aliases(&self) -> impl ExactSizeIterator<Item = &TypeAlias> {
+        self.type_aliases.iter()
+    }
+
+    /// Iterate the re-exported enum variants: each path, relative to the
+    /// root, and the variant's path through its enum's
+    /// (`alignment::Alignment::Center`).
+    pub fn variants(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.variants
+            .iter()
+            .map(|(path, variant)| (path.as_ref(), variant.as_ref()))
+    }
+
     /// Iterate the root's `macro_rules!` macros, sorted by path.
     pub fn macros(&self) -> impl ExactSizeIterator<Item = &Macro> {
         self.macros.iter()

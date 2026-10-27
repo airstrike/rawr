@@ -107,8 +107,18 @@ node --input-type=module -e '
   // Each distinct source once. Without the header, landing runs are rate
   // limited per IP, so a 429 waits as long as it asks and tries again.
   for (const body of sources) {
-    for (;;) {
-      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers, body });
+    // A fresh image can reset a connection or run out of render time on its
+    // first iced snippets while it starts, so those two get a few retries.
+    for (let cold = 0; ; ) {
+      let response;
+      try {
+        response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers, body });
+      } catch (error) {
+        if (++cold > 3) throw error;
+        console.log("the bot dropped the connection; retrying in 10 s");
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+        continue;
+      }
       if (response.status === 429) {
         const wait = Number(/(\d+) s/.exec(await response.text())?.[1] ?? 30);
         console.log("rate limited; waiting " + wait + " s");
@@ -119,7 +129,15 @@ node --input-type=module -e '
         console.log("ran a site snippet: its compile error, as the page shows");
         break;
       }
-      if (!response.ok) throw new Error("run failed: " + response.status + " " + (await response.text()).slice(0, 200));
+      if (!response.ok) {
+        const message = (await response.text()).slice(0, 200);
+        if (response.status === 422 && message.includes("render time limit") && ++cold <= 3) {
+          console.log("the bot ran out of render time; retrying in 10 s");
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+          continue;
+        }
+        throw new Error("run failed: " + response.status + " " + message);
+      }
       console.log("ran a site snippet:", response.headers.get("content-type"));
       break;
     }

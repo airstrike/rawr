@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, DefKind, Namespace as RustNamespace, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace as RustNamespace, Res};
 use rustc_hir::definitions::DefPathData;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::metadata::Reexport as RustReexport;
@@ -57,7 +57,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 20 adds the selected crate's name index for demanded units. Schema 21
 // keeps a Future impl's `Output`; schema 22 keeps an Iterator impl's `Item` and
 // `next`; schema 23 keeps an AsRef impl's `as_ref`.
-const PROTOCOL_SCHEMA: u32 = 23;
+const PROTOCOL_SCHEMA: u32 = 24;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -591,6 +591,10 @@ struct Export {
     aliases: Vec<Alias>,
     reexports: Vec<Reexport>,
     span: Span,
+    /// A re-exported enum variant, as `pub use Alignment::Center;`: the
+    /// variant's name, and `target` is its enum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -2051,8 +2055,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if !child.vis.is_public() {
                 continue;
             }
+            // A re-exported variant's constructor, in the value namespace,
+            // is the variant the type namespace re-exports.
+            if matches!(child.res, Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)) {
+                continue;
+            }
+            // A re-exported variant, as `pub use Alignment::Center;`, names
+            // its enum's variant: the export is the enum's, with the
+            // variant's name.
+            let (res, variant) = match child.res {
+                Res::Def(DefKind::Variant, variant) => {
+                    let owner = self.tcx.parent(variant);
+                    (
+                        Res::Def(DefKind::Enum, owner),
+                        Some(self.budget.owned(self.tcx.item_name(variant).as_str())?),
+                    )
+                }
+                res => (res, None),
+            };
             if names_only {
-                match child.res {
+                match res {
                     Res::Def(DefKind::Mod, _) => {}
                     Res::Def(kind, def_id)
                         if kind.ns().is_some_and(|ns| {
@@ -2077,7 +2099,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             } else {
                 Binding::Nameable
             };
-            let (namespace, target, aliases, nested, named) = match child.res {
+            let (namespace, target, aliases, nested, named) = match res {
                 Res::Def(kind, def_id) => {
                     let Some(namespace) = kind.ns().map(namespace) else {
                         return Err(format!(
@@ -2226,6 +2248,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     aliases: aliases.clone(),
                     reexports: reexports.clone(),
                     span: span.clone(),
+                    variant: variant.clone(),
                 });
             }
             let depth = depth.saturating_add(1);
@@ -2303,6 +2326,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let Res::Def(kind, def_id) = child.res else {
                 continue;
             };
+            // A re-exported variant, as `pub use Alignment::Center;`, selects
+            // its enum.
+            let (kind, def_id) = match kind {
+                DefKind::Variant => (DefKind::Enum, tcx.parent(def_id)),
+                DefKind::Ctor(CtorOf::Variant, _) => {
+                    (DefKind::Enum, tcx.parent(tcx.parent(def_id)))
+                }
+                _ => (kind, def_id),
+            };
             let Some(ns) = kind.ns() else {
                 continue;
             };
@@ -2321,7 +2353,44 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
                         (target, tcx.def_kind(target))
                     }
-                    _ => (def_id, kind),
+                    // A generic alias, as `pub type Element<'a, M, Theme =
+                    // Plain> = element::Element<'a, M, Theme>;`, or one with
+                    // fixed arguments, as `pub type Result = Result<(),
+                    // Error>;`, selects each type it and its defaults name,
+                    // with their impl tables, as rustc proves their bounds.
+                    // `Alias::member` is its type's member.
+                    aliased => {
+                        let defaults = tcx
+                            .generics_of(def_id)
+                            .own_params
+                            .iter()
+                            .filter_map(|parameter| parameter.default_value(tcx))
+                            .filter_map(|default| {
+                                default.instantiate_identity().skip_norm_wip().as_type()
+                            })
+                            .collect::<Vec<_>>();
+                        let named = tcx
+                            .type_of(def_id)
+                            .instantiate_identity()
+                            .skip_norm_wip()
+                            .walk()
+                            .chain(defaults.into_iter().flat_map(|default| default.walk()))
+                            .filter_map(|argument| argument.as_type())
+                            .filter_map(|ty| match ty.kind() {
+                                ty::Adt(definition, _) => Some(definition.did()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        for target in named {
+                            self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
+                        }
+                        match aliased {
+                            ty::Adt(definition, _) => {
+                                (definition.did(), tcx.def_kind(definition.did()))
+                            }
+                            _ => (def_id, kind),
+                        }
+                    }
                 },
                 _ => (def_id, kind),
             };
@@ -2378,11 +2447,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut traits = tcx
                 .visible_traits()
                 .filter(|trait_id| {
-                    tcx.generics_of(*trait_id).count() == 1
-                        && tcx
-                            .associated_items(*trait_id)
-                            .filter_by_name_unhygienic(name)
-                            .any(|item| item.is_fn())
+                    tcx.associated_items(*trait_id)
+                        .filter_by_name_unhygienic(name)
+                        .any(|item| item.is_fn())
                 })
                 .collect::<Vec<_>>();
             traits.sort_unstable_by_key(|trait_id| {
@@ -2396,13 +2463,19 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let defaulted = generic.then(|| defaulted_instance(tcx, adt)).flatten();
             for trait_id in traits {
                 self.edge(1)?;
+                // A generic trait, as iced's `Widget<Message, Theme,
+                // Renderer>`, is the type's own implementation of it, whose
+                // trait arguments rustc proves where the bridge calls the
+                // member: its provided `_boxed` is the type's.
+                let trait_generic = tcx.generics_of(trait_id).count() != 1;
                 let implements = |self_ty: ty::Ty<'tcx>| {
                     tcx.infer_ctxt()
                         .build(ty::TypingMode::non_body_analysis())
                         .type_implements_trait(trait_id, [self_ty], param_env)
                         .must_apply_modulo_regions()
                 };
-                let applies = implements(self_ty) || defaulted.is_some_and(implements);
+                let applies =
+                    trait_generic || implements(self_ty) || defaulted.is_some_and(implements);
                 if !applies {
                     continue;
                 }
@@ -2427,7 +2500,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             )
                         })
                 });
-                let arguments = tcx.mk_args(&[self_ty.into()]);
+                let arguments = match own {
+                    Some(implementation) if trait_generic => tcx
+                        .impl_opt_trait_ref(implementation)
+                        .map(|reference| reference.instantiate_identity().skip_norm_wip().args)
+                        .unwrap_or_else(|| tcx.mk_args(&[self_ty.into()])),
+                    _ => tcx.mk_args(&[self_ty.into()]),
+                };
                 let obligation = AssociatedObligation {
                     kind: AssociatedDemandKind::SelectedMember,
                     trait_item: Some(trait_item),
@@ -2436,6 +2515,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 };
                 if let Some(implementation) = own {
                     self.request_implementation(implementation, adt, Some(obligation))?;
+                    continue;
+                }
+                // A blanket implementation of a generic trait is left
+                // unresolved, as rustc would choose its arguments.
+                if trait_generic {
                     continue;
                 }
                 let blankets = candidates

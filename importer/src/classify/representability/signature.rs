@@ -307,6 +307,30 @@ impl Signature {
         self.instance.as_ref()
     }
 
+    /// This signature with the parameters at `indices` inferred at the
+    /// call, as an implementation's parameter its type doesn't name is
+    /// (`Renderer` of `impl<.., Renderer> Widget<Message, Theme, Renderer>
+    /// for Button<..>`): no turbofish names one, as none names an
+    /// argument's `impl Trait`. Among the first `container` parameters, the
+    /// implementation's, they follow the ones its type names, which a path
+    /// to the type gives.
+    pub(crate) fn with_inferred(mut self, indices: &[u32], container: usize) -> Self {
+        let mut parameters = std::mem::take(&mut self.parameters).into_vec();
+        let container = container.min(parameters.len());
+        parameters[..container].sort_by_key(|parameter| indices.contains(&parameter.index()));
+        self.parameters = parameters
+            .into_iter()
+            .map(|parameter| {
+                if indices.contains(&parameter.index()) {
+                    parameter.into_argument_impl()
+                } else {
+                    parameter
+                }
+            })
+            .collect();
+        self
+    }
+
     pub(crate) fn with_scope(mut self, scope: Option<Scope>) -> Self {
         self.scope = scope;
         self
