@@ -2248,10 +2248,15 @@ fn write_copied_body(
     }
     output.declaration(source, declaration, "let __rawr_returned = {\n");
     let offset = output.body(source, span, &body.source, &body.locations);
+    // The parameters' final values move out, as the body's locals end.
+    let moved = copied
+        .iter()
+        .map(|name| format!("{}({name})", crate::engine::KEYWORD_MOVE))
+        .collect::<Vec<_>>();
     output.declaration(
         source,
         declaration,
-        &format!("\n}};\n[__rawr_returned, {}]", copied.join(", ")),
+        &format!("\n}};\n[__rawr_returned, {}]", moved.join(", ")),
     );
     offset
 }
@@ -25672,7 +25677,7 @@ impl<'a> Parser<'a> {
         }
         let mut returned = value.surrounded("[", "");
         for name in &self.copy_out {
-            returned.push_text(format!(", {name}"));
+            returned.push_text(format!(", {}({name})", crate::engine::KEYWORD_MOVE));
         }
         returned.push_text("]");
         Some(returned)
@@ -25701,16 +25706,18 @@ impl<'a> Parser<'a> {
         if places.is_empty() {
             return Ok(call);
         }
+        // Each value moves out of the returned array, which ends here.
+        let moved = crate::engine::KEYWORD_MOVE;
         let returned = self.temporary("returned");
         let mut source = origin::Fragment::plain(format!("{{ let {returned} = "));
         source.push(call);
         source.push_text("; ");
         for (index, place) in places.iter().enumerate() {
-            let value = format!("{returned}[{}]", index + 1);
+            let value = format!("{moved}({returned}[{}])", index + 1);
             source.push(self.store_into(place, &value)?);
             source.push_text(" ");
         }
-        source.push_text(format!("{returned}[0] }})"));
+        source.push_text(format!("{moved}({returned}[0]) }})"));
         Ok(source.surrounded("(", ""))
     }
 
@@ -33065,6 +33072,9 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(member_span.start(), end),
             );
+            let copied = method_copied(&definition, &self.models);
+            let places = self.mutable_arguments(&args, copied.iter().copied())?;
+            self.move_copied_in(&mut args, &copied);
             let arguments = origin::Fragment::join(
                 args.iter()
                     .map(ParsedExpr::rendered_source)
@@ -33072,7 +33082,6 @@ impl<'a> Parser<'a> {
                 ", ",
             );
             let method = method_name(definition.id());
-            let places = self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
             let source = match writeback {
                 Some(Writeback::Owned) => {
                     let receiver = self.temporary("receiver");
@@ -40055,7 +40064,9 @@ impl<'a> Parser<'a> {
             {
                 self.shared_call_fns.insert(call);
             }
-            let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
+            let places =
+                self.mutable_arguments(&arguments, receiver.into_iter().chain(copied.clone()))?;
+            self.move_copied_in(&mut arguments, &copied);
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
                 && index < arguments.len()
@@ -42863,8 +42874,9 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(owner_span.start(), end),
             );
-            let places =
-                self.mutable_arguments(&arguments, method_copied(&definition, &self.models))?;
+            let copied = method_copied(&definition, &self.models);
+            let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+            self.move_copied_in(&mut arguments, &copied);
             let source = origin::Fragment::call(
                 method_name(definition.id()),
                 arguments

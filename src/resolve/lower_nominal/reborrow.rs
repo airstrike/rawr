@@ -321,6 +321,46 @@ impl Parser<'_> {
         }
     }
 
+    /// The `&mut` arguments at `copied`, which the call copies in and back
+    /// out (`copied_call`): each that is a local of this body, or a chain
+    /// of fields below one, moves in, since what the call gives back is
+    /// stored there (D568). A parameter's place and `self`'s are read as
+    /// before, so a call that fails leaves the caller's values as they were.
+    pub(super) fn move_copied_in(&self, arguments: &mut [ParsedExpr], copied: &[usize]) {
+        for &index in copied {
+            let Some(argument) = arguments.get_mut(index) else {
+                continue;
+            };
+            if self.in_async_body() || !argument.prelude.is_empty() {
+                continue;
+            }
+            let (root, place) = match &argument.lvalue {
+                Some(Lvalue::Binding { binding, .. })
+                    if argument.source.as_str() == binding.as_str() =>
+                {
+                    (binding.clone(), argument.source.clone())
+                }
+                Some(Lvalue::Field(_) | Lvalue::Nested(_)) => {
+                    let Some(field) = fields_below_local(argument) else {
+                        continue;
+                    };
+                    field
+                }
+                _ => continue,
+            };
+            let own = self.bindings.get(root.as_str()).is_some_and(|binding| {
+                matches!(binding.kind, BindingKind::Local)
+                    && !self.parameter_declarations.contains(&binding.declaration)
+            }) && !root.starts_with("__rawr")
+                && !self.aliases.contains_key(root.as_str())
+                && !self.entry_aliases.contains_key(root.as_str())
+                && !self.cell_guards.contains_key(root.as_str());
+            if own {
+                argument.source = origin::Fragment::call(crate::engine::KEYWORD_MOVE, [place]);
+            }
+        }
+    }
+
     /// What the `&` borrow `value` borrows where it is: the whole local,
     /// `self`, or a chain of fields and members below one (each slot a
     /// literal), and that place's text. `None` for any other value, one a

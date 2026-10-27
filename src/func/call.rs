@@ -1350,6 +1350,15 @@ impl Engine {
                     value.set_access_mode(crate::types::dynamic::AccessMode::ReadWrite);
                     return Ok(value.flatten());
                 }
+                // A part of a local below literal slots (`r[1]`, `s[0][2]`)
+                // moves out of it, leaving `()` there.
+                if matches!(arg, Expr::Index(..))
+                    && let Some((root, slots)) = lent_place(arg)
+                    && let Some(place) = root_place(scope, this_ptr.as_deref_mut(), root)
+                    && let Some(value) = take_part(place, &slots)
+                {
+                    return Ok(value.flatten());
+                }
                 if !matches!(arg, Expr::Variable(..)) {
                     let (value, ..) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
                     return Ok(value.flatten());
@@ -2162,6 +2171,22 @@ fn share_part(place: &mut Dynamic, slots: &[usize]) -> Option<Dynamic> {
         return share_part(guard.part_mut(slot)?, rest);
     }
     share_part(place.part_mut(slot)?, rest)
+}
+
+/// The part of `place` that `slots` reach, taken out with `()` left in its
+/// place. A shared value on the way is locked to reach below it; `None`
+/// where one is held already, or where a part is missing.
+fn take_part(place: &mut Dynamic, slots: &[usize]) -> Option<Dynamic> {
+    let Some((&slot, rest)) = slots.split_first() else {
+        let mut value = place.take();
+        value.set_access_mode(crate::types::dynamic::AccessMode::ReadWrite);
+        return Some(value);
+    };
+    if place.is_shared() {
+        let mut guard = place.write_lock::<Dynamic>()?;
+        return take_part(guard.part_mut(slot)?, rest);
+    }
+    take_part(place.part_mut(slot)?, rest)
 }
 
 /// The part of `place` that `slots` reach made plain again where nothing

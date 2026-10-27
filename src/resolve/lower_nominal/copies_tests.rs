@@ -284,6 +284,7 @@ const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
         fn bump(&mut self, n: i64) { self.count += n; }
         fn total(&self) -> i64 { self.count }
         fn with(&self, state: &State) -> i64 { self.count + view(state) }
+        fn absorb(&mut self, other: &mut Inner) { self.count += other.count; other.count = 0; }
     }
     struct State { inner: Inner, items: Vec<Tally>, count: i64 }
     impl State {
@@ -295,6 +296,7 @@ const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
     fn peek(state: &State) -> i64 { state.inner.count }
     fn two(a: &State, b: &Inner) -> i64 { a.count + b.count }
     fn both(a: &mut State, b: &mut Inner) { a.count += 1; b.count += 1; }
+    fn pair(a: &mut Inner, b: &mut Inner) { a.count += b.count; b.count = 1; }
     fn lens(items: &Vec<Tally>) -> i64 { items.len() as i64 }
     fn filled() -> Vec<Tally> {
         let mut items = Vec::new();
@@ -372,6 +374,28 @@ fn structs_passed_by_reference_are_lent() {
         (
             "let r = &s.inner; sum += r.count + lens(&r.items) + r.total();",
             100000,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+}
+
+/// A local, or a field of one, passed to a `&mut` parameter after the
+/// first moves in and back out of the call: a thousand calls copy no
+/// `Tally` (T248). Before, each copied the value in, out of the callee
+/// and back into the place, three copies a call.
+#[test]
+fn locals_passed_by_mut_reference_move_in_and_out() {
+    for (work, expected) in [
+        (
+            "let mut o = Inner { items: filled(), count: n }; both(&mut s, &mut o);
+            pair(&mut o, &mut s.inner); sum += o.count + s.inner.count;",
+            502499,
+        ),
+        (
+            "let mut o = Inner { items: filled(), count: 0 }; s.inner.count = n;
+            o.absorb(&mut s.inner); sum += o.count + s.inner.count;",
+            499500,
         ),
     ] {
         assert_eq!(struct_places(work), (expected, 0), "{work}");
