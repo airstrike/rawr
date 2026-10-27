@@ -610,13 +610,10 @@ impl Engine {
             _ => return Ok(None),
         };
         let pos = dot.lhs.start_position();
-        let op_pos = parent.position();
         let race = || -> crate::RawrError { ERR::ErrorDataRace(String::new(), pos).into() };
         let mut cell = {
             let mut guard = shared.write_lock::<Dynamic>().ok_or_else(race)?;
-            let Some(part) =
-                self.part_at(global, caches, scope, &mut guard, &indexes, pos, op_pos)?
-            else {
+            let Some(part) = Self::part_at(&mut guard, &indexes) else {
                 return Ok(None);
             };
             if !part.is_shared() {
@@ -642,43 +639,25 @@ impl Engine {
         drop(cell);
         // The part is plain again where it is, once nothing else holds it.
         if let Some(mut guard) = shared.write_lock::<Dynamic>()
-            && let Ok(Some(part)) =
-                self.part_at(global, caches, scope, &mut guard, &indexes, pos, op_pos)
+            && let Some(part) = Self::part_at(&mut guard, &indexes)
         {
             part.unshare_if_unique();
         }
         result.map(|(value, _)| Some(value))
     }
 
-    /// The part of `value` that `indexes` reach, itself, through elements
-    /// that are not shared; `None` for a part no index reaches in place.
-    fn part_at<'v>(
-        &self,
-        global: &mut GlobalRuntimeState,
-        caches: &mut Caches,
-        scope: &mut Scope,
-        mut value: &'v mut Dynamic,
-        indexes: &[Dynamic],
-        pos: Position,
-        op_pos: Position,
-    ) -> RawrResultOf<Option<&'v mut Dynamic>> {
-        for (at, index) in indexes.iter().enumerate() {
-            if value.is_shared() {
-                return Ok(None);
+    /// The element of `value` that `indexes` reach, itself, through
+    /// arrays that are not shared (the element itself may be); `None` for
+    /// any other value or index.
+    fn part_at<'v>(mut value: &'v mut Dynamic, indexes: &[Dynamic]) -> Option<&'v mut Dynamic> {
+        for index in indexes {
+            if !value.is_array() {
+                return None;
             }
-            let mut idx = index.clone();
-            match self.get_indexed_mut(
-                global, caches, scope, None, value, &mut idx, pos, op_pos, false, false,
-            )? {
-                Target::RefMut(part) => value = part,
-                _ => return Ok(None),
-            }
-            // The part lent is the last one, which may already be shared.
-            if at + 1 < indexes.len() && value.is_shared() {
-                return Ok(None);
-            }
+            let index = usize::try_from(index.as_int().ok()?).ok()?;
+            value = value.part_mut(index)?;
         }
-        Ok(Some(value))
+        Some(value)
     }
 
     /// Evaluate a chain of indexes and store the results in a [`FnArgsVec`].
