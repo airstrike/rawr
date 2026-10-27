@@ -426,6 +426,9 @@ impl fmt::Display for ParseErrorType {
                     write!(f, "Unsupported nominal syntax '{construct}'")
                 }
                 crate::resolve::Error::Syntax { message, .. } => f.write_str(message),
+                crate::resolve::Error::UnlabeledJumpInWhileCondition { .. } => f.write_str(
+                    "`break` or `continue` with no label in the condition of a `while` loop",
+                ),
                 crate::resolve::Error::Application(error) => write!(f, "{error}"),
                 crate::resolve::Error::InvalidPreview {
                     preview, reason, ..

@@ -105,6 +105,7 @@ codes!(Resolve;
     (RESOLVE_CAPABILITY, "RAWR-RESOLVE-CAPABILITY", "Missing proven capability."),
     (RESOLVE_MATCH, "RAWR-RESOLVE-MATCH", "Invalid nominal match."),
     (RESOLVE_UNSUPPORTED_SYNTAX, "RAWR-RESOLVE-UNSUPPORTED-SYNTAX", "Unsupported resolved syntax."),
+    (RESOLVE_JUMP_IN_WHILE_CONDITION, "E0590", "A `break` or `continue` with no label in a `while` condition, as rustc reports it."),
     (RESOLVE_PREVIEW, "RAWR-RESOLVE-PREVIEW", "Invalid local preview metadata."),
     (RESOLVE_WIDGET, "RAWR-RESOLVE-WIDGET", "Invalid scripted-widget lifecycle protocol."),
     (RESOLVE_MODULE_GRAPH, "RAWR-RESOLVE-MODULE-GRAPH", "Invalid static file-module graph."),

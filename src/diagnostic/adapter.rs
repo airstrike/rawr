@@ -524,6 +524,9 @@ fn resolution_report_with_sources(
 fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
     match error {
         resolve::Error::Syntax { label, .. } => Some(label.clone()),
+        resolve::Error::UnlabeledJumpInWhileCondition { keyword, .. } => {
+            Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
+        }
         resolve::Error::MovedValue {
             previous_iteration: true,
             ..
@@ -601,6 +604,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
         resolve::Category::Syntax => code::PARSE_UNEXPECTED,
+        resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::InvalidPreview => code::RESOLVE_PREVIEW,
         resolve::Category::InvalidWidget => code::RESOLVE_WIDGET,
         resolve::Category::InvalidApplication => unreachable!(),
@@ -881,6 +885,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("unsupported syntax: {construct}")
         }
         resolve::Error::Syntax { message, .. } => message.to_string(),
+        resolve::Error::UnlabeledJumpInWhileCondition { .. } => {
+            "`break` or `continue` with no label in the condition of a `while` loop".to_string()
+        }
         resolve::Error::Application(error) => application_message(error),
         resolve::Error::InvalidPreview {
             preview, reason, ..

@@ -6,3 +6,7 @@ misc/or_pattern_mut_none_settles_by_other_alternative.rs	ok	0	"(None, Some(3))\n
 misc/or_pattern_mut_parts_unannotated.rs	ok	0	"[(Some(11), None), (None, Some(12)), (None, None)]\n"
 misc/or_pattern_none_settles_by_other_alternative.rs	ok	0	"1\n"
 misc/or_pattern_parts_unannotated.rs	ok	0	"1\n2\nnone\n"
+misc/while_condition_bare_break.rs	E0590:3
+misc/while_condition_bare_break_in_nested_while.rs	E0590:4
+misc/while_condition_bare_continue.rs	E0590:3
+misc/while_condition_inner_loop_bare_break_ok.rs	ok	0	"3\n"

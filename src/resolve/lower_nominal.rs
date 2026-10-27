@@ -25158,13 +25158,15 @@ impl<'a> Parser<'a> {
             let Some(target) = self.loops.len().checked_sub(1) else {
                 return Err(self.unsupported("`break` or `continue` outside a loop"));
             };
-            // rustc's E0590.
             if self.loops[target].condition.is_some() {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "`break` or `continue` with no label in the condition of a \
-                                `while` loop"
-                        .into(),
-                    source: start,
+                return Err(Error::UnlabeledJumpInWhileCondition {
+                    keyword: if token == Token::Break {
+                        "break"
+                    } else {
+                        "continue"
+                    }
+                    .into(),
+                    at: start,
                 });
             }
             target
