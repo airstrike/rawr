@@ -7,6 +7,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 
+## 0.2.5 (2026-10-27)
+
+- A script struct or enum can stand where a crate expects a generic type, such as an app's state and message passed to iced's `application`.
+- A script type crossing into a crate keeps its own name, so a crate that reads `type_name` sees the app's type.
+- A script function or a closure that captures nothing can be passed where a crate takes `impl Fn`, including views that borrow their state. After a save, it calls the edited code.
+- A string a view borrows from its state isn't copied.
+- A crate trait whose only impl is for functions, such as iced's `ViewFn`, takes a script function.
+
 ## 0.2.4 (2026-10-27)
 
 - A crate method that takes an `impl Fn(..) + 'a` closure, such as iced's `Button::style`, takes a script closure.
