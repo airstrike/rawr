@@ -174,7 +174,7 @@ fn declare_progress_bar(builder: &mut facade::Builder) -> Result<(), host::Error
     builder.private_type::<crate::marker::progress_bar::Builtin>(
         "widget::progress_bar::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     for (name, _) in PROGRESS_BAR_BUILTINS {
         let path = format!("widget::progress_bar::{name}");
@@ -430,37 +430,37 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     builder.private_type::<Builtin<button::Status, button::Style>>(
         "widget::button::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<checkbox::Status, checkbox::Style>>(
         "widget::checkbox::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<radio::Status, radio::Style>>(
         "widget::radio::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<slider::Status, slider::Style>>(
         "widget::slider::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<scrollable::Status, scrollable::Style>>(
         "widget::scrollable::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<text_input::Status, text_input::Style>>(
         "widget::text_input::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
     builder.private_type::<Builtin<toggler::Status, toggler::Style>>(
         "widget::toggler::Builtin",
         &[],
-        &[],
+        crate::PINNED_STYLE_CAPABILITIES,
     )?;
 
     for (owner, name) in STATUS_MEMBERS {

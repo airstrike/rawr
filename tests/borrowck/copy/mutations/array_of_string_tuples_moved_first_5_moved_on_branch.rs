@@ -1,0 +1,14 @@
+fn main() {
+    let names = [("a", String::from("x")), ("b", String::from("y"))];
+    let first: Vec<String> = names.into_iter().map(|(_, name)| name).collect();
+    let second: Vec<&str> = names.into_iter().map(|(key, _)| key).collect();
+    if __c() {
+        __take(first);
+    }
+    println!("{first:?} {second:?}");
+}
+
+fn __take<T>(_: T) {}
+fn __c() -> bool {
+    false
+}

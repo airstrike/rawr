@@ -14828,11 +14828,22 @@ impl<'a> Parser<'a> {
     fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
         match self.inference.resolve(ty) {
             Ty::Unit => true,
-            Ty::Callable { .. } => false,
-            // Function pointers and items are `Copy`, as in Rust.
-            Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
+            // Function pointers and items are `Copy`, as in Rust: a host's
+            // callable and an imported function are its Rust items.
+            Ty::Fn { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 matches!(capability, capability::Kind::Clone | capability::Kind::Copy)
             }
+            #[cfg(feature = "rust-import")]
+            Ty::ImportedFunctionItem { .. } => {
+                matches!(capability, capability::Kind::Clone | capability::Kind::Copy)
+            }
+            // A closure is `Copy` unless it owns a capture that is not, or
+            // captures by `&mut`.
+            Ty::FnItem { key, .. } => match capability {
+                capability::Kind::Clone => true,
+                capability::Kind::Copy => !self.owning_closures.contains(&*key),
+                _ => false,
+            },
             // `[T; N]` is `Copy` when `T` is; `Vec<T>` is only `Clone`.
             Ty::Array { element, length } => {
                 (capability != capability::Kind::Copy || length.is_some())
@@ -14851,8 +14862,6 @@ impl<'a> Parser<'a> {
                     && self.type_provides(&ok, capability)
                     && self.type_provides(&err, capability)
             }
-            #[cfg(feature = "rust-import")]
-            Ty::ImportedFunctionItem { .. } => false,
             #[cfg(feature = "rust-import")]
             Ty::ProfileMapper { .. } => false,
             #[cfg(feature = "rust-import")]
@@ -19918,6 +19927,17 @@ impl<'a> Parser<'a> {
         }
         let declaration = binding.declaration;
         if !self.moves_by_value(&value.ty) {
+            self.note_unsettled_copy(value);
+            // A parameter of a function type may be `impl Fn` or `F: Fn`,
+            // which is not `Copy`: Rawr's one function type doesn't say.
+            if matches!(self.inference.resolve(&value.ty), Ty::Fn { .. })
+                && self.parameter_declarations.contains(&declaration)
+            {
+                self.flow().unmodeled(
+                    "a by-value use of a parameter of a function type, which may not be `Copy`",
+                    value.span,
+                );
+            }
             // A copy of a `Copy` closure has its own copies of what it
             // changes, as Rust copies the closure's captured values.
             if let Ty::FnItem { key, .. } = self.inference.resolve(&value.ty)
@@ -20125,6 +20145,7 @@ impl<'a> Parser<'a> {
             });
         }
         if !value.prelude.is_empty() || !self.moves_by_value(&value.ty) {
+            self.note_unsettled_copy(value);
             return Ok(());
         }
         // The field moves out, and the move check follows what is left: in a
@@ -20287,7 +20308,7 @@ impl<'a> Parser<'a> {
         // With `impl Drop` in the crate, a value of a generic type moves as
         // in Rust, unless its bounds make it `Copy`: its drop is its last
         // owner's.
-        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) && self.drops() {
+        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) {
             return !self.type_provides(&resolved, capability::Kind::Copy);
         }
         !matches!(
@@ -20304,6 +20325,50 @@ impl<'a> Parser<'a> {
                 | Ty::Param(_)
                 | Ty::Projection(..)
         ) && !self.type_provides(&resolved, capability::Kind::Copy)
+            && !self.copy_unsettled(&resolved)
+    }
+
+    /// Whether `ty` being `Copy` waits on inference: none of its parts
+    /// makes it not `Copy`, and one still unsettled may (`(None, 1)` before
+    /// the `Option`'s element is known).
+    fn copy_unsettled(&self, ty: &Ty) -> bool {
+        let parts = match self.inference.resolve(ty) {
+            Ty::Infer(_) | Ty::Unknown => return true,
+            Ty::Tuple(members) => members.into_vec(),
+            Ty::Array {
+                element,
+                length: Some(_),
+            }
+            | Ty::Option(element)
+            | Ty::Reverse(element) => vec![*element],
+            Ty::Result(ok, err) => vec![*ok, *err],
+            Ty::Script(id, arguments)
+                if self
+                    .models
+                    .definition(id)
+                    .capabilities()
+                    .contains(capability::Kind::Copy) =>
+            {
+                arguments.into_vec()
+            }
+            _ => return false,
+        };
+        let unsettled = |part: &Ty| self.copy_unsettled(part);
+        parts.iter().any(unsettled)
+            && parts
+                .iter()
+                .all(|part| unsettled(part) || self.type_provides(part, capability::Kind::Copy))
+    }
+
+    /// A by-value use of `value`, whose type may not be `Copy` once it is
+    /// settled: the move check leaves it to rustc.
+    fn note_unsettled_copy(&self, value: &ParsedExpr) {
+        if self.copy_unsettled(&value.ty) {
+            self.flow().unmodeled(
+                "a by-value use of a value whose type is not settled there",
+                value.span,
+            );
+        }
     }
 
     fn consume_imported_value(

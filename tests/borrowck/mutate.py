@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | drops | moved | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | drops | moved | copied | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -27,8 +27,10 @@ moved out), or by a `Vec`, whose drop does not use it, and the variants go
 to `drops/mutations`. With `moved`, `x` is moved before the statement, on
 a branch, in a loop, by a block's tail or a `match`, moved and given its
 value back, or bound by `ref` only, and the variants go to
-`moves/mutations`. rustc decides which are errors: run `record.py` on the
-folder afterwards.
+`moves/mutations`. With `copied`, the same moves are made of each local
+(`let` or `let mut`) of the cases in `copy/`, whose types are `Copy` or
+not as rustc has it, and the variants go to `copy/mutations`. rustc
+decides which are errors: run `record.py` on the folder afterwards.
 """
 
 import glob
@@ -46,6 +48,7 @@ TEMPORARIES = sys.argv[1:] == ["temporaries"]
 REGIONS = sys.argv[1:] == ["regions"]
 DROPS = sys.argv[1:] == ["drops"]
 MOVED = sys.argv[1:] == ["moved"]
+COPIED = sys.argv[1:] == ["copied"]
 OUT = os.path.join(
     HERE,
     "kept-mutations"
@@ -62,9 +65,11 @@ OUT = os.path.join(
     if DROPS
     else "moves/mutations"
     if MOVED
+    else "copy/mutations"
+    if COPIED
     else "mutations",
 )
-SOURCES = sorted(
+SOURCES = sorted(glob.glob(os.path.join(HERE, "copy/*.rs"))) if COPIED else sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
@@ -111,6 +116,8 @@ struct __Hold<'a, T> {
 }
 """
 DECLARATION = re.compile(r"^(\s*)let mut (\w+)\b[^=]*=.*;\s*$")
+# `copied` moves locals declared without `mut` too.
+ANY_DECLARATION = re.compile(r"^(\s*)let (?:mut )?(\w+)\b[^=]*=.*;\s*$")
 PER_LOCAL = 2
 
 
@@ -377,7 +384,7 @@ def main():
         stem = os.path.splitext(os.path.basename(source))[0]
         lines = open(source, encoding="utf-8").read().splitlines()
         for start, line in enumerate(lines):
-            declared = DECLARATION.match(line)
+            declared = (ANY_DECLARATION if COPIED else DECLARATION).match(line)
             if not declared:
                 continue
             indent, name = declared.group(1), declared.group(2)
@@ -396,10 +403,17 @@ def main():
                     else drop_variants
                     if DROPS
                     else moved_variants
-                    if MOVED
+                    if MOVED or COPIED
                     else variants
                 )
                 written = mutate(indent, name, lines[target])
+                # Giving a value back needs `let mut`.
+                if COPIED and " mut " not in line:
+                    written = {
+                        kind: replacement
+                        for kind, replacement in written.items()
+                        if "given_back" not in kind
+                    }
                 for kind, replacement in written.items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
@@ -414,7 +428,7 @@ def main():
                             else DROP_HELPERS
                             if DROPS
                             else MOVED_HELPERS
-                            if MOVED
+                            if MOVED or COPIED
                             else HELPERS
                         )
                         file.write("\n".join(mutated) + "\n" + helpers)
