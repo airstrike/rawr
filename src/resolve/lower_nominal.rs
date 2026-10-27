@@ -9919,6 +9919,9 @@ struct Parser<'a> {
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
+    /// Each `&` borrow of a chain of fields below a local, by the borrow's
+    /// span: the local and the chain's place (`lend_argument`).
+    borrowed_fields: BTreeMap<Span, (ImmutableString, origin::Fragment)>,
     /// Moves an arm made out of a local its bindings shadow, deferred to
     /// after the match (`drops::Clears::InArm`): each flag's declaration
     /// and what runs once the match ends.
@@ -10095,6 +10098,7 @@ impl<'a> Parser<'a> {
             temporary_scopes: Vec::new(),
             temporary_shapes: BTreeMap::new(),
             borrowed: BTreeSet::new(),
+            borrowed_fields: BTreeMap::new(),
             deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
             imported,
@@ -31645,6 +31649,10 @@ impl<'a> Parser<'a> {
                 target: Box::new(self.inference.resolve(&operand.ty)),
             };
             operand.span = span(start, operand.span.end());
+            // `&s.a.b`: the field chain a call may lend (`lend_argument`).
+            if let Some(field) = fields_below_local(&operand) {
+                self.borrowed_fields.insert(operand.span, field);
+            }
             operand.lvalue = None;
             return Ok(operand.retain_origin());
         }
@@ -47376,6 +47384,23 @@ fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
             Some(place)
         }
         Lvalue::Slice(_) => None,
+    }
+}
+
+/// The local and the place of `value` when it is a chain of fields and
+/// members below a local (`s.a.0` is `s[0][0]`), each slot a literal.
+fn fields_below_local(value: &ParsedExpr) -> Option<(ImmutableString, origin::Fragment)> {
+    match value.lvalue.as_ref()? {
+        Lvalue::Field(field) => Some((field.binding.clone(), field.place())),
+        Lvalue::Nested(nested)
+            if nested
+                .steps
+                .iter()
+                .all(|step| matches!(step, PlaceStep::Field { .. } | PlaceStep::Member(_))) =>
+        {
+            Some((variable_name(nested.base.as_str())?, in_place(value)?))
+        }
+        _ => None,
     }
 }
 

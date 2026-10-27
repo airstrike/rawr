@@ -288,11 +288,14 @@ const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
     struct State { inner: Inner, items: Vec<Tally>, count: i64 }
     impl State {
         fn show(&self) -> i64 { view(self) }
+        fn sizes(&self) -> i64 { lens(&self.items) + lens(&self.inner.items) }
     }
     fn set(state: &mut State, n: i64) { state.count = n; }
     fn view(state: &State) -> i64 { state.count + state.items.len() as i64 + peek(state) }
     fn peek(state: &State) -> i64 { state.inner.count }
     fn two(a: &State, b: &Inner) -> i64 { a.count + b.count }
+    fn both(a: &mut State, b: &mut Inner) { a.count += 1; b.count += 1; }
+    fn lens(items: &Vec<Tally>) -> i64 { items.len() as i64 }
     fn filled() -> Vec<Tally> {
         let mut items = Vec::new();
         for _ in 0..100 { items.push(Tally::new()); }
@@ -339,10 +342,11 @@ fn struct_fields_are_reached_without_a_copy() {
     }
 }
 
-/// A struct passed by `&` to a function, passed on from there, passed as
-/// `self`, or passed beside another, is lent: a thousand calls copy no
-/// `Tally` (T248). Before, each call copied the struct, and each field
-/// read inside it copied it again, three copies a call.
+/// A struct or a field of one passed by `&` to a function, passed on from
+/// there, passed as `self`, to a method, or beside another, is lent: a
+/// thousand calls copy no `Tally` (T248). Before, each call copied the
+/// struct, and each field read inside it copied it again, three copies a
+/// call, and `&s.items` copied the field.
 #[test]
 fn structs_passed_by_reference_are_lent() {
     for (work, expected) in [
@@ -355,6 +359,11 @@ fn structs_passed_by_reference_are_lent() {
         (
             "s.count = n; let o = Inner { items: filled(), count: 1 }; sum += o.with(&s);",
             600500,
+        ),
+        ("s.inner.count = n; sum += two(&s, &s.inner);", 499500),
+        (
+            "sum += lens(&s.items) + lens(&s.inner.items) + s.sizes();",
+            400000,
         ),
     ] {
         assert_eq!(struct_places(work), (expected, 0), "{work}");

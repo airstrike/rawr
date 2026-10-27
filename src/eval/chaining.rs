@@ -473,24 +473,33 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         expr: &Expr,
         new_val: Option<(Dynamic, &OpAssignment)>,
     ) -> RawrResult {
-        let result = self.eval_chain(global, caches, scope, this_ptr, expr, new_val);
+        let result = self.eval_chain(
+            global,
+            caches,
+            scope,
+            this_ptr.as_deref_mut(),
+            expr,
+            new_val,
+        );
         if let Expr::Index(x, ..) | Expr::Dot(x, ..) = expr {
-            Self::end_chain_loans(scope, &x.rhs);
+            Self::end_chain_loans(scope, &mut this_ptr, &x.rhs);
         }
         result
     }
 
     /// `end_loans` of each method call's arguments in a chain's `rhs`.
-    fn end_chain_loans(scope: &mut Scope, rhs: &Expr) {
+    fn end_chain_loans(scope: &mut Scope, this_ptr: &mut Option<&mut Dynamic>, rhs: &Expr) {
         match rhs {
-            Expr::MethodCall(x, ..) => Self::end_loans(scope, x.args.iter()),
+            Expr::MethodCall(x, ..) => {
+                Self::end_loans(scope, this_ptr.as_deref_mut(), x.args.iter())
+            }
             Expr::Index(x, ..) | Expr::Dot(x, ..) => {
-                Self::end_chain_loans(scope, &x.lhs);
-                Self::end_chain_loans(scope, &x.rhs);
+                Self::end_chain_loans(scope, this_ptr, &x.lhs);
+                Self::end_chain_loans(scope, this_ptr, &x.rhs);
             }
             _ => {}
         }

@@ -1581,7 +1581,7 @@ impl Engine {
                 }
 
                 is_ref_mut = true;
-                args.push(this_ptr.unwrap());
+                args.push(this_ptr.as_deref_mut().unwrap());
             }
             Some(first @ Expr::Variable(.., pos)) if curry.is_empty() => {
                 self.track_operation(global, *pos)?;
@@ -1602,7 +1602,8 @@ impl Engine {
 
                 // A constant is lent too: a call that would change it changes
                 // a copy (`exec_native_fn_call`'s `by_value`).
-                let target = self.search_namespace(global, caches, scope, this_ptr, first)?;
+                let target =
+                    self.search_namespace(global, caches, scope, this_ptr.as_deref_mut(), first)?;
 
                 // A place a closure reaches through a shared handle is the
                 // place itself, held locked for the call, not a copy.
@@ -1648,36 +1649,30 @@ impl Engine {
             .map(|(v, ..)| v);
         drop(args);
         drop(lent);
-        Self::end_loans(scope, first_arg.into_iter().chain(args_expr));
+        Self::end_loans(scope, this_ptr, first_arg.into_iter().chain(args_expr));
         result
     }
 
-    /// `__rawr_lend(x)` (`KEYWORD_LEND`): the local `x`, or `this`, made
-    /// shared where it is, and its shared handle. No lock is taken, so a
-    /// local a call already holds is lent too.
+    /// `__rawr_lend(x)` (`KEYWORD_LEND`): the local `x`, `this`, or a field
+    /// below one (`x[0][1]`), made shared where it is, and its shared
+    /// handle. A local is lent without a lock, so one a call already holds
+    /// is lent too; a field below a held shared local is copied instead.
     fn lend(
         &self,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         arg: &Expr,
     ) -> RawrResult {
-        let place = match arg {
-            Expr::ThisPtr(..) => this_ptr,
-            Expr::Variable(v, ..) if v.2.is_empty() => scope
-                .search(v.1.as_str())
-                .map(|index| scope.get_mut_by_index(index)),
-            _ => None,
-        };
-        let Some(place) = place else {
-            let (value, ..) = self.get_arg_value(global, caches, scope, None, arg)?;
-            return Ok(value.flatten());
-        };
-        if !place.is_shared() {
-            *place = place.take().into_shared();
+        if let Some((root, slots)) = lent_place(arg)
+            && let Some(place) = root_place(scope, this_ptr.as_deref_mut(), root)
+            && let Some(handle) = share_part(place, &slots)
+        {
+            return Ok(handle);
         }
-        Ok(place.clone())
+        let (value, ..) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
+        Ok(value.flatten())
     }
 
     /// A call's argument: a lent local's shared handle as it is
@@ -1697,15 +1692,18 @@ impl Engine {
         Ok(value.flatten())
     }
 
-    /// Once a call ends, each local its arguments lent (`KEYWORD_LEND`) is
-    /// plain again where nothing else holds it. `this` is made plain when
-    /// its method returns.
-    pub(crate) fn end_loans<'e>(scope: &mut Scope, args: impl IntoIterator<Item = &'e Expr>) {
+    /// Once a call ends, each place its arguments lent (`KEYWORD_LEND`) is
+    /// plain again where nothing else holds it.
+    pub(crate) fn end_loans<'e>(
+        scope: &mut Scope,
+        mut this_ptr: Option<&mut Dynamic>,
+        args: impl IntoIterator<Item = &'e Expr>,
+    ) {
         for expr in args {
-            if let Some(Expr::Variable(v, ..)) = lent_local(expr)
-                && let Some(index) = scope.search(v.1.as_str())
+            if let Some((root, slots)) = lent_local(expr).and_then(lent_place)
+                && let Some(place) = root_place(scope, this_ptr.as_deref_mut(), root)
             {
-                scope.get_mut_by_index(index).unshare_if_unique();
+                unshare_part(place, &slots);
             }
         }
     }
@@ -2105,6 +2103,82 @@ pub(crate) fn lent_local(expr: &Expr) -> Option<&Expr> {
             call.args.first()
         }
         _ => None,
+    }
+}
+
+/// What `__rawr_lend` lends: a local or `this`, and the field slots below
+/// it (`x[0][1]`, each a literal). `None` for any other expression.
+fn lent_place(expr: &Expr) -> Option<(&Expr, crate::StaticVec<usize>)> {
+    let mut slots = crate::StaticVec::new_const();
+    let (root, mut steps) = match expr {
+        Expr::Index(chain, ..) => (&chain.lhs, Some(&chain.rhs)),
+        root => (root, None),
+    };
+    while let Some(step) = steps {
+        let (slot, rest) = match step {
+            Expr::Index(chain, ..) => (&chain.lhs, Some(&chain.rhs)),
+            slot => (slot, None),
+        };
+        let Expr::IntegerConstant(slot, ..) = slot else {
+            return None;
+        };
+        slots.push(usize::try_from(*slot).ok()?);
+        steps = rest;
+    }
+    match root {
+        Expr::ThisPtr(..) => Some((root, slots)),
+        Expr::Variable(v, ..) if v.2.is_empty() => Some((root, slots)),
+        _ => None,
+    }
+}
+
+/// The value `root` (a local or `this`) holds, itself.
+fn root_place<'s>(
+    scope: &'s mut Scope,
+    this_ptr: Option<&'s mut Dynamic>,
+    root: &Expr,
+) -> Option<&'s mut Dynamic> {
+    match root {
+        Expr::ThisPtr(..) => this_ptr,
+        Expr::Variable(v, ..) => scope
+            .search(v.1.as_str())
+            .map(|index| scope.get_mut_by_index(index)),
+        _ => None,
+    }
+}
+
+/// The part of `place` that `slots` reach made shared where it is, and its
+/// shared handle. A shared value on the way is locked to reach below it;
+/// `None` where one is held already, or where a part is missing.
+fn share_part(place: &mut Dynamic, slots: &[usize]) -> Option<Dynamic> {
+    let Some((&slot, rest)) = slots.split_first() else {
+        if !place.is_shared() {
+            *place = place.take().into_shared();
+        }
+        return Some(place.clone());
+    };
+    if place.is_shared() {
+        let mut guard = place.write_lock::<Dynamic>()?;
+        return share_part(guard.part_mut(slot)?, rest);
+    }
+    share_part(place.part_mut(slot)?, rest)
+}
+
+/// The part of `place` that `slots` reach made plain again where nothing
+/// else holds it (`share_part`).
+fn unshare_part(place: &mut Dynamic, slots: &[usize]) {
+    let Some((&slot, rest)) = slots.split_first() else {
+        place.unshare_if_unique();
+        return;
+    };
+    if place.is_shared() {
+        if let Some(mut guard) = place.write_lock::<Dynamic>()
+            && let Some(part) = guard.part_mut(slot)
+        {
+            unshare_part(part, rest);
+        }
+    } else if let Some(part) = place.part_mut(slot) {
+        unshare_part(part, rest);
     }
 }
 

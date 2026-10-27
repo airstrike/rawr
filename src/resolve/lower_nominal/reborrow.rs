@@ -316,7 +316,16 @@ impl Parser<'_> {
         if self.in_async_body() || !argument.prelude.is_empty() || !self.moves_by_value(&target) {
             return;
         }
-        let name = argument.source.as_str();
+        // The local, and the place: the local itself, or a chain of fields
+        // and members below it, each slot a literal.
+        // A coercion that changed the argument's text leaves it as it is.
+        let (name, place) = self
+            .borrowed_fields
+            .get(&argument.span)
+            .filter(|(_, place)| place.as_str() == argument.source.as_str())
+            .cloned()
+            .unwrap_or_else(|| (argument.source.as_str().into(), argument.source.clone()));
+        let name = name.as_str();
         let lendable = name == KEYWORD_THIS
             || is_valid_identifier(name)
                 && !name.starts_with("__rawr")
@@ -327,7 +336,7 @@ impl Parser<'_> {
                 && !self.entry_aliases.contains_key(name)
                 && !self.cell_guards.contains_key(name);
         if lendable {
-            argument.source = origin::Fragment::call(KEYWORD_LEND, [argument.source.clone()]);
+            argument.source = origin::Fragment::call(KEYWORD_LEND, [place]);
         }
     }
 }
