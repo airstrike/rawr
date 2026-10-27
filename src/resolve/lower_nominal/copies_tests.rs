@@ -283,9 +283,16 @@ const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
     impl Inner {
         fn bump(&mut self, n: i64) { self.count += n; }
         fn total(&self) -> i64 { self.count }
+        fn with(&self, state: &State) -> i64 { self.count + view(state) }
     }
     struct State { inner: Inner, items: Vec<Tally>, count: i64 }
+    impl State {
+        fn show(&self) -> i64 { view(self) }
+    }
     fn set(state: &mut State, n: i64) { state.count = n; }
+    fn view(state: &State) -> i64 { state.count + state.items.len() as i64 + peek(state) }
+    fn peek(state: &State) -> i64 { state.inner.count }
+    fn two(a: &State, b: &Inner) -> i64 { a.count + b.count }
     fn filled() -> Vec<Tally> {
         let mut items = Vec::new();
         for _ in 0..100 { items.push(Tally::new()); }
@@ -325,6 +332,28 @@ fn struct_fields_are_reached_without_a_copy() {
         ("s.items[0].add(n); sum += s.items[0].total();", 166666500),
         (
             "s.items.push(Tally::new()); sum += s.items.len() as i64;",
+            600500,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+}
+
+/// A struct passed by `&` to a function, passed on from there, passed as
+/// `self`, or passed beside another, is lent: a thousand calls copy no
+/// `Tally` (T248). Before, each call copied the struct, and each field
+/// read inside it copied it again, three copies a call.
+#[test]
+fn structs_passed_by_reference_are_lent() {
+    for (work, expected) in [
+        ("s.count = n; sum += view(&s);", 599500),
+        ("s.count = n; sum += s.show();", 599500),
+        (
+            "let o = Inner { items: filled(), count: n }; sum += two(&s, &o);",
+            499500,
+        ),
+        (
+            "s.count = n; let o = Inner { items: filled(), count: 1 }; sum += o.with(&s);",
             600500,
         ),
     ] {

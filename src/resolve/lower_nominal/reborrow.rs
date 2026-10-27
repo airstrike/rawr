@@ -14,7 +14,7 @@
 //! scopes at each `.await`, so there a new borrow stays refused.
 
 use super::*;
-use crate::engine::{KEYWORD_SLOT_OF, KEYWORD_THROUGH};
+use crate::engine::{KEYWORD_LEND, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
 
 impl Parser<'_> {
     /// Whether the whole local `name` may be what a `&mut` local refers to:
@@ -289,6 +289,46 @@ impl Parser<'_> {
             origin::Fragment::plain(format!("{selector} = {source};")),
             replacement.span,
         ))
+    }
+
+    /// `f(&s)` to a script function's `&` parameter (`declared`, `expected`
+    /// at this call), of a value Rust moves: the whole local `s`, or
+    /// `self`, is lent (`KEYWORD_LEND`), so the call reads it where it is
+    /// and nothing is copied (D568). A part of a local, a local in an async
+    /// body, or a reference filling a type parameter, which the body may
+    /// move as a value, is passed as before.
+    pub(super) fn lend_argument(
+        &self,
+        declared: &type_ref::Type,
+        expected: &Ty,
+        argument: &mut ParsedExpr,
+    ) {
+        let (
+            type_ref::Type::Reference { mutable: false, .. },
+            Ty::Reference {
+                mutable: false,
+                target,
+            },
+        ) = (declared, self.inference.resolve(expected))
+        else {
+            return;
+        };
+        if self.in_async_body() || !argument.prelude.is_empty() || !self.moves_by_value(&target) {
+            return;
+        }
+        let name = argument.source.as_str();
+        let lendable = name == KEYWORD_THIS
+            || is_valid_identifier(name)
+                && !name.starts_with("__rawr")
+                && self
+                    .bindings
+                    .get(name)
+                    .is_some_and(|binding| matches!(binding.kind, BindingKind::Local))
+                && !self.entry_aliases.contains_key(name)
+                && !self.cell_guards.contains_key(name);
+        if lendable {
+            argument.source = origin::Fragment::call(KEYWORD_LEND, [argument.source.clone()]);
+        }
     }
 }
 

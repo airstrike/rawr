@@ -32934,6 +32934,16 @@ impl<'a> Parser<'a> {
                 span(member_span.start(), end),
                 &substitution,
             )?;
+            let receiver_root = in_place(&value).map(|place| {
+                let place = place.as_str();
+                place[..place.find('[').unwrap_or(place.len())].to_string()
+            });
+            self.lend_arguments(
+                &definition,
+                &mut args,
+                &substitution,
+                receiver_root.as_deref(),
+            );
             // rustc's E0040: `drop` runs where the value drops, not by name.
             if definition.trait_name().is_some_and(|name| name == "Drop") {
                 return Err(Error::Syntax {
@@ -39977,6 +39987,7 @@ impl<'a> Parser<'a> {
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;
+                self.lend_argument(&parameter.ty, &expected, argument);
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
@@ -40968,6 +40979,24 @@ impl<'a> Parser<'a> {
             self.move_local(argument)?;
         }
         Ok(())
+    }
+
+    /// Each argument of a script method's `&` parameter lent where it is
+    /// (`lend_argument`), unless it is the local `receiver_root` the call's
+    /// receiver is in, which the call holds while it runs.
+    fn lend_arguments(
+        &self,
+        definition: &method::Definition,
+        arguments: &mut [ParsedExpr],
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        receiver_root: Option<&str>,
+    ) {
+        for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
+            if receiver_root != Some(argument.source.as_str()) {
+                let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
+                self.lend_argument(&parameter.ty, &expected, argument);
+            }
+        }
     }
 
     /// A generic impl's method at one call: fresh parameters, the owner's
@@ -42786,6 +42815,7 @@ impl<'a> Parser<'a> {
                 span(owner_span.start(), end),
                 &substitution,
             )?;
+            self.lend_arguments(&definition, &mut arguments, &substitution, None);
             let opens_startup = is_tuple(definition.output())
                 && self.models.boot.as_ref() == Some(definition.key());
             let witnesses = self.witness_arguments(

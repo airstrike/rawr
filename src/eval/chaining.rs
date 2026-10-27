@@ -466,8 +466,37 @@ impl Engine {
         }
     }
 
-    /// Evaluate a dot/index chain.
+    /// Evaluate a dot/index chain. Once it ends, a local a method call in
+    /// it lent (`KEYWORD_LEND`) is plain again where nothing else holds it.
     pub(crate) fn eval_dot_index_chain(
+        &self,
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+        scope: &mut Scope,
+        this_ptr: Option<&mut Dynamic>,
+        expr: &Expr,
+        new_val: Option<(Dynamic, &OpAssignment)>,
+    ) -> RawrResult {
+        let result = self.eval_chain(global, caches, scope, this_ptr, expr, new_val);
+        if let Expr::Index(x, ..) | Expr::Dot(x, ..) = expr {
+            Self::end_chain_loans(scope, &x.rhs);
+        }
+        result
+    }
+
+    /// `end_loans` of each method call's arguments in a chain's `rhs`.
+    fn end_chain_loans(scope: &mut Scope, rhs: &Expr) {
+        match rhs {
+            Expr::MethodCall(x, ..) => Self::end_loans(scope, x.args.iter()),
+            Expr::Index(x, ..) | Expr::Dot(x, ..) => {
+                Self::end_chain_loans(scope, &x.lhs);
+                Self::end_chain_loans(scope, &x.rhs);
+            }
+            _ => {}
+        }
+    }
+
+    fn eval_chain(
         &self,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
@@ -696,9 +725,8 @@ impl Engine {
                 );
 
                 for expr in &*x.args {
-                    let arg_value =
-                        self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
-                    idx_values.push(arg_value.0.flatten());
+                    let tp = this_ptr.as_deref_mut();
+                    idx_values.push(self.call_arg(global, caches, scope, tp, expr)?);
                 }
             }
 
@@ -723,8 +751,7 @@ impl Engine {
 
                         for expr in &*x.args {
                             let tp = this_ptr.as_deref_mut();
-                            let arg_value = self.get_arg_value(global, caches, scope, tp, expr)?;
-                            _arg_values.push(arg_value.0.flatten());
+                            _arg_values.push(self.call_arg(global, caches, scope, tp, expr)?);
                         }
                     }
                     (_, ChainType::Indexing) => {
