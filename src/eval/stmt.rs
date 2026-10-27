@@ -775,7 +775,7 @@ impl Engine {
                 let args = &mut [&mut *lock_guard, &mut new_val];
 
                 match self.exec_native_fn_call(
-                    global, caches, op_x_str, opx, hash_x, args, true, false, pos,
+                    global, caches, op_x_str, opx, hash_x, args, true, false, false, pos,
                 ) {
                     Ok(_) => (),
                     Err(err) if matches!(*err, ERR::ErrorFunctionNotFound(ref f, ..) if f.starts_with(op_x_str)) =>
@@ -785,7 +785,7 @@ impl Engine {
 
                         *args[0] = self
                             .exec_native_fn_call(
-                                global, caches, op_str, op, hash, args, true, false, pos,
+                                global, caches, op_str, op, hash, args, true, false, false, pos,
                             )?
                             .0;
                     }

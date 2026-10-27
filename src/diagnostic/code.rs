@@ -80,6 +80,10 @@ codes!(Resolve;
     (BORROW_MOVE, "E0505", "A move out of a place while a borrow of it is live, as rustc reports it."),
     (BORROW_ASSIGN, "E0506", "An assignment to a place while a borrow of it is live, as rustc reports it."),
     (BORROW_LIFETIME, "E0597", "A local that ends while a borrow of it is live, as rustc reports it."),
+    (BORROW_CLOSURE_OUTLIVES, "E0373", "A closure that borrows a local and may outlive the function, as rustc reports it."),
+    (BORROW_CLOSURE_UNIQUE, "E0500", "A closure's unique capture of a place while a borrow of it is live, as rustc reports it."),
+    (BORROW_AFTER_UNIQUE, "E0501", "A borrow of a place while a closure's unique capture of it is live, as rustc reports it."),
+    (BORROW_TWO_UNIQUE, "E0524", "Two closures' unique captures of a place live at once, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
     (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
@@ -170,6 +174,10 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0503" => BORROW_USE_MUTABLE,
         "E0505" => BORROW_MOVE,
         "E0506" => BORROW_ASSIGN,
+        "E0373" => BORROW_CLOSURE_OUTLIVES,
+        "E0500" => BORROW_CLOSURE_UNIQUE,
+        "E0501" => BORROW_AFTER_UNIQUE,
+        "E0524" => BORROW_TWO_UNIQUE,
         _ => BORROW_LIFETIME,
     }
 }

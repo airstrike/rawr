@@ -28,6 +28,7 @@ fn main() {
 </div>
 <h2 id="capture">Captures</h2>
 <p>A closure that changes what it captures is <code>FnMut</code>. A <code>move</code> closure takes what it captures. A closure that moves a captured value out, as <code>|| drop(s)</code> does, can be called once.</p>
+<p>A closure that doesn&rsquo;t take what it captures borrows it, and keeps the borrow while the closure is used, as in Rust. It captures only the fields it uses. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="capture.rs" id="src-capture">let mut count = 0;
 let mut tick = || count += 1;

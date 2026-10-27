@@ -132,11 +132,28 @@ pub(crate) struct Loan {
     /// A two-phase `&mut` borrow's reservation (`v.push(v.len())`): until
     /// its activation it lets the place be read and borrowed shared.
     pub(crate) two_phase: bool,
+    /// A closure's capture of the place, made where the closure is.
+    pub(crate) capture: Capture,
     pub(crate) span: Span,
     pub(crate) at: Point,
     /// The hidden local the borrow's value is held in until a `let`, an
     /// assignment or a call takes it: the loan's point defines it.
     pub(crate) temporary: Local,
+}
+
+/// Whether a loan is a closure's capture, and which kind, as rustc reports
+/// its conflicts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Capture {
+    /// A borrow the body makes itself.
+    #[default]
+    No,
+    /// A closure's shared or `&mut` capture.
+    Borrow,
+    /// A closure's unique capture: a change through a `&mut` reference in a
+    /// local not declared `mut` (`|| *r += 1`), a `&mut` borrow that rustc
+    /// reports as the closure requiring unique access.
+    Unique,
 }
 
 /// A local's name and declaration, for messages.
@@ -256,7 +273,7 @@ impl Points {
 /// A borrow error, as rustc reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Conflict {
-    /// rustc's code: E0499, E0502, E0503, E0505, E0506 or E0597.
+    /// rustc's code: E0373, E0499, E0500, E0501, E0502, E0503, E0505, E0506, E0524 or E0597.
     pub(crate) code: &'static str,
     pub(crate) message: String,
     /// The access that conflicts.
@@ -282,6 +299,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             .push(loan_index);
     }
     let forever = reaches(body, &body.everywhere);
+    let returned = reaches(body, &body.returned);
     for point in body.points() {
         let Some(Fact::Access {
             place,
@@ -293,25 +311,39 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             continue;
         };
         // A local borrowed for `'static` never lives long enough: it ends
-        // with the body, or when it unwinds.
+        // with the body, or when it unwinds. Nor does one a returned
+        // closure captures; another borrow of a local the body returns is
+        // rustc's E0515, left to it.
         if let Some(loan) = loan
-            && forever[loan.0 as usize]
+            && (forever[loan.0 as usize]
+                || returned[loan.0 as usize] && body.loans[loan.0 as usize].capture != Capture::No)
             && !body.loans[loan.0 as usize]
                 .place
                 .projection
                 .contains(&Projection::Deref)
         {
             let loan = &body.loans[loan.0 as usize];
+            let name = describe(body, &loan.place);
+            // A closure that borrows it is one that may outlive the body.
+            let (code, message) = if loan.capture == Capture::No {
+                ("E0597", format!("`{name}` does not live long enough"))
+            } else {
+                (
+                    "E0373",
+                    format!(
+                        "closure may outlive the current function, but it borrows `{name}`, \
+                         which is owned by the current function"
+                    ),
+                )
+            };
             return Some(Conflict {
-                code: "E0597",
-                message: format!(
-                    "`{}` does not live long enough",
-                    describe(body, &loan.place)
-                ),
+                code,
+                message,
                 access: loan.span,
                 borrow: loan.span,
             });
         }
+        let made = loan.map(|loan| body.loans[loan.0 as usize].capture);
         let Some(loans) = by_local.get(&place.local) else {
             continue;
         };
@@ -321,7 +353,14 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             if !in_scope[loan_index].contains(index(point)) {
                 continue;
             }
-            if let Some(conflict) = conflict(body, place, *access, *span, &body.loans[loan_index]) {
+            if let Some(conflict) = conflict(
+                body,
+                place,
+                *access,
+                made.unwrap_or_default(),
+                *span,
+                &body.loans[loan_index],
+            ) {
                 return Some(conflict);
             }
         }
@@ -440,6 +479,7 @@ fn conflict(
     body: &Body,
     place: &Place,
     access: Access,
+    made: Capture,
     span: Span,
     loan: &Loan,
 ) -> Option<Conflict> {
@@ -458,6 +498,42 @@ fn conflict(
     // A reservation conflicts as a shared borrow does, and is reported as
     // the `&mut` borrow it becomes.
     let (conflicts_mutably, reported_mutable) = (loan.mutable, loan.mutable || loan.two_phase);
+    // A closure's unique capture, made or in scope, has codes of its own.
+    let unique = (
+        made == Capture::Unique && access == Access::Mutable,
+        loan.capture == Capture::Unique,
+    );
+    if matches!(access, Access::Shared | Access::Reserve | Access::Mutable)
+        && unique != (false, false)
+    {
+        let (code, message) = match unique {
+            (true, true) => (
+                "E0524",
+                format!("two closures require unique access to `{name}` at the same time"),
+            ),
+            (true, false) => (
+                "E0500",
+                format!("closure requires unique access to `{name}` but it is already borrowed"),
+            ),
+            _ => (
+                "E0501",
+                format!(
+                    "cannot borrow `{name}` as {} because previous closure requires unique access",
+                    if access == Access::Shared {
+                        "immutable"
+                    } else {
+                        "mutable"
+                    }
+                ),
+            ),
+        };
+        return Some(Conflict {
+            code,
+            message,
+            access: span,
+            borrow: loan.span,
+        });
+    }
     let (code, message) = match access {
         Access::None => return None,
         Access::Reserve | Access::Mutable if !conflicts_mutably && reported_mutable => (

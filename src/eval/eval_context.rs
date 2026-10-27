@@ -492,6 +492,7 @@ fn _call_fn_raw(
                 args,
                 is_ref_mut,
                 false,
+                false,
                 Position::NONE,
             )
             .map(|(r, ..)| r);

@@ -2538,7 +2538,12 @@ fn parse_function_rest(
     };
     parse_where_with(input, &mut generics, None, &mut lifetimes)?;
     lift_impl_parameters(&mut generics, &mut parameters);
-    erase_fn_bounds(&mut generics, &mut parameters, &mut output);
+    erase_fn_bounds(
+        &mut generics,
+        &mut parameters,
+        &mut output,
+        &lifetimes.bounds,
+    );
 
     // `fn area(&self) -> f64;`: a required trait function has no body.
     if declaration && let Some((Token::SemiColon, position)) = input.peek() {
@@ -3498,7 +3503,8 @@ fn parse_type_split(
 }
 
 /// `impl Fn(A) -> B + 'a + Send`: the lifetimes and auto traits after a
-/// function type, which Rawr's one function type needs no record of.
+/// function type. Rawr's one function type keeps the lifetimes, which bound
+/// what the function value captures, for the borrow checker (D572.4).
 fn skip_fn_bounds(
     input: &mut TokenStream,
     split: &mut Option<Position>,
@@ -3510,6 +3516,7 @@ fn skip_fn_bounds(
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             let lifetime = parse_lifetime(input)?;
             path.span = Span::new(start, lifetime.span.end());
+            bound_fn_type(&mut path, lifetime);
             continue;
         }
         if let Some(end) = skip_precise_capture(input, Some(split))? {
@@ -3529,6 +3536,16 @@ fn skip_fn_bounds(
         path.span = Span::new(start, extra.span.end());
     }
     Ok(path)
+}
+
+/// The function type `path` is bounded by `lifetime`: what its value
+/// captures outlives it.
+fn bound_fn_type(path: &mut type_ref::Path, lifetime: type_ref::Lifetime) {
+    if let [segment] = &mut path.segments[..] {
+        let mut arguments = std::mem::take(&mut segment.arguments).into_vec();
+        arguments.push(type_ref::Argument::Lifetime(lifetime));
+        segment.arguments = arguments.into_boxed_slice();
+    }
 }
 
 /// Whether an `impl Hash` declares Rust's one method,
@@ -3889,11 +3906,13 @@ fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<t
 
 /// A generic parameter bounded by `Fn(A) -> B` is that function type, as
 /// Rawr has one function type: each use of the parameter in the signature
-/// is replaced by it, and the parameter is dropped.
+/// is replaced by it, bounded by the parameter's `outlives` bounds, and the
+/// parameter is dropped.
 fn erase_fn_bounds(
     generics: &mut Vec<crate::item::GenericParam>,
     parameters: &mut [crate::item::Parameter],
     output: &mut Option<type_ref::Type>,
+    outlives: &[(crate::item::Name, crate::item::Name)],
 ) {
     generics.retain(|generic| {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
@@ -3931,7 +3950,20 @@ fn erase_fn_bounds(
         }) else {
             return true;
         };
-        let replacement = type_ref::Type::Path(bound.clone());
+        let mut bound = bound.clone();
+        for (_, lifetime) in outlives
+            .iter()
+            .filter(|(parameter, _)| parameter.text == generic.name.text)
+        {
+            bound_fn_type(
+                &mut bound,
+                type_ref::Lifetime {
+                    name: lifetime.clone(),
+                    span: lifetime.span,
+                },
+            );
+        }
+        let replacement = type_ref::Type::Path(bound);
         for parameter in parameters.iter_mut() {
             replace_named(&mut parameter.ty, &generic.name.text, &replacement);
         }
