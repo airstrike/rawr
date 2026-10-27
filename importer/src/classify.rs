@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 35;
+const CLASSIFIER_VERSION: u32 = 36;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4839,6 +4839,17 @@ impl<P: api::Phase> Context<'_, P> {
                         representability::convert::Builtin::String,
                     )
                 }
+                // An argument's `impl IntoIterator<Item = X>`, as iced's
+                // `Column::with_children` takes: a `Vec<X>`, which Rawr's
+                // array is, so the call's `X` is its elements' type.
+                model::Type::Parameter { index, .. }
+                    if let Some(item) = self.iterated_item(generics, *index) =>
+                {
+                    representability::convert::Type::Sequence {
+                        element: Box::new(self.convert_value(item)?),
+                        owned: true,
+                    }
+                }
                 input if futures.is_empty() => self.convert_input(&rewrite(input))?,
                 input => futurize(self.convert_input(&rewrite(input))?, &futures),
             });
@@ -5662,6 +5673,59 @@ impl<P: api::Phase> Context<'_, P> {
             })
             .count()
             == 1
+    }
+
+    /// `X` of an argument's `impl IntoIterator<Item = X>` at the parameter
+    /// `index`, when that is its only bound besides `Sized`.
+    fn iterated_item<'g>(
+        &self,
+        generics: &'g model::Generics,
+        index: u32,
+    ) -> Option<&'g model::Type> {
+        let parameter = generics
+            .parameters()
+            .find(|parameter| parameter.index() == index)?;
+        if !parameter.name().starts_with("impl ") {
+            return None;
+        }
+        let mut item = None;
+        for predicate in generics.predicates() {
+            match predicate {
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *bounded == index => {
+                    if !self.is_core_trait(trait_id, "IntoIterator")
+                        && self.definition_name(trait_id) != Some("Sized")
+                    {
+                        return None;
+                    }
+                }
+                model::Predicate::ProjectionEquality {
+                    projection:
+                        model::Type::Projection {
+                            trait_id,
+                            associated,
+                            arguments,
+                        },
+                    ty,
+                } if matches!(
+                    arguments.first(),
+                    Some(model::Argument::Type(model::Type::Parameter { index: bounded, .. }))
+                        if *bounded == index
+                ) =>
+                {
+                    if !self.is_core_trait(trait_id, "IntoIterator")
+                        || self.definition_name(associated) != Some("Item")
+                    {
+                        return None;
+                    }
+                    item = Some(ty);
+                }
+                _ => {}
+            }
+        }
+        item
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {

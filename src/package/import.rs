@@ -1864,8 +1864,16 @@ fn imported_item(
     let retains_item = match outcome.representability() {
         Representability::Function(_)
         | Representability::Method(_)
-        | Representability::Constant(_)
-        | Representability::Invocation(_) => true,
+        | Representability::Constant(_) => true,
+        // A callable parameter whose closure Rawr can't make, as cosmic
+        // text's `with_buffer_mut(impl FnOnce(&mut Borrowed<..>) -> T)`
+        // takes, leaves the item uncallable.
+        Representability::Invocation(plan) => {
+            plan.call().is_some()
+                || plan.signature().parameters().iter().all(|parameter| {
+                    parameter.kind() != representability::signature::Kind::Callable
+                })
+        }
         Representability::FunctionItem(plan) => callable_generic(plan),
         _ => false,
     };

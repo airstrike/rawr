@@ -2502,6 +2502,16 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 signature
             },
         ),
+        // A callable parameter whose closure Rawr can't make leaves the item
+        // uncallable, as cosmic text's `with_buffer_mut` is.
+        Representability::Invocation(plan)
+            if plan.call().is_none()
+                && plan.signature().parameters().iter().any(|parameter| {
+                    parameter.kind() == representability::signature::Kind::Callable
+                }) =>
+        {
+            return Ok(None);
+        }
         Representability::Invocation(plan) => (
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
