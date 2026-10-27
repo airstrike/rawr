@@ -90,6 +90,26 @@ fn methods_cross_through_traits_over_fn_as_iced_takes_them() {
     );
 }
 
+/// iced's counter: `column![button("Increment"), text(value).size(50),
+/// ..]` from `fn view(&self) -> impl Widget<Message>`. Only `Widget`'s
+/// defaulted `Renderer`, a parameterless alias that is the only name of
+/// its type, and the crate's impls decide the hidden type's renderer
+/// (D604), and a string literal fills `button`'s content as `&'static
+/// str`. The output is `cargo run`'s.
+#[test]
+fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
+    assert_eq!(
+        printed("crossing-counter", Some("counter.rs")),
+        "title crossing::Counter\n\
+         renderer events::widgets::fallback::Renderer<events::widgets::backend::Gpu, events::widgets::backend::Soft>\n\
+         1 view pad 20 [Increment] 0@50 [Decrement]\n1 message Increment\n\
+         2 view pad 20 [Increment] 1@50 [Decrement]\n2 message Increment\n\
+         3 view pad 20 [Increment] 2@50 [Decrement]\n3 message Increment\n\
+         4 view pad 20 [Increment] 3@50 [Decrement]\n4 message Decrement\n\
+         last view pad 20 [Increment] 2@50 [Decrement]"
+    );
+}
+
 /// `event` and the count a `N view count X` line shows.
 fn parse(line: &str) -> Option<(i64, i64)> {
     let (event, count) = line.split_once(" view count ")?;
