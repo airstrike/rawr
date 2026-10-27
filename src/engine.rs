@@ -53,6 +53,17 @@ pub const KEYWORD_LOCATE: &str = "__rawr_locate";
 /// `switch __rawr_some_through_x`: the switch matches `Some(&mut place)`,
 /// where `x` holds the place's path, or `()` for `None` (`get_mut`).
 pub const KEYWORD_SOME_THROUGH: &str = "__rawr_some_through_";
+/// `__rawr_share(path)`: the local at the start of a place's path
+/// ([`KEYWORD_LOCATE`]) made shared where it is, as a closure's capture makes
+/// it, and its shared handle: the same value, not a copy.
+pub const KEYWORD_SHARE: &str = "__rawr_share";
+/// `__rawr_in_held_h`: the place a closure reaches through what it captured
+/// where it was made: the local `h` holds the shared handle of the place's
+/// local ([`KEYWORD_SHARE`]), and `h` followed by [`HELD_STEPS`] the place's
+/// path, whose steps below that local reach the place itself.
+pub const KEYWORD_HELD: &str = "__rawr_in_held_";
+/// The suffix of the local holding a held place's path ([`KEYWORD_HELD`]).
+pub const HELD_STEPS: &str = "_at";
 pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
 pub const KEYWORD_THIS: &str = "this";
 pub const KEYWORD_GLOBAL: &str = "global";

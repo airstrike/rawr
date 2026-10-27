@@ -71,7 +71,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A <code>&amp;mut</code> chosen by a branch, as in <code>r = if c { &amp;mut a } else { &amp;mut b };</code>. Assign it in each branch instead.</li>
   <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
   <li>A <code>&amp;mut</code> pattern binding of a slice pattern&rsquo;s rest, as in <code>[first, rest @ ..] = &amp;mut v[..]</code>, or of a whole range of elements.</li>
-  <li>A closure that uses a <code>&amp;mut</code> pattern binding or a mutable loop&rsquo;s element.</li>
+  <li>A closure that uses a <code>&amp;mut</code> borrow declared outside it inside an async block, or a borrow of a range of elements or of a place behind a <code>RefCell</code> borrow. Such a closure can&rsquo;t be passed to a native function either.</li>
+  <li>A <code>&amp;mut</code> borrow in a struct literal&rsquo;s field, as in <code>W { v: &amp;mut v }</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure. See <a href="/docs/reference/moves#drop">Drop</a>.</li>

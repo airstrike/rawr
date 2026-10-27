@@ -2,7 +2,7 @@
 
 use super::{Caches, EvalContext, GlobalRuntimeState, Target};
 use crate::ast::Expr;
-use crate::engine::{KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
+use crate::engine::{HELD_STEPS, KEYWORD_HELD, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
 use crate::packages::string_basic::{print_with_func, FUNC_TO_STRING};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, RawrResult, RawrResultOf, Scope, SmartString, ERR};
@@ -58,7 +58,9 @@ impl Engine {
         // parser gave them no index.
         if let Expr::Variable(v, None, ..) = expr
             && v.0.is_none()
-            && (v.1.starts_with(KEYWORD_SLOT_OF) || v.1.starts_with(KEYWORD_THROUGH))
+            && (v.1.starts_with(KEYWORD_SLOT_OF)
+                || v.1.starts_with(KEYWORD_THROUGH)
+                || v.1.starts_with(KEYWORD_HELD))
         {
             return Self::search_place(scope, this_ptr, v.1.as_str(), expr);
         }
@@ -201,11 +203,36 @@ impl Engine {
             };
             return Ok(Dynamic::from_int(slot).into());
         }
+        if let Some(holder) = name.strip_prefix(KEYWORD_HELD) {
+            return Self::held_place(scope, holder, name, expr);
+        }
         let holder = name.strip_prefix(KEYWORD_THROUGH).unwrap_or(name);
         let index = scope.search(holder).ok_or_else(|| missing(holder))?;
         let (root, steps) =
             Self::held_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
-        Self::place_at(scope, this_ptr, &root, &steps, name, expr)?.try_into()
+        Self::place_at(scope, this_ptr, &root, &steps, name, expr)
+    }
+
+    /// `__rawr_in_held_h` (`KEYWORD_HELD`): the place a closure reaches through
+    /// the shared handle `h` of the place's local, which it captured where
+    /// it was made, and the path below that local, which `h_at` holds.
+    fn held_place<'s>(
+        scope: &'s mut Scope,
+        holder: &str,
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<Target<'s>> {
+        let missing = |name: &str| -> crate::RawrError {
+            ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
+        };
+        let mut at = SmartString::new_const();
+        at.push_str(holder);
+        at.push_str(HELD_STEPS);
+        let path = scope.search(&at).ok_or_else(|| missing(&at))?;
+        let (_, steps) =
+            Self::held_path(scope.get_mut_by_index(path)).ok_or_else(|| missing(name))?;
+        let index = scope.search(holder).ok_or_else(|| missing(holder))?;
+        Self::reach(scope.get_mut_by_index(index), &steps, name, expr)
     }
 
     /// The place `root` (a local's slot, `-1` for `this`, or in an async
@@ -218,7 +245,7 @@ impl Engine {
         steps: &[usize],
         name: &str,
         expr: &Expr,
-    ) -> RawrResultOf<&'s mut Dynamic> {
+    ) -> RawrResultOf<Target<'s>> {
         let missing = |name: &str| -> crate::RawrError {
             ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
         };
@@ -232,11 +259,46 @@ impl Engine {
                 scope.search(&local).ok_or_else(|| missing(&local))? as crate::INT
             }
         };
-        let mut place = match usize::try_from(slot) {
+        let place = match usize::try_from(slot) {
             Ok(slot) if slot < scope.len() => scope.get_mut_by_index(slot),
             Ok(_) => return Err(missing(name)),
             Err(_) => this_ptr.ok_or_else(|| missing(KEYWORD_THIS))?,
         };
+        Self::reach(place, steps, name, expr)
+    }
+
+    /// The part of `place` that `steps` reach, itself. A shared value on
+    /// the way (a local a closure captured) is locked, and the target holds
+    /// the lock and reaches the part below it at each use.
+    pub(crate) fn reach<'s>(
+        mut place: &'s mut Dynamic,
+        steps: &[usize],
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<Target<'s>> {
+        for (at, &step) in steps.iter().enumerate() {
+            if place.is_shared() {
+                let Some(mut guard) = place.write_lock::<Dynamic>() else {
+                    return Err(ERR::ErrorDataRace(name.to_string(), expr.position()).into());
+                };
+                Self::step_through(&mut guard, &steps[at..], name, expr)?;
+                return Ok(Target::SharedPart {
+                    guard,
+                    steps: steps[at..].iter().copied().collect(),
+                });
+            }
+            place = Self::step_through(place, &[step], name, expr)?;
+        }
+        place.try_into()
+    }
+
+    /// The part of `place` that `steps` reach, none of them shared.
+    fn step_through<'p>(
+        mut place: &'p mut Dynamic,
+        steps: &[usize],
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<&'p mut Dynamic> {
         for &step in steps {
             if let Ok(array) = place.as_array_ref()
                 && step >= array.len()
@@ -246,7 +308,10 @@ impl Engine {
                     ERR::ErrorArrayBounds(length, step as crate::INT, expr.position()).into(),
                 );
             }
-            place = place.part_mut(step).ok_or_else(|| missing(name))?;
+            let Some(part) = place.part_mut(step) else {
+                return Err(ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into());
+            };
+            place = part;
         }
         Ok(place)
     }
@@ -254,6 +319,10 @@ impl Engine {
     /// What a local naming a place holds: where the local is and the parts
     /// below it, or `None` for another value.
     pub(crate) fn held_path(held: &Dynamic) -> Option<(Dynamic, crate::StaticVec<usize>)> {
+        // A path a closure captured is shared: its indexes are read out.
+        if held.is_shared() {
+            return Self::held_path(&held.flatten_clone());
+        }
         if held.is_int() {
             return Some((held.clone(), crate::StaticVec::new_const()));
         }

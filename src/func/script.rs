@@ -50,6 +50,10 @@ impl Engine {
 
         let orig_scope_len = scope.len();
         let orig_lib_len = global.lib.len();
+        // A closure in the body that reaches the caller's place `this`
+        // makes it shared (`KEYWORD_SHARE`); once the closure is gone, the
+        // caller's place is plain again.
+        let this_shared = this_ptr.as_deref().is_some_and(Dynamic::is_shared);
         let orig_imports_len = global.num_imports();
 
         #[cfg(feature = "debugging")]
@@ -172,7 +176,7 @@ impl Engine {
                     Ok(ref r) => crate::eval::DebuggerEvent::FunctionExitWithValue(r),
                     Err(ref err) => crate::eval::DebuggerEvent::FunctionExitWithError(err),
                 };
-                match self.dbg_raw(global, caches, scope, this_ptr, node, event) {
+                match self.dbg_raw(global, caches, scope, this_ptr.as_deref_mut(), node, event) {
                     Ok(_) => (),
                     Err(err) => _result = Err(err),
                 }
@@ -195,6 +199,9 @@ impl Engine {
         }
         global.lib.truncate(orig_lib_len);
         global.truncate_imports(orig_imports_len);
+        if !this_shared && let Some(this) = this_ptr {
+            this.unshare_if_unique();
+        }
 
         // Restore constants
         if let Some(constants) = orig_constants {

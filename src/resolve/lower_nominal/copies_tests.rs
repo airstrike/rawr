@@ -97,11 +97,88 @@ fn run(source: &str) -> i64 {
 /// What `run` with `body` returns, and how many times the run copied a
 /// `Tally`.
 pub(super) fn copies(body: &str) -> (i64, usize) {
+    copies_with("", body)
+}
+
+/// `copies`, with `items` (functions `body` calls) beside `run`.
+pub(super) fn copies_with(items: &str, body: &str) -> (i64, usize) {
     COPIES.with(|copies| copies.set(0));
     let value = run(&format!(
-        "use tally::Tally;\npub fn run() -> i64 {{\n{body}\n}}"
+        "use tally::Tally;\n{items}\npub fn run() -> i64 {{\n{body}\n}}"
     ));
     (value, COPIES.with(Cell::get))
+}
+
+/// A closure using a `&mut` local, a function's `&mut` parameter, a `&mut`
+/// pattern binding or a mutable loop's element reaches the place itself:
+/// a thousand calls through each copy no `Tally`, as the same calls made
+/// on the places by name copy none (T144, T164). Before, these closures
+/// were refused, and before D585 a pattern binding's closure copied.
+#[test]
+fn closures_reach_places_without_a_copy() {
+    let items = "fn push_one(all: &mut Vec<Tally>) {
+        let mut push = || all.push(Tally::new());
+        push();
+    }
+    fn add_one(t: &mut Tally, n: i64) {
+        let mut add = |k| t.add(k);
+        add(n);
+    }";
+    let through = copies_with(
+        items,
+        "let mut all = vec![Tally::new()];
+        let mut first = Tally::new();
+        let mut slot = Some(Tally::new());
+        let mut pair = vec![Tally::new(), Tally::new()];
+        for n in 0..1000 {
+            push_one(&mut all);
+            add_one(&mut first, n);
+            {
+                let r = &mut all;
+                let mut push = || r.push(Tally::new());
+                push();
+            }
+            if let Some(t) = &mut slot {
+                let mut add = |k| t.add(k);
+                add(n);
+            }
+            if let Some(t) = pair.get_mut(1) {
+                let mut add = || t.add(1);
+                add();
+            }
+            for t in &mut pair {
+                let mut add = || t.add(1);
+                add();
+            }
+        }
+        let second = match &mut slot {
+            Some(t) => t.total(),
+            None => 0,
+        };
+        let last = match pair.get_mut(1) {
+            Some(t) => t.total(),
+            None => 0,
+        };
+        all.len() as i64 * 1000000000000 + first.total() * 1000 + second + last",
+    );
+    let named = copies(
+        "let mut all = vec![Tally::new()];
+        let mut first = Tally::new();
+        let mut slot = Tally::new();
+        let mut last = Tally::new();
+        for n in 0..1000 {
+            all.push(Tally::new());
+            first.add(n);
+            all.push(Tally::new());
+            slot.add(n);
+            last.add(1);
+            last.add(1);
+        }
+        all.len() as i64 * 1000000000000 + first.total() * 1000 + slot.total() + last.total()",
+    );
+    let expected = (2001 * 1000000000000 + 499500 * 1000 + 499500 + 2000, 0);
+    assert_eq!(through, expected, "a copy stood in for a closure's borrow");
+    assert_eq!(named, expected);
 }
 
 /// A native call's output, a `&mut self` and a `&self` call on a local

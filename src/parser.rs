@@ -556,6 +556,20 @@ impl Engine {
         name: &str,
         _pos: Position,
     ) -> (Option<NonZeroUsize>, bool) {
+        // `__rawr_in_held_h` is the place reached through the locals `h` and
+        // `h_at`: a closure captures those, and the name itself is found
+        // where it is used.
+        if state.allow_capture
+            && let Some(holder) = name.strip_prefix(crate::engine::KEYWORD_HELD)
+        {
+            let mut at = crate::SmartString::new_const();
+            at.push_str(holder);
+            at.push_str(crate::engine::HELD_STEPS);
+            let _ = self.access_var(state, holder, _pos);
+            let _ = self.access_var(state, &at, _pos);
+            return (None, false);
+        }
+
         let (index, hit_barrier) = state.find_var(name);
 
         // `__rawr_slot_of_b` takes where `b` is, which a `&mut` local then

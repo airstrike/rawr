@@ -1,0 +1,976 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+closure-places/binding_get_mut.rs	ok	0	"[1, 22, 3]\n"
+closure-places/binding_get_mut_conflict.rs	E0503:5
+closure-places/binding_if_let.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/binding_if_let_twice.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/binding_match_ref_mut.rs	ok	0	"([1, 5, 6], 2)\n"
+closure-places/binding_param_match.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/binding_struct_field.rs	ok	0	"[1, 2] a!\n"
+closure-places/binding_two_closures.rs	E0524:5
+closure-places/binding_use_while_captured.rs	E0501:5
+closure-places/local_element.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/local_field.rs	ok	0	"[1, 2] 2\n"
+closure-places/local_field_disjoint_while_captured.rs	ok	0	"[1, 2] 2\n"
+closure-places/local_push.rs	ok	0	"[1, 2, 2]\n"
+closure-places/local_read_closure.rs	ok	0	"3\n[1, 2, 3, 4]\n"
+closure-places/local_reborrowed_closure.rs	E0500:5
+closure-places/local_root_while_captured.rs	E0499:5
+closure-places/local_shared_closure_and_unique.rs	E0500:5
+closure-places/local_two_closures.rs	E0524:5
+closure-places/local_use_while_captured.rs	E0501:5
+closure-places/loop_element.rs	ok	0	"[2, 4, 6]\n"
+closure-places/loop_element_closures_kept.rs	ok	0	"[101, 102, 103]\n"
+closure-places/loop_element_conflict.rs	E0503:5
+closure-places/loop_element_iter_mut.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/method_field_alias.rs	ok	0	"[1, 2]\n"
+closure-places/param_borrowed_then_captured.rs	E0500:3
+closure-places/param_closure_passed.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_field_closure.rs	ok	0	"[4, 5] 2\n"
+closure-places/param_move_closure.rs	ok	0	"[0, 1, 2]\n"
+closure-places/param_move_closure_then_param.rs	E0382:4
+closure-places/param_nested_closure.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/param_nested_closure_conflict.rs	E0499:4
+closure-places/param_push.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/param_push_then_param.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_returned_closure.rs	E0502:10
+closure-places/param_returned_closure_conflict.rs	E0499:9 E0502:11
+closure-places/param_returned_closure_scoped.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_second_mut.rs	ok	0	"[2] [1, 3]\n"
+closure-places/param_shared_read_while_captured.rs	E0501:3
+closure-places/param_struct_element.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/param_two_closures.rs	E0524:3
+closure-places/param_two_closures_in_turn.rs	ok	0	"[0, 1, 2]\n"
+closure-places/param_use_while_captured.rs	E0501:4
+closure-places/rebound_local.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/rebound_local_in_loop.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/binding_get_mut_conflict_inc_6_back_edge.rs	E0503:5 E0499:9
+closure-places/mutations/binding_get_mut_conflict_inc_6_fresh_each_iteration.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_inc_6_into_branch.rs	E0503:5 E0499:7
+closure-places/mutations/binding_get_mut_conflict_inc_6_mut_across.rs	E0503:5 E0499:7
+closure-places/mutations/binding_get_mut_conflict_inc_6_mut_ended.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_inc_6_other_arm.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_inc_6_shared_across.rs	E0503:5 E0502:7
+closure-places/mutations/binding_get_mut_conflict_v_8_back_edge.rs	E0503:5 E0502:11
+closure-places/mutations/binding_get_mut_conflict_v_8_fresh_each_iteration.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_v_8_into_branch.rs	E0503:5 E0502:9
+closure-places/mutations/binding_get_mut_conflict_v_8_mut_across.rs	E0503:5 E0502:9
+closure-places/mutations/binding_get_mut_conflict_v_8_mut_ended.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_v_8_other_arm.rs	E0503:5
+closure-places/mutations/binding_get_mut_conflict_v_8_shared_across.rs	E0503:5
+closure-places/mutations/binding_get_mut_inc_5_back_edge.rs	E0499:8
+closure-places/mutations/binding_get_mut_inc_5_fresh_each_iteration.rs	ok	0	"[1, 32, 3]\n"
+closure-places/mutations/binding_get_mut_inc_5_into_branch.rs	E0499:6
+closure-places/mutations/binding_get_mut_inc_5_mut_across.rs	E0499:6
+closure-places/mutations/binding_get_mut_inc_5_mut_ended.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_inc_5_other_arm.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_inc_5_shared_across.rs	E0502:6
+closure-places/mutations/binding_get_mut_inc_6_back_edge.rs	E0499:9
+closure-places/mutations/binding_get_mut_inc_6_fresh_each_iteration.rs	ok	0	"[1, 32, 3]\n"
+closure-places/mutations/binding_get_mut_inc_6_into_branch.rs	E0499:7
+closure-places/mutations/binding_get_mut_inc_6_mut_across.rs	E0499:7
+closure-places/mutations/binding_get_mut_inc_6_mut_ended.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_inc_6_other_arm.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_inc_6_shared_across.rs	E0502:7
+closure-places/mutations/binding_get_mut_v_8_back_edge.rs	E0502:11
+closure-places/mutations/binding_get_mut_v_8_fresh_each_iteration.rs	ok	0	"[1, 22, 3]\n[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_v_8_into_branch.rs	E0502:9
+closure-places/mutations/binding_get_mut_v_8_mut_across.rs	E0502:9
+closure-places/mutations/binding_get_mut_v_8_mut_ended.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_v_8_other_arm.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_get_mut_v_8_shared_across.rs	ok	0	"[1, 22, 3]\n"
+closure-places/mutations/binding_if_let_f_5_back_edge.rs	E0499:8
+closure-places/mutations/binding_if_let_f_5_fresh_each_iteration.rs	ok	0	"Some([1, 2, 3, 3])\n"
+closure-places/mutations/binding_if_let_f_5_into_branch.rs	E0499:6
+closure-places/mutations/binding_if_let_f_5_mut_across.rs	E0499:6
+closure-places/mutations/binding_if_let_f_5_mut_ended.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_f_5_other_arm.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_f_5_shared_across.rs	E0502:6
+closure-places/mutations/binding_if_let_slot_7_back_edge.rs	E0502:10
+closure-places/mutations/binding_if_let_slot_7_fresh_each_iteration.rs	ok	0	"Some([1, 2, 3])\nSome([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_slot_7_into_branch.rs	E0502:8
+closure-places/mutations/binding_if_let_slot_7_mut_across.rs	E0502:8
+closure-places/mutations/binding_if_let_slot_7_mut_ended.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_slot_7_other_arm.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_slot_7_shared_across.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/mutations/binding_if_let_twice_f_5_back_edge.rs	E0499:8
+closure-places/mutations/binding_if_let_twice_f_5_fresh_each_iteration.rs	ok	0	"Some([1, 2, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_5_into_branch.rs	E0499:6
+closure-places/mutations/binding_if_let_twice_f_5_mut_across.rs	E0499:6
+closure-places/mutations/binding_if_let_twice_f_5_mut_ended.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_5_other_arm.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_5_shared_across.rs	E0502:6
+closure-places/mutations/binding_if_let_twice_f_6_back_edge.rs	E0499:9
+closure-places/mutations/binding_if_let_twice_f_6_fresh_each_iteration.rs	ok	0	"Some([1, 2, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_6_into_branch.rs	E0499:7
+closure-places/mutations/binding_if_let_twice_f_6_mut_across.rs	E0499:7
+closure-places/mutations/binding_if_let_twice_f_6_mut_ended.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_6_other_arm.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_f_6_shared_across.rs	E0502:7
+closure-places/mutations/binding_if_let_twice_slot_8_back_edge.rs	E0502:11
+closure-places/mutations/binding_if_let_twice_slot_8_fresh_each_iteration.rs	ok	0	"Some([1, 2, 2])\nSome([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_slot_8_into_branch.rs	E0502:9
+closure-places/mutations/binding_if_let_twice_slot_8_mut_across.rs	E0502:9
+closure-places/mutations/binding_if_let_twice_slot_8_mut_ended.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_slot_8_other_arm.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_if_let_twice_slot_8_shared_across.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/mutations/binding_match_ref_mut_pair_13_back_edge.rs	E0502:16
+closure-places/mutations/binding_match_ref_mut_pair_13_fresh_each_iteration.rs	ok	0	"([1, 5, 6], 2)\n([1, 5, 6], 2)\n"
+closure-places/mutations/binding_match_ref_mut_pair_13_into_branch.rs	E0502:14
+closure-places/mutations/binding_match_ref_mut_pair_13_mut_across.rs	E0502:14
+closure-places/mutations/binding_match_ref_mut_pair_13_mut_ended.rs	ok	0	"([1, 5, 6], 2)\n"
+closure-places/mutations/binding_match_ref_mut_pair_13_other_arm.rs	ok	0	"([1, 5, 6], 2)\n"
+closure-places/mutations/binding_match_ref_mut_pair_13_shared_across.rs	ok	0	"([1, 5, 6], 2)\n"
+closure-places/mutations/binding_param_match_push_4_back_edge.rs	E0499:7
+closure-places/mutations/binding_param_match_push_4_fresh_each_iteration.rs	ok	0	"Some([0, 1, 1, 2])\n"
+closure-places/mutations/binding_param_match_push_4_into_branch.rs	E0499:5
+closure-places/mutations/binding_param_match_push_4_mut_across.rs	E0499:5
+closure-places/mutations/binding_param_match_push_4_mut_ended.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_push_4_other_arm.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_push_4_shared_across.rs	E0502:5
+closure-places/mutations/binding_param_match_push_5_back_edge.rs	E0499:8
+closure-places/mutations/binding_param_match_push_5_fresh_each_iteration.rs	ok	0	"Some([0, 1, 2, 2])\n"
+closure-places/mutations/binding_param_match_push_5_into_branch.rs	E0499:6
+closure-places/mutations/binding_param_match_push_5_mut_across.rs	E0499:6
+closure-places/mutations/binding_param_match_push_5_mut_ended.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_push_5_other_arm.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_push_5_shared_across.rs	E0502:6
+closure-places/mutations/binding_param_match_slot_11_back_edge.rs	E0499:14
+closure-places/mutations/binding_param_match_slot_11_fresh_each_iteration.rs	ok	0	"Some([0, 1, 2, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_11_into_branch.rs	E0499:12
+closure-places/mutations/binding_param_match_slot_11_mut_across.rs	E0499:12
+closure-places/mutations/binding_param_match_slot_11_mut_ended.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_11_other_arm.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_11_shared_across.rs	E0502:12
+closure-places/mutations/binding_param_match_slot_12_back_edge.rs	E0502:15
+closure-places/mutations/binding_param_match_slot_12_fresh_each_iteration.rs	ok	0	"Some([0, 1, 2])\nSome([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_12_into_branch.rs	E0502:13
+closure-places/mutations/binding_param_match_slot_12_mut_across.rs	E0502:13
+closure-places/mutations/binding_param_match_slot_12_mut_ended.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_12_other_arm.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_param_match_slot_12_shared_across.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/mutations/binding_struct_field_add_12_back_edge.rs	E0499:15
+closure-places/mutations/binding_struct_field_add_12_fresh_each_iteration.rs	ok	0	"[1, 1, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_12_into_branch.rs	E0499:13
+closure-places/mutations/binding_struct_field_add_12_mut_across.rs	E0499:13
+closure-places/mutations/binding_struct_field_add_12_mut_ended.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_12_other_arm.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_12_shared_across.rs	E0502:13
+closure-places/mutations/binding_struct_field_add_13_back_edge.rs	E0499:16
+closure-places/mutations/binding_struct_field_add_13_fresh_each_iteration.rs	ok	0	"[1, 2, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_13_into_branch.rs	E0499:14
+closure-places/mutations/binding_struct_field_add_13_mut_across.rs	E0499:14
+closure-places/mutations/binding_struct_field_add_13_mut_ended.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_13_other_arm.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_add_13_shared_across.rs	E0502:14
+closure-places/mutations/binding_struct_field_bags_18_back_edge.rs	E0502:21 E0502:21
+closure-places/mutations/binding_struct_field_bags_18_fresh_each_iteration.rs	ok	0	"[1, 2] a!\n[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_bags_18_into_branch.rs	E0502:19 E0502:19
+closure-places/mutations/binding_struct_field_bags_18_mut_across.rs	E0502:19 E0502:19
+closure-places/mutations/binding_struct_field_bags_18_mut_ended.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_bags_18_other_arm.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_struct_field_bags_18_shared_across.rs	ok	0	"[1, 2] a!\n"
+closure-places/mutations/binding_two_closures_f_6_back_edge.rs	E0524:5 E0499:9
+closure-places/mutations/binding_two_closures_f_6_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/binding_two_closures_f_6_into_branch.rs	E0524:5 E0499:7
+closure-places/mutations/binding_two_closures_f_6_mut_across.rs	E0524:5 E0499:7
+closure-places/mutations/binding_two_closures_f_6_mut_ended.rs	E0524:5
+closure-places/mutations/binding_two_closures_f_6_other_arm.rs	E0524:5
+closure-places/mutations/binding_two_closures_f_6_shared_across.rs	E0524:5 E0502:7
+closure-places/mutations/binding_two_closures_g_7_back_edge.rs	E0524:5 E0499:10
+closure-places/mutations/binding_two_closures_g_7_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/binding_two_closures_g_7_into_branch.rs	E0524:5 E0499:8
+closure-places/mutations/binding_two_closures_g_7_mut_across.rs	E0524:5 E0499:8
+closure-places/mutations/binding_two_closures_g_7_mut_ended.rs	E0524:5
+closure-places/mutations/binding_two_closures_g_7_other_arm.rs	E0524:5
+closure-places/mutations/binding_two_closures_g_7_shared_across.rs	E0524:5 E0502:8
+closure-places/mutations/binding_two_closures_slot_9_back_edge.rs	E0524:5 E0502:12
+closure-places/mutations/binding_two_closures_slot_9_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/binding_two_closures_slot_9_into_branch.rs	E0524:5 E0502:10
+closure-places/mutations/binding_two_closures_slot_9_mut_across.rs	E0524:5 E0502:10
+closure-places/mutations/binding_two_closures_slot_9_mut_ended.rs	E0524:5
+closure-places/mutations/binding_two_closures_slot_9_other_arm.rs	E0524:5
+closure-places/mutations/binding_two_closures_slot_9_shared_across.rs	E0524:5
+closure-places/mutations/binding_use_while_captured_f_6_back_edge.rs	E0501:5 E0499:9
+closure-places/mutations/binding_use_while_captured_f_6_fresh_each_iteration.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_f_6_into_branch.rs	E0501:5 E0499:7
+closure-places/mutations/binding_use_while_captured_f_6_mut_across.rs	E0501:5 E0499:7
+closure-places/mutations/binding_use_while_captured_f_6_mut_ended.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_f_6_other_arm.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_f_6_shared_across.rs	E0501:5 E0502:7
+closure-places/mutations/binding_use_while_captured_slot_8_back_edge.rs	E0501:5 E0502:11
+closure-places/mutations/binding_use_while_captured_slot_8_fresh_each_iteration.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_slot_8_into_branch.rs	E0501:5 E0502:9
+closure-places/mutations/binding_use_while_captured_slot_8_mut_across.rs	E0501:5 E0502:9
+closure-places/mutations/binding_use_while_captured_slot_8_mut_ended.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_slot_8_other_arm.rs	E0501:5
+closure-places/mutations/binding_use_while_captured_slot_8_shared_across.rs	E0501:5
+closure-places/mutations/local_element_f_5_back_edge.rs	E0499:8
+closure-places/mutations/local_element_f_5_fresh_each_iteration.rs	ok	0	"[[1], [2, 3, 3, 4]]\n"
+closure-places/mutations/local_element_f_5_into_branch.rs	E0499:6
+closure-places/mutations/local_element_f_5_mut_across.rs	E0499:6
+closure-places/mutations/local_element_f_5_mut_ended.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_f_5_other_arm.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_f_5_shared_across.rs	E0502:6
+closure-places/mutations/local_element_f_6_back_edge.rs	E0499:9
+closure-places/mutations/local_element_f_6_fresh_each_iteration.rs	ok	0	"[[1], [2, 3, 4, 4]]\n"
+closure-places/mutations/local_element_f_6_into_branch.rs	E0499:7
+closure-places/mutations/local_element_f_6_mut_across.rs	E0499:7
+closure-places/mutations/local_element_f_6_mut_ended.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_f_6_other_arm.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_f_6_shared_across.rs	E0502:7
+closure-places/mutations/local_element_v_7_back_edge.rs	E0502:10
+closure-places/mutations/local_element_v_7_fresh_each_iteration.rs	ok	0	"[[1], [2, 3, 4]]\n[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_v_7_into_branch.rs	E0502:8
+closure-places/mutations/local_element_v_7_mut_across.rs	E0502:8
+closure-places/mutations/local_element_v_7_mut_ended.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_v_7_other_arm.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_element_v_7_shared_across.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_10_back_edge.rs	E0499:13
+closure-places/mutations/local_field_disjoint_while_captured_f_10_fresh_each_iteration.rs	ok	0	"[1, 1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_10_into_branch.rs	E0499:11
+closure-places/mutations/local_field_disjoint_while_captured_f_10_mut_across.rs	E0499:11
+closure-places/mutations/local_field_disjoint_while_captured_f_10_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_10_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_10_shared_across.rs	E0502:11
+closure-places/mutations/local_field_disjoint_while_captured_f_12_back_edge.rs	E0499:15
+closure-places/mutations/local_field_disjoint_while_captured_f_12_fresh_each_iteration.rs	ok	0	"[1, 2, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_12_into_branch.rs	E0499:13
+closure-places/mutations/local_field_disjoint_while_captured_f_12_mut_across.rs	E0499:13
+closure-places/mutations/local_field_disjoint_while_captured_f_12_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_12_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_f_12_shared_across.rs	E0502:13
+closure-places/mutations/local_field_disjoint_while_captured_s_11_back_edge.rs	E0499:11 E0503:14
+closure-places/mutations/local_field_disjoint_while_captured_s_11_fresh_each_iteration.rs	E0499:12
+closure-places/mutations/local_field_disjoint_while_captured_s_11_into_branch.rs	E0499:11 E0503:12
+closure-places/mutations/local_field_disjoint_while_captured_s_11_mut_across.rs	E0499:11 E0503:12
+closure-places/mutations/local_field_disjoint_while_captured_s_11_mut_ended.rs	E0499:11
+closure-places/mutations/local_field_disjoint_while_captured_s_11_other_arm.rs	E0499:11
+closure-places/mutations/local_field_disjoint_while_captured_s_11_shared_across.rs	E0502:11 E0506:12
+closure-places/mutations/local_field_disjoint_while_captured_s_13_back_edge.rs	E0502:16 E0502:16
+closure-places/mutations/local_field_disjoint_while_captured_s_13_fresh_each_iteration.rs	ok	0	"[1, 2] 2\n[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_s_13_into_branch.rs	E0502:14 E0502:14
+closure-places/mutations/local_field_disjoint_while_captured_s_13_mut_across.rs	E0502:14 E0502:14
+closure-places/mutations/local_field_disjoint_while_captured_s_13_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_s_13_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_disjoint_while_captured_s_13_shared_across.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_f_10_back_edge.rs	E0499:13
+closure-places/mutations/local_field_f_10_fresh_each_iteration.rs	ok	0	"[1, 1, 2] 2\n"
+closure-places/mutations/local_field_f_10_into_branch.rs	E0499:11
+closure-places/mutations/local_field_f_10_mut_across.rs	E0499:11
+closure-places/mutations/local_field_f_10_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_f_10_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_f_10_shared_across.rs	E0502:11
+closure-places/mutations/local_field_f_11_back_edge.rs	E0499:14
+closure-places/mutations/local_field_f_11_fresh_each_iteration.rs	ok	0	"[1, 2, 2] 2\n"
+closure-places/mutations/local_field_f_11_into_branch.rs	E0499:12
+closure-places/mutations/local_field_f_11_mut_across.rs	E0499:12
+closure-places/mutations/local_field_f_11_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_f_11_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_f_11_shared_across.rs	E0502:12
+closure-places/mutations/local_field_s_12_back_edge.rs	E0503:15
+closure-places/mutations/local_field_s_12_fresh_each_iteration.rs	ok	0	"[1, 2] 3\n"
+closure-places/mutations/local_field_s_12_into_branch.rs	E0503:13
+closure-places/mutations/local_field_s_12_mut_across.rs	E0503:13
+closure-places/mutations/local_field_s_12_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_s_12_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_s_12_shared_across.rs	E0506:13
+closure-places/mutations/local_field_s_13_back_edge.rs	E0502:16 E0502:16
+closure-places/mutations/local_field_s_13_fresh_each_iteration.rs	ok	0	"[1, 2] 2\n[1, 2] 2\n"
+closure-places/mutations/local_field_s_13_into_branch.rs	E0502:14 E0502:14
+closure-places/mutations/local_field_s_13_mut_across.rs	E0502:14 E0502:14
+closure-places/mutations/local_field_s_13_mut_ended.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_s_13_other_arm.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_field_s_13_shared_across.rs	ok	0	"[1, 2] 2\n"
+closure-places/mutations/local_push_f_5_back_edge.rs	E0499:8
+closure-places/mutations/local_push_f_5_fresh_each_iteration.rs	ok	0	"[1, 2, 2, 2]\n"
+closure-places/mutations/local_push_f_5_into_branch.rs	E0499:6
+closure-places/mutations/local_push_f_5_mut_across.rs	E0499:6
+closure-places/mutations/local_push_f_5_mut_ended.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_f_5_other_arm.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_f_5_shared_across.rs	E0502:6
+closure-places/mutations/local_push_f_6_back_edge.rs	E0499:9
+closure-places/mutations/local_push_f_6_fresh_each_iteration.rs	ok	0	"[1, 2, 2, 2]\n"
+closure-places/mutations/local_push_f_6_into_branch.rs	E0499:7
+closure-places/mutations/local_push_f_6_mut_across.rs	E0499:7
+closure-places/mutations/local_push_f_6_mut_ended.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_f_6_other_arm.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_f_6_shared_across.rs	E0502:7
+closure-places/mutations/local_push_v_7_back_edge.rs	E0502:10
+closure-places/mutations/local_push_v_7_fresh_each_iteration.rs	ok	0	"[1, 2, 2]\n[1, 2, 2]\n"
+closure-places/mutations/local_push_v_7_into_branch.rs	E0502:8
+closure-places/mutations/local_push_v_7_mut_across.rs	E0502:8
+closure-places/mutations/local_push_v_7_mut_ended.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_v_7_other_arm.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_push_v_7_shared_across.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/local_read_closure_v_8_back_edge.rs	E0502:11
+closure-places/mutations/local_read_closure_v_8_fresh_each_iteration.rs	ok	0	"3\n[1, 2, 3, 4]\n[1, 2, 3, 4]\n"
+closure-places/mutations/local_read_closure_v_8_into_branch.rs	E0502:9
+closure-places/mutations/local_read_closure_v_8_mut_across.rs	E0502:9
+closure-places/mutations/local_read_closure_v_8_mut_ended.rs	ok	0	"3\n[1, 2, 3, 4]\n"
+closure-places/mutations/local_read_closure_v_8_other_arm.rs	ok	0	"3\n[1, 2, 3, 4]\n"
+closure-places/mutations/local_read_closure_v_8_shared_across.rs	ok	0	"3\n[1, 2, 3, 4]\n"
+closure-places/mutations/local_reborrowed_closure_f_6_back_edge.rs	E0500:5 E0499:9
+closure-places/mutations/local_reborrowed_closure_f_6_fresh_each_iteration.rs	E0500:5
+closure-places/mutations/local_reborrowed_closure_f_6_into_branch.rs	E0500:5 E0499:7
+closure-places/mutations/local_reborrowed_closure_f_6_mut_across.rs	E0500:5 E0499:7
+closure-places/mutations/local_reborrowed_closure_f_6_mut_ended.rs	E0500:5
+closure-places/mutations/local_reborrowed_closure_f_6_other_arm.rs	E0500:5
+closure-places/mutations/local_reborrowed_closure_f_6_shared_across.rs	E0500:5 E0502:7
+closure-places/mutations/local_root_while_captured_f_6_back_edge.rs	E0499:5 E0499:9
+closure-places/mutations/local_root_while_captured_f_6_fresh_each_iteration.rs	E0499:5
+closure-places/mutations/local_root_while_captured_f_6_into_branch.rs	E0499:5 E0499:7
+closure-places/mutations/local_root_while_captured_f_6_mut_across.rs	E0499:5 E0499:7
+closure-places/mutations/local_root_while_captured_f_6_mut_ended.rs	E0499:5
+closure-places/mutations/local_root_while_captured_f_6_other_arm.rs	E0499:5
+closure-places/mutations/local_root_while_captured_f_6_shared_across.rs	E0499:5 E0502:7
+closure-places/mutations/local_root_while_captured_v_5_back_edge.rs	E0499:5 E0499:8
+closure-places/mutations/local_root_while_captured_v_5_fresh_each_iteration.rs	E0499:6 E0499:8
+closure-places/mutations/local_root_while_captured_v_5_into_branch.rs	E0499:5 E0499:6
+closure-places/mutations/local_root_while_captured_v_5_mut_across.rs	E0499:5 E0499:6
+closure-places/mutations/local_root_while_captured_v_5_mut_ended.rs	E0499:5 E0499:7
+closure-places/mutations/local_root_while_captured_v_5_other_arm.rs	E0499:5 E0499:9
+closure-places/mutations/local_root_while_captured_v_5_shared_across.rs	E0502:5 E0499:6
+closure-places/mutations/local_root_while_captured_v_7_back_edge.rs	E0499:5 E0502:10
+closure-places/mutations/local_root_while_captured_v_7_fresh_each_iteration.rs	E0499:5
+closure-places/mutations/local_root_while_captured_v_7_into_branch.rs	E0499:5 E0502:8
+closure-places/mutations/local_root_while_captured_v_7_mut_across.rs	E0499:5 E0502:8
+closure-places/mutations/local_root_while_captured_v_7_mut_ended.rs	E0499:5
+closure-places/mutations/local_root_while_captured_v_7_other_arm.rs	E0499:5
+closure-places/mutations/local_root_while_captured_v_7_shared_across.rs	E0499:5
+closure-places/mutations/local_shared_closure_and_unique_f_6_back_edge.rs	E0500:5 E0499:9
+closure-places/mutations/local_shared_closure_and_unique_f_6_fresh_each_iteration.rs	E0500:5
+closure-places/mutations/local_shared_closure_and_unique_f_6_into_branch.rs	E0500:5 E0499:7
+closure-places/mutations/local_shared_closure_and_unique_f_6_mut_across.rs	E0500:5 E0499:7
+closure-places/mutations/local_shared_closure_and_unique_f_6_mut_ended.rs	E0500:5
+closure-places/mutations/local_shared_closure_and_unique_f_6_other_arm.rs	E0500:5
+closure-places/mutations/local_shared_closure_and_unique_f_6_shared_across.rs	E0500:5 E0502:7
+closure-places/mutations/local_two_closures_f_6_back_edge.rs	E0524:5 E0499:9
+closure-places/mutations/local_two_closures_f_6_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/local_two_closures_f_6_into_branch.rs	E0524:5 E0499:7
+closure-places/mutations/local_two_closures_f_6_mut_across.rs	E0524:5 E0499:7
+closure-places/mutations/local_two_closures_f_6_mut_ended.rs	E0524:5
+closure-places/mutations/local_two_closures_f_6_other_arm.rs	E0524:5
+closure-places/mutations/local_two_closures_f_6_shared_across.rs	E0524:5 E0502:7
+closure-places/mutations/local_two_closures_g_7_back_edge.rs	E0524:5 E0499:10
+closure-places/mutations/local_two_closures_g_7_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/local_two_closures_g_7_into_branch.rs	E0524:5 E0499:8
+closure-places/mutations/local_two_closures_g_7_mut_across.rs	E0524:5 E0499:8
+closure-places/mutations/local_two_closures_g_7_mut_ended.rs	E0524:5
+closure-places/mutations/local_two_closures_g_7_other_arm.rs	E0524:5
+closure-places/mutations/local_two_closures_g_7_shared_across.rs	E0524:5 E0502:8
+closure-places/mutations/local_two_closures_v_8_back_edge.rs	E0524:5 E0502:11
+closure-places/mutations/local_two_closures_v_8_fresh_each_iteration.rs	E0524:5
+closure-places/mutations/local_two_closures_v_8_into_branch.rs	E0524:5 E0502:9
+closure-places/mutations/local_two_closures_v_8_mut_across.rs	E0524:5 E0502:9
+closure-places/mutations/local_two_closures_v_8_mut_ended.rs	E0524:5
+closure-places/mutations/local_two_closures_v_8_other_arm.rs	E0524:5
+closure-places/mutations/local_two_closures_v_8_shared_across.rs	E0524:5
+closure-places/mutations/local_use_while_captured_f_6_back_edge.rs	E0501:5 E0499:9
+closure-places/mutations/local_use_while_captured_f_6_fresh_each_iteration.rs	E0501:5
+closure-places/mutations/local_use_while_captured_f_6_into_branch.rs	E0501:5 E0499:7
+closure-places/mutations/local_use_while_captured_f_6_mut_across.rs	E0501:5 E0499:7
+closure-places/mutations/local_use_while_captured_f_6_mut_ended.rs	E0501:5
+closure-places/mutations/local_use_while_captured_f_6_other_arm.rs	E0501:5
+closure-places/mutations/local_use_while_captured_f_6_shared_across.rs	E0501:5 E0502:7
+closure-places/mutations/local_use_while_captured_v_7_back_edge.rs	E0501:5 E0502:10
+closure-places/mutations/local_use_while_captured_v_7_fresh_each_iteration.rs	E0501:5
+closure-places/mutations/local_use_while_captured_v_7_into_branch.rs	E0501:5 E0502:8
+closure-places/mutations/local_use_while_captured_v_7_mut_across.rs	E0501:5 E0502:8
+closure-places/mutations/local_use_while_captured_v_7_mut_ended.rs	E0501:5
+closure-places/mutations/local_use_while_captured_v_7_other_arm.rs	E0501:5
+closure-places/mutations/local_use_while_captured_v_7_shared_across.rs	E0501:5
+closure-places/mutations/loop_element_closures_kept_v_10_back_edge.rs	E0502:13
+closure-places/mutations/loop_element_closures_kept_v_10_fresh_each_iteration.rs	ok	0	"[101, 102, 103]\n[101, 102, 103]\n"
+closure-places/mutations/loop_element_closures_kept_v_10_into_branch.rs	E0502:11
+closure-places/mutations/loop_element_closures_kept_v_10_mut_across.rs	E0502:11
+closure-places/mutations/loop_element_closures_kept_v_10_mut_ended.rs	ok	0	"[101, 102, 103]\n"
+closure-places/mutations/loop_element_closures_kept_v_10_other_arm.rs	ok	0	"[101, 102, 103]\n"
+closure-places/mutations/loop_element_closures_kept_v_10_shared_across.rs	ok	0	"[101, 102, 103]\n"
+closure-places/mutations/loop_element_conflict_double_6_back_edge.rs	E0503:5 E0499:9
+closure-places/mutations/loop_element_conflict_double_6_fresh_each_iteration.rs	E0503:5
+closure-places/mutations/loop_element_conflict_double_6_into_branch.rs	E0503:5 E0499:7
+closure-places/mutations/loop_element_conflict_double_6_mut_across.rs	E0503:5 E0499:7
+closure-places/mutations/loop_element_conflict_double_6_mut_ended.rs	E0503:5
+closure-places/mutations/loop_element_conflict_double_6_other_arm.rs	E0503:5
+closure-places/mutations/loop_element_conflict_double_6_shared_across.rs	E0503:5 E0502:7
+closure-places/mutations/loop_element_conflict_v_8_back_edge.rs	E0503:5 E0502:11
+closure-places/mutations/loop_element_conflict_v_8_fresh_each_iteration.rs	E0503:5
+closure-places/mutations/loop_element_conflict_v_8_into_branch.rs	E0503:5 E0502:9
+closure-places/mutations/loop_element_conflict_v_8_mut_across.rs	E0503:5 E0502:9
+closure-places/mutations/loop_element_conflict_v_8_mut_ended.rs	E0503:5
+closure-places/mutations/loop_element_conflict_v_8_other_arm.rs	E0503:5
+closure-places/mutations/loop_element_conflict_v_8_shared_across.rs	E0503:5
+closure-places/mutations/loop_element_double_5_back_edge.rs	E0499:8
+closure-places/mutations/loop_element_double_5_fresh_each_iteration.rs	ok	0	"[4, 8, 12]\n"
+closure-places/mutations/loop_element_double_5_into_branch.rs	E0499:6
+closure-places/mutations/loop_element_double_5_mut_across.rs	E0499:6
+closure-places/mutations/loop_element_double_5_mut_ended.rs	ok	0	"[2, 4, 6]\n"
+closure-places/mutations/loop_element_double_5_other_arm.rs	ok	0	"[2, 4, 6]\n"
+closure-places/mutations/loop_element_double_5_shared_across.rs	E0502:6
+closure-places/mutations/loop_element_iter_mut_push_5_back_edge.rs	E0499:8
+closure-places/mutations/loop_element_iter_mut_push_5_fresh_each_iteration.rs	ok	0	"[[1, 0, 0], [2, 10, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_push_5_into_branch.rs	E0499:6
+closure-places/mutations/loop_element_iter_mut_push_5_mut_across.rs	E0499:6
+closure-places/mutations/loop_element_iter_mut_push_5_mut_ended.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_push_5_other_arm.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_push_5_shared_across.rs	E0502:6
+closure-places/mutations/loop_element_iter_mut_v_7_back_edge.rs	E0502:10
+closure-places/mutations/loop_element_iter_mut_v_7_fresh_each_iteration.rs	ok	0	"[[1, 0], [2, 10]]\n[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_v_7_into_branch.rs	E0502:8
+closure-places/mutations/loop_element_iter_mut_v_7_mut_across.rs	E0502:8
+closure-places/mutations/loop_element_iter_mut_v_7_mut_ended.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_v_7_other_arm.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_iter_mut_v_7_shared_across.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/mutations/loop_element_v_7_back_edge.rs	E0502:10
+closure-places/mutations/loop_element_v_7_fresh_each_iteration.rs	ok	0	"[2, 4, 6]\n[2, 4, 6]\n"
+closure-places/mutations/loop_element_v_7_into_branch.rs	E0502:8
+closure-places/mutations/loop_element_v_7_mut_across.rs	E0502:8
+closure-places/mutations/loop_element_v_7_mut_ended.rs	ok	0	"[2, 4, 6]\n"
+closure-places/mutations/loop_element_v_7_other_arm.rs	ok	0	"[2, 4, 6]\n"
+closure-places/mutations/loop_element_v_7_shared_across.rs	ok	0	"[2, 4, 6]\n"
+closure-places/mutations/method_field_alias_add_10_back_edge.rs	E0499:13
+closure-places/mutations/method_field_alias_add_10_fresh_each_iteration.rs	ok	0	"[1, 2, 2]\n"
+closure-places/mutations/method_field_alias_add_10_into_branch.rs	E0499:11
+closure-places/mutations/method_field_alias_add_10_mut_across.rs	E0499:11
+closure-places/mutations/method_field_alias_add_10_mut_ended.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_add_10_other_arm.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_add_10_shared_across.rs	E0502:11
+closure-places/mutations/method_field_alias_add_9_back_edge.rs	E0499:12
+closure-places/mutations/method_field_alias_add_9_fresh_each_iteration.rs	ok	0	"[1, 1, 2]\n"
+closure-places/mutations/method_field_alias_add_9_into_branch.rs	E0499:10
+closure-places/mutations/method_field_alias_add_9_mut_across.rs	E0499:10
+closure-places/mutations/method_field_alias_add_9_mut_ended.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_add_9_other_arm.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_add_9_shared_across.rs	E0502:10
+closure-places/mutations/method_field_alias_bag_16_back_edge.rs	E0499:19
+closure-places/mutations/method_field_alias_bag_16_fresh_each_iteration.rs	ok	0	"[1, 2, 1, 2]\n"
+closure-places/mutations/method_field_alias_bag_16_into_branch.rs	E0499:17
+closure-places/mutations/method_field_alias_bag_16_mut_across.rs	E0499:17
+closure-places/mutations/method_field_alias_bag_16_mut_ended.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_bag_16_other_arm.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_bag_16_shared_across.rs	E0502:17
+closure-places/mutations/method_field_alias_bag_17_back_edge.rs	E0502:20
+closure-places/mutations/method_field_alias_bag_17_fresh_each_iteration.rs	ok	0	"[1, 2]\n[1, 2]\n"
+closure-places/mutations/method_field_alias_bag_17_into_branch.rs	E0502:18
+closure-places/mutations/method_field_alias_bag_17_mut_across.rs	E0502:18
+closure-places/mutations/method_field_alias_bag_17_mut_ended.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_bag_17_other_arm.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/method_field_alias_bag_17_shared_across.rs	ok	0	"[1, 2]\n"
+closure-places/mutations/param_borrowed_then_captured_push_4_back_edge.rs	E0500:3 E0499:7
+closure-places/mutations/param_borrowed_then_captured_push_4_fresh_each_iteration.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_push_4_into_branch.rs	E0500:3 E0499:5
+closure-places/mutations/param_borrowed_then_captured_push_4_mut_across.rs	E0500:3 E0499:5
+closure-places/mutations/param_borrowed_then_captured_push_4_mut_ended.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_push_4_other_arm.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_push_4_shared_across.rs	E0500:3 E0502:5
+closure-places/mutations/param_borrowed_then_captured_v_10_back_edge.rs	E0500:3 E0499:13
+closure-places/mutations/param_borrowed_then_captured_v_10_fresh_each_iteration.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_10_into_branch.rs	E0500:3 E0499:11
+closure-places/mutations/param_borrowed_then_captured_v_10_mut_across.rs	E0500:3 E0499:11
+closure-places/mutations/param_borrowed_then_captured_v_10_mut_ended.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_10_other_arm.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_10_shared_across.rs	E0500:3 E0502:11
+closure-places/mutations/param_borrowed_then_captured_v_11_back_edge.rs	E0500:3 E0502:14
+closure-places/mutations/param_borrowed_then_captured_v_11_fresh_each_iteration.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_11_into_branch.rs	E0500:3 E0502:12
+closure-places/mutations/param_borrowed_then_captured_v_11_mut_across.rs	E0500:3 E0502:12
+closure-places/mutations/param_borrowed_then_captured_v_11_mut_ended.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_11_other_arm.rs	E0500:3
+closure-places/mutations/param_borrowed_then_captured_v_11_shared_across.rs	E0500:3
+closure-places/mutations/param_closure_passed_v_13_back_edge.rs	E0499:16
+closure-places/mutations/param_closure_passed_v_13_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_13_into_branch.rs	E0499:14
+closure-places/mutations/param_closure_passed_v_13_mut_across.rs	E0499:14
+closure-places/mutations/param_closure_passed_v_13_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_13_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_13_shared_across.rs	E0502:14
+closure-places/mutations/param_closure_passed_v_14_back_edge.rs	E0502:17
+closure-places/mutations/param_closure_passed_v_14_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3]\n[0, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_14_into_branch.rs	E0502:15
+closure-places/mutations/param_closure_passed_v_14_mut_across.rs	E0502:15
+closure-places/mutations/param_closure_passed_v_14_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_14_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_closure_passed_v_14_shared_across.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_field_closure_bag_17_back_edge.rs	E0499:20
+closure-places/mutations/param_field_closure_bag_17_fresh_each_iteration.rs	ok	0	"[4, 5, 4, 5] 4\n"
+closure-places/mutations/param_field_closure_bag_17_into_branch.rs	E0499:18
+closure-places/mutations/param_field_closure_bag_17_mut_across.rs	E0499:18
+closure-places/mutations/param_field_closure_bag_17_mut_ended.rs	ok	0	"[4, 5] 2\n"
+closure-places/mutations/param_field_closure_bag_17_other_arm.rs	ok	0	"[4, 5] 2\n"
+closure-places/mutations/param_field_closure_bag_17_shared_across.rs	E0502:18
+closure-places/mutations/param_field_closure_bag_18_back_edge.rs	E0502:21 E0502:21
+closure-places/mutations/param_field_closure_bag_18_fresh_each_iteration.rs	ok	0	"[4, 5] 2\n[4, 5] 2\n"
+closure-places/mutations/param_field_closure_bag_18_into_branch.rs	E0502:19 E0502:19
+closure-places/mutations/param_field_closure_bag_18_mut_across.rs	E0502:19 E0502:19
+closure-places/mutations/param_field_closure_bag_18_mut_ended.rs	ok	0	"[4, 5] 2\n"
+closure-places/mutations/param_field_closure_bag_18_other_arm.rs	ok	0	"[4, 5] 2\n"
+closure-places/mutations/param_field_closure_bag_18_shared_across.rs	ok	0	"[4, 5] 2\n"
+closure-places/mutations/param_move_closure_push_3_back_edge.rs	E0499:6
+closure-places/mutations/param_move_closure_push_3_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2]\n"
+closure-places/mutations/param_move_closure_push_3_into_branch.rs	E0499:4
+closure-places/mutations/param_move_closure_push_3_mut_across.rs	E0499:4
+closure-places/mutations/param_move_closure_push_3_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_push_3_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_push_3_shared_across.rs	E0502:4
+closure-places/mutations/param_move_closure_push_4_back_edge.rs	E0499:7
+closure-places/mutations/param_move_closure_push_4_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2]\n"
+closure-places/mutations/param_move_closure_push_4_into_branch.rs	E0499:5
+closure-places/mutations/param_move_closure_push_4_mut_across.rs	E0499:5
+closure-places/mutations/param_move_closure_push_4_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_push_4_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_push_4_shared_across.rs	E0502:5
+closure-places/mutations/param_move_closure_then_param_push_3_back_edge.rs	E0499:6 E0382:8
+closure-places/mutations/param_move_closure_then_param_push_3_fresh_each_iteration.rs	E0382:8
+closure-places/mutations/param_move_closure_then_param_push_3_into_branch.rs	E0499:4 E0382:8
+closure-places/mutations/param_move_closure_then_param_push_3_mut_across.rs	E0499:4 E0382:6
+closure-places/mutations/param_move_closure_then_param_push_3_mut_ended.rs	E0382:6
+closure-places/mutations/param_move_closure_then_param_push_3_other_arm.rs	E0382:9
+closure-places/mutations/param_move_closure_then_param_push_3_shared_across.rs	E0502:4 E0382:6
+closure-places/mutations/param_move_closure_then_param_push_4_back_edge.rs	E0382:7
+closure-places/mutations/param_move_closure_then_param_push_4_fresh_each_iteration.rs	E0382:7
+closure-places/mutations/param_move_closure_then_param_push_4_into_branch.rs	E0382:5
+closure-places/mutations/param_move_closure_then_param_push_4_mut_across.rs	E0382:5
+closure-places/mutations/param_move_closure_then_param_push_4_mut_ended.rs	E0382:6
+closure-places/mutations/param_move_closure_then_param_push_4_other_arm.rs	E0382:8
+closure-places/mutations/param_move_closure_then_param_push_4_shared_across.rs	E0382:5
+closure-places/mutations/param_move_closure_then_param_v_10_back_edge.rs	E0382:4 E0502:13
+closure-places/mutations/param_move_closure_then_param_v_10_fresh_each_iteration.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_10_into_branch.rs	E0382:4 E0502:11
+closure-places/mutations/param_move_closure_then_param_v_10_mut_across.rs	E0382:4 E0502:11
+closure-places/mutations/param_move_closure_then_param_v_10_mut_ended.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_10_other_arm.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_10_shared_across.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_9_back_edge.rs	E0382:4 E0499:12
+closure-places/mutations/param_move_closure_then_param_v_9_fresh_each_iteration.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_9_into_branch.rs	E0382:4 E0499:10
+closure-places/mutations/param_move_closure_then_param_v_9_mut_across.rs	E0382:4 E0499:10
+closure-places/mutations/param_move_closure_then_param_v_9_mut_ended.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_9_other_arm.rs	E0382:4
+closure-places/mutations/param_move_closure_then_param_v_9_shared_across.rs	E0382:4 E0502:10
+closure-places/mutations/param_move_closure_v_10_back_edge.rs	E0502:13
+closure-places/mutations/param_move_closure_v_10_fresh_each_iteration.rs	ok	0	"[0, 1, 2]\n[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_10_into_branch.rs	E0502:11
+closure-places/mutations/param_move_closure_v_10_mut_across.rs	E0502:11
+closure-places/mutations/param_move_closure_v_10_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_10_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_10_shared_across.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_9_back_edge.rs	E0499:12
+closure-places/mutations/param_move_closure_v_9_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_9_into_branch.rs	E0499:10
+closure-places/mutations/param_move_closure_v_9_mut_across.rs	E0499:10
+closure-places/mutations/param_move_closure_v_9_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_9_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_move_closure_v_9_shared_across.rs	E0502:10
+closure-places/mutations/param_nested_closure_conflict_inner_5_back_edge.rs	E0499:4 E0499:8
+closure-places/mutations/param_nested_closure_conflict_inner_5_fresh_each_iteration.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_inner_5_into_branch.rs	E0499:4 E0499:6
+closure-places/mutations/param_nested_closure_conflict_inner_5_mut_across.rs	E0499:4 E0499:6
+closure-places/mutations/param_nested_closure_conflict_inner_5_mut_ended.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_inner_5_other_arm.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_inner_5_shared_across.rs	E0499:4 E0502:6
+closure-places/mutations/param_nested_closure_conflict_v_12_back_edge.rs	E0499:4 E0499:15
+closure-places/mutations/param_nested_closure_conflict_v_12_fresh_each_iteration.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_12_into_branch.rs	E0499:4 E0499:13
+closure-places/mutations/param_nested_closure_conflict_v_12_mut_across.rs	E0499:4 E0499:13
+closure-places/mutations/param_nested_closure_conflict_v_12_mut_ended.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_12_other_arm.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_12_shared_across.rs	E0499:4 E0502:13
+closure-places/mutations/param_nested_closure_conflict_v_13_back_edge.rs	E0499:4 E0502:16
+closure-places/mutations/param_nested_closure_conflict_v_13_fresh_each_iteration.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_13_into_branch.rs	E0499:4 E0502:14
+closure-places/mutations/param_nested_closure_conflict_v_13_mut_across.rs	E0499:4 E0502:14
+closure-places/mutations/param_nested_closure_conflict_v_13_mut_ended.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_13_other_arm.rs	E0499:4
+closure-places/mutations/param_nested_closure_conflict_v_13_shared_across.rs	E0499:4
+closure-places/mutations/param_nested_closure_inner_4_back_edge.rs	E0499:7
+closure-places/mutations/param_nested_closure_inner_4_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2, 1, 1, 2]\n"
+closure-places/mutations/param_nested_closure_inner_4_into_branch.rs	E0499:5
+closure-places/mutations/param_nested_closure_inner_4_mut_across.rs	E0499:5
+closure-places/mutations/param_nested_closure_inner_4_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_inner_4_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_inner_4_shared_across.rs	E0502:5
+closure-places/mutations/param_nested_closure_inner_5_back_edge.rs	E0499:8
+closure-places/mutations/param_nested_closure_inner_5_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2, 1, 2, 2]\n"
+closure-places/mutations/param_nested_closure_inner_5_into_branch.rs	E0499:6
+closure-places/mutations/param_nested_closure_inner_5_mut_across.rs	E0499:6
+closure-places/mutations/param_nested_closure_inner_5_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_inner_5_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_inner_5_shared_across.rs	E0502:6
+closure-places/mutations/param_nested_closure_v_13_back_edge.rs	E0499:16
+closure-places/mutations/param_nested_closure_v_13_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_13_into_branch.rs	E0499:14
+closure-places/mutations/param_nested_closure_v_13_mut_across.rs	E0499:14
+closure-places/mutations/param_nested_closure_v_13_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_13_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_13_shared_across.rs	E0502:14
+closure-places/mutations/param_nested_closure_v_14_back_edge.rs	E0502:17
+closure-places/mutations/param_nested_closure_v_14_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2]\n[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_14_into_branch.rs	E0502:15
+closure-places/mutations/param_nested_closure_v_14_mut_across.rs	E0502:15
+closure-places/mutations/param_nested_closure_v_14_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_14_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_nested_closure_v_14_shared_across.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_push_3_back_edge.rs	E0499:6
+closure-places/mutations/param_push_push_3_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2, 1, 1, 2]\n"
+closure-places/mutations/param_push_push_3_into_branch.rs	E0499:4
+closure-places/mutations/param_push_push_3_mut_across.rs	E0499:4
+closure-places/mutations/param_push_push_3_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_push_3_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_push_3_shared_across.rs	E0502:4
+closure-places/mutations/param_push_push_4_back_edge.rs	E0499:7
+closure-places/mutations/param_push_push_4_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2, 1, 2, 2]\n"
+closure-places/mutations/param_push_push_4_into_branch.rs	E0499:5
+closure-places/mutations/param_push_push_4_mut_across.rs	E0499:5
+closure-places/mutations/param_push_push_4_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_push_4_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_push_4_shared_across.rs	E0502:5
+closure-places/mutations/param_push_then_param_push_3_back_edge.rs	E0499:6
+closure-places/mutations/param_push_then_param_push_3_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_3_into_branch.rs	E0499:4
+closure-places/mutations/param_push_then_param_push_3_mut_across.rs	E0499:4
+closure-places/mutations/param_push_then_param_push_3_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_3_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_3_shared_across.rs	E0502:4
+closure-places/mutations/param_push_then_param_push_4_back_edge.rs	E0499:7
+closure-places/mutations/param_push_then_param_push_4_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_4_into_branch.rs	E0499:5
+closure-places/mutations/param_push_then_param_push_4_mut_across.rs	E0499:5
+closure-places/mutations/param_push_then_param_push_4_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_4_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_push_4_shared_across.rs	E0502:5
+closure-places/mutations/param_push_then_param_v_10_back_edge.rs	E0499:13
+closure-places/mutations/param_push_then_param_v_10_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_10_into_branch.rs	E0499:11
+closure-places/mutations/param_push_then_param_v_10_mut_across.rs	E0499:11
+closure-places/mutations/param_push_then_param_v_10_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_10_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_10_shared_across.rs	E0502:11
+closure-places/mutations/param_push_then_param_v_11_back_edge.rs	E0502:14
+closure-places/mutations/param_push_then_param_v_11_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3]\n[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_11_into_branch.rs	E0502:12
+closure-places/mutations/param_push_then_param_v_11_mut_across.rs	E0502:12
+closure-places/mutations/param_push_then_param_v_11_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_11_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_then_param_v_11_shared_across.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_push_v_10_back_edge.rs	E0499:13
+closure-places/mutations/param_push_v_10_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_10_into_branch.rs	E0499:11
+closure-places/mutations/param_push_v_10_mut_across.rs	E0499:11
+closure-places/mutations/param_push_v_10_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_10_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_10_shared_across.rs	E0502:11
+closure-places/mutations/param_push_v_9_back_edge.rs	E0499:12
+closure-places/mutations/param_push_v_9_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_9_into_branch.rs	E0499:10
+closure-places/mutations/param_push_v_9_mut_across.rs	E0499:10
+closure-places/mutations/param_push_v_9_mut_ended.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_9_other_arm.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_push_v_9_shared_across.rs	E0502:10
+closure-places/mutations/param_returned_closure_conflict_p_10_back_edge.rs	E0499:9 E0499:13 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_10_fresh_each_iteration.rs	E0499:9 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_10_into_branch.rs	E0499:9 E0499:11 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_10_mut_across.rs	E0499:9 E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_p_10_mut_ended.rs	E0499:9 E0502:13
+closure-places/mutations/param_returned_closure_conflict_p_10_other_arm.rs	E0499:9 E0502:16
+closure-places/mutations/param_returned_closure_conflict_p_10_shared_across.rs	E0499:9 E0502:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_p_8_back_edge.rs	E0499:11 E0499:13 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_8_fresh_each_iteration.rs	E0499:13 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_8_into_branch.rs	E0499:9 E0499:13 E0502:15
+closure-places/mutations/param_returned_closure_conflict_p_8_mut_across.rs	E0499:9 E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_p_8_mut_ended.rs	E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_p_8_other_arm.rs	E0499:14 E0502:16
+closure-places/mutations/param_returned_closure_conflict_p_8_shared_across.rs	E0502:9 E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_v_11_back_edge.rs	E0499:9 E0499:11 E0502:14
+closure-places/mutations/param_returned_closure_conflict_v_11_fresh_each_iteration.rs	E0499:9 E0499:12 E0502:14
+closure-places/mutations/param_returned_closure_conflict_v_11_into_branch.rs	E0499:9 E0499:11 E0502:12
+closure-places/mutations/param_returned_closure_conflict_v_11_mut_across.rs	E0499:9 E0499:11 E0502:12
+closure-places/mutations/param_returned_closure_conflict_v_11_mut_ended.rs	E0499:9 E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_v_11_other_arm.rs	E0499:9 E0499:11 E0502:15
+closure-places/mutations/param_returned_closure_conflict_v_11_shared_across.rs	E0499:9 E0502:11 E0502:12
+closure-places/mutations/param_returned_closure_conflict_v_9_back_edge.rs	E0499:9 E0499:12 E0502:15
+closure-places/mutations/param_returned_closure_conflict_v_9_fresh_each_iteration.rs	E0499:10 E0499:12 E0502:15
+closure-places/mutations/param_returned_closure_conflict_v_9_into_branch.rs	E0499:9 E0499:10 E0502:15
+closure-places/mutations/param_returned_closure_conflict_v_9_mut_across.rs	E0499:9 E0499:10 E0502:13
+closure-places/mutations/param_returned_closure_conflict_v_9_mut_ended.rs	E0499:9 E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_conflict_v_9_other_arm.rs	E0499:9 E0499:13 E0502:16
+closure-places/mutations/param_returned_closure_conflict_v_9_shared_across.rs	E0502:9 E0499:10 E0502:13
+closure-places/mutations/param_returned_closure_p_8_back_edge.rs	E0499:11 E0502:14
+closure-places/mutations/param_returned_closure_p_8_fresh_each_iteration.rs	E0502:14
+closure-places/mutations/param_returned_closure_p_8_into_branch.rs	E0499:9 E0502:14
+closure-places/mutations/param_returned_closure_p_8_mut_across.rs	E0499:9 E0502:12
+closure-places/mutations/param_returned_closure_p_8_mut_ended.rs	E0502:12
+closure-places/mutations/param_returned_closure_p_8_other_arm.rs	E0502:15
+closure-places/mutations/param_returned_closure_p_8_shared_across.rs	E0502:9 E0502:12
+closure-places/mutations/param_returned_closure_p_9_back_edge.rs	E0499:12 E0502:14
+closure-places/mutations/param_returned_closure_p_9_fresh_each_iteration.rs	E0502:14
+closure-places/mutations/param_returned_closure_p_9_into_branch.rs	E0499:10 E0502:14
+closure-places/mutations/param_returned_closure_p_9_mut_across.rs	E0499:10 E0502:12
+closure-places/mutations/param_returned_closure_p_9_mut_ended.rs	E0502:12
+closure-places/mutations/param_returned_closure_p_9_other_arm.rs	E0502:15
+closure-places/mutations/param_returned_closure_p_9_shared_across.rs	E0502:10 E0502:12
+closure-places/mutations/param_returned_closure_scoped_p_10_back_edge.rs	E0499:13
+closure-places/mutations/param_returned_closure_scoped_p_10_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_10_into_branch.rs	E0499:11
+closure-places/mutations/param_returned_closure_scoped_p_10_mut_across.rs	E0499:11
+closure-places/mutations/param_returned_closure_scoped_p_10_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_10_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_10_shared_across.rs	E0502:11
+closure-places/mutations/param_returned_closure_scoped_p_9_back_edge.rs	E0499:12
+closure-places/mutations/param_returned_closure_scoped_p_9_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_9_into_branch.rs	E0499:10
+closure-places/mutations/param_returned_closure_scoped_p_9_mut_across.rs	E0499:10
+closure-places/mutations/param_returned_closure_scoped_p_9_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_9_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_p_9_shared_across.rs	E0502:10
+closure-places/mutations/param_returned_closure_scoped_v_12_back_edge.rs	E0499:15
+closure-places/mutations/param_returned_closure_scoped_v_12_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_12_into_branch.rs	E0499:13
+closure-places/mutations/param_returned_closure_scoped_v_12_mut_across.rs	E0499:13
+closure-places/mutations/param_returned_closure_scoped_v_12_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_12_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_12_shared_across.rs	E0502:13
+closure-places/mutations/param_returned_closure_scoped_v_13_back_edge.rs	E0502:16
+closure-places/mutations/param_returned_closure_scoped_v_13_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 3]\n[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_13_into_branch.rs	E0502:14
+closure-places/mutations/param_returned_closure_scoped_v_13_mut_across.rs	E0502:14
+closure-places/mutations/param_returned_closure_scoped_v_13_mut_ended.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_13_other_arm.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_scoped_v_13_shared_across.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/mutations/param_returned_closure_v_10_back_edge.rs	E0499:10 E0502:13
+closure-places/mutations/param_returned_closure_v_10_fresh_each_iteration.rs	E0499:11 E0502:13
+closure-places/mutations/param_returned_closure_v_10_into_branch.rs	E0499:10 E0502:11
+closure-places/mutations/param_returned_closure_v_10_mut_across.rs	E0499:10 E0502:11
+closure-places/mutations/param_returned_closure_v_10_mut_ended.rs	E0499:10 E0502:12
+closure-places/mutations/param_returned_closure_v_10_other_arm.rs	E0499:10 E0502:14
+closure-places/mutations/param_returned_closure_v_10_shared_across.rs	E0502:10 E0502:11
+closure-places/mutations/param_second_mut_a_11_back_edge.rs	E0499:14
+closure-places/mutations/param_second_mut_a_11_fresh_each_iteration.rs	ok	0	"[2, 2] [1, 3, 1, 3]\n"
+closure-places/mutations/param_second_mut_a_11_into_branch.rs	E0499:12
+closure-places/mutations/param_second_mut_a_11_mut_across.rs	E0499:12
+closure-places/mutations/param_second_mut_a_11_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_a_11_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_a_11_shared_across.rs	E0502:12
+closure-places/mutations/param_second_mut_a_12_back_edge.rs	E0502:15
+closure-places/mutations/param_second_mut_a_12_fresh_each_iteration.rs	ok	0	"[2] [1, 3]\n[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_a_12_into_branch.rs	E0502:13
+closure-places/mutations/param_second_mut_a_12_mut_across.rs	E0502:13
+closure-places/mutations/param_second_mut_a_12_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_a_12_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_a_12_shared_across.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_11_back_edge.rs	E0499:14
+closure-places/mutations/param_second_mut_b_11_fresh_each_iteration.rs	ok	0	"[2, 2] [1, 3, 1, 3]\n"
+closure-places/mutations/param_second_mut_b_11_into_branch.rs	E0499:12
+closure-places/mutations/param_second_mut_b_11_mut_across.rs	E0499:12
+closure-places/mutations/param_second_mut_b_11_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_11_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_11_shared_across.rs	E0502:12
+closure-places/mutations/param_second_mut_b_12_back_edge.rs	E0502:15
+closure-places/mutations/param_second_mut_b_12_fresh_each_iteration.rs	ok	0	"[2] [1, 3]\n[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_12_into_branch.rs	E0502:13
+closure-places/mutations/param_second_mut_b_12_mut_across.rs	E0502:13
+closure-places/mutations/param_second_mut_b_12_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_12_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_b_12_shared_across.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_3_back_edge.rs	E0499:6
+closure-places/mutations/param_second_mut_push_3_fresh_each_iteration.rs	ok	0	"[2] [1, 1, 3]\n"
+closure-places/mutations/param_second_mut_push_3_into_branch.rs	E0499:4
+closure-places/mutations/param_second_mut_push_3_mut_across.rs	E0499:4
+closure-places/mutations/param_second_mut_push_3_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_3_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_3_shared_across.rs	E0502:4
+closure-places/mutations/param_second_mut_push_4_back_edge.rs	ok	0	"[2, 2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_fresh_each_iteration.rs	ok	0	"[2, 2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_into_branch.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_mut_across.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_mut_ended.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_other_arm.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_second_mut_push_4_shared_across.rs	ok	0	"[2] [1, 3]\n"
+closure-places/mutations/param_shared_read_while_captured_push_4_back_edge.rs	E0501:3 E0499:7
+closure-places/mutations/param_shared_read_while_captured_push_4_fresh_each_iteration.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_push_4_into_branch.rs	E0501:3 E0499:5
+closure-places/mutations/param_shared_read_while_captured_push_4_mut_across.rs	E0501:3 E0499:5
+closure-places/mutations/param_shared_read_while_captured_push_4_mut_ended.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_push_4_other_arm.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_push_4_shared_across.rs	E0501:3 E0502:5
+closure-places/mutations/param_shared_read_while_captured_v_11_back_edge.rs	E0501:3 E0502:14
+closure-places/mutations/param_shared_read_while_captured_v_11_fresh_each_iteration.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_v_11_into_branch.rs	E0501:3 E0502:12
+closure-places/mutations/param_shared_read_while_captured_v_11_mut_across.rs	E0501:3 E0502:12
+closure-places/mutations/param_shared_read_while_captured_v_11_mut_ended.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_v_11_other_arm.rs	E0501:3
+closure-places/mutations/param_shared_read_while_captured_v_11_shared_across.rs	E0501:3
+closure-places/mutations/param_struct_element_h_12_back_edge.rs	E0499:15
+closure-places/mutations/param_struct_element_h_12_fresh_each_iteration.rs	ok	0	"[[0], [5, 1, 1, 7]] [[0], [5, 1, 1]]\n"
+closure-places/mutations/param_struct_element_h_12_into_branch.rs	E0499:13
+closure-places/mutations/param_struct_element_h_12_mut_across.rs	E0499:13
+closure-places/mutations/param_struct_element_h_12_mut_ended.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_h_12_other_arm.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_h_12_shared_across.rs	E0502:13
+closure-places/mutations/param_struct_element_h_14_back_edge.rs	E0499:17
+closure-places/mutations/param_struct_element_h_14_fresh_each_iteration.rs	ok	0	"[[0], [5, 1, 7, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_h_14_into_branch.rs	E0499:15
+closure-places/mutations/param_struct_element_h_14_mut_across.rs	E0499:15
+closure-places/mutations/param_struct_element_h_14_mut_ended.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_h_14_other_arm.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_h_14_shared_across.rs	E0502:15
+closure-places/mutations/param_struct_element_push_3_back_edge.rs	E0499:6
+closure-places/mutations/param_struct_element_push_3_fresh_each_iteration.rs	ok	0	"[[0], [5, 1, 1, 7]] [[0], [5, 1, 1]]\n"
+closure-places/mutations/param_struct_element_push_3_into_branch.rs	E0499:4
+closure-places/mutations/param_struct_element_push_3_mut_across.rs	E0499:4
+closure-places/mutations/param_struct_element_push_3_mut_ended.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_push_3_other_arm.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/mutations/param_struct_element_push_3_shared_across.rs	E0502:4
+closure-places/mutations/param_two_closures_a_4_back_edge.rs	E0524:3 E0499:7
+closure-places/mutations/param_two_closures_a_4_fresh_each_iteration.rs	E0524:3
+closure-places/mutations/param_two_closures_a_4_into_branch.rs	E0524:3 E0499:5
+closure-places/mutations/param_two_closures_a_4_mut_across.rs	E0524:3 E0499:5
+closure-places/mutations/param_two_closures_a_4_mut_ended.rs	E0524:3
+closure-places/mutations/param_two_closures_a_4_other_arm.rs	E0524:3
+closure-places/mutations/param_two_closures_a_4_shared_across.rs	E0524:3 E0502:5
+closure-places/mutations/param_two_closures_b_5_back_edge.rs	E0524:3 E0499:8
+closure-places/mutations/param_two_closures_b_5_fresh_each_iteration.rs	E0524:3
+closure-places/mutations/param_two_closures_b_5_into_branch.rs	E0524:3 E0499:6
+closure-places/mutations/param_two_closures_b_5_mut_across.rs	E0524:3 E0499:6
+closure-places/mutations/param_two_closures_b_5_mut_ended.rs	E0524:3
+closure-places/mutations/param_two_closures_b_5_other_arm.rs	E0524:3
+closure-places/mutations/param_two_closures_b_5_shared_across.rs	E0524:3 E0502:6
+closure-places/mutations/param_two_closures_in_turn_a_3_back_edge.rs	E0499:6
+closure-places/mutations/param_two_closures_in_turn_a_3_fresh_each_iteration.rs	ok	0	"[0, 1, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_a_3_into_branch.rs	E0499:4
+closure-places/mutations/param_two_closures_in_turn_a_3_mut_across.rs	E0499:4
+closure-places/mutations/param_two_closures_in_turn_a_3_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_a_3_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_a_3_shared_across.rs	E0502:4
+closure-places/mutations/param_two_closures_in_turn_b_5_back_edge.rs	E0499:8
+closure-places/mutations/param_two_closures_in_turn_b_5_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_b_5_into_branch.rs	E0499:6
+closure-places/mutations/param_two_closures_in_turn_b_5_mut_across.rs	E0499:6
+closure-places/mutations/param_two_closures_in_turn_b_5_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_b_5_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_b_5_shared_across.rs	E0502:6
+closure-places/mutations/param_two_closures_in_turn_v_10_back_edge.rs	E0499:13
+closure-places/mutations/param_two_closures_in_turn_v_10_fresh_each_iteration.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_10_into_branch.rs	E0499:11
+closure-places/mutations/param_two_closures_in_turn_v_10_mut_across.rs	E0499:11
+closure-places/mutations/param_two_closures_in_turn_v_10_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_10_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_10_shared_across.rs	E0502:11
+closure-places/mutations/param_two_closures_in_turn_v_11_back_edge.rs	E0502:14
+closure-places/mutations/param_two_closures_in_turn_v_11_fresh_each_iteration.rs	ok	0	"[0, 1, 2]\n[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_11_into_branch.rs	E0502:12
+closure-places/mutations/param_two_closures_in_turn_v_11_mut_across.rs	E0502:12
+closure-places/mutations/param_two_closures_in_turn_v_11_mut_ended.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_11_other_arm.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_in_turn_v_11_shared_across.rs	ok	0	"[0, 1, 2]\n"
+closure-places/mutations/param_two_closures_v_10_back_edge.rs	E0524:3 E0499:13
+closure-places/mutations/param_two_closures_v_10_fresh_each_iteration.rs	E0524:3
+closure-places/mutations/param_two_closures_v_10_into_branch.rs	E0524:3 E0499:11
+closure-places/mutations/param_two_closures_v_10_mut_across.rs	E0524:3 E0499:11
+closure-places/mutations/param_two_closures_v_10_mut_ended.rs	E0524:3
+closure-places/mutations/param_two_closures_v_10_other_arm.rs	E0524:3
+closure-places/mutations/param_two_closures_v_10_shared_across.rs	E0524:3 E0502:11
+closure-places/mutations/param_two_closures_v_11_back_edge.rs	E0524:3 E0502:14
+closure-places/mutations/param_two_closures_v_11_fresh_each_iteration.rs	E0524:3
+closure-places/mutations/param_two_closures_v_11_into_branch.rs	E0524:3 E0502:12
+closure-places/mutations/param_two_closures_v_11_mut_across.rs	E0524:3 E0502:12
+closure-places/mutations/param_two_closures_v_11_mut_ended.rs	E0524:3
+closure-places/mutations/param_two_closures_v_11_other_arm.rs	E0524:3
+closure-places/mutations/param_two_closures_v_11_shared_across.rs	E0524:3
+closure-places/mutations/param_use_while_captured_push_3_back_edge.rs	E0499:6 E0501:8
+closure-places/mutations/param_use_while_captured_push_3_fresh_each_iteration.rs	E0501:8
+closure-places/mutations/param_use_while_captured_push_3_into_branch.rs	E0499:4 E0501:8
+closure-places/mutations/param_use_while_captured_push_3_mut_across.rs	E0499:4 E0501:6
+closure-places/mutations/param_use_while_captured_push_3_mut_ended.rs	E0501:6
+closure-places/mutations/param_use_while_captured_push_3_other_arm.rs	E0501:9
+closure-places/mutations/param_use_while_captured_push_3_shared_across.rs	E0502:4 E0501:6
+closure-places/mutations/param_use_while_captured_push_4_back_edge.rs	E0501:7
+closure-places/mutations/param_use_while_captured_push_4_fresh_each_iteration.rs	E0501:7
+closure-places/mutations/param_use_while_captured_push_4_into_branch.rs	E0501:5
+closure-places/mutations/param_use_while_captured_push_4_mut_across.rs	E0501:5
+closure-places/mutations/param_use_while_captured_push_4_mut_ended.rs	E0501:6
+closure-places/mutations/param_use_while_captured_push_4_other_arm.rs	E0501:8
+closure-places/mutations/param_use_while_captured_push_4_shared_across.rs	E0501:5
+closure-places/mutations/param_use_while_captured_v_10_back_edge.rs	E0501:4 E0499:13
+closure-places/mutations/param_use_while_captured_v_10_fresh_each_iteration.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_10_into_branch.rs	E0501:4 E0499:11
+closure-places/mutations/param_use_while_captured_v_10_mut_across.rs	E0501:4 E0499:11
+closure-places/mutations/param_use_while_captured_v_10_mut_ended.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_10_other_arm.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_10_shared_across.rs	E0501:4 E0502:11
+closure-places/mutations/param_use_while_captured_v_11_back_edge.rs	E0501:4 E0502:14
+closure-places/mutations/param_use_while_captured_v_11_fresh_each_iteration.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_11_into_branch.rs	E0501:4 E0502:12
+closure-places/mutations/param_use_while_captured_v_11_mut_across.rs	E0501:4 E0502:12
+closure-places/mutations/param_use_while_captured_v_11_mut_ended.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_11_other_arm.rs	E0501:4
+closure-places/mutations/param_use_while_captured_v_11_shared_across.rs	E0501:4
+closure-places/mutations/rebound_local_a_10_back_edge.rs	E0502:13
+closure-places/mutations/rebound_local_a_10_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20]\n[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_a_10_into_branch.rs	E0502:11
+closure-places/mutations/rebound_local_a_10_mut_across.rs	E0502:11
+closure-places/mutations/rebound_local_a_10_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_a_10_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_a_10_shared_across.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_10_back_edge.rs	E0502:13
+closure-places/mutations/rebound_local_b_10_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20]\n[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_10_into_branch.rs	E0502:11
+closure-places/mutations/rebound_local_b_10_mut_across.rs	E0502:11
+closure-places/mutations/rebound_local_b_10_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_10_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_10_shared_across.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_6_back_edge.rs	E0499:9
+closure-places/mutations/rebound_local_b_6_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_6_into_branch.rs	E0499:7
+closure-places/mutations/rebound_local_b_6_mut_across.rs	E0499:7
+closure-places/mutations/rebound_local_b_6_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_6_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_b_6_shared_across.rs	E0502:7
+closure-places/mutations/rebound_local_f_8_back_edge.rs	E0499:11
+closure-places/mutations/rebound_local_f_8_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20, 20]\n"
+closure-places/mutations/rebound_local_f_8_into_branch.rs	E0499:9
+closure-places/mutations/rebound_local_f_8_mut_across.rs	E0499:9
+closure-places/mutations/rebound_local_f_8_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_f_8_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_f_8_shared_across.rs	E0502:9
+closure-places/mutations/rebound_local_f_9_back_edge.rs	E0499:12
+closure-places/mutations/rebound_local_f_9_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20, 20]\n"
+closure-places/mutations/rebound_local_f_9_into_branch.rs	E0499:10
+closure-places/mutations/rebound_local_f_9_mut_across.rs	E0499:10
+closure-places/mutations/rebound_local_f_9_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_f_9_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_f_9_shared_across.rs	E0502:10
+closure-places/mutations/rebound_local_in_loop_a_12_back_edge.rs	E0502:15
+closure-places/mutations/rebound_local_in_loop_a_12_fresh_each_iteration.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_a_12_into_branch.rs	E0502:13
+closure-places/mutations/rebound_local_in_loop_a_12_mut_across.rs	E0502:13
+closure-places/mutations/rebound_local_in_loop_a_12_mut_ended.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_a_12_other_arm.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_a_12_shared_across.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_b_12_back_edge.rs	E0502:15
+closure-places/mutations/rebound_local_in_loop_b_12_fresh_each_iteration.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_b_12_into_branch.rs	E0502:13
+closure-places/mutations/rebound_local_in_loop_b_12_mut_across.rs	E0502:13
+closure-places/mutations/rebound_local_in_loop_b_12_mut_ended.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_b_12_other_arm.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_b_12_shared_across.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_f_7_back_edge.rs	E0499:10
+closure-places/mutations/rebound_local_in_loop_f_7_fresh_each_iteration.rs	ok	0	"[1, 0, 0, 1, 1] [2, 2, 2, 3, 3]\n"
+closure-places/mutations/rebound_local_in_loop_f_7_into_branch.rs	E0499:8
+closure-places/mutations/rebound_local_in_loop_f_7_mut_across.rs	E0499:8
+closure-places/mutations/rebound_local_in_loop_f_7_mut_ended.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_f_7_other_arm.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"
+closure-places/mutations/rebound_local_in_loop_f_7_shared_across.rs	E0502:8
+closure-places/mutations/rebound_local_r_5_back_edge.rs	E0499:8
+closure-places/mutations/rebound_local_r_5_fresh_each_iteration.rs	ok	0	"[1, 10, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_5_into_branch.rs	E0499:6
+closure-places/mutations/rebound_local_r_5_mut_across.rs	E0499:6
+closure-places/mutations/rebound_local_r_5_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_5_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_5_shared_across.rs	E0502:6
+closure-places/mutations/rebound_local_r_6_back_edge.rs	E0506:9 E0499:9
+closure-places/mutations/rebound_local_r_6_fresh_each_iteration.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_6_into_branch.rs	E0506:7
+closure-places/mutations/rebound_local_r_6_mut_across.rs	E0506:7
+closure-places/mutations/rebound_local_r_6_mut_ended.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_6_other_arm.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/mutations/rebound_local_r_6_shared_across.rs	E0506:7

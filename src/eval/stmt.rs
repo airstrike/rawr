@@ -468,7 +468,8 @@ impl Engine {
     ) -> RawrResultOf<Result<bool, String>> {
         let held = scope
             .search(holder)
-            .map(|index| scope.get_mut_by_index(index).clone())
+            // A path a closure captured is shared: its indexes are read out.
+            .map(|index| scope.get_mut_by_index(index).flatten_clone())
             .ok_or_else(|| ERR::ErrorVariableNotFound(holder.to_string(), expr.position()))?;
         if some && held.is_unit() {
             let none = crate::option::none();
@@ -499,7 +500,8 @@ impl Engine {
             path.pop();
         }
         let (root, steps) = Self::path_parts(&path).ok_or_else(missing)?;
-        let place = Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?;
+        let target = Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?;
+        let place = target.as_ref();
         let Some((low, high, inclusive)) = window else {
             let place = place.read_lock::<Dynamic>().ok_or_else(missing)?;
             return Ok(if some {
@@ -980,10 +982,14 @@ impl Engine {
                     return Err(ERR::ErrorTooManyVariables(*pos).into());
                 }
 
-                // Evaluate initial value
-                let value = self
-                    .eval_expr(global, caches, scope, this_ptr, expr)?
-                    .flatten();
+                // Evaluate initial value. A place's shared handle
+                // (`__rawr_share`) stays the handle: flattening it would
+                // copy the value it shares.
+                let value = self.eval_expr(global, caches, scope, this_ptr, expr)?;
+                let value = match expr {
+                    Expr::FnCall(call, ..) if call.name == crate::engine::KEYWORD_SHARE => value,
+                    _ => value.flatten(),
+                };
                 let mut value = self.intern_string(value);
 
                 let _alias = if !rewind_scope {

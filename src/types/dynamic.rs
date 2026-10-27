@@ -1902,6 +1902,41 @@ impl Dynamic {
             Ok(value) | Err(value) => Some(value),
         }
     }
+    /// The part at `index` of a value made of parts, as [`Self::part_mut`]
+    /// reaches it, read.
+    #[must_use]
+    pub(crate) fn part(&self, index: usize) -> Option<&Self> {
+        match self.0 {
+            Union::Array(ref array, ..) => return array.get(index),
+            Union::Struct(ref value, ..) => return value.fields().get(index),
+            Union::Enum(ref value, ..) => return value.payload().get(index),
+            _ if index != 0 => return None,
+            _ => {}
+        }
+        if let Some(option) = self.downcast_ref::<crate::option::Value>() {
+            return option.as_ref();
+        }
+        match self.downcast_ref::<crate::result::Value>()? {
+            Ok(value) | Err(value) => Some(value),
+        }
+    }
+    /// A shared value that nothing else holds any more made plain again,
+    /// in place. A shared value still held elsewhere stays shared.
+    pub(crate) fn unshare_if_unique(&mut self) {
+        if !self.is_shared() {
+            return;
+        }
+        let Union::Shared(cell, tag, access) = self.take().0 else {
+            unreachable!("checked shared");
+        };
+        *self = match crate::func::native::shared_try_take(cell) {
+            #[cfg(not(feature = "sync"))]
+            Ok(value) => value.into_inner(),
+            #[cfg(feature = "sync")]
+            Ok(value) => value.into_inner().unwrap(),
+            Err(cell) => Self(Union::Shared(cell, tag, access)),
+        };
+    }
 
     /// Return `true` if the [`Dynamic`] holds a `()`.
     ///

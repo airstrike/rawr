@@ -3539,6 +3539,10 @@ struct LiftedClosure {
     captures: Vec<origin::Fragment>,
     body: origin::Fragment,
     span: Span,
+    /// Whether its body reaches a place through a handle made where it is
+    /// written (`places::held`), which its generated function has no way to
+    /// be given.
+    held: bool,
 }
 
 /// An executable callable for a lifted closure.
@@ -9679,6 +9683,11 @@ struct Parser<'a> {
     /// The declaration of the local each of `aliases` is a place in, by
     /// the alias's declaration: a later local of its name shadows it.
     alias_roots: BTreeMap<Span, Span>,
+    /// The declarations of `&mut` borrows the lowering marks mutable so a
+    /// write through them is allowed, though they were not declared `mut`
+    /// (`places::alias_by_itself`): a closure captures what they refer to
+    /// by a unique borrow, as rustc's capture analysis has it.
+    undeclared_mut: BTreeSet<Span>,
     /// The `&mut` locals given new borrows, by name: their declaration and
     /// whether they were declared `let mut` (`reborrow.rs`).
     reborrow_selectors: BTreeMap<ImmutableString, (Span, bool)>,
@@ -10004,6 +10013,7 @@ impl<'a> Parser<'a> {
             pending_member: None,
             aliases: BTreeMap::new(),
             alias_roots: BTreeMap::new(),
+            undeclared_mut: BTreeSet::new(),
             reborrow_selectors: BTreeMap::new(),
             flow: std::cell::RefCell::default(),
             parameter_declarations: BTreeSet::new(),
@@ -34925,6 +34935,14 @@ impl<'a> Parser<'a> {
                 .flow()
                 .closure(&key)
                 .is_some_and(|closure| closure.mutable),
+            // A closure a function returned, as `impl FnMut(i32)`: its type
+            // doesn't say which `Fn` trait it has, and a call of one
+            // declared `mut` is an `FnMut` call, which borrows it `&mut`.
+            Ty::Fn { .. } => {
+                binding.mutable
+                    && matches!(binding.kind, BindingKind::Local)
+                    && !self.parameter_declarations.contains(&binding.declaration)
+            }
             _ => false,
         };
         if mutable {
@@ -35171,6 +35189,14 @@ impl<'a> Parser<'a> {
         let Some(index) = self.lifted.iter().position(|closure| closure.key == *key) else {
             return Ok(());
         };
+        if self.lifted[index].held {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a closure using a `&mut` borrow of a place declared outside it, \
+                            passed to a native function: not supported in Rawr yet"
+                    .into(),
+                source: self.lifted[index].span,
+            });
+        }
         let inputs: Box<[Ty]> = inputs
             .iter()
             .map(|input| match input {
@@ -38856,6 +38882,7 @@ impl<'a> Parser<'a> {
             captures: BTreeSet::new(),
             consumed: BTreeSet::new(),
             asynchronous: async_step.is_some(),
+            held: Vec::new(),
         });
         let outer_loops = std::mem::take(&mut self.loops);
         let closure_split = self.flow().closure_enter();
@@ -39002,10 +39029,18 @@ impl<'a> Parser<'a> {
                     declaration,
                     holder: self.may_hold_borrow(&binding.ty),
                     copy: !self.moves_by_value(&binding.ty),
-                    // A function's `&mut` parameter can be changed through
-                    // but was not declared `mut`.
+                    // A function's `&mut` parameter, or a `&mut` pattern
+                    // binding, can be changed through but was not declared
+                    // `mut`. A closure inside one that captures the same
+                    // local reaches it through the enclosing closure's
+                    // capture, and borrows it as rustc does a `mut` one.
                     declared_mut: binding.mutable
-                        && !self.parameter_declarations.contains(&declaration),
+                        && !self.parameter_declarations.contains(&declaration)
+                        && !self.undeclared_mut.contains(&declaration)
+                        || self
+                            .closures
+                            .last()
+                            .is_some_and(|outer| outer.outer.get(name) == Some(&declaration)),
                 })
             })
             .collect();
@@ -39143,6 +39178,24 @@ impl<'a> Parser<'a> {
             if name == "this" || !(moved || scope.consumed.contains(name)) {
                 continue;
             }
+            // A `&mut` borrow of a place moves into a `move` closure: the
+            // closure holds the place's handle (`held`), and a later use of
+            // the borrow is a use after move.
+            if moved
+                && let Some(declaration) = scope.outer.get(name)
+                && self
+                    .aliases
+                    .get(name)
+                    .is_some_and(|(at, _)| at == declaration)
+            {
+                if let Some(binding) = self.bindings.get_mut(name.as_str())
+                    && binding.declaration == *declaration
+                {
+                    binding.available = false;
+                    self.moved_at.insert(*declaration, expression);
+                }
+                continue;
+            }
             let parts = match scope.outer.get(name) {
                 Some(declaration) if moved && !scope.asynchronous => closure
                     .by_value
@@ -39221,6 +39274,7 @@ impl<'a> Parser<'a> {
                     captures,
                     body: body_block,
                     span: expression,
+                    held: !scope.held.is_empty(),
                 });
                 Ty::FnItem {
                     key: Box::new(key),
@@ -39246,6 +39300,15 @@ impl<'a> Parser<'a> {
         if moved && !scope.captures.is_empty() || !moved && !moving.is_empty() {
             let mut copied = origin::Fragment::plain("{ ");
             for name in &scope.captures {
+                // A `&mut` borrow of a place is no local of its own at run
+                // time: the closure holds the place's handle (`held`).
+                if self
+                    .aliases
+                    .get(name)
+                    .is_some_and(|(at, _)| scope.outer.get(name) == Some(at))
+                {
+                    continue;
+                }
                 if name == "this" {
                     if moved {
                         copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
@@ -39275,6 +39338,7 @@ impl<'a> Parser<'a> {
             bound.push_text(" }");
             source = bound;
         }
+        let source = Self::with_held(&scope.held, source);
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
     }
 
@@ -46264,6 +46328,10 @@ struct ClosureScope {
     consumed: BTreeSet<ImmutableString>,
     /// An async body, where `.await` may appear.
     asynchronous: bool,
+    /// The `&mut` borrows of places declared outside the closure that its
+    /// body uses, each reached through a shared handle made where the
+    /// closure is (`places::held`).
+    held: Vec<places::Held>,
 }
 
 /// Whether a type still has an inference variable in it.
