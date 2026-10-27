@@ -1,7 +1,7 @@
-<meta name="description" content="The built-in macros rawr supports, and the format strings that println! and format! take.">
+<meta name="description" content="The built-in macros rawr supports, the macro_rules! macros of crates it expands, and the format strings that println! and format! take.">
 <article>
 <h1>Macros</h1>
-<p class="lede">rawr has a fixed set of built-in macros. <code>macro_rules!</code> isn&rsquo;t supported yet.</p>
+<p class="lede">rawr has a fixed set of built-in macros, and it expands the <code>macro_rules!</code> macros of the crates a program depends on. A <code>macro_rules!</code> the program defines itself isn&rsquo;t supported yet.</p>
 <h2 id="built-in">Built-in macros</h2>
 <table>
   <tr><th>Macro</th><th>Notes</th></tr>
@@ -40,6 +40,16 @@ writeln!(&amp;mut s, " done").unwrap();
 print!("{s}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-write" data-out="out-write" aria-label="Run write.rs" hidden></button><b>rawr run write.rs</b><span id="out-write" aria-live="polite">1,2,3, done</span></div>
 </div>
+<h2 id="crates">Macros from crates</h2>
+<p>A <code>macro_rules!</code> macro that a dependency exports expands from the dependency&rsquo;s own source, as rustc expands it. You import it with <code>use</code> or call it by its path, as in <code>use iced::widget::column;</code> or <code>outer::scaled!(2, 3)</code>.</p>
+<ul>
+  <li>Its rules are tried in order, with Rust&rsquo;s fragment specifiers (<code>expr</code>, <code>ty</code>, <code>ident</code>, <code>literal</code>, <code>tt</code> and the rest) and repetitions (<code>$(..),*</code>, <code>+</code> and <code>?</code>).</li>
+  <li>An <code>expr</code> argument stays one expression, so <code>scaled!(2, 3 + 1)</code> multiplies by 4.</li>
+  <li><code>$crate</code> names the crate that defines the macro, even when your program doesn&rsquo;t depend on that crate directly. Its paths reach items the crate hides with <code>#[doc(hidden)]</code>.</li>
+  <li>A local that the macro binds with <code>let</code>, <code>for</code> or a closure parameter is the macro&rsquo;s own. It never meets a name your program passes in.</li>
+  <li>A macro may call another, or itself through <code>$crate</code>.</li>
+</ul>
+<p>With rawr-iced installed, its own <code>column!</code>, <code>row!</code>, <code>text!</code>, <code>rich_text!</code> and <code>color!</code> take the place of iced&rsquo;s.</p>
 <h2 id="format">Format strings</h2>
 <p>Format strings follow Rust&rsquo;s rules. Positional, numbered, named and captured arguments work. So do fill, alignment, width, precision, signs, radix, <code>{:?}</code>, <code>{:#?}</code> and <code>{:x?}</code>. A width, precision or sign on <code>{:?}</code> of an <code>Option</code>, a tuple, a <code>Vec</code> or a derived struct applies to each number, <code>bool</code> and <code>()</code> inside, as rustc passes its formatter down. Strings and chars inside ignore it. <code>{:x?}</code> writes each integer inside in hexadecimal.</p>
 <div class="block">

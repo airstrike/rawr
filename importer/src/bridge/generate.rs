@@ -4381,7 +4381,12 @@ fn render_source(
     let _type_paths = TypePaths::install(facade.as_ref());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
-            for path in facade.traits() {
+            // A macro's `$crate` path to a trait is no Rust path; the
+            // trait's spelling through the root brings it into scope.
+            for path in facade
+                .traits()
+                .filter(|path| !path.contains(crate::api::ledger::CRATE_SEGMENT))
+            {
                 writeln!(
                     stamps,
                     "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
@@ -7383,7 +7388,22 @@ fn rust_path(plan: &Plan) -> String {
         path.push_str("::");
         path.push_str(segment);
     }
-    path
+    if !path.contains(crate::api::ledger::CRATE_SEGMENT) {
+        return path;
+    }
+    // A macro's `$crate` path, which Rust cannot write: the root's own
+    // spelling of the item, or of the type an associated item is on.
+    if let Some(spelled) = plan
+        .selector()
+        .and_then(|selector| ITEM_PATHS.with_borrow(|paths| paths.get(selector).cloned()))
+        .filter(|_| plan.export().path().last() == Some(plan.name()))
+    {
+        return spelled;
+    }
+    PATH_IDENTITIES
+        .with_borrow(|identities| identities.get(&path).copied())
+        .and_then(|identity| TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned()))
+        .unwrap_or(path)
 }
 
 fn render_constructor(
@@ -9731,6 +9751,11 @@ thread_local! {
     /// Each imported type's identity, by every Rust path it has.
     static PATH_IDENTITIES: std::cell::RefCell<std::collections::BTreeMap<String, [u8; 32]>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The Rust path of each free imported function and constant reached
+    /// through its root, by selector: a macro's `$crate` path to it is
+    /// written as the root spells it.
+    static ITEM_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The scope families the adapters name, by their type at `'x`: the
     /// family's name and its type's.
     /// Each script type a generic instance names, by its path from the
@@ -10116,22 +10141,44 @@ impl TypePaths {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
                 values.clear();
-                for owner in facade
+                // A type's own spelling through its root comes before a
+                // macro's `$crate` path to it, which Rust cannot write.
+                let through_crate = |path: &str| path.contains(crate::api::ledger::CRATE_SEGMENT);
+                let types = facade
                     .into_iter()
                     .flat_map(crate::surface::facade::Plan::facades)
-                {
-                    for ty in owner.types() {
-                        let path = format!("{}::{}", owner.root(), ty.path());
-                        // The facade's own value at this path, as a view's
-                        // builder takes `iced::Length` (D558 tier 2).
-                        let facade =
-                            *crate::surface::identity::Definition::facade(&path).as_bytes();
-                        values.insert(facade);
-                        paths.entry(facade).or_insert_with(|| path.clone());
-                        paths.entry(*ty.identity()).or_insert(path);
-                    }
+                    .flat_map(|owner| owner.types().map(move |ty| (owner, ty)));
+                let (plain, through): (Vec<_>, Vec<_>) =
+                    types.partition(|(_, ty)| !through_crate(ty.path()));
+                for (owner, ty) in plain.into_iter().chain(through) {
+                    let path = format!("{}::{}", owner.root(), ty.path());
+                    // The facade's own value at this path, as a view's
+                    // builder takes `iced::Length` (D558 tier 2).
+                    let facade = *crate::surface::identity::Definition::facade(&path).as_bytes();
+                    values.insert(facade);
+                    paths.entry(facade).or_insert_with(|| path.clone());
+                    paths.entry(*ty.identity()).or_insert(path);
                 }
             });
+        });
+        ITEM_PATHS.with_borrow_mut(|paths| {
+            paths.clear();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                for item in owner.items().filter(|item| {
+                    matches!(
+                        item.kind(),
+                        crate::surface::facade::ItemKind::Function
+                            | crate::surface::facade::ItemKind::Constant
+                    ) && !item.path().contains(crate::api::ledger::CRATE_SEGMENT)
+                }) {
+                    paths
+                        .entry(item.selector().fingerprint())
+                        .or_insert_with(|| format!("{}::{}", owner.root(), item.path()));
+                }
+            }
         });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
@@ -10198,6 +10245,7 @@ impl Drop for TypePaths {
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
     }

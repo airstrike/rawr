@@ -1164,7 +1164,8 @@ fn definition_generics(
         | Kind::Const { .. }
         | Kind::TypeConst { .. }
         | Kind::Static { .. }
-        | Kind::Sysroot { .. } => None,
+        | Kind::Sysroot { .. }
+        | Kind::MacroRules { .. } => None,
     }
 }
 
