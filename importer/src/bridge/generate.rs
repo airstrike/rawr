@@ -8172,7 +8172,10 @@ fn render_slot(
         .collect::<Result<Vec<_>, _>>()?;
     let returned = substituted(call.output(), signature, substitutions)?;
     // An output that borrows the inputs, at the slot's `'x`.
-    let family = if call.borrows() {
+    // An output that borrows the inputs, as the bound writes it or as the
+    // type the instance gives a synthetic output is (`W` of iced's
+    // `ViewFn`, a `Column<'a, ..>`).
+    let family = if call.borrows() || carries_lifetime(&returned) {
         Some(family_of(&returned).ok_or(drift("a slot's borrowing output"))?)
     } else {
         None

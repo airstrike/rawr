@@ -1247,6 +1247,155 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// `T`'s arguments, and one more, as `E`, is a synthetic parameter the
     /// instance infers, as a future's `F::Output` is (D527). `None` when
     /// nothing is read so.
+    /// `generics` with each parameter `P: Trait<A..>` of a crate's trait
+    /// that one blanket implementation `impl<T: Fn(..) -> R, ..> Trait<..>
+    /// for T` gives to callables read as that callable: `P` takes the
+    /// implementation's `Fn` bound and its other bounds, at the arguments
+    /// `A..`, and the one other parameter the implementation declares, as
+    /// `R` or a `W` its output is, is a synthetic parameter the call infers
+    /// (D594). iced's `UpdateFn` and `ViewFn` are read so. `None` when no
+    /// parameter is.
+    fn blanket_callables(&self, generics: &model::Generics) -> Option<model::Generics> {
+        let callable = |predicate: &model::Predicate, of: u32| {
+            matches!(
+                predicate,
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *index == of
+                    && matches!(self.definition_name(trait_id), Some("Fn" | "FnMut" | "FnOnce"))
+            )
+        };
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        let mut predicates = Vec::new();
+        let mut changed = false;
+        for predicate in generics.predicates() {
+            let model::Predicate::Bound {
+                ty:
+                    model::Type::Parameter {
+                        owner,
+                        index: parameter,
+                    },
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+            } = predicate
+            else {
+                predicates.push(predicate.clone());
+                continue;
+            };
+            if self.graph.definition_index(trait_id).is_none()
+                || matches!(
+                    self.definition_name(trait_id),
+                    Some("Fn" | "FnMut" | "FnOnce")
+                )
+            {
+                predicates.push(predicate.clone());
+                continue;
+            }
+            let mut found = self.graph.implementations().filter(|implementation| {
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    return false;
+                };
+                let model::Type::Parameter { owner, index } = implementation.self_type() else {
+                    return false;
+                };
+                id == trait_id
+                    && owner == implementation.id()
+                    && implementation
+                        .generics()
+                        .predicates()
+                        .any(|predicate| callable(predicate, *index))
+            });
+            let (Some(implementation), None) = (found.next(), found.next()) else {
+                predicates.push(predicate.clone());
+                continue;
+            };
+            let model::Trait::Trait {
+                arguments: implemented,
+                ..
+            } = implementation.trait_ref()
+            else {
+                predicates.push(predicate.clone());
+                continue;
+            };
+            let model::Type::Parameter { index: this, .. } = implementation.self_type() else {
+                predicates.push(predicate.clone());
+                continue;
+            };
+            // What the bound gives each of the implementation's parameters.
+            let mut given = vec![(
+                *this,
+                model::Type::Parameter {
+                    owner: owner.clone(),
+                    index: *parameter,
+                },
+            )];
+            for (implemented, argument) in implemented.iter().skip(1).zip(arguments.iter()) {
+                if let (
+                    model::Argument::Type(model::Type::Parameter { index, .. }),
+                    model::Argument::Type(argument),
+                ) = (implemented, argument)
+                {
+                    given.push((*index, argument.clone()));
+                }
+            }
+            let mut others = implementation.generics().parameters().filter(|candidate| {
+                matches!(candidate.kind(), model::ParameterKind::Type { .. })
+                    && !given.iter().any(|(index, _)| *index == candidate.index())
+            });
+            let other = others.next();
+            if others.next().is_some() {
+                predicates.push(predicate.clone());
+                continue;
+            }
+            let synthetic = representability::signature::future_output(*parameter);
+            let renamed = |index: u32| {
+                given
+                    .iter()
+                    .find(|(given, _)| *given == index)
+                    .map(|(_, ty)| ty.clone())
+                    .or_else(|| {
+                        other.is_some_and(|other| other.index() == index).then(|| {
+                            model::Type::Parameter {
+                                owner: owner.clone(),
+                                index: synthetic,
+                            }
+                        })
+                    })
+            };
+            let relabeled = implementation
+                .generics()
+                .predicates()
+                .map(|predicate| relabel_predicate(predicate, implementation.id(), &renamed))
+                .collect::<Option<Vec<_>>>();
+            let Some(relabeled) = relabeled else {
+                predicates.push(predicate.clone());
+                continue;
+            };
+            predicates.extend(relabeled);
+            if let Some(other) = other {
+                parameters.push(model::Parameter::new(
+                    owner.clone(),
+                    synthetic,
+                    other.name().into(),
+                    model::ParameterKind::Type {
+                        bounds: Box::default(),
+                        default: model::Default::Absent,
+                    },
+                ));
+            }
+            changed = true;
+        }
+        changed.then(|| {
+            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice())
+        })
+    }
+
     fn callable_conversion(&self, generics: &model::Generics) -> Option<model::Generics> {
         let callable = |predicate: &model::Predicate| {
             matches!(
@@ -3744,6 +3893,11 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 return Err(reject::Kind::CallableProtocol.into());
             }
+            // A method of a generic implementation takes no slot yet (D594):
+            // its callables cross only as the closure Rawr makes.
+            if item.call().is_none() && !item.crossings().is_empty() {
+                return Err(reject::Kind::CallableProtocol.into());
+            }
             let item = if fixed {
                 let instance = self
                     .convert(implementation.self_type())
@@ -4501,6 +4655,11 @@ impl<P: api::Phase> Context<'_, P> {
         } else {
             None
         };
+        // A parameter bounded by a crate's trait over `Fn`, as iced's
+        // `impl UpdateFn<State, Message>` is, takes the callable the trait's
+        // blanket implementation takes (D594).
+        let blanket = self.blanket_callables(generics);
+        let generics = blanket.as_ref().unwrap_or(generics);
         let converted = self.callable_conversion(generics);
         let generics = converted.as_ref().unwrap_or(generics);
         let strings = self.string_parameters(generics);

@@ -34,9 +34,18 @@ fn root(name: &str) -> PathBuf {
     root
 }
 
-#[test]
-fn a_script_state_message_update_and_view_run_under_a_native_generic_run() {
-    let root = root("crossing");
+/// `rawr-import run` on the fixture copied to `name`, with `variant` from
+/// `variants/` as its `main.rs` when given: its stdout without the process
+/// id, which `cargo run` of the same crate prints too.
+fn printed(name: &str, variant: Option<&str>) -> String {
+    let root = root(name);
+    if let Some(variant) = variant {
+        fs::copy(
+            root.join("variants").join(variant),
+            root.join("src/main.rs"),
+        )
+        .unwrap();
+    }
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
@@ -51,17 +60,33 @@ fn a_script_state_message_update_and_view_run_under_a_native_generic_run() {
     let stdout = String::from_utf8_lossy(&run.stdout);
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
-    // `cargo run` of the same crate prints this, but for the process id.
-    let printed = stdout
+    stdout
         .lines()
         .filter(|line| !line.starts_with("pid "))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+
+/// What both programs print after their first lines, as `cargo run` does.
+const EVENTS: &str = "1 view \n1 message Increment\n2 view count 1\n2 message Increment\n\
+                      3 view count 2\n3 message Increment\nlast view count 3";
+
+#[test]
+fn a_script_state_message_update_and_view_run_under_a_native_generic_run() {
     assert_eq!(
-        printed,
-        "title crossing::Counter\n1 view \n1 message Increment\n2 view count 1\n\
-         2 message Increment\n3 view count 2\n3 message Increment\nlast view count 3",
-        "stderr:\n{stderr}"
+        printed("crossing", None),
+        format!("title crossing::Counter\n{EVENTS}")
+    );
+}
+
+/// iced's shape: `application(Counter::update, Counter::view)` takes the
+/// methods through traits implemented for every `Fn` of their shape, and
+/// the theme and renderer are the ones the view's widget names.
+#[test]
+fn methods_cross_through_traits_over_fn_as_iced_takes_them() {
+    assert_eq!(
+        printed("crossing-application", Some("application.rs")),
+        format!("title crossing::Counter\ntheme events::Theme\n{EVENTS}")
     );
 }
 
