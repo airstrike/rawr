@@ -3558,27 +3558,45 @@ impl<P: api::Phase> Context<'_, P> {
             // `impl<'a, Message, W, ..> Content<'a, Message, Void, W, ..>`
             // does: its own parameters stand in order among them, and the
             // bridge reaches the type at that instance.
+            // An implementation's parameters its type doesn't name, as
+            // `Renderer` of iced's `impl<'a, Message, W, Theme, Renderer>
+            // Widget<Message, Theme, Renderer> for Button<'a, Message, W,
+            // Theme>` and `Message` of its `impl<Message, Theme, Renderer>
+            // Widget<Message, Theme, Renderer> for Text<'_, Theme,
+            // Renderer>`, are the call's to infer, from what it gives and
+            // takes, as rustc infers them. A trait's arguments name them.
+            let trait_impl = matches!(implementation.trait_ref(), model::Trait::Trait { .. });
+            let mut inferred = Vec::new();
+            let mut infer = |parameter: &model::Parameter| {
+                if trait_impl && matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                    inferred.push(parameter.index());
+                    Ok(())
+                } else {
+                    Err(reject::Kind::GenericImplementation)
+                }
+            };
             let mut own = parameters.iter();
             let mut fixed = false;
             for argument in arguments {
                 match argument {
-                    model::Argument::Type(model::Type::Parameter { owner, index }) => {
+                    model::Argument::Type(model::Type::Parameter { owner, index }) => loop {
                         let Some(parameter) = own.next() else {
                             return Err(reject::Kind::GenericImplementation.into());
                         };
-                        if owner != implementation.id()
-                            || *index != parameter.index()
-                            || !matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                        if owner == implementation.id()
+                            && *index == parameter.index()
+                            && matches!(parameter.kind(), model::ParameterKind::Type { .. })
                         {
-                            return Err(reject::Kind::GenericImplementation.into());
+                            break;
                         }
-                    }
+                        infer(parameter)?;
+                    },
                     model::Argument::Type(_) => fixed = true,
                     _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
             }
-            if own.next().is_some() {
-                return Err(reject::Kind::GenericImplementation.into());
+            for parameter in own {
+                infer(parameter)?;
             }
             if !implementation.relevance().any(|relevant| relevant == id)
                 || !implementation.retains_associated_owner(definition)
@@ -3599,12 +3617,70 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 return Err(reject::Kind::GenericImplementation.into());
             }
-            let container_parameters = parameters.len();
+            let container_parameters = parameters.len() - inferred.len();
+            // A trait's provided method, as iced's `Widget::_boxed`, names
+            // the trait's parameters, which this implementation's trait
+            // arguments are. Its own parameters follow the trait's, so they
+            // follow the implementation's here.
+            let provided = match (definition.owner(), implementation.trait_ref()) {
+                (model::Owner::Definition(owner), model::Trait::Trait { id, arguments })
+                    if owner == id =>
+                {
+                    let mut substitutions = arguments
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, argument)| match argument {
+                            model::Argument::Type(ty) => {
+                                Some(((id.clone(), u32::try_from(index).ok()?), ty.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let first = implementation
+                        .generics()
+                        .parameters()
+                        .map(|parameter| parameter.index().saturating_add(1))
+                        .max()
+                        .unwrap_or(0);
+                    let mut own = Vec::new();
+                    for (position, parameter) in generics.parameters().enumerate() {
+                        let index = first
+                            .checked_add(u32::try_from(position).map_err(|_| Error::IndexOverflow)?)
+                            .ok_or(Error::IndexOverflow)?;
+                        if matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                            substitutions.push((
+                                (parameter.owner().clone(), parameter.index()),
+                                model::Type::Parameter {
+                                    owner: parameter.owner().clone(),
+                                    index,
+                                },
+                            ));
+                        }
+                        own.push(model::Parameter::new(
+                            parameter.owner().clone(),
+                            index,
+                            parameter.name().into(),
+                            parameter.kind().clone(),
+                        ));
+                    }
+                    let own = model::Generics::new(
+                        own.into_boxed_slice(),
+                        generics.predicates().cloned().collect(),
+                    );
+                    Some((substituted_signature(signature, &substitutions), own))
+                }
+                _ => None,
+            };
+            let (signature, generics) = match &provided {
+                Some((signature, generics)) => (signature, generics),
+                None => (signature, generics),
+            };
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
+            let item = item.with_inferred(&inferred, parameters.len());
             // An invocation's signature declares each of its parameters, and
             // an argument's `impl Fn(..)` has no name to declare, as in
             // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`,
@@ -5968,6 +6044,41 @@ fn futurize(
         },
         other => other,
     }
+}
+
+/// `signature` with each parameter in `substitutions` replaced in its
+/// receiver, inputs and output.
+fn substituted_signature(
+    signature: &model::Signature,
+    substitutions: &[((api::identity::Definition, u32), model::Type)],
+) -> model::Signature {
+    let substitute = |ty: &model::Type| substitute_parameters(ty, substitutions);
+    let receiver = match signature.receiver() {
+        model::Receiver::None => model::Receiver::None,
+        model::Receiver::Value { ty } => model::Receiver::Value { ty: substitute(ty) },
+        model::Receiver::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Receiver::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: substitute(ty),
+        },
+        model::Receiver::Explicit { ty } => model::Receiver::Explicit { ty: substitute(ty) },
+    };
+    model::Signature::new(
+        signature.safety(),
+        signature.const_function(),
+        signature.async_function(),
+        signature.abi().into(),
+        signature.variadic(),
+        signature.binders().cloned().collect(),
+        receiver,
+        signature.inputs().map(substitute).collect(),
+        substitute(signature.output()),
+    )
+    .with_guard(signature.guard().cloned())
 }
 
 /// `ty` with each impl parameter in `substitutions` replaced.

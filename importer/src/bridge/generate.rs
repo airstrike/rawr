@@ -5872,11 +5872,29 @@ fn render_adapter_body(
                         output
                             .write_all(b" = take_native(arguments, 0)?;\n")
                             .map_err(|_| request::Error::Encoding)?;
+                        // An implementation's parameter the call infers, as
+                        // `Renderer` of iced's `Widget` for `Button`, is
+                        // named by the output's type.
+                        let inferred = signature.parameters().iter().any(|parameter| {
+                            parameter.is_argument_impl()
+                                && output_names(signature.output(), parameter.index())
+                        });
+                        let annotation = if inferred {
+                            concrete_type(&substituted(
+                                signature.output(),
+                                signature,
+                                substitutions,
+                            )?)
+                            .map(|ty| format!(": {ty}"))
+                            .unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
                         // The arena is lent while the method runs, as for a
                         // function (D551.6).
                         write!(
                             output,
-                            "    let output = lend(arguments.arena, || receiver.{}",
+                            "    let output{annotation} = lend(arguments.arena, || receiver.{}",
                             plan.name()
                         )
                         .map_err(|_| request::Error::Encoding)?;
@@ -9924,6 +9942,26 @@ impl Drop for TypePaths {
 
 /// The Rust spelling of `ty`, its imported types by their facade paths, or
 /// `None` when it has no exact spelling.
+/// Whether `ty` names the type parameter at `index`.
+fn output_names(ty: &convert::Type, index: u32) -> bool {
+    match ty {
+        convert::Type::Parameter(parameter) => *parameter == index,
+        convert::Type::Unit | convert::Type::Builtin(_) => false,
+        convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => arguments
+            .iter()
+            .any(|argument| output_names(argument, index)),
+        convert::Type::Option(element)
+        | convert::Type::Borrowed { ty: element, .. }
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => output_names(element, index),
+        convert::Type::Result(ok, err) => output_names(ok, index) || output_names(err, index),
+        convert::Type::FunctionItem { input, output } => {
+            output_names(input, index) || output_names(output, index)
+        }
+        convert::Type::ProfileMessage { payload, .. } => output_names(payload, index),
+    }
+}
+
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Unit => "()".to_owned(),

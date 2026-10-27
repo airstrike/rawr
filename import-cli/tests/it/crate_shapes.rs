@@ -99,3 +99,14 @@ fn a_module_and_a_function_of_one_name_are_both_reached() {
         "count at 20\nother at 16\nfull at 16\nbase at 16\n1\n",
     );
 }
+
+/// A generic trait's provided method, as iced's `Widget<Message, ..>`'s
+/// `_boxed`, is a member of each type that implements the trait, through an
+/// implementation whose parameter its type doesn't name (`impl<Message>
+/// Widget<Message> for Space`): called as a method, through the trait's
+/// `use`d name and through its path, as `column!` calls it, with the
+/// parameter inferred from what the call gives.
+#[test]
+fn a_generic_traits_provided_method_is_each_implementors() {
+    runs_as_cargo_does("provided", "4\n5\n6\n");
+}

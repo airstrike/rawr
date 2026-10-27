@@ -127,22 +127,32 @@ pub fn run(succeed: bool) -> Result {
 pub mod widget {
     pub use crate::base::*;
 
-    pub trait Widget {
+    /// Generic over its message, as iced's `Widget<Message, Theme,
+    /// Renderer>` is.
+    pub trait Widget<Message> {
         fn width(&self) -> u32;
 
-        fn boxed(self) -> Boxed
+        fn boxed<'a>(self) -> Boxed<'a, Message>
         where
-            Self: Sized + 'static,
+            Self: Sized + 'a,
         {
             Boxed {
                 width: self.width(),
+                message: std::marker::PhantomData,
             }
         }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Boxed {
+    pub struct Boxed<'a, Message> {
         pub width: u32,
+        message: std::marker::PhantomData<&'a Message>,
+    }
+
+    impl<Message> Boxed<'_, Message> {
+        pub fn width(&self) -> u32 {
+            self.width
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +160,7 @@ pub mod widget {
         pub width: u32,
     }
 
-    impl Widget for Space {
+    impl<Message> Widget<Message> for Space {
         fn width(&self) -> u32 {
             self.width
         }

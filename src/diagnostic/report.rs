@@ -310,6 +310,14 @@ impl Builder {
         if span.start() > span.end() {
             return Err(Error::ReversedSpan(span));
         }
+        // A span of tokens a macro expansion made from one written token
+        // can run past the written one's line: it starts where they were
+        // written.
+        let span = if source.contains(span.start()) && !source.contains(span.end()) {
+            Span::new(span.start(), span.start())
+        } else {
+            span
+        };
         if !source.contains(span.start()) || !source.contains(span.end()) {
             return Err(Error::SpanOutsideSource {
                 source: source.identity().into(),

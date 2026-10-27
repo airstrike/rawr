@@ -2447,11 +2447,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut traits = tcx
                 .visible_traits()
                 .filter(|trait_id| {
-                    tcx.generics_of(*trait_id).count() == 1
-                        && tcx
-                            .associated_items(*trait_id)
-                            .filter_by_name_unhygienic(name)
-                            .any(|item| item.is_fn())
+                    tcx.associated_items(*trait_id)
+                        .filter_by_name_unhygienic(name)
+                        .any(|item| item.is_fn())
                 })
                 .collect::<Vec<_>>();
             traits.sort_unstable_by_key(|trait_id| {
@@ -2465,13 +2463,19 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let defaulted = generic.then(|| defaulted_instance(tcx, adt)).flatten();
             for trait_id in traits {
                 self.edge(1)?;
+                // A generic trait, as iced's `Widget<Message, Theme,
+                // Renderer>`, is the type's own implementation of it, whose
+                // trait arguments rustc proves where the bridge calls the
+                // member: its provided `_boxed` is the type's.
+                let trait_generic = tcx.generics_of(trait_id).count() != 1;
                 let implements = |self_ty: ty::Ty<'tcx>| {
                     tcx.infer_ctxt()
                         .build(ty::TypingMode::non_body_analysis())
                         .type_implements_trait(trait_id, [self_ty], param_env)
                         .must_apply_modulo_regions()
                 };
-                let applies = implements(self_ty) || defaulted.is_some_and(implements);
+                let applies =
+                    trait_generic || implements(self_ty) || defaulted.is_some_and(implements);
                 if !applies {
                     continue;
                 }
@@ -2496,7 +2500,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             )
                         })
                 });
-                let arguments = tcx.mk_args(&[self_ty.into()]);
+                let arguments = match own {
+                    Some(implementation) if trait_generic => tcx
+                        .impl_opt_trait_ref(implementation)
+                        .map(|reference| reference.instantiate_identity().skip_norm_wip().args)
+                        .unwrap_or_else(|| tcx.mk_args(&[self_ty.into()])),
+                    _ => tcx.mk_args(&[self_ty.into()]),
+                };
                 let obligation = AssociatedObligation {
                     kind: AssociatedDemandKind::SelectedMember,
                     trait_item: Some(trait_item),
@@ -2505,6 +2515,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 };
                 if let Some(implementation) = own {
                     self.request_implementation(implementation, adt, Some(obligation))?;
+                    continue;
+                }
+                // A blanket implementation of a generic trait is left
+                // unresolved, as rustc would choose its arguments.
+                if trait_generic {
                     continue;
                 }
                 let blankets = candidates

@@ -42435,6 +42435,25 @@ impl<'a> Parser<'a> {
                     span(owner_span.start(), member_span.end()),
                 );
             }
+            // `Trait::method(receiver, ..)` through a crate's trait a `use`
+            // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
+            // which Rawr names as a module: the method called on its
+            // receiver, as through the trait's whole path.
+            if self.models.host_items(&path).is_none()
+                && matches!(binding.target, item::Import::Module)
+                && binding
+                    .qualified
+                    .rsplit("::")
+                    .next()
+                    .and_then(|name| name.chars().next())
+                    .is_some_and(char::is_uppercase)
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
                 let native = self.models.host.entry(&path).is_none()
