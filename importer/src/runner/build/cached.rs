@@ -316,6 +316,7 @@ fn compile<B>(
     let copied = result.as_ref().ok().map(|messages| {
         // The runner's dep-info names every source this build compiled.
         let output = built.join(host).join("debug");
+        let _ = super::name_binary(&output, &work.join("Cargo.toml"));
         if let Ok(used) = fs::read(output.join("rawr-generated-runner.d")) {
             crate::deps::prune_rawr(&build, &used);
         }

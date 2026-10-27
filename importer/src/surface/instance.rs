@@ -20,6 +20,46 @@ pub struct Arguments {
     functions: Box<[FunctionItem]>,
     mappers: Box<[EventMapper]>,
     predicates: Box<[super::identity::Implementation]>,
+    slots: Box<[Slot]>,
+}
+
+/// A script function that fills a callable parameter of the item as a
+/// slot (D594): a function item the runner generates, which calls the
+/// script function in the generation current where native code calls it.
+/// Its key names the script function, so two functions are two slots, of
+/// two Rust types, as two Rust functions are.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Slot {
+    position: u32,
+    key: [u8; 32],
+}
+
+impl Slot {
+    /// The slot for the script function named `name` at the call's input
+    /// `position`.
+    #[must_use]
+    pub fn new(position: u32, name: &str) -> Self {
+        use sha2::{Digest as _, Sha256};
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.instance.slot/v1");
+        digest.update(name.as_bytes());
+        Self {
+            position,
+            key: digest.finalize().into(),
+        }
+    }
+
+    /// The input the slot fills.
+    #[must_use]
+    pub const fn position(&self) -> u32 {
+        self.position
+    }
+
+    /// The digest of the script function's name.
+    #[must_use]
+    pub const fn key(&self) -> &[u8; 32] {
+        &self.key
+    }
 }
 
 pub(super) struct Parts {
@@ -30,6 +70,7 @@ pub(super) struct Parts {
     pub(super) functions: Box<[FunctionItem]>,
     pub(super) mappers: Box<[EventMapper]>,
     pub(super) predicates: Box<[super::identity::Implementation]>,
+    pub(super) slots: Box<[Slot]>,
 }
 
 /// One exact public imported function item consumed at a direct formal.
@@ -125,7 +166,22 @@ impl Arguments {
             functions: Box::default(),
             mappers: Box::default(),
             predicates: Box::default(),
+            slots: Box::default(),
         })
+    }
+
+    /// Attach the script functions that fill the item's callable
+    /// parameters as slots (D594).
+    #[doc(hidden)]
+    pub fn with_slots(mut self, slots: Box<[Slot]>) -> Result<Self, super::Error> {
+        if !slots
+            .windows(2)
+            .all(|pair| pair[0].position < pair[1].position)
+        {
+            return Err(super::Error::InstanceMismatch);
+        }
+        self.slots = slots;
+        Ok(self)
     }
 
     /// Attach the exact compile-time function items selected by checked Rawr source.
@@ -280,6 +336,23 @@ impl Arguments {
             .iter()
             .filter(|parameter| parameter.kind() == representability::signature::Kind::Constant)
             .count();
+        // A call whose callables are slots needs each parameter to cross.
+        if !self.slots.is_empty() {
+            let crossings = match representability {
+                representability::Representability::FunctionItem(item) => item.crossings(),
+                representability::Representability::Invocation(item) => item.crossings(),
+                _ => &[],
+            };
+            return if type_parameters == self.types.len()
+                && constant_parameters == self.constants.len()
+                && self.callable.is_none()
+                && !crossings.is_empty()
+            {
+                Ok(())
+            } else {
+                Err(super::Error::InstanceMismatch)
+            };
+        }
         if type_parameters == self.types.len()
             && constant_parameters == self.constants.len()
             && parameters
@@ -328,6 +401,7 @@ impl Arguments {
             functions: self.functions,
             mappers: self.mappers,
             predicates: self.predicates,
+            slots: self.slots,
         }
     }
 
@@ -548,7 +622,7 @@ fn concrete_type_bytes(
     }
     match ty {
         convert::Type::Parameter(_) => Err(super::Error::UnconstrainedGeneric),
-        convert::Type::Nominal { arguments, .. } => {
+        convert::Type::Nominal { arguments, .. } | convert::Type::Script { arguments, .. } => {
             arguments
                 .iter()
                 .try_fold(std::mem::size_of::<convert::Type>(), |bytes, argument| {
@@ -608,6 +682,7 @@ fn concrete_type_bytes(
                 })
             })
         }
+        convert::Type::Inferred => Ok(std::mem::size_of::<convert::Type>()),
         convert::Type::Unit | convert::Type::Builtin(_) => Ok(std::mem::size_of::<convert::Type>()),
     }
 }
@@ -621,6 +696,24 @@ pub fn key(types: &[convert::Type]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"rawr.instance.key/v1");
     digest.update(serde_json::to_vec(types).unwrap_or_default());
+    digest.finalize().into()
+}
+
+/// [`key`] of an instance whose callables are the script functions
+/// `slots` (D594): each function is an instance of its own, as each Rust
+/// function is a type of its own.
+#[must_use]
+pub fn key_with_slots(types: &[convert::Type], slots: &[Slot]) -> [u8; 32] {
+    if slots.is_empty() {
+        return key(types);
+    }
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(key(types));
+    for slot in slots {
+        digest.update(slot.position.to_le_bytes());
+        digest.update(slot.key);
+    }
     digest.finalize().into()
 }
 

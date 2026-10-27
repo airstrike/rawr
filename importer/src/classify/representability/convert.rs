@@ -134,6 +134,17 @@ pub enum Type {
         payload: Box<Type>,
     },
     Parameter(u32),
+    /// A script type where a native generic takes a Rust type (D594): the
+    /// runner's proxy for it, named by its `path` from the project's crate
+    /// root (`State`, `app::State`), at `arguments` when it is generic.
+    Script {
+        path: Box<str>,
+        arguments: Box<[Type]>,
+    },
+    /// A type parameter no script value fixes, as iced's `Theme` and
+    /// `Renderer` of `run` are, which the view's widget gives: rustc infers
+    /// it where the bridge calls the item (D594).
+    Inferred,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

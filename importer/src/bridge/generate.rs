@@ -17,6 +17,8 @@ const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
 const BUILD_PATH: &str = "build.rs";
 const SOURCE_PATH: &str = "src/main.rs";
+/// The crate name of a runner binary no script type names.
+const RUNNER_BINARY: &str = "rawr_generated_runner";
 const TOP_LEVEL_SOURCE: &[u8] = include_bytes!("generate/top_level.rs");
 const BUILD_SCRIPT: &[u8] = b"use std::{env, fs, path::PathBuf};\n\
 fn main() {\n\
@@ -4142,14 +4144,15 @@ fn render<B: crate::surface::Runner>(
     profile: &crate::profile::Proof,
 ) -> Result<Product, request::Error> {
     let harness = native.runner_harness(request.allocation.limits().1)?;
-    let manifest = runner_manifest(harness.manifest())?;
     let lock = runner_lock(harness.lock())?;
     let mut sources = Vec::new();
     let mut spans = Vec::new();
     spans
         .try_reserve_exact(request.plans.len())
         .map_err(|_| request::Error::Allocation)?;
-    render_source(
+    // A runner whose proxies stand for a script's types is built as a
+    // binary named as the script's crate, so their `type_name` is theirs.
+    let named = render_source(
         &request.plans,
         request.fingerprint,
         profile,
@@ -4158,6 +4161,7 @@ fn render<B: crate::surface::Runner>(
         &mut sources,
         &mut spans,
     )?;
+    let manifest = runner_manifest(harness.manifest(), named.as_deref())?;
     let source = encode_sources(&sources)?;
     let mut source_map = Vec::new();
     super::source_map::write(request, &spans, &mut source_map)?;
@@ -4235,7 +4239,7 @@ fn expected_parts<B>(
     })
 }
 
-fn runner_manifest(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
+fn runner_manifest(bytes: &[u8], binary: Option<&str>) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
         reason: error.to_string().into_boxed_str(),
     })?;
@@ -4262,6 +4266,16 @@ fn runner_manifest(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
     package.insert("edition", value("2024"));
     package.insert("build", value(BUILD_PATH));
     document.remove("lib");
+    // The binary is the script crate's name; the build gives it the name
+    // `rawr-generated-runner` as well (`runner::build::name_binary`).
+    if let Some(binary) = binary.filter(|binary| *binary != RUNNER_BINARY) {
+        let mut target = toml_edit::Table::new();
+        target.insert("name", value(binary));
+        target.insert("path", value(SOURCE_PATH));
+        let mut targets = toml_edit::ArrayOfTables::new();
+        targets.push(target);
+        document.insert("bin", Item::ArrayOfTables(targets));
+    }
     share_harness_units(&mut document)?;
     Ok(normalize(document.to_string().as_bytes()))
 }
@@ -4354,7 +4368,7 @@ fn render_source(
     facade_plan: Option<&[u8]>,
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
-) -> Result<(), request::Error> {
+) -> Result<Option<String>, request::Error> {
     let mut main = Vec::new();
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
@@ -4395,7 +4409,7 @@ fn render_source(
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
-    let _type_paths = TypePaths::install(facade.as_ref());
+    let _type_paths = TypePaths::install(facade.as_ref(), profile.has_generated_projections());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
             // A macro's `$crate` path to a trait is no Rust path; the
@@ -4415,7 +4429,7 @@ fn render_source(
     }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\ninclude!(\"rawr_proxies.rs\");\n",
         )
         .map_err(|_| request::Error::Encoding)?;
     // The facade plan is megabytes of data: rustc reads it with
@@ -4611,18 +4625,28 @@ fn render_source(
     render_families(&mut families)?;
     view::render_families(&mut families)?;
     sources.push((FAMILIES_PATH.into(), families));
+    let mut proxies = Vec::new();
+    render_proxies(&mut proxies)?;
+    sources.push((PROXIES_PATH.into(), proxies));
     sources.push((SURFACE_PATH.into(), stamps));
-    Ok(())
+    Ok(PROXY_CRATE.with_borrow(Clone::clone))
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
 /// item that is not generic.
 fn instance_key(plan: &Plan) -> [u8; 32] {
     match plan.operation() {
-        Operation::Function { substitutions, .. } | Operation::Method { substitutions, .. }
-            if !substitutions.is_empty() =>
-        {
-            crate::surface::instance::key(substitutions)
+        Operation::Function {
+            substitutions,
+            slots,
+            ..
+        }
+        | Operation::Method {
+            substitutions,
+            slots,
+            ..
+        } if !substitutions.is_empty() || !slots.is_empty() => {
+            crate::surface::instance::key_with_slots(substitutions, slots)
         }
         _ => [0; 32],
     }
@@ -4673,6 +4697,10 @@ fn span_offset(output: &[u8]) -> Result<u32, request::Error> {
 /// The scope families the adapters name (D558 tier 1), after every adapter
 /// module in path order.
 const FAMILIES_PATH: &str = "src/rawr_families.rs";
+
+/// The runner's proxies of script types (D594), included at the crate root
+/// so each is named as the script names it.
+const PROXIES_PATH: &str = "src/rawr_proxies.rs";
 
 /// The per-generation stamps module, after every adapter module in path order.
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
@@ -5503,11 +5531,27 @@ fn render_adapter_body(
             container_parameters,
             associated,
             call,
+            slots,
+            crossings,
         } => {
             if !mappers.is_empty() && replay.is_none() {
                 return Err(request::Error::Drift {
                     field: "profile event mapper invocation lacks replay projection",
                 });
+            }
+            let crossed = Crossed { slots, crossings };
+            if signature.scope().is_some() && replay.is_none() {
+                render_anchored_opening(
+                    plan,
+                    signature,
+                    substitutions,
+                    constants,
+                    functions,
+                    mappers,
+                    *container_parameters,
+                    *associated,
+                    output,
+                )?;
             }
             if replay.is_some() {
                 render_function_arguments(
@@ -5517,6 +5561,7 @@ fn render_adapter_body(
                     mappers,
                     Some(profile),
                     call.as_ref(),
+                    crossed,
                     0,
                     output,
                 )?;
@@ -5528,6 +5573,7 @@ fn render_adapter_body(
                     mappers,
                     None,
                     call.as_ref(),
+                    crossed,
                     0,
                     output,
                 )?;
@@ -5573,6 +5619,7 @@ fn render_adapter_body(
                     functions,
                     mappers,
                     Some(profile),
+                    crossed,
                     output,
                 )?;
                 output
@@ -5615,7 +5662,15 @@ fn render_adapter_body(
                 output
                     .write_all(b"(")
                     .map_err(|_| request::Error::Encoding)?;
-                function_argument_list(signature, substitutions, functions, mappers, None, output)?;
+                function_argument_list(
+                    signature,
+                    substitutions,
+                    functions,
+                    mappers,
+                    None,
+                    crossed,
+                    output,
+                )?;
                 output
                     .write_all(b"));\n")
                     .map_err(|_| request::Error::Encoding)?;
@@ -5635,7 +5690,7 @@ fn render_adapter_body(
             substitutions,
             constants,
             container_parameters,
-            call: _,
+            ..
         } if signature.scope().is_some() => {
             render_arguments_with(signature, substitutions, 1, output)?;
             render_method_opening(
@@ -5656,6 +5711,7 @@ fn render_adapter_body(
             constants,
             container_parameters,
             call,
+            ..
         } => {
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
@@ -5669,6 +5725,7 @@ fn render_adapter_body(
                     &[],
                     None,
                     Some(call),
+                    Crossed::default(),
                     1,
                     output,
                 )?;
@@ -6008,6 +6065,7 @@ fn render_opening(
         functions,
         mappers,
         None,
+        Crossed::default(),
         &mut call,
     )?;
     call.write_all(b")").map_err(encoding)?;
@@ -6044,6 +6102,104 @@ fn render_opening(
         result
     }}){with};
     Ok(Dynamic::from(output))"
+    )
+    .map_err(encoding)
+}
+
+/// A call whose output borrows its `&str` inputs, made while a slot's
+/// region is open (D594): `view(&state)`'s `text(&state.label)`. The output
+/// goes in that region, whose lifetime is the lent value's, and each string
+/// it borrows is pinned in the lent value, so the slot gives native code
+/// the output at that lifetime. Pinning holds the string's shared handle,
+/// so no text is copied. Elsewhere the call opens a frame of its own
+/// (`render_opening`).
+#[allow(clippy::too_many_arguments)]
+fn render_anchored_opening(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    functions: &[crate::surface::adapter::FunctionItem],
+    mappers: &[crate::surface::adapter::EventMapper],
+    container_parameters: usize,
+    associated: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    if !functions.is_empty() || !mappers.is_empty() {
+        return Ok(());
+    }
+    let mut call = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        associated,
+        &mut call,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    function_argument_list(
+        signature,
+        substitutions,
+        functions,
+        mappers,
+        None,
+        Crossed::default(),
+        &mut call,
+    )?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let mut taken = Vec::new();
+    let mut pinned = String::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if matches!(input, convert::Type::Builtin(convert::Builtin::Str)) {
+            writeln!(
+                taken,
+                "        let argument_{position}_text = (**arguments.values.get_mut({position}).ok_or(Error::MissingArgument)?).take().into_immutable_string().map_err(|_| Error::TypeMismatch)?;"
+            )
+            .map_err(encoding)?;
+            pinned.push_str(&format!(
+                "\n            let argument_{position} = pins.pin(argument_{position}_text);"
+            ));
+        } else {
+            render_take_input(
+                position,
+                position,
+                input,
+                signature,
+                substitutions,
+                None,
+                &mut taken,
+            )?;
+        }
+    }
+    let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;{pinned}
+            let made = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(\"a slot's region\", error))?;
+    }}"
     )
     .map_err(encoding)
 }
@@ -7800,6 +7956,16 @@ fn render_rust_type(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        convert::Type::Script { .. } => output
+            .write_all(
+                concrete_type(ty)
+                    .ok_or(request::Error::Drift {
+                        field: "a script type's proxy",
+                    })?
+                    .as_bytes(),
+            )
+            .map_err(|_| request::Error::Encoding),
+        convert::Type::Inferred => output.write_all(b"_").map_err(|_| request::Error::Encoding),
         convert::Type::Unit => output
             .write_all(b"()")
             .map_err(|_| request::Error::Encoding),
@@ -7984,6 +8150,201 @@ fn dynamic_function_arity(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The script functions a call's callable parameters take as slots, and
+/// what each parameter takes and gives (D594).
+#[derive(Clone, Copy, Default)]
+struct Crossed<'a> {
+    slots: &'a [crate::surface::instance::Slot],
+    crossings: &'a [crate::classify::representability::callable::Call],
+}
+
+impl<'a> Crossed<'a> {
+    /// The call of the slot at input `position`, when one fills it.
+    fn slot_at(
+        &self,
+        position: usize,
+        ty: &convert::Type,
+    ) -> Option<&'a crate::classify::representability::callable::Call> {
+        let convert::Type::Parameter(parameter) = ty else {
+            return None;
+        };
+        self.slots
+            .iter()
+            .any(|slot| usize::try_from(slot.position()).ok() == Some(position))
+            .then(|| {
+                self.crossings
+                    .iter()
+                    .find(|call| call.parameter() == *parameter)
+            })
+            .flatten()
+    }
+}
+
+/// A script function that fills a callable parameter as a slot (D594): a
+/// function item `slot_{local}` the call takes, which calls the function
+/// in the generation current where native code calls it, through a static
+/// the adapter fills with the function each time script code passes it. The
+/// item captures nothing, so it is zero-sized, and each script function
+/// has its own adapter and so its own item and Rust type.
+///
+/// The item lends a script value it takes by reference: `&mut` as the
+/// function's own place, and shared by its handle, so nothing is copied.
+/// An output that borrows what it takes, as `view(&state) -> Element<'_>`
+/// gives, is made in a region at that borrow's lifetime, where a script
+/// string the function's native calls borrow is pinned in the lent value.
+fn render_slot(
+    local: usize,
+    index: usize,
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let drift = |field| request::Error::Drift { field };
+    let inputs = call
+        .inputs()
+        .iter()
+        .map(|input| substituted(input, signature, substitutions))
+        .collect::<Result<Vec<_>, _>>()?;
+    let returned = substituted(call.output(), signature, substitutions)?;
+    // An output that borrows the inputs, at the slot's `'x`.
+    // An output that borrows the inputs, as the bound writes it or as the
+    // type the instance gives a synthetic output is (`W` of iced's
+    // `ViewFn`, a `Column<'a, ..>`).
+    let family = if call.borrows() || carries_lifetime(&returned) {
+        Some(family_of(&returned).ok_or(drift("a slot's borrowing output"))?)
+    } else {
+        None
+    };
+    let lifetime = if family.is_some() { "'x " } else { "" };
+    let mut parameters = Vec::new();
+    let mut values = Vec::new();
+    let mut mutable = Vec::new();
+    let mut restores = String::new();
+    let mut pins = None;
+    let mut native = false;
+    for (position, input) in inputs.iter().enumerate() {
+        let name = format!("input_{position}");
+        match input {
+            convert::Type::Borrowed { mutable: true, ty }
+                if matches!(**ty, convert::Type::Script { .. }) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                parameters.push(format!("{name}: &{lifetime}mut {rust}"));
+                values.push(format!("{name}.0.lend_mut()"));
+                mutable.push(position.to_string());
+                restores.push_str(&format!(
+                    "\n        {name}.0.restore(std::mem::take(&mut values[{position}]));"
+                ));
+            }
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(**ty, convert::Type::Script { .. }) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                parameters.push(format!("{name}: &{lifetime}{rust}"));
+                values.push(format!("{name}.0.lend()"));
+                pins.get_or_insert_with(|| format!("{name}.0.pins()"));
+            }
+            convert::Type::Borrowed { .. } => {
+                return Err(drift(
+                    "a slot's input borrows a value that isn't a script value",
+                ));
+            }
+            input => {
+                let rust = concrete_type(input).ok_or(drift("a slot's input"))?;
+                parameters.push(format!("{name}: {rust}"));
+                let mut converted = String::new();
+                render_to_dynamic(input, &name, 0, &mut converted)?;
+                native |= matches!(input, convert::Type::Nominal { .. })
+                    && !is_value(input)
+                    && !is_duration(input);
+                values.push(format!("({converted})"));
+            }
+        }
+    }
+    let in_arena = |body: &str| {
+        format!(
+            "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
+        )
+    };
+    let values = if native {
+        format!(
+            "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
+            in_arena(&format!("Ok([{}])", values.join(", ")))
+        )
+    } else {
+        let values = values
+            .iter()
+            .map(|value| {
+                if value.starts_with('(') {
+                    format!("{value}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))")
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        format!("[{}]", values.join(", "))
+    };
+    let mutable = mutable.join(", ");
+    let (generics, rust, body) = match &family {
+        Some(family) => {
+            let pins = pins.ok_or(drift("a slot's borrowing output with no script value lent"))?;
+            (
+                "<'x>",
+                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+                format!(
+                    "let mut values = {values};
+        let mut region = __rawr_internal::scope::Region::anchored({pins});
+        let value = __rawr_internal::scope::open_anchored(&mut region, || SLOT_{local}.invoke(&mut values, &[{mutable}]));{restores}
+        let scoped = value
+            .read_lock::<__rawr_internal::scope::Scoped>()
+            .map(|scoped| *scoped)
+            .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
+        region
+            .take::<{family}>(scoped)
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+                ),
+            )
+        }
+        None => {
+            let rust = concrete_type(&returned).ok_or(drift("a slot's output"))?;
+            let mut converted = String::new();
+            render_from_dynamic(&returned, "value", 0, &mut converted)?;
+            let native_output = matches!(returned, convert::Type::Nominal { .. })
+                && !is_value(&returned)
+                && !is_duration(&returned);
+            let converted = if native_output {
+                in_arena(&converted)
+            } else {
+                format!("({converted})")
+            };
+            (
+                "",
+                rust,
+                format!(
+                    "let mut values = {values};
+        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+        {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
+                ),
+            )
+        }
+    };
+    writeln!(
+        output,
+        "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
+    SLOT_{local}
+        .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())
+        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;
+    #[allow(unused_mut, clippy::needless_lifetimes)]
+    fn slot_{local}{generics}({}) -> {rust} {{
+        {body}
+    }}",
+        parameters.join(", ")
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_function_arguments(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
@@ -7991,6 +8352,7 @@ fn render_function_arguments(
     mappers: &[crate::surface::adapter::EventMapper],
     profile: Option<&crate::profile::Proof>,
     call: Option<&crate::classify::representability::callable::Call>,
+    crossed: Crossed<'_>,
     offset: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
@@ -8028,7 +8390,9 @@ fn render_function_arguments(
                 });
             }
             _ => {
-                if let Some(call) =
+                if let Some(slot) = crossed.slot_at(position, ty) {
+                    render_slot(position, runtime, slot, signature, substitutions, output)?;
+                } else if let Some(call) =
                     call.filter(|call| *ty == convert::Type::Parameter(call.parameter()))
                 {
                     render_take_callable(
@@ -8072,6 +8436,7 @@ fn function_argument_list(
     functions: &[crate::surface::adapter::FunctionItem],
     mappers: &[crate::surface::adapter::EventMapper],
     profile: Option<&crate::profile::Proof>,
+    crossed: Crossed<'_>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let mut selected = functions.iter().peekable();
@@ -8116,6 +8481,10 @@ fn function_argument_list(
                 return Err(request::Error::Drift {
                     field: "generated static operand position",
                 });
+            }
+            // A script function, as a slot (D594).
+            _ if crossed.slot_at(position, ty).is_some() => {
+                write!(output, "slot_{position}").map_err(|_| request::Error::Encoding)?;
             }
             // A script closure, made a Rust closure (D513.7 b).
             _ if callable_parameter(ty, signature) => {
@@ -8593,6 +8962,18 @@ fn render_take(
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
         ty if is_duration(ty) || is_facade_value(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",
+        // A script value where native generic code takes a Rust type: the
+        // runner's proxy for its type (D594).
+        convert::Type::Script { .. } => {
+            let rust = concrete_type(ty).ok_or(request::Error::Drift {
+                field: "a script type's proxy",
+            })?;
+            return writeln!(
+                output,
+                "    let argument_{local} = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()));"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
@@ -8621,6 +9002,11 @@ fn render_take(
             )
             .map_err(|_| request::Error::Encoding);
         }
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit | convert::Type::Builtin(_) => "take_primitive",
     };
     writeln!(
@@ -8640,6 +9026,7 @@ fn render_give(
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
+        convert::Type::Script { .. } => writeln!(output, "    Ok({value}.0.into_dynamic())"),
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1).
         convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
@@ -8668,6 +9055,11 @@ fn render_give(
             writeln!(output, "    Ok(Dynamic::from({value}.to_string()))")
         }
         // The unit type, or a `PhantomData` field, which Rawr holds as it.
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit => {
             writeln!(output, "    let _ = {value};\n    Ok(Dynamic::from(()))")
         }
@@ -8739,6 +9131,7 @@ fn render_from_dynamic(
         )
     };
     match ty {
+        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
         convert::Type::Unit => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
@@ -8784,6 +9177,15 @@ fn render_from_dynamic(
             output,
             "Ok::<__rawr_internal::Value, Error>(__rawr_internal::Value::from({value}))"
         ),
+        convert::Type::Script { .. } => {
+            let rust = concrete_type(ty).ok_or(request::Error::Drift {
+                field: "a script type's proxy",
+            })?;
+            write!(
+                output,
+                "Ok::<{rust}, Error>(<{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new({value})))"
+            )
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
@@ -8891,6 +9293,9 @@ fn render_to_dynamic(
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
+        convert::Type::Script { .. } => {
+            write!(output, "Ok::<Dynamic, Error>({value}.0.into_dynamic())")
+        }
         // A value that borrows, made in a scope frame: its region holds it
         // (D558 tier 1).
         convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
@@ -8916,6 +9321,7 @@ fn render_to_dynamic(
         convert::Type::Builtin(convert::Builtin::Text) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}.to_string()))")
         }
+        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
         convert::Type::Unit | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
@@ -9244,6 +9650,10 @@ fn substituted(
             owned: *owned,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
+        convert::Type::Script { path, arguments } => convert::Type::Script {
+            path: path.clone(),
+            arguments: all(arguments)?,
+        },
         convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
             input: one(input)?,
             output: one(output)?,
@@ -9252,6 +9662,7 @@ fn substituted(
             mapper: *mapper,
             payload: one(payload)?,
         },
+        convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
     })
 }
@@ -9544,6 +9955,15 @@ thread_local! {
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The scope families the adapters name, by their type at `'x`: the
     /// family's name and its type's.
+    /// Each script type a generic instance names, by its path from the
+    /// crate root, with its number of type arguments: the runner declares
+    /// its proxy (D594).
+    static PROXIES: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The name of the script's crate, which the runner's binary takes, so
+    /// a proxy's `type_name` is the script type's (D594).
+    static PROXY_CRATE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
     static FAMILIES: std::cell::RefCell<std::collections::BTreeMap<String, (String, Lifetimes)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// Whether a Rust value being converted lives in a scope frame's
@@ -9775,6 +10195,96 @@ fn container_family(path: &str, container: &str) -> Option<String> {
     Some(family(text, lifetimes))
 }
 
+/// The proxies of the script types the adapters named (D594), each at its
+/// script path from the crate root, so `type_name` and `TypeId` are its
+/// own. A proxy holds the script value by a shared handle; its `Clone`,
+/// `Debug` and `Default` are the script type's own.
+fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let proxies = PROXIES.with_borrow(Clone::clone);
+    // Each module path's proxies, nested as the script nests them.
+    let mut tree = std::collections::BTreeMap::<Vec<String>, Vec<(String, String, usize)>>::new();
+    for (path, arity) in proxies {
+        let mut segments = path.split("::").map(str::to_owned).collect::<Vec<_>>();
+        let name = segments.pop().unwrap_or_default();
+        tree.entry(segments).or_default().push((path, name, arity));
+    }
+    let mut open: Vec<String> = Vec::new();
+    for (modules, proxies) in tree {
+        while !modules.starts_with(&open) {
+            open.pop();
+            output
+                .write_all(b"}\n")
+                .map_err(|_| request::Error::Encoding)?;
+        }
+        for module in &modules[open.len()..] {
+            writeln!(
+                output,
+                "pub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            open.push(module.clone());
+        }
+        for (path, name, arity) in proxies {
+            let parameters = (0..arity)
+                .map(|index| format!("T{index}"))
+                .collect::<Vec<_>>();
+            let (generics, marker, made) = if parameters.is_empty() {
+                (String::new(), String::new(), "Self(proxy)".to_owned())
+            } else {
+                let list = parameters.join(", ");
+                (
+                    format!("<{list}>"),
+                    format!(", std::marker::PhantomData<fn() -> ({list},)>"),
+                    "Self(proxy, std::marker::PhantomData)".to_owned(),
+                )
+            };
+            let bounds = if parameters.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", parameters.join(", "))
+            };
+            writeln!(
+                output,
+                "/// The script type `{path}` where native generic code takes a Rust type (D594).
+pub struct {name}{generics}(pub(crate) __rawr_internal::crossing::Proxy{marker});
+
+#[allow(dead_code)]
+impl{bounds} {name}{generics} {{
+    pub(crate) fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+        {made}
+    }}
+}}
+
+impl{bounds} Clone for {name}{generics} {{
+    fn clone(&self) -> Self {{
+        Self::from_proxy(self.0.clone())
+    }}
+}}
+
+impl{bounds} std::fmt::Debug for {name}{generics} {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        std::fmt::Debug::fmt(&self.0, f)
+    }}
+}}
+
+impl{bounds} Default for {name}{generics} {{
+    fn default() -> Self {{
+        Self::from_proxy(__rawr_internal::crossing::Proxy::default_of({path:?}))
+    }}
+}}
+"
+            )
+            .map_err(|_| request::Error::Encoding)?;
+        }
+    }
+    for _ in open {
+        output
+            .write_all(b"}\n")
+            .map_err(|_| request::Error::Encoding)?;
+    }
+    Ok(())
+}
+
 /// The scope families the adapters named, as the `rawr_families` module.
 fn render_families(output: &mut Vec<u8>) -> Result<(), request::Error> {
     output
@@ -9826,8 +10336,11 @@ use super::*;
 struct TypePaths;
 
 impl TypePaths {
-    fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
-        view::install(facade);
+    /// `views` when a host profile makes view recipes (D558 tier 2); a
+    /// runner with the neutral profile makes none, and an imported type
+    /// that renders is an ordinary scoped type (D594).
+    fn install(facade: Option<&crate::surface::facade::Plan>, views: bool) -> Self {
+        view::install(facade.filter(|_| views));
         TYPE_PATHS.with_borrow_mut(|paths| {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
@@ -9922,6 +10435,8 @@ impl TypePaths {
             });
         });
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXY_CRATE.with_borrow_mut(|named| *named = None);
         Self
     }
 }
@@ -9937,6 +10452,8 @@ impl Drop for TypePaths {
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
         ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        PROXY_CRATE.with_borrow_mut(|named| *named = None);
     }
 }
 
@@ -9946,8 +10463,10 @@ impl Drop for TypePaths {
 fn output_names(ty: &convert::Type, index: u32) -> bool {
     match ty {
         convert::Type::Parameter(parameter) => *parameter == index,
-        convert::Type::Unit | convert::Type::Builtin(_) => false,
-        convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => arguments
+        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => false,
+        convert::Type::Nominal { arguments, .. }
+        | convert::Type::Tuple(arguments)
+        | convert::Type::Script { arguments, .. } => arguments
             .iter()
             .any(|argument| output_names(argument, index)),
         convert::Type::Option(element)
@@ -9964,6 +10483,7 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
 
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
+        convert::Type::Inferred => "_".to_owned(),
         convert::Type::Unit => "()".to_owned(),
         convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
             "String".to_owned()
@@ -10001,6 +10521,26 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("Result<{}, {}>", concrete_type(ok)?, concrete_type(err)?)
         }
         convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
+        // A script type's proxy, at the runner's crate root, which is named
+        // as the script's crate is (D594).
+        convert::Type::Script { path, arguments } => {
+            let arguments = arguments
+                .iter()
+                .map(concrete_type)
+                .collect::<Option<Vec<_>>>()?;
+            let (krate, path) = path.split_once("::")?;
+            PROXIES.with_borrow_mut(|proxies| {
+                proxies.entry(path.to_owned()).or_insert(arguments.len());
+            });
+            PROXY_CRATE.with_borrow_mut(|named| {
+                named.get_or_insert_with(|| krate.to_owned());
+            });
+            if arguments.is_empty() {
+                format!("crate::{path}")
+            } else {
+                format!("crate::{path}<{}>", arguments.join(", "))
+            }
+        }
         convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
         convert::Type::Tuple(members) => format!(
             "({},)",
@@ -10093,6 +10633,7 @@ fn render_generic_arguments(
                 type_index += 1;
                 let concrete = match ty {
                     convert::Type::Nominal { .. }
+                    | convert::Type::Script { .. }
                     | convert::Type::Option(_)
                     | convert::Type::Range(_)
                     | convert::Type::Borrowed { .. }
@@ -10101,6 +10642,7 @@ fn render_generic_arguments(
                 };
                 output
                     .write_all(match ty {
+                        convert::Type::Inferred => b"_",
                         convert::Type::Unit => b"()" as &[u8],
                         // Rust infers the range's integer type from the
                         // call's bounds, as it does for `1..=6`.
@@ -10112,6 +10654,7 @@ fn render_generic_arguments(
                         // An imported type is written out where its path is
                         // known; Rust infers it otherwise.
                         convert::Type::Nominal { .. }
+                        | convert::Type::Script { .. }
                         | convert::Type::Option(_)
                         | convert::Type::Range(_)
                         | convert::Type::Result(..)
@@ -10478,6 +11021,11 @@ fn builder_execution_inputs(operation: &Operation) -> Option<Vec<&convert::Type>
 
 fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), request::Error> {
     let source = match ty {
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit => "Dynamic::from(())",
         convert::Type::Builtin(convert::Builtin::Bool) => "Dynamic::from(false)",
         convert::Type::Builtin(convert::Builtin::Char) => "Dynamic::from('\\0')",
@@ -10512,6 +11060,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
         | convert::Type::Nominal { .. }
+        | convert::Type::Script { .. }
         | convert::Type::Sequence { .. }
         | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
@@ -10834,7 +11383,7 @@ mod tests {
     #[test]
     fn runner_manifest_makes_only_the_runner_unit_incremental() {
         let harness = b"[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n[dependencies]\niced = \"0.14\"\n";
-        let manifest = super::runner_manifest(harness).unwrap();
+        let manifest = super::runner_manifest(harness, None).unwrap();
         let document = std::str::from_utf8(&manifest)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
@@ -10854,7 +11403,8 @@ mod tests {
         );
         assert!(document.get("lib").is_none());
         assert!(super::runner_manifest(
-            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n"
+            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n",
+            None
         )
         .is_err());
     }

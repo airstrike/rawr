@@ -585,6 +585,10 @@ impl<'r, F: Regional> Erased<'r> for Slot<'r, F> {
 pub struct Region<'r> {
     nonce: Nonce,
     slots: Vec<Option<Box<dyn Erased<'r> + 'r>>>,
+    /// Where script strings a call in the region borrows live for `'r`,
+    /// in a region a slot opens at the lifetime of a script value it lent
+    /// (D594).
+    pins: Option<&'r Pins>,
     _r: PhantomData<fn(&'r ()) -> &'r ()>,
 }
 
@@ -601,8 +605,27 @@ impl<'r> Region<'r> {
         Self {
             nonce: fresh(),
             slots: Vec::new(),
+            pins: None,
             _r: PhantomData,
         }
+    }
+
+    /// An empty region at the lifetime `'r` of a script value native code
+    /// lent a script function, as `view(&state)` lends `state` (D594): a
+    /// script string a call in it borrows is pinned in `pins`, which
+    /// outlive `'r`, so a value the call makes can keep the borrow.
+    #[must_use]
+    pub fn anchored(pins: &'r Pins) -> Self {
+        Self {
+            pins: Some(pins),
+            ..Self::new()
+        }
+    }
+
+    /// The pins of a region [`Region::anchored`] made.
+    #[must_use]
+    pub const fn pins(&self) -> Option<&'r Pins> {
+        self.pins
     }
 
     /// The nonce the region is lent by while it is open.
@@ -722,6 +745,101 @@ pub struct RegionF;
 
 impl Family for RegionF {
     type Of<'x> = Region<'x>;
+}
+
+thread_local! {
+    /// The regions [`open_anchored`] opened on this thread, innermost last.
+    static ANCHORS: RefCell<Vec<Nonce>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Pops an anchor when its region closes, however it closes.
+struct Unanchor;
+
+impl Drop for Unanchor {
+    fn drop(&mut self) {
+        ANCHORS.with(|anchors| anchors.borrow_mut().pop());
+    }
+}
+
+/// [`open`] of a region [`Region::anchored`] made: while `body` runs, a
+/// call whose output borrows a script string it takes makes the output in
+/// this region, which the slot that opened it gives native code at its
+/// lifetime, instead of opening a frame of its own (D594).
+pub fn open_anchored<R>(region: &mut Region<'_>, body: impl FnOnce() -> R) -> R {
+    ANCHORS.with(|anchors| anchors.borrow_mut().push(region.nonce));
+    let _unanchor = Unanchor;
+    open(region, body)
+}
+
+/// The nonce of the innermost region [`open_anchored`] opened on this
+/// thread, while its body runs.
+#[must_use]
+pub fn anchor() -> Option<Nonce> {
+    ANCHORS.with(|anchors| anchors.borrow().last().copied())
+}
+
+/// Script strings native code borrows for as long as the script value
+/// they belong to is lent (D594): the strings a script `view(&state)`
+/// gives native widgets that borrow them for `'a` of `&'a State`. Each is
+/// held by its shared handle, so pinning copies no text, and one held
+/// already is not held twice. They are let go when the owner is next
+/// reached `&mut`, when no borrow of them can remain.
+#[derive(Default)]
+pub struct Pins(std::sync::Mutex<Vec<crate::ImmutableString>>);
+
+impl Pins {
+    /// No strings pinned.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `text`, borrowed for as long as these pins are.
+    pub fn pin(&self, text: crate::ImmutableString) -> &str {
+        let mut pinned = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let index = match pinned.iter().position(|held| held.ptr_eq(&text)) {
+            Some(index) => index,
+            None => {
+                pinned.push(text);
+                pinned.len() - 1
+            }
+        };
+        let text: *const str = pinned[index].as_str();
+        // SAFETY: the text lives in the string's shared allocation, which a
+        // handle in `pinned` keeps alive until `clear` takes `&mut self`
+        // or the pins drop, and neither can happen while `&self` is
+        // borrowed. Moving a handle within the vector doesn't move the
+        // allocation. Nothing writes a held string in place: only this
+        // vector reaches its handle, and `ImmutableString::make_mut` of any
+        // other handle copies while this one shares the allocation.
+        unsafe { &*text }
+    }
+
+    /// Let every pinned string go.
+    pub fn clear(&mut self) {
+        self.0
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    /// How many strings are pinned.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// Whether no string is pinned.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Run `body` with `region` lent, by its own nonce, to [`with`] and

@@ -210,6 +210,7 @@ fn call(plan: &Plan) -> Option<Call<'_>> {
             container_parameters,
             call,
             associated,
+            ..
         } if functions.is_empty() && mappers.is_empty() => Some(Call {
             signature,
             substitutions,
@@ -226,6 +227,7 @@ fn call(plan: &Plan) -> Option<Call<'_>> {
             constants,
             container_parameters,
             call,
+            ..
         } => Some(Call {
             signature,
             substitutions,

@@ -19,6 +19,10 @@ pub struct Item {
     /// its `Output` projection write them (`F: FnOnce() -> R`).
     #[serde(default)]
     call: Option<Call>,
+    /// Each callable parameter's inputs and output, as a script function
+    /// fills it by a slot (D594). Empty when one can't.
+    #[serde(default)]
+    crossings: Box<[Call]>,
 }
 
 /// What a generic item's callable parameter takes and gives: a script
@@ -28,6 +32,10 @@ pub struct Call {
     parameter: u32,
     inputs: Box<[super::convert::Type]>,
     output: super::convert::Type,
+    /// The output borrows at the lifetime the bound declares for its
+    /// inputs, as `for<'a> Fn(&'a S) -> Element<'a, M>`'s does.
+    #[serde(default)]
+    borrows: bool,
 }
 
 impl Call {
@@ -40,7 +48,19 @@ impl Call {
             parameter,
             inputs,
             output,
+            borrows: false,
         }
+    }
+
+    pub(crate) const fn borrowing(mut self, borrows: bool) -> Self {
+        self.borrows = borrows;
+        self
+    }
+
+    /// Whether the output borrows at the lifetime of the inputs.
+    #[must_use]
+    pub const fn borrows(&self) -> bool {
+        self.borrows
     }
 
     /// The index of the callable type parameter.
@@ -73,7 +93,7 @@ pub struct Invocation {
 }
 
 impl Item {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         signature: super::signature::Signature,
         receiver: Option<super::ownership::Receiver>,
         class: Option<crate::surface::callable::Class>,
@@ -87,12 +107,25 @@ impl Item {
             binders,
             predicates,
             call: None,
+            crossings: Box::new([]),
         }
     }
 
     pub(crate) fn with_call(mut self, call: Option<Call>) -> Self {
         self.call = call;
         self
+    }
+
+    pub(crate) fn with_crossings(mut self, crossings: Box<[Call]>) -> Self {
+        self.crossings = crossings;
+        self
+    }
+
+    /// Each callable parameter's inputs and output, as a script function
+    /// fills it by a slot (D594).
+    #[must_use]
+    pub fn crossings(&self) -> &[Call] {
+        &self.crossings
     }
 
     /// The callable parameter's inputs and output, when it has one.
@@ -180,6 +213,13 @@ impl Invocation {
     #[must_use]
     pub const fn call(&self) -> Option<&Call> {
         self.item.call()
+    }
+
+    /// Each callable parameter's inputs and output, as a script function
+    /// fills it by a slot (D594).
+    #[must_use]
+    pub fn crossings(&self) -> &[Call] {
+        self.item.crossings()
     }
 
     /// Number of leading generic parameters owned by the inherent

@@ -674,6 +674,9 @@ pub(crate) struct ImportedUse {
     pub(crate) mappers: Box<[ImportedMapperUse]>,
     /// The item takes a script closure for its `F: FnOnce` parameter.
     pub(crate) callable: bool,
+    /// The script functions that fill its callable parameters as slots
+    /// (D594).
+    pub(crate) slots: Box<[rawr_import::surface::instance::Slot]>,
     pub(crate) span: Span,
 }
 
@@ -714,6 +717,7 @@ pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
 #[cfg(feature = "rust-import")]
 fn imported_surface_type(
     inference: &Inference,
+    models: &Models,
     ty: &Ty,
     operation: Span,
     imported: &mut ImportedContext<'_>,
@@ -749,7 +753,7 @@ fn imported_surface_type(
         Ty::Range(element) => {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Range(Box::new(imported_surface_type(
-                inference, element, operation, imported,
+                inference, models, element, operation, imported,
             )?))
         }
         Ty::String | Ty::Str => Type::Builtin(Builtin::String),
@@ -760,7 +764,7 @@ fn imported_surface_type(
             Type::ProfileMessage {
                 mapper: *seal,
                 payload: Box::new(imported_surface_type(
-                    inference, payload, operation, imported,
+                    inference, models, payload, operation, imported,
                 )?),
             }
         }
@@ -784,7 +788,7 @@ fn imported_surface_type(
             let mut converted = imported.entries(arguments.len())?;
             for argument in arguments.iter() {
                 converted.push(imported_surface_type(
-                    inference, argument, operation, imported,
+                    inference, models, argument, operation, imported,
                 )?);
             }
             Type::Nominal {
@@ -802,7 +806,7 @@ fn imported_surface_type(
         // (D558 tier 1).
         Ty::Reference { mutable: false, .. }
             if let Some(converted @ Type::Borrowed { .. }) =
-                instance_surface_type(inference, ty) =>
+                instance_surface_type(inference, models, ty) =>
         {
             imported.retain_checked(Some(2), Some(2 * std::mem::size_of::<Type>()))?;
             converted
@@ -810,12 +814,12 @@ fn imported_surface_type(
         // A tuple of Rust's own types is that tuple, as Freya's
         // `background((35, 35, 35))` takes `(u8, u8, u8)`.
         Ty::Tuple(members)
-            if instance_surface_type(inference, ty).is_some_and(|ty| !is_erased(&ty)) =>
+            if instance_surface_type(inference, models, ty).is_some_and(|ty| !is_erased(&ty)) =>
         {
             let mut converted = imported.entries(members.len())?;
             for member in members.iter() {
                 converted.push(imported_surface_type(
-                    inference, member, operation, imported,
+                    inference, models, member, operation, imported,
                 )?);
             }
             Type::Tuple(converted.into_boxed_slice())
@@ -823,24 +827,47 @@ fn imported_surface_type(
         // An array of Rust's own types is a `Vec` of them, as ratatui's
         // `List::new(rows)` takes `impl IntoIterator<Item: Into<ListItem>>`.
         Ty::Array { element, .. }
-            if instance_surface_type(inference, ty).is_some_and(|ty| !is_erased(&ty)) =>
+            if instance_surface_type(inference, models, ty).is_some_and(|ty| !is_erased(&ty)) =>
         {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Sequence {
                 element: Box::new(imported_surface_type(
-                    inference, element, operation, imported,
+                    inference, models, element, operation, imported,
                 )?),
                 owned: true,
+            }
+        }
+        // A type parameter no script value fixes, as iced's `Theme` that the
+        // view's widget gives: rustc infers it where the bridge calls the
+        // item (D594).
+        Ty::Infer(_) => Type::Inferred,
+        // A script type is its proxy in the runner, named as the script
+        // names it, so Rust's bounds, `TypeId` and `type_name` are its own
+        // (D594).
+        Ty::Script(definition, arguments) => {
+            let mut converted = imported.entries(arguments.len())?;
+            for argument in arguments.iter() {
+                converted.push(imported_surface_type(
+                    inference, models, argument, operation, imported,
+                )?);
+            }
+            Type::Script {
+                path: models.script_path(*definition),
+                arguments: converted.into_boxed_slice(),
             }
         }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
         },
-        _ => {
+        other => {
             return Err(Error::InvalidHostOperation {
                 item: "<imported generic instance>".into(),
-                reason: "imported generic argument is not one exact concrete surface type".into(),
+                reason: format!(
+                    "imported generic argument `{}` is not one exact concrete surface type",
+                    other.name(models)
+                )
+                .into(),
                 operation,
             });
         }
@@ -898,6 +925,7 @@ fn erased(ty: &Ty) -> bool {
 #[cfg(feature = "rust-import")]
 fn instance_surface_type(
     inference: &Inference,
+    models: &Models,
     ty: &Ty,
 ) -> Option<rawr_import::classify::representability::convert::Type> {
     use rawr_import::classify::representability::convert::{Builtin, Type};
@@ -921,11 +949,13 @@ fn instance_surface_type(
             Int::I128 | Int::U128 => return None,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
-        Ty::Range(element) => Type::Range(Box::new(instance_surface_type(inference, element)?)),
+        Ty::Range(element) => {
+            Type::Range(Box::new(instance_surface_type(inference, models, element)?))
+        }
         Ty::String | Ty::Str => Type::Builtin(Builtin::String),
         Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
             mapper: *seal,
-            payload: Box::new(instance_surface_type(inference, payload)?),
+            payload: Box::new(instance_surface_type(inference, models, payload)?),
         },
         Ty::Host { proof, .. }
             if proof.definition.identity().imported().is_none()
@@ -942,7 +972,7 @@ fn instance_surface_type(
             ),
             arguments: arguments
                 .iter()
-                .map(|argument| instance_surface_type(inference, argument))
+                .map(|argument| instance_surface_type(inference, models, argument))
                 .collect::<Option<_>>()?,
         },
         Ty::Time(Time::Duration) => Type::Nominal {
@@ -958,7 +988,7 @@ fn instance_surface_type(
             mutable: false,
             ty: Box::new(match inference.resolve(target) {
                 Ty::Array { element, .. } => Type::Sequence {
-                    element: Box::new(instance_surface_type(inference, &element)?),
+                    element: Box::new(instance_surface_type(inference, models, &element)?),
                     owned: false,
                 },
                 Ty::Str | Ty::String => Type::Builtin(Builtin::Str),
@@ -968,21 +998,29 @@ fn instance_surface_type(
         Ty::Tuple(members)
             if let Some(converted) = members
                 .iter()
-                .map(|member| instance_surface_type(inference, member))
+                .map(|member| instance_surface_type(inference, models, member))
                 .collect::<Option<Box<[_]>>>()
                 .filter(|converted| !converted.iter().any(is_erased)) =>
         {
             Type::Tuple(converted)
         }
         Ty::Array { element, .. }
-            if let Some(element) =
-                instance_surface_type(inference, element).filter(|element| !is_erased(element)) =>
+            if let Some(element) = instance_surface_type(inference, models, element)
+                .filter(|element| !is_erased(element)) =>
         {
             Type::Sequence {
                 element: Box::new(element),
                 owned: true,
             }
         }
+        Ty::Infer(_) => Type::Inferred,
+        Ty::Script(definition, arguments) => Type::Script {
+            path: models.script_path(*definition),
+            arguments: arguments
+                .iter()
+                .map(|argument| instance_surface_type(inference, models, argument))
+                .collect::<Option<_>>()?,
+        },
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
@@ -1014,12 +1052,15 @@ fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> boo
                 || arguments.iter().any(is_erased)
         }
         Type::Tuple(members) => members.iter().any(is_erased),
+        // A script type's proxy holds a script value (D594).
+        Type::Script { .. } => true,
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. } => is_erased(element),
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) | Type::FunctionItem { .. } | Type::Parameter(_) => false,
     }
 }
@@ -3350,6 +3391,22 @@ impl Models {
 
     fn definition(&self, id: type_def::Id) -> &Nominal {
         &self.by_definition[&id]
+    }
+
+    /// The path of the script type `id` with its crate's name first, as
+    /// the runner names its proxy (`counter::State`, `counter::app::State`)
+    /// (D594).
+    #[cfg(feature = "rust-import")]
+    fn script_path(&self, id: type_def::Id) -> Box<str> {
+        let key = self.definition(id).definition().key();
+        let mut path = key.package().replace('-', "_");
+        path.push_str("::");
+        for module in key.modules() {
+            path.push_str(module);
+            path.push_str("::");
+        }
+        path.push_str(key.name());
+        path.into_boxed_str()
     }
 
     /// The inherent function `name` of `owner`, or else the one trait
@@ -14759,6 +14816,12 @@ impl<'a> Parser<'a> {
                 } = *operation;
                 for (parameter, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
+                    // A parameter no script value fixes is rustc's to infer
+                    // and to check (D594).
+                    #[cfg(feature = "rust-import")]
+                    if matches!(ty, Ty::Infer(_)) && item.imported_identity().is_some() {
+                        continue;
+                    }
                     for capability in required.iter() {
                         if !self.type_provides(&ty, capability) {
                             return Err(Error::MissingCapability {
@@ -14788,6 +14851,18 @@ impl<'a> Parser<'a> {
                 } else {
                     0
                 };
+                #[cfg(feature = "rust-import")]
+                let instance = self.imported_instance_key(
+                    &item,
+                    &requirements,
+                    &self.crossing_slots(
+                        &item,
+                        operands
+                            .iter()
+                            .filter(|(_, _, receiver)| !*receiver)
+                            .map(|(ty, _, _)| ty.clone()),
+                    ),
+                );
                 let operands = operands
                     .iter()
                     .filter(|(ty, _, _)| !ty.is_imported_static_operand())
@@ -14797,8 +14872,6 @@ impl<'a> Parser<'a> {
                     })
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice();
-                #[cfg(feature = "rust-import")]
-                let instance = self.imported_instance_key(&item, &requirements);
                 #[cfg(not(feature = "rust-import"))]
                 let instance = None;
                 ExecutableOp::Intrinsic {
@@ -16885,8 +16958,9 @@ impl<'a> Parser<'a> {
         &self,
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
+        slots: &[rawr_import::surface::instance::Slot],
     ) -> Option<[u8; 32]> {
-        if item.imported_identity().is_none() || requirements.is_empty() {
+        if item.imported_identity().is_none() || (requirements.is_empty() && slots.is_empty()) {
             return None;
         }
         let types = item
@@ -16896,10 +16970,12 @@ impl<'a> Parser<'a> {
                 let (_, ty, _) = requirements
                     .iter()
                     .find(|(candidate, _, _)| *candidate == name)?;
-                instance_surface_type(&self.inference, ty)
+                instance_surface_type(&self.inference, &self.models, ty)
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(rawr_import::surface::instance::key(&types))
+        Some(rawr_import::surface::instance::key_with_slots(
+            &types, slots,
+        ))
     }
 
     fn push_intrinsic(
@@ -46450,6 +46526,7 @@ impl<'a> Parser<'a> {
             functions: Box::default(),
             mappers: Box::default(),
             callable: false,
+            slots: Box::default(),
             span,
         });
         Ok(format!("{SENTINEL}{index}"))
@@ -46647,15 +46724,29 @@ impl<'a> Parser<'a> {
         } else {
             requirements.iter().collect()
         };
-        for (_, ty, _) in ordered {
-            types.push(imported_surface_type(
-                &self.inference,
-                ty,
-                span,
-                self.imported
-                    .as_mut()
-                    .expect("imported lowering retains allocation authority"),
-            )?);
+        for (name, ty, _) in ordered {
+            types.push(
+                imported_surface_type(
+                    &self.inference,
+                    &self.models,
+                    ty,
+                    span,
+                    self.imported
+                        .as_mut()
+                        .expect("imported lowering retains allocation authority"),
+                )
+                .map_err(|error| match error {
+                    // Which of the item's parameters it is.
+                    Error::InvalidHostOperation {
+                        reason, operation, ..
+                    } => Error::InvalidHostOperation {
+                        item: format!("{}'s `{name}`", item.path()).into(),
+                        reason,
+                        operation,
+                    },
+                    error => error,
+                })?,
+            );
         }
         let types = types.into_boxed_slice();
         let function_count = arguments
@@ -46714,6 +46805,13 @@ impl<'a> Parser<'a> {
                 span: function.span,
             });
         }
+        let slots = self.crossing_slots(
+            item,
+            operands
+                .iter()
+                .filter(|(_, _, receiver)| !*receiver)
+                .map(|(ty, _, _)| ty.clone()),
+        );
         let context = self
             .imported
             .as_mut()
@@ -46734,9 +46832,48 @@ impl<'a> Parser<'a> {
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
             callable: item.signature().takes_callable(),
+            slots,
             span,
         });
         Ok(())
+    }
+
+    /// The script functions that fill `item`'s callable parameters as
+    /// slots (D594): each named function or closure that captures nothing,
+    /// by its position among the call's arguments. A closure that captures
+    /// crosses as a Rust closure that holds what it captured.
+    #[cfg(feature = "rust-import")]
+    fn crossing_slots(
+        &self,
+        item: &crate::host::item::Definition,
+        arguments: impl Iterator<Item = Ty>,
+    ) -> Box<[rawr_import::surface::instance::Slot]> {
+        if !item.signature().crossing() {
+            return Box::default();
+        }
+        arguments
+            .enumerate()
+            .filter_map(|(position, ty)| {
+                let Ty::Callable {
+                    item: Some(function),
+                    ..
+                } = self.inference.resolve(&ty)
+                else {
+                    return None;
+                };
+                let captures = self
+                    .lifted
+                    .iter()
+                    .find(|closure| closure.key == *function.key())
+                    .is_some_and(|closure| !closure.captures.is_empty());
+                (!captures).then(|| {
+                    rawr_import::surface::instance::Slot::new(
+                        u32::try_from(position).unwrap_or(u32::MAX),
+                        &format!("{:?}", function.key()),
+                    )
+                })
+            })
+            .collect()
     }
 
     #[cfg(feature = "rust-import")]
@@ -46767,6 +46904,7 @@ impl<'a> Parser<'a> {
             functions: Box::default(),
             mappers: Box::default(),
             callable: false,
+            slots: Box::default(),
             span,
         });
         Ok(format!("{SENTINEL}{index}"))

@@ -182,6 +182,9 @@ pub struct Identity {
     functions: Box<[super::instance::FunctionItem]>,
     mappers: Box<[super::instance::EventMapper]>,
     predicates: Box<[Implementation]>,
+    /// The script functions that fill callable parameters (D594).
+    #[serde(default)]
+    slots: Box<[super::instance::Slot]>,
     hook: Option<Hook>,
     semantic: [u8; 32],
 }
@@ -553,6 +556,7 @@ impl Identity {
             functions,
             mappers,
             predicates,
+            slots,
         } = instance.into_parts();
         Self::seal_instance(
             self.definition,
@@ -566,6 +570,7 @@ impl Identity {
             functions,
             mappers,
             predicates,
+            slots,
         )
     }
 
@@ -594,6 +599,7 @@ impl Identity {
             functions,
             mappers,
             predicates,
+            Box::default(),
         )
     }
 
@@ -610,6 +616,7 @@ impl Identity {
         functions: Box<[super::instance::FunctionItem]>,
         mappers: Box<[super::instance::EventMapper]>,
         predicates: Box<[Implementation]>,
+        slots: Box<[super::instance::Slot]>,
     ) -> Self {
         let hook = None;
         let mut framed = Framed::new(OPERATION_DOMAIN);
@@ -675,6 +682,15 @@ impl Identity {
         for predicate in &predicates {
             framed.bytes(predicate.as_bytes());
         }
+        // An instance without slots frames as it did before them.
+        if !slots.is_empty() {
+            framed.byte(2);
+            framed.count(slots.len());
+            for slot in &slots {
+                framed.0.update(slot.position().to_le_bytes());
+                framed.bytes(slot.key());
+            }
+        }
         framed.byte(0);
         Self {
             definition,
@@ -688,9 +704,16 @@ impl Identity {
             functions,
             mappers,
             predicates,
+            slots,
             hook,
             semantic: framed.finish(),
         }
+    }
+
+    /// The script functions that fill callable parameters (D594).
+    #[must_use]
+    pub fn slots(&self) -> &[super::instance::Slot] {
+        &self.slots
     }
 
     /// Return the canonical definition shared by all of its export aliases.
@@ -824,6 +847,14 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
                 .checked_add(std::mem::size_of::<convert::Type>())?
                 .checked_add(type_bytes(member)?)
         }),
+        convert::Type::Script { path, arguments } => {
+            arguments.iter().try_fold(path.len(), |bytes, argument| {
+                bytes
+                    .checked_add(std::mem::size_of::<convert::Type>())?
+                    .checked_add(type_bytes(argument)?)
+            })
+        }
+        convert::Type::Inferred => Some(0),
         convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
     }
 }
@@ -1267,6 +1298,7 @@ impl Framed {
 
     fn converted_type(&mut self, ty: &convert::Type) {
         match ty {
+            convert::Type::Inferred => self.byte(14),
             convert::Type::Unit => self.byte(0),
             convert::Type::Builtin(builtin) => {
                 self.byte(1);
@@ -1344,6 +1376,14 @@ impl Framed {
             convert::Type::Parameter(index) => {
                 self.byte(3);
                 self.0.update(index.to_le_bytes());
+            }
+            convert::Type::Script { path, arguments } => {
+                self.byte(13);
+                self.bytes(path.as_bytes());
+                self.count(arguments.len());
+                for argument in arguments {
+                    self.converted_type(argument);
+                }
             }
         }
     }

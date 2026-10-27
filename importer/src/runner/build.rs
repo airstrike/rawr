@@ -187,6 +187,13 @@ impl<B> super::Manifest<super::Generated, B> {
         if !status.success() {
             return Err(Error::Build(status.code()));
         }
+        name_binary(&target.join("debug"), &entry.join("Cargo.toml")).map_err(|source| {
+            Error::Io {
+                operation: "name the generated runner binary",
+                path: target.join("debug"),
+                source,
+            }
+        })?;
         let artifact = super::artifact::BuiltArtifactProof::seal(
             &self.generated,
             &executable(entry),
@@ -214,6 +221,44 @@ impl<B> super::Manifest<super::Generated, B> {
             phase: super::Built { native, read_set },
         }
     }
+}
+
+/// Give a runner binary named as the script's crate (so its proxies'
+/// `type_name` is the script types', D594) the name every other step finds
+/// it by, `rawr-generated-runner`, beside it in `debug`, with its dep-info.
+/// Nothing for a runner of the default name.
+pub(crate) fn name_binary(debug: &Path, manifest: &Path) -> std::io::Result<()> {
+    let text = fs::read_to_string(manifest)?;
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return Ok(());
+    };
+    let Some(name) = document
+        .get("bin")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .and_then(|targets| targets.get(0))
+        .and_then(|target| target.get("name"))
+        .and_then(toml_edit::Item::as_str)
+    else {
+        return Ok(());
+    };
+    let suffix = std::env::consts::EXE_SUFFIX;
+    for (from, to) in [
+        (
+            format!("{name}{suffix}"),
+            format!("rawr-generated-runner{suffix}"),
+        ),
+        (format!("{name}.d"), "rawr-generated-runner.d".to_owned()),
+    ] {
+        let (from, to) = (debug.join(from), debug.join(to));
+        if !from.exists() {
+            continue;
+        }
+        let _ = fs::remove_file(&to);
+        if fs::hard_link(&from, &to).is_err() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 fn executable(entry: &Path) -> PathBuf {

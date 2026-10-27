@@ -1,8 +1,8 @@
-//! A script type a native generic fills as `rawr::Value` keeps its type
-//! (D513, review 1, 2, 3, 8 and 9): a native `TypeId` cast to another script
-//! type, or to another instance of a generic one, is refused where the
-//! value comes back, a closure native code feeds a value of another type
-//! refuses it, a `Clone` bound is checked on the script type, native
+//! A script type a native generic fills keeps its type (D513, review 1, 2,
+//! 3, 8 and 9): it crosses as its own Rust type (D594), so a native
+//! `TypeId` cast to another script type, or to another instance of a
+//! generic one, gives `None` as in Rust, a closure native code feeds is fed
+//! only its own type, a `Clone` bound is checked on the script type, native
 //! `Clone` and `Debug` are the script type's own, and a value holding a
 //! native one passes through whole. The generated runner's own runtime
 //! tests run last. Build the driver first, as for `plain`.
@@ -95,69 +95,43 @@ struct Order {
 // The cases run in one test, one after another, on one root.
 #[test]
 fn a_script_type_filling_a_native_generic_keeps_its_type() {
-    // Review 1: a cast to the same instance works; one to another
-    // instance of the generic, or another script type, is refused.
+    // Review 1: a script type crosses as its own Rust type (D594), so a
+    // `TypeId` cast to the same instance works and one to another instance
+    // of the generic, or another script type, gives `None`, as in Rust. An
+    // unsuffixed literal is an `i32` there, as rustc infers it.
     runs(
         &format!(
             "{TYPES}
 fn main() {{
-    let same: Option<Envelope<i64>> = natives::cast(Envelope {{ value: 1 }});
+    let same: Option<Envelope<i64>> = natives::cast(Envelope {{ value: 1_i64 }});
     println!(\"same {{}}\", same.map(|envelope| envelope.value).unwrap_or(-1));
-}}
-"
-        ),
-        "same 1\n",
-    );
-    refused(
-        &format!(
-            "{TYPES}
-fn main() {{
+    let literal: Option<Envelope<i64>> = natives::cast(Envelope {{ value: 1 }});
+    println!(\"literal {{}}\", literal.is_some());
     let other: Option<Envelope<String>> = natives::cast(Envelope {{ value: 1_i64 }});
-    if let Some(envelope) = other {{
-        println!(\"wrong {{}}\", envelope.value.len());
-    }}
-}}
-"
-        ),
-        "not its type",
-    );
-    refused(
-        &format!(
-            "{TYPES}
-fn main() {{
+    println!(\"other {{}}\", other.is_some());
     let order: Option<Order> = natives::cast(Ticket {{ number: 3 }});
-    if let Some(order) = order {{
-        println!(\"wrong {{}}\", order.count);
-    }}
+    println!(\"order {{}}\", order.is_some());
 }}
 "
         ),
-        "not its type",
+        "same 1\nliteral false\nother false\norder false\n",
     );
-    // Review 2: a closure native code feeds a cast value checks it.
+    // Review 2: a closure native code feeds a cast value gets its own type,
+    // and one of another type isn't fed, as in Rust.
     runs(
         &format!(
             "{TYPES}
 fn main() {{
     let number = natives::apply(Ticket {{ number: 3 }}, |ticket: Ticket| ticket.number);
     println!(\"applied {{number}}\");
-}}
-"
-        ),
-        "applied 3\n",
-    );
-    refused(
-        &format!(
-            "{TYPES}
-fn main() {{
     let length = natives::apply(Envelope {{ value: 3_i64 }}, |envelope: Envelope<String>| {{
         envelope.value.len() as i64
     }});
-    println!(\"wrong {{length}}\");
+    println!(\"length {{length}}\");
 }}
 "
         ),
-        "not its type",
+        "applied 3\nlength -1\n",
     );
     // Review 3: `T: Clone` is checked on the script type, as rustc does.
     runs(

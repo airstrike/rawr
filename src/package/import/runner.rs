@@ -1319,6 +1319,9 @@ fn signature(
     for (index, parameter) in signature.parameters().enumerate() {
         builder.type_parameter(parameter, &super::requirements(signature.bounds(index)))?;
     }
+    if signature.crossing() {
+        builder.crossing();
+    }
     for input in signature.inputs() {
         builder.try_parameter(ty(facade, input, profile, installed)?)?;
     }

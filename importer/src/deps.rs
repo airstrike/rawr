@@ -248,19 +248,34 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
         }
     };
     let mut rebuilt = false;
+    // The runner's binary target, named as the script's crate when its
+    // proxies stand for script types (D594).
+    let mut runner = String::from("rawr_generated_runner");
     for line in messages.split(|byte| *byte == b'\n') {
         let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
             continue;
         };
-        rebuilt |= message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false)
-            && message
+        let is_runner = (message
+            .get("package_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|package| package.contains("rawr-generated-runner"))
+            || message
                 .pointer("/target/name")
                 .and_then(serde_json::Value::as_str)
-                == Some("rawr-generated-runner")
+                == Some("rawr-generated-runner"))
             && message
                 .pointer("/target/kind/0")
                 .and_then(serde_json::Value::as_str)
                 == Some("bin");
+        if is_runner
+            && let Some(name) = message
+                .pointer("/target/name")
+                .and_then(serde_json::Value::as_str)
+        {
+            runner = name.replace('-', "_");
+        }
+        rebuilt |=
+            message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false) && is_runner;
         for file in message
             .get("filenames")
             .and_then(serde_json::Value::as_array)
@@ -276,7 +291,7 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
     if live.is_empty() {
         return;
     }
-    let runner = "rawr_generated_runner";
+    let runner = runner.as_str();
     // The runner this build linked, and the object files its debug map names
     // (macOS keeps debug info in them, by path): a rebuilt runner's earlier
     // objects, and every output of its other unit hashes, are superseded.

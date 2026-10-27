@@ -681,6 +681,16 @@ fn native_evidence_buffers_require_budget_before_reserving_selected_entries() {
     check::<convert::Type>();
 }
 
+/// The models of an empty program, which no script type of these tests
+/// names.
+fn empty_models() -> super::Models {
+    let engine = Engine::new();
+    let program = program(&engine, "");
+    let runtime =
+        crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
+    super::Models::new(&program, runtime, engine.host_registry.clone())
+}
+
 #[test]
 fn profile_message_evidence_charges_its_box_before_payload_conversion() {
     let mut inference = super::Inference::default();
@@ -700,6 +710,7 @@ fn profile_message_evidence_charges_its_box_before_payload_conversion() {
         let mut types = context.entries(1)?;
         types.push(super::imported_surface_type(
             &inference,
+            &empty_models(),
             &message,
             crate::Span::NONE,
             context,
@@ -718,6 +729,7 @@ fn profile_message_evidence_charges_its_box_before_payload_conversion() {
         let mut types = context.entries(1)?;
         types.push(super::imported_surface_type(
             &inference,
+            &empty_models(),
             &message,
             crate::Span::NONE,
             context,
@@ -740,7 +752,13 @@ fn profile_message_evidence_charges_its_box_before_payload_conversion() {
     };
     let mut refused = host::TestImportAllocation::new(0, 0);
     let (converted, failure) = with_import_context(&mut refused, |context| {
-        super::imported_surface_type(&inference, &invalid, crate::Span::NONE, context)
+        super::imported_surface_type(
+            &inference,
+            &empty_models(),
+            &invalid,
+            crate::Span::NONE,
+            context,
+        )
     });
     assert!(matches!(
         converted,
@@ -753,7 +771,13 @@ fn profile_message_evidence_charges_its_box_before_payload_conversion() {
     assert_eq!(refused.usage(), (0, 0));
     let mut allowed = host::TestImportAllocation::new(1, bytes);
     let (converted, failure) = with_import_context(&mut allowed, |context| {
-        super::imported_surface_type(&inference, &invalid, crate::Span::NONE, context)
+        super::imported_surface_type(
+            &inference,
+            &empty_models(),
+            &invalid,
+            crate::Span::NONE,
+            context,
+        )
     });
     assert!(matches!(
         converted,

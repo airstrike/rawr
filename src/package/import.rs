@@ -445,7 +445,7 @@ impl crate::Engine {
                         source_identity: source.identity().into(),
                     })
                     .map_err(super::Error::import)?;
-            if used.types.is_empty() && used.functions.is_empty() {
+            if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
                 compiler
                     .require_selected(identity, used.selector, source.identity(), start, end)
                     .map_err(Error::from)
@@ -537,53 +537,61 @@ impl crate::Engine {
                 })
                 .map(|binders| binders.to_vec().into_boxed_slice())
                 .unwrap_or_default();
-            let instance =
-                if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
-                    rawr_import::surface::instance::Arguments::borrowed(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        limits,
-                    )
-                } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
-                    rawr_import::surface::instance::Arguments::shared(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        proof.scope(),
-                        limits,
-                    )
-                } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
-                    rawr_import::surface::instance::Arguments::mutable(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        limits,
-                    )
-                } else if used.callable {
-                    rawr_import::surface::instance::Arguments::once(
-                        used.types,
-                        Box::default(),
-                        Box::default(),
-                        limits,
-                    )
-                } else {
-                    rawr_import::surface::instance::Arguments::new(
-                        used.types,
-                        Box::default(),
-                        Box::default(),
-                        None,
-                        limits,
-                    )
-                }
-                .and_then(|instance| {
-                    instance.with_function_items(functions.into_boxed_slice(), limits)
-                })
-                .and_then(|instance| {
-                    instance.with_event_mappers(mappers.into_boxed_slice(), limits)
-                })
-                .map_err(Error::from)
-                .map_err(super::Error::import)?;
+            // Script functions that fill callables as slots (D594) take
+            // no closure class.
+            let class = class.filter(|_| used.slots.is_empty());
+            let slotted = !used.slots.is_empty();
+            let instance = if slotted {
+                rawr_import::surface::instance::Arguments::new(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    None,
+                    limits,
+                )
+                .and_then(|instance| instance.with_slots(used.slots))
+            } else if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
+                rawr_import::surface::instance::Arguments::borrowed(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    limits,
+                )
+            } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
+                rawr_import::surface::instance::Arguments::shared(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    proof.scope(),
+                    limits,
+                )
+            } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
+                rawr_import::surface::instance::Arguments::mutable(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    limits,
+                )
+            } else if used.callable && !slotted {
+                rawr_import::surface::instance::Arguments::once(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    limits,
+                )
+            } else {
+                rawr_import::surface::instance::Arguments::new(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    None,
+                    limits,
+                )
+            }
+            .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
+            .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
+            .map_err(Error::from)
+            .map_err(super::Error::import)?;
             compiler
                 .require_instance(
                     identity,
@@ -1856,8 +1864,16 @@ fn imported_item(
     let retains_item = match outcome.representability() {
         Representability::Function(_)
         | Representability::Method(_)
-        | Representability::Constant(_)
-        | Representability::Invocation(_) => true,
+        | Representability::Constant(_) => true,
+        // A callable parameter whose closure Rawr can't make, as cosmic
+        // text's `with_buffer_mut(impl FnOnce(&mut Borrowed<..>) -> T)`
+        // takes, leaves the item uncallable.
+        Representability::Invocation(plan) => {
+            plan.call().is_some()
+                || plan.signature().parameters().iter().all(|parameter| {
+                    parameter.kind() != representability::signature::Kind::Callable
+                })
+        }
         Representability::FunctionItem(plan) => callable_generic(plan),
         _ => false,
     };
@@ -1914,12 +1930,24 @@ fn imported_item(
                 // Fn(&Theme, Status) -> Style + 'a)`, is the closure's type.
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
+                    callable_signature(
+                        types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
+                    callable_signature(
+                        types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -1934,16 +1962,34 @@ fn imported_item(
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
+                    callable_signature(
+                        types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
                 )?,
                 Selector::Function { .. } => host::item::Definition::function(
                     path,
-                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
+                    callable_signature(
+                        types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
+                    callable_signature(
+                        types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -2003,8 +2049,12 @@ fn ty_ok(
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. } => ty_ok(element, declared),
-        Type::Tuple(members) => members.iter().all(|ty| ty_ok(ty, declared)),
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
+        Type::Inferred => true,
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
@@ -2013,6 +2063,18 @@ fn ty_ok(
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
     match plan.class() {
+        // A script function fills each callable parameter as a slot,
+        // as `iced::run(update, view)` takes them (D594).
+        None if !plan.crossings().is_empty() => {
+            plan.signature().parameters().iter().all(|parameter| {
+                matches!(
+                    parameter.kind(),
+                    representability::signature::Kind::Type
+                        | representability::signature::Kind::Future
+                        | representability::signature::Kind::Callable
+                )
+            })
+        }
         // `F: Future` takes a script future (D527).
         None => plan.signature().parameters().iter().all(|parameter| {
             matches!(
@@ -2061,6 +2123,7 @@ impl Types {
     ) -> Result<host::type_ref::Type, Error> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
+            Type::Inferred => return Err(Error::Cardinality),
             Type::Unit => host::type_ref::Type::unit(),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
                 Builtin::Bool => host::type_ref::Builtin::Bool,
@@ -2144,6 +2207,9 @@ impl Types {
                     .map(|member| Self::convert_charged(member, parameters))
                     .collect::<Result<Vec<_>, _>>()?,
             )?,
+            // A script type's proxy fills a call's instance; no Rust
+            // declaration names one (D594).
+            Type::Script { .. } => return Err(Error::Cardinality),
         })
     }
 }
@@ -2290,10 +2356,11 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
     use representability::convert::Type;
     match ty {
         Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) => false,
-        Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
-            arguments.iter().any(names_impl_parameter)
-        }
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => arguments.iter().any(names_impl_parameter),
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
@@ -2313,22 +2380,31 @@ fn callable_signature(
     types: &Types,
     signature: &representability::signature::Signature,
     call: Option<&representability::callable::Call>,
+    crossings: &[representability::callable::Call],
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<host::signature::Definition, Error> {
-    let Some(call) = call else {
+    if call.is_none() && crossings.is_empty() {
         return self::signature(types, signature, allocation);
-    };
+    }
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         if parameter.kind() == representability::signature::Kind::Type {
             builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
         }
     }
+    // A script function fills each callable parameter as a slot (D594).
+    if !crossings.is_empty() {
+        builder.crossing();
+    }
     let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {
         types.convert(ty, signature.parameters(), allocation)
     };
     for input in signature.inputs() {
-        if *input == representability::convert::Type::Parameter(call.parameter()) {
+        let call = crossings
+            .iter()
+            .chain(call)
+            .find(|call| *input == representability::convert::Type::Parameter(call.parameter()));
+        if let Some(call) = call {
             let input = match call.inputs() {
                 [] => host::type_ref::Type::unit(),
                 [single] => convert(single, allocation)?,
@@ -2394,17 +2470,19 @@ fn type_usage(
         | Type::Sequence {
             element: payload, ..
         } => type_usage(payload, parameters)?,
-        Type::Tuple(members) => {
-            members
-                .iter()
-                .try_fold((0_usize, 0_usize), |(items, bytes), member| {
-                    let (member_items, member_bytes) = type_usage(member, parameters)?;
-                    Ok::<_, Error>((
-                        items.checked_add(member_items).ok_or(Error::Allocation)?,
-                        bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
-                    ))
-                })?
-        }
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members
+            .iter()
+            .try_fold((0_usize, 0_usize), |(items, bytes), member| {
+                let (member_items, member_bytes) = type_usage(member, parameters)?;
+                Ok::<_, Error>((
+                    items.checked_add(member_items).ok_or(Error::Allocation)?,
+                    bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
+                ))
+            })?,
+        Type::Inferred => (0, 0),
         Type::Unit | Type::Builtin(_) => (0, 0),
     };
     Ok((

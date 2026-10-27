@@ -552,6 +552,14 @@ pub trait Remote: crate::func::SendSync {
         None
     }
 
+    /// The `Default` of the script type at `path` (`State`, `app::State`):
+    /// its own `impl Default`, or the derived one (D594). `None` when the
+    /// program has no such type.
+    fn default_of(&self, path: &str) -> Option<RawrResultOf<Dynamic>> {
+        let _ = path;
+        None
+    }
+
     /// Whether `function`, a callable `from` made, runs here: the same
     /// item by its stable key and signature, and for a lifted closure the
     /// same closures in the function that writes it (D553.5).
@@ -711,6 +719,13 @@ fn published() -> Option<Program> {
     return None;
 }
 
+/// The program script code runs in on this thread: the generation current
+/// here, and else the one the process published.
+#[cfg(feature = "sync")]
+pub(crate) fn current_program() -> Option<Program> {
+    with_host(|host| host.share()).flatten().or_else(published)
+}
+
 /// A copy of `value` by its script type's own `Clone` (review 8).
 pub(crate) fn clone_value(value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
     published()?.clone_value(value)
@@ -782,6 +797,58 @@ impl Callable {
     pub fn call(&self, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
         let _entry = entry();
         self.program().invoke(&self.function, arguments)
+    }
+
+    /// Call the closure with `arguments`, where each index in `mutable` is
+    /// an argument it takes `&mut` (D594). A function changes its first
+    /// `&mut` parameter in place and gives the others back after its value,
+    /// as `[value, ..copied]`; a method or an associated function gives back
+    /// all but its receiver, and a closure all of them
+    /// (`resolve::lower_nominal::copied_parameters`). Each given back is
+    /// stored in its argument's place, so the caller finds every `&mut`
+    /// argument where it lent it.
+    pub fn call_places(
+        &self,
+        arguments: &mut [Dynamic],
+        mutable: &[usize],
+    ) -> RawrResultOf<Dynamic> {
+        let _entry = entry();
+        let program = self.program();
+        let result = program.invoke(&self.function, arguments)?;
+        let copied = match self.function.kind() {
+            item::Kind::Function
+                if self.function.captures().is_empty()
+                    && !self.function.key().name().contains("{closure#") =>
+            {
+                mutable.get(1..).unwrap_or_default()
+            }
+            item::Kind::Method => mutable
+                .iter()
+                .position(|index| *index != 0)
+                .map_or(&[][..], |at| &mutable[at..]),
+            _ => mutable,
+        };
+        if copied.is_empty() {
+            return Ok(result);
+        }
+        let actual = result.type_name();
+        let returned = result
+            .into_array()
+            .ok()
+            .filter(|returned| returned.len() == copied.len() + 1)
+            .ok_or_else(|| {
+                failure(format!(
+                    "rawr: a function native code called gave back `{actual}`, not its `&mut` arguments"
+                ))
+            })?;
+        let mut returned = returned.into_iter();
+        let result = returned.next().unwrap_or(Dynamic::UNIT);
+        for (index, value) in copied.iter().zip(returned) {
+            if let Some(place) = arguments.get_mut(*index) {
+                *place = value;
+            }
+        }
+        Ok(result)
     }
 
     /// Call the closure with `arguments`, each first checked against the

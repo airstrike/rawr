@@ -5,6 +5,7 @@
 //! native loop takes a body edit at its next call into script code.
 
 mod crate_shapes;
+mod crossing;
 mod erasure;
 mod islands;
 mod panes;

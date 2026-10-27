@@ -13,6 +13,8 @@ pub struct Definition {
     output: host::type_ref::Type,
     /// What the item's bounds tie between its type parameters.
     relations: Box<[Relation]>,
+    /// Its callable parameters take a script function as a slot (D594).
+    crossing: bool,
 }
 
 /// A bound `R: Trait<A..>` on an imported generic item's type parameter
@@ -118,6 +120,7 @@ pub struct Builder {
     parameters: Vec<host::type_ref::Type>,
     output: Option<host::type_ref::Type>,
     relations: Vec<Relation>,
+    crossing: bool,
 }
 
 impl Builder {
@@ -130,7 +133,16 @@ impl Builder {
             parameters: Vec::new(),
             output: None,
             relations: Vec::new(),
+            crossing: false,
         }
+    }
+
+    /// Mark the item's callable parameters as taking a script function as a
+    /// slot (D594).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn crossing(&mut self) -> &mut Self {
+        self.crossing = true;
+        self
     }
 
     /// Declare a type parameter and its exact capability requirements.
@@ -217,6 +229,7 @@ impl Builder {
             parameters: self.parameters.into_boxed_slice(),
             output: self.output.unwrap_or_else(host::type_ref::Type::unit),
             relations: self.relations.into_boxed_slice(),
+            crossing: self.crossing,
         }
     }
 }
@@ -293,7 +306,15 @@ impl Definition {
             parameters: parameters.into_boxed_slice(),
             output: self.output.try_clone()?,
             relations: self.relations.clone(),
+            crossing: self.crossing,
         })
+    }
+
+    /// Whether a script function fills a callable parameter as a slot
+    /// (D594).
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn crossing(&self) -> bool {
+        self.crossing
     }
 
     /// What the item's bounds tie between its type parameters.
@@ -453,6 +474,7 @@ impl Definition {
             parameters: parameters.into_boxed_slice(),
             output,
             relations: self.relations.clone(),
+            crossing: self.crossing,
         })
     }
 
