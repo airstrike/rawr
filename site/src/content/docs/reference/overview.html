@@ -5,7 +5,7 @@
 <h2 id="glance">At a glance</h2>
 <p>Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
 <ul>
-  <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
+  <li>A <code>macro_rules!</code> the program defines isn&rsquo;t supported. The <a href="/docs/reference/macros">built-in macros</a> and a dependency&rsquo;s own <code>macro_rules!</code> macros work.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
   <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps, those a struct, a collection or an <code>Option</code> holds, and those a closure captures. It covers temporaries and what a function returns against its signature too. <a href="#lenient">A few borrows</a> aren&rsquo;t checked yet, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
@@ -47,7 +47,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <a href="/docs/reference/patterns">Patterns<span><code>match</code>, <code>if let</code>, <code>let else</code> and loops.</span></a>
   <a href="/docs/reference/moves">Moves<span>Moves, partial moves, drops and clones.</span></a>
   <a href="/docs/reference/closures">Closures<span>Captures, <code>Fn</code> traits and async code.</span></a>
-  <a href="/docs/reference/macros">Macros<span>The built-in macros and format strings.</span></a>
+  <a href="/docs/reference/macros">Macros<span>The built-in macros, crates&rsquo; macros and format strings.</span></a>
   <a href="/docs/reference/std">std<span>The parts of the standard library that work.</span></a>
 </div>
 
@@ -56,7 +56,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
   <li>A <code>static mut</code>.</li>
-  <li><code>macro_rules!</code>.</li>
+  <li>A <code>macro_rules!</code> the program defines. A dependency&rsquo;s macros expand.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
   <li><code>async</code> and <code>.await</code> outside iced, except an <code>async fn main</code> in <code>?play</code> or under a runtime&rsquo;s attribute in a crate.</li>
   <li><code>try_join!</code> and <code>select!</code> outside iced and <code>?play</code>.</li>

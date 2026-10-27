@@ -51,6 +51,64 @@ pub enum Kind {
     /// `LocalKey::scope` returns a `TaskLocalFuture<T, F>`. A script
     /// future fills `F` with a type Rawr has no name for (D527).
     ScriptFutureType,
+    /// A `macro_rules!` macro: Rawr expands its source, so it has no native
+    /// operation (the facade plan carries the source).
+    MacroRules,
+}
+
+impl Kind {
+    /// Why an item of this kind has no binding, as a diagnostic says it.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Module => "it is a module",
+            Self::Union => "it is a union",
+            Self::Static => "it is a static rawr can't read",
+            Self::Trait => "it is a trait",
+            Self::AssociatedType => "it is an associated type",
+            Self::TypeConstant => "it is a type-level constant",
+            Self::SysrootDefinition => "it is a standard library definition",
+            Self::UnsafeFunction => "it is an unsafe function",
+            Self::AsyncFunction => "it is an async function",
+            Self::VariadicFunction => "it is a variadic function",
+            Self::ForeignAbi => "it uses a foreign ABI",
+            Self::HigherRankedBinder => "its signature has a higher-ranked lifetime",
+            Self::EscapingBorrow => "its output keeps a borrow rawr can't hold",
+            Self::NonStaticCallable => "it takes a callable that isn't 'static",
+            Self::CallableProtocol => "it takes a callable rawr can't make",
+            Self::ExplicitReceiver => "its receiver has an explicit type",
+            Self::UnsafeImplementation => "it is an unsafe impl",
+            Self::NegativeImplementation => "it is a negative impl",
+            Self::ConstImplementation => "it is a const impl",
+            Self::DefaultImplementation => "it is a default impl",
+            Self::GenericImplementation => "it is a generic impl",
+            Self::ReferenceType => "its signature has a reference type rawr can't lend",
+            Self::RawPointer => "its signature has a raw pointer",
+            Self::FunctionPointer => "its signature has a function pointer",
+            Self::TraitObject => "its signature has a trait object",
+            Self::OpaqueType => "its signature has an opaque `impl Trait` type",
+            Self::Projection => "its signature has an associated type projection",
+            Self::TupleType => "its signature has a tuple type rawr can't hold there",
+            Self::SliceType => "its signature has a slice type rawr can't hold there",
+            Self::ArrayType => "its signature has an array type",
+            Self::NeverType => "its signature has the never type",
+            Self::UnsupportedPrimitive => "its signature has an unsupported primitive",
+            Self::UnsupportedGenericArgument => "its signature has an unsupported generic argument",
+            Self::LifetimeOrConstGeneric => "its signature borrows at a lifetime rawr can't hold",
+            Self::Predicate => "it has a where clause rawr can't check",
+            Self::PrivateType => "its signature names a private type",
+            Self::UnnameableType => "its signature names a type generated code can't name",
+            Self::UnresolvedDefinition => {
+                "its signature names a definition the importer didn't see"
+            }
+            Self::MissingConstantValue => "it is a constant without a value",
+            Self::UnevaluatedConstant => "it is a constant rustc didn't evaluate",
+            Self::UnsupportedConstant => "it is a constant of an unsupported type",
+            Self::Extraction => "the importer couldn't extract it",
+            Self::ScriptFutureType => "its signature names a future parameter's own type",
+            Self::MacroRules => "it is a `macro_rules!` macro, which rawr expands from its source",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -146,8 +204,9 @@ mod tests {
             Kind::UnsupportedConstant,
             Kind::Extraction,
             Kind::ScriptFutureType,
+            Kind::MacroRules,
         ];
-        assert_eq!(kinds.len(), 43);
+        assert_eq!(kinds.len(), 44);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

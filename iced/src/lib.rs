@@ -66,6 +66,14 @@ const OWNED_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Send,
     capability::Kind::Static,
 ];
+/// A pinned iced style function, as `button::primary`: a Rust `fn` item or
+/// pointer, which is `Copy`.
+const PINNED_STYLE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Clone,
+    capability::Kind::Copy,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
 /// A `Clone` value that is not `Copy`, as iced's `Event`.
 const DEBUG_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Debug,
@@ -310,14 +318,22 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     // iced's `Application` builder, which `iced::application` returns.
     builder.type_::<marker::Application>("Application", &["State", "Message"], &[])?;
-    builder.private_type::<marker::container::Style>("widget::container::Builtin", &[], &[])?;
+    builder.private_type::<marker::container::Style>(
+        "widget::container::Builtin",
+        &[],
+        PINNED_STYLE_CAPABILITIES,
+    )?;
     builder.default_value_type::<iced::widget::container::Style>(
         "widget::container::Style",
         &[],
         OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.default_value_type::<iced::Border>("Border", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
-    builder.private_type::<marker::text::Style>("widget::text::Builtin", &[], &[])?;
+    builder.private_type::<marker::text::Style>(
+        "widget::text::Builtin",
+        &[],
+        PINNED_STYLE_CAPABILITIES,
+    )?;
     builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()

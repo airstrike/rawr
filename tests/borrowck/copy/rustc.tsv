@@ -1,0 +1,338 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+copy/array_of_fn_items_copied.rs	ok	0	"6 12 10\n"
+copy/array_of_fn_tuples_copied.rs	ok	0	"8 negate\n-4 2\n"
+copy/array_of_fn_tuples_into_iter_twice.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/array_of_inferred_fn_tuples_in_method.rs	ok	0	"[\"<Primary>2\", \"<Secondary>20\"] [3, 20]\n"
+copy/array_of_plain_closures_copied.rs	ok	0	"8 5\n"
+copy/array_of_string_tuples_moved.rs	E0382:4
+copy/associated_type_copy_bound.rs	ok	0	"(7, 7)\n"
+copy/associated_type_moved.rs	E0382:18
+copy/field_array_of_fn_tuples_through_self.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/generic_fn_parameter_moved.rs	E0382:3
+copy/generic_param_moved.rs	E0382:3
+copy/generic_tuple_copy_bound.rs	ok	0	"((2, 1), (2, 1))\n"
+copy/generic_tuple_moved.rs	E0382:4
+copy/generic_where_copy_copied.rs	ok	0	"(4, 4) 18\n"
+copy/impl_fn_copy_parameter_copied.rs	ok	0	"5\n"
+copy/impl_fn_parameter_moved.rs	E0382:3
+copy/impl_generic_copy_bound.rs	ok	0	"2 1 1\n"
+copy/impl_generic_moved.rs	E0382:9
+copy/option_of_fn_pointer_copied.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/tuple_of_shared_references_copied.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/tuple_settled_later_copied.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/tuple_settled_later_moved.rs	E0382:4
+copy/tuple_with_borrowing_closure_copied.rs	ok	0	"3 2 2\n"
+copy/tuple_with_mut_closure_moved.rs	E0382:6
+copy/tuple_with_mut_reference_moved.rs	E0382:5
+copy/tuple_with_owning_closure_moved.rs	E0382:6
+copy/vec_of_fn_tuples_moved.rs	E0382:8
+copy/mutations/array_of_fn_items_copied_again_10_bound_by_ref.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_after.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_before.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_by_block_tail.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_by_match.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_in_loop.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_on_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_again_10_moved_on_diverging_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_bound_by_ref.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_after.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_before.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_by_block_tail.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_by_match.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_in_loop.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_on_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_copy_10_moved_on_diverging_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_bound_by_ref.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_after.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_before.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_by_block_tail.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_by_match.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_in_loop.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_on_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_items_copied_total_10_moved_on_diverging_branch.rs	ok	0	"6 12 10\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_bound_by_ref.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_after.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_before.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_by_block_tail.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_by_match.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_in_loop.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_on_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_12_moved_on_diverging_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_bound_by_ref.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_after.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_before.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_by_block_tail.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_by_match.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_in_loop.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_on_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_copy_13_moved_on_diverging_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_bound_by_ref.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_after.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_before.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_by_block_tail.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_by_match.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_in_loop.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_on_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_12_moved_on_diverging_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_bound_by_ref.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_after.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_before.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_by_block_tail.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_by_match.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_in_loop.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_on_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_copied_styles_13_moved_on_diverging_branch.rs	ok	0	"8 negate\n-4 2\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_bound_by_ref.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_after.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_before.rs	E0382:14
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_by_block_tail.rs	E0382:14
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_by_match.rs	E0382:16
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_in_loop.rs	E0382:18
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_on_branch.rs	E0382:16
+copy/mutations/array_of_fn_tuples_into_iter_twice_first_13_moved_on_diverging_branch.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_bound_by_ref.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_after.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_before.rs	E0382:14
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_by_block_tail.rs	E0382:14
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_by_match.rs	E0382:16
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_in_loop.rs	E0382:18
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_on_branch.rs	E0382:16
+copy/mutations/array_of_fn_tuples_into_iter_twice_second_13_moved_on_diverging_branch.rs	ok	0	"[6, -3] [\"double\", \"negate\"]\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_bound_by_ref.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_after.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_before.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_by_block_tail.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_by_match.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_in_loop.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_on_branch.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_copy_7_moved_on_diverging_branch.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_bound_by_ref.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_after.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_before.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_by_block_tail.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_by_match.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_in_loop.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_on_branch.rs	ok	0	"8 5\n"
+copy/mutations/array_of_plain_closures_copied_total_7_moved_on_diverging_branch.rs	ok	0	"8 5\n"
+copy/mutations/array_of_string_tuples_moved_first_5_bound_by_ref.rs	E0382:4
+copy/mutations/array_of_string_tuples_moved_first_5_moved_after.rs	E0382:4
+copy/mutations/array_of_string_tuples_moved_first_5_moved_before.rs	E0382:4 E0382:6
+copy/mutations/array_of_string_tuples_moved_first_5_moved_by_block_tail.rs	E0382:4 E0382:6
+copy/mutations/array_of_string_tuples_moved_first_5_moved_by_match.rs	E0382:4 E0382:8
+copy/mutations/array_of_string_tuples_moved_first_5_moved_in_loop.rs	E0382:4 E0382:10
+copy/mutations/array_of_string_tuples_moved_first_5_moved_on_branch.rs	E0382:4 E0382:8
+copy/mutations/array_of_string_tuples_moved_first_5_moved_on_diverging_branch.rs	E0382:4
+copy/mutations/array_of_string_tuples_moved_second_5_bound_by_ref.rs	E0382:4
+copy/mutations/array_of_string_tuples_moved_second_5_moved_after.rs	E0382:4
+copy/mutations/array_of_string_tuples_moved_second_5_moved_before.rs	E0382:4 E0382:6
+copy/mutations/array_of_string_tuples_moved_second_5_moved_by_block_tail.rs	E0382:4 E0382:6
+copy/mutations/array_of_string_tuples_moved_second_5_moved_by_match.rs	E0382:4 E0382:8
+copy/mutations/array_of_string_tuples_moved_second_5_moved_in_loop.rs	E0382:4 E0382:10
+copy/mutations/array_of_string_tuples_moved_second_5_moved_on_branch.rs	E0382:4 E0382:8
+copy/mutations/array_of_string_tuples_moved_second_5_moved_on_diverging_branch.rs	E0382:4
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_bound_by_ref.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_after.rs	E0382:19
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_and_given_back.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_and_given_back_in_loop.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_before.rs	E0382:18
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_by_block_tail.rs	E0382:18
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_by_match.rs	E0382:20
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_in_loop.rs	E0382:22
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_on_branch.rs	E0382:20
+copy/mutations/field_array_of_fn_tuples_through_self_out_17_moved_on_diverging_branch.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_bound_by_ref.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_after.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_before.rs	E0382:25
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_by_block_tail.rs	E0382:25
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_by_match.rs	E0382:27
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_in_loop.rs	E0382:29
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_on_branch.rs	E0382:27
+copy/mutations/field_array_of_fn_tuples_through_self_panel_24_moved_on_diverging_branch.rs	ok	0	"[2, -1, 4, -2] double\n"
+copy/mutations/impl_generic_copy_bound_pair_22_bound_by_ref.rs	ok	0	"2 1 1\n"
+copy/mutations/impl_generic_copy_bound_pair_22_moved_after.rs	ok	0	"2 1 1\n"
+copy/mutations/impl_generic_copy_bound_pair_22_moved_before.rs	E0382:23
+copy/mutations/impl_generic_copy_bound_pair_22_moved_by_block_tail.rs	E0382:23
+copy/mutations/impl_generic_copy_bound_pair_22_moved_by_match.rs	E0382:25
+copy/mutations/impl_generic_copy_bound_pair_22_moved_in_loop.rs	E0382:27
+copy/mutations/impl_generic_copy_bound_pair_22_moved_on_branch.rs	E0382:25
+copy/mutations/impl_generic_copy_bound_pair_22_moved_on_diverging_branch.rs	ok	0	"2 1 1\n"
+copy/mutations/impl_generic_moved_holder_15_bound_by_ref.rs	E0382:9
+copy/mutations/impl_generic_moved_holder_15_moved_after.rs	E0382:9
+copy/mutations/impl_generic_moved_holder_15_moved_and_given_back.rs	E0382:9
+copy/mutations/impl_generic_moved_holder_15_moved_and_given_back_in_loop.rs	E0382:9
+copy/mutations/impl_generic_moved_holder_15_moved_before.rs	E0382:9 E0382:16
+copy/mutations/impl_generic_moved_holder_15_moved_by_block_tail.rs	E0382:9 E0382:16
+copy/mutations/impl_generic_moved_holder_15_moved_by_match.rs	E0382:9 E0382:18
+copy/mutations/impl_generic_moved_holder_15_moved_in_loop.rs	E0382:9 E0382:20
+copy/mutations/impl_generic_moved_holder_15_moved_on_branch.rs	E0382:9 E0382:18
+copy/mutations/impl_generic_moved_holder_15_moved_on_diverging_branch.rs	E0382:9
+copy/mutations/option_of_fn_pointer_copied_copy_10_bound_by_ref.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_after.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_before.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_by_block_tail.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_by_match.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_in_loop.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_on_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_copy_10_moved_on_diverging_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_bound_by_ref.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_after.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_before.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_by_block_tail.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_by_match.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_in_loop.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_on_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_pair_10_moved_on_diverging_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_bound_by_ref.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_after.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_before.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_by_block_tail.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_by_match.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_in_loop.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_on_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/option_of_fn_pointer_copied_used_10_moved_on_diverging_branch.rs	ok	0	"Some(6) Some(8) 2\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_bound_by_ref.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_after.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_before.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_by_block_tail.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_by_match.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_in_loop.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_on_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_first_7_moved_on_diverging_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_bound_by_ref.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_after.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_before.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_by_block_tail.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_by_match.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_in_loop.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_on_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_pair_7_moved_on_diverging_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_bound_by_ref.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_after.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_before.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_by_block_tail.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_by_match.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_in_loop.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_on_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_of_shared_references_copied_second_7_moved_on_diverging_branch.rs	ok	0	"ab [1, 2, 3] cd 3\n"
+copy/mutations/tuple_settled_later_copied_second_6_bound_by_ref.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_after.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_before.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_by_block_tail.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_by_match.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_in_loop.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_on_branch.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_second_6_moved_on_diverging_branch.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_bound_by_ref.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_after.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_before.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_by_block_tail.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_by_match.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_in_loop.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_on_branch.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_copied_typed_6_moved_on_diverging_branch.rs	ok	0	"(None, 1) (None, 1)\n"
+copy/mutations/tuple_settled_later_moved_second_6_bound_by_ref.rs	E0382:4
+copy/mutations/tuple_settled_later_moved_second_6_moved_after.rs	E0382:4
+copy/mutations/tuple_settled_later_moved_second_6_moved_before.rs	E0382:4 E0382:7
+copy/mutations/tuple_settled_later_moved_second_6_moved_by_block_tail.rs	E0382:4 E0382:7
+copy/mutations/tuple_settled_later_moved_second_6_moved_by_match.rs	E0382:4 E0382:9
+copy/mutations/tuple_settled_later_moved_second_6_moved_in_loop.rs	E0382:4 E0382:11
+copy/mutations/tuple_settled_later_moved_second_6_moved_on_branch.rs	E0382:4 E0382:9
+copy/mutations/tuple_settled_later_moved_second_6_moved_on_diverging_branch.rs	E0382:4
+copy/mutations/tuple_settled_later_moved_typed_6_bound_by_ref.rs	E0382:4
+copy/mutations/tuple_settled_later_moved_typed_6_moved_after.rs	E0382:4
+copy/mutations/tuple_settled_later_moved_typed_6_moved_before.rs	E0382:4 E0382:7
+copy/mutations/tuple_settled_later_moved_typed_6_moved_by_block_tail.rs	E0382:4 E0382:7
+copy/mutations/tuple_settled_later_moved_typed_6_moved_by_match.rs	E0382:4 E0382:9
+copy/mutations/tuple_settled_later_moved_typed_6_moved_in_loop.rs	E0382:4 E0382:11
+copy/mutations/tuple_settled_later_moved_typed_6_moved_on_branch.rs	E0382:4 E0382:9
+copy/mutations/tuple_settled_later_moved_typed_6_moved_on_diverging_branch.rs	E0382:4
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_bound_by_ref.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_after.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_before.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_by_block_tail.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_by_match.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_in_loop.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_on_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_first_7_moved_on_diverging_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_bound_by_ref.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_after.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_before.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_by_block_tail.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_by_match.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_in_loop.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_on_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_pair_7_moved_on_diverging_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_bound_by_ref.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_after.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_before.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_by_block_tail.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_by_match.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_in_loop.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_on_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_borrowing_closure_copied_second_7_moved_on_diverging_branch.rs	ok	0	"3 2 2\n"
+copy/mutations/tuple_with_mut_closure_moved_first_7_bound_by_ref.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_after.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_and_given_back.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_and_given_back_in_loop.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_before.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_by_block_tail.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_by_match.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_in_loop.rs	E0382:6 E0382:12
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_on_branch.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_mut_closure_moved_first_7_moved_on_diverging_branch.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_second_8_bound_by_ref.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_after.rs	E0382:6
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_before.rs	E0382:6 E0382:9
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_by_block_tail.rs	E0382:6 E0382:9
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_by_match.rs	E0382:6 E0382:11
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_in_loop.rs	E0382:6 E0382:13
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_on_branch.rs	E0382:6 E0382:11
+copy/mutations/tuple_with_mut_closure_moved_second_8_moved_on_diverging_branch.rs	E0382:6
+copy/mutations/tuple_with_mut_reference_moved_first_6_bound_by_ref.rs	E0382:5
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_after.rs	E0382:5
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_before.rs	E0382:5 E0382:7
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_by_block_tail.rs	E0382:5 E0382:7
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_by_match.rs	E0382:5 E0382:9
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_in_loop.rs	E0382:5 E0382:11
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_on_branch.rs	E0382:5 E0382:9
+copy/mutations/tuple_with_mut_reference_moved_first_6_moved_on_diverging_branch.rs	E0382:5
+copy/mutations/tuple_with_mut_reference_moved_second_7_bound_by_ref.rs	E0382:5
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_after.rs	E0382:5
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_before.rs	E0382:5 E0382:8
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_by_block_tail.rs	E0382:5 E0382:8
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_by_match.rs	E0382:5 E0382:10
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_in_loop.rs	E0382:5 E0382:12
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_on_branch.rs	E0382:5 E0382:10
+copy/mutations/tuple_with_mut_reference_moved_second_7_moved_on_diverging_branch.rs	E0382:5
+copy/mutations/tuple_with_owning_closure_moved_first_7_bound_by_ref.rs	E0382:6
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_after.rs	E0382:6
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_before.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_by_block_tail.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_by_match.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_in_loop.rs	E0382:6 E0382:12
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_on_branch.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_owning_closure_moved_first_7_moved_on_diverging_branch.rs	E0382:6
+copy/mutations/tuple_with_owning_closure_moved_second_7_bound_by_ref.rs	E0382:6
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_after.rs	E0382:6
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_before.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_by_block_tail.rs	E0382:6 E0382:8
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_by_match.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_in_loop.rs	E0382:6 E0382:12
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_on_branch.rs	E0382:6 E0382:10
+copy/mutations/tuple_with_owning_closure_moved_second_7_moved_on_diverging_branch.rs	E0382:6
+copy/mutations/vec_of_fn_tuples_moved_first_9_bound_by_ref.rs	E0382:8
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_after.rs	E0382:8
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_before.rs	E0382:8 E0382:10
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_by_block_tail.rs	E0382:8 E0382:10
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_by_match.rs	E0382:8 E0382:12
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_in_loop.rs	E0382:8 E0382:14
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_on_branch.rs	E0382:8 E0382:12
+copy/mutations/vec_of_fn_tuples_moved_first_9_moved_on_diverging_branch.rs	E0382:8
+copy/mutations/vec_of_fn_tuples_moved_second_9_bound_by_ref.rs	E0382:8
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_after.rs	E0382:8
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_before.rs	E0382:8 E0382:10
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_by_block_tail.rs	E0382:8 E0382:10
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_by_match.rs	E0382:8 E0382:12
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_in_loop.rs	E0382:8 E0382:14
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_on_branch.rs	E0382:8 E0382:12
+copy/mutations/vec_of_fn_tuples_moved_second_9_moved_on_diverging_branch.rs	E0382:8

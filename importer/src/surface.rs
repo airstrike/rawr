@@ -27,7 +27,9 @@ fn has_unresolved_structural_parameters(
     use crate::classify::representability::Representability;
 
     match representability {
-        Representability::Struct(plan) => !plan.parameters().is_empty(),
+        // A struct whose every parameter has a default is reached at that
+        // instance, as palette's `Rgb` is `Rgb<Srgb, f32>`.
+        Representability::Struct(plan) => plan.declaration_only(),
         Representability::Enum(plan) => !plan.parameters().is_empty(),
         _ => false,
     }
@@ -1162,7 +1164,8 @@ fn definition_generics(
         | Kind::Const { .. }
         | Kind::TypeConst { .. }
         | Kind::Static { .. }
-        | Kind::Sysroot { .. } => None,
+        | Kind::Sysroot { .. }
+        | Kind::MacroRules { .. } => None,
     }
 }
 
@@ -2010,25 +2013,45 @@ mod tests {
     #[test]
     fn unresolved_generic_structure_is_rejected_before_demand_or_adapter() {
         let limits = crate::cargo::Limits::standard();
+        // A struct whose every parameter has a default is reached at that
+        // instance, as iced's `Rectangle<T = f32>` is `Rectangle<f32>`.
         let contract = crate::test_fixture::iced_profile()
             .classify(&Policy::standard(), &limits)
             .expect("iced-profile fixture classifies");
-        let outcome = contract
+        let rectangle = contract
             .outcomes()
             .find(|outcome| outcome.name() == "Rectangle")
             .expect("fixture has one generic Rectangle");
+        let mut compiler = contract
+            .compiler((), snapshot(b"Rectangle", &limits), &limits)
+            .expect("defaulted-structure compiler starts");
+        compiler
+            .require(
+                rectangle.identity().clone(),
+                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
+            )
+            .expect("a defaulted generic struct is demandable");
+
+        // One with a parameter without a default is not.
+        let contract = crate::test_fixture::native_shapes()
+            .classify(&Policy::standard(), &limits)
+            .expect("native-shapes fixture classifies");
+        let outcome = contract
+            .outcomes()
+            .find(|outcome| outcome.name() == "Pair")
+            .expect("fixture has one generic Pair");
         let crate::classify::representability::Representability::Struct(plan) =
             outcome.representability()
         else {
-            panic!("Rectangle is a structural outcome")
+            panic!("Pair is a structural outcome")
         };
         let field = plan
             .fields()
             .first()
-            .expect("Rectangle has a field selector")
+            .expect("Pair has a field selector")
             .selector();
         let mut compiler = contract
-            .compiler((), snapshot(b"Rectangle", &limits), &limits)
+            .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("generic-structure compiler starts");
 
         assert!(matches!(

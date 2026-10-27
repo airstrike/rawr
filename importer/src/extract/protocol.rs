@@ -342,6 +342,10 @@ pub(crate) enum Shape {
     Sysroot {
         compiler_kind: String,
     },
+    MacroRules {
+        source: String,
+        krate: String,
+    },
     Unknown {
         compiler_kind: String,
     },
@@ -716,6 +720,7 @@ impl Population {
             Shape::UnnameablePrivate
             | Shape::Module
             | Shape::Sysroot { .. }
+            | Shape::MacroRules { .. }
             | Shape::Unknown { .. } => {}
             Shape::Struct {
                 fields, generics, ..

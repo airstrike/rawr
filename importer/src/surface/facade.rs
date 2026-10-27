@@ -157,6 +157,9 @@ pub struct Facade {
     /// (), Error>;`, other than those of a builtin, in path order.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     type_aliases: Box<[TypeAlias]>,
+    /// The `macro_rules!` macros the root exports, sorted by path.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    macros: Box<[Macro]>,
 }
 
 /// One crate type alias: its path, relative to the root, its type
@@ -196,6 +199,75 @@ impl TypeAlias {
     pub const fn target(&self) -> &Type {
         &self.target
     }
+}
+
+/// One `macro_rules!` macro a dependency exports: its path below the
+/// root, its definition as the crate's source writes it, and the segment
+/// its `$crate` reads as after the root (`__rawr_crate_<name>_<id>`).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Macro {
+    path: Box<str>,
+    source: Box<str>,
+    krate: Box<str>,
+}
+
+impl Macro {
+    /// The macro's path, relative to the root.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    /// The definition, from `macro_rules!` through the close of its body.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    /// The path segment `$crate` reads as after the root.
+    #[must_use]
+    pub fn krate(&self) -> &str {
+        &self.krate
+    }
+}
+
+/// The `macro_rules!` macros `graph` exports, each with its root alias,
+/// sorted by root and path.
+pub fn macros(
+    graph: &crate::api::Graph<impl crate::api::Phase>,
+) -> Result<Vec<(Box<str>, Macro)>, super::Error> {
+    let mut macros = Vec::new();
+    for export in graph.exports() {
+        let crate::api::ledger::Path::Imported(export) = export else {
+            continue;
+        };
+        let Some(crate::api::model::Kind::MacroRules { source, krate }) = graph
+            .definitions()
+            .find(|definition| definition.id() == export.target())
+            .map(crate::api::model::Definition::kind)
+        else {
+            continue;
+        };
+        let key = export.key();
+        macros
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
+        macros.push((
+            copy(key.root_alias())?,
+            Macro {
+                path: path(key.path())?,
+                source: copy(source)?,
+                krate: copy(krate)?,
+            },
+        ));
+    }
+    macros.sort_by(|(left_root, left), (right_root, right)| {
+        left_root
+            .cmp(right_root)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    macros.dedup_by(|(left_root, left), (right_root, right)| {
+        left_root == right_root && left.path == right.path
+    });
+    Ok(macros)
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -521,6 +593,7 @@ impl Plan {
                             builtins: Box::default(),
                             variants: Box::default(),
                             type_aliases: Box::default(),
+                            macros: Box::default(),
                         },
                     );
                     index
@@ -628,6 +701,36 @@ impl Plan {
                     facade.items = items.into_boxed_slice();
                 }
             }
+        }
+        // A dependency's `macro_rules!` macros: Rawr expands their source.
+        for (root, rules) in macros(graph)? {
+            let index = match facades.binary_search_by(|facade| facade.root.cmp(&root)) {
+                Ok(index) => index,
+                Err(index) => {
+                    facades
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    facades.insert(
+                        index,
+                        Facade {
+                            root,
+                            types: Box::default(),
+                            items: Box::default(),
+                            traits: Box::default(),
+                            builtins: Box::default(),
+                            variants: Box::default(),
+                            type_aliases: Box::default(),
+                            macros: Box::default(),
+                        },
+                    );
+                    index
+                }
+            };
+            let facade = &mut facades[index];
+            let mut list = std::mem::take(&mut facade.macros).into_vec();
+            list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+            list.push(rules);
+            facade.macros = list.into_boxed_slice();
         }
         // An item whose signature names a type its own facade does not
         // declare (one the importer could not model, or one only another
@@ -1013,6 +1116,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             builtins: Box::default(),
             variants: Box::default(),
             type_aliases: Box::default(),
+            macros: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -1133,6 +1237,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 builtins: Box::default(),
                 variants: Box::default(),
                 type_aliases: Box::default(),
+                macros: Box::default(),
             },
             iced,
         ]),
@@ -1287,6 +1392,11 @@ impl Facade {
         self.variants
             .iter()
             .map(|(path, variant)| (path.as_ref(), variant.as_ref()))
+    }
+
+    /// Iterate the root's `macro_rules!` macros, sorted by path.
+    pub fn macros(&self) -> impl ExactSizeIterator<Item = &Macro> {
+        self.macros.iter()
     }
 }
 

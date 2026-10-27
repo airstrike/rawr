@@ -27,6 +27,8 @@ pub enum Kind {
     AssociatedFunction,
     /// A function with a typed receiver associated with a host type.
     Method,
+    /// A dependency's `macro_rules!` macro, expanded from its source.
+    MacroRules,
 }
 
 impl Kind {
@@ -37,9 +39,66 @@ impl Kind {
     /// call syntax picks between them.
     #[must_use]
     pub const fn is_macro(self) -> bool {
-        matches!(self, Self::IntrinsicMacro)
+        matches!(self, Self::IntrinsicMacro | Self::MacroRules)
     }
 }
+
+/// A dependency's `macro_rules!` macro: its definition as the crate's
+/// source writes it, and the path `$crate` reads as (the dependency's root
+/// and the defining crate's segment). It is parsed into rules once, at its
+/// first expansion.
+pub struct MacroRules {
+    source: ImmutableString,
+    krate: ImmutableString,
+    rules: once_cell::sync::OnceCell<Result<crate::resolve::macro_rules::Rules, ImmutableString>>,
+}
+
+impl MacroRules {
+    /// The definition, from `macro_rules!` through the close of its body.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The path `$crate` reads as.
+    #[must_use]
+    pub fn krate(&self) -> &str {
+        &self.krate
+    }
+
+    /// The macro's rules, parsed from its source at the first call.
+    pub(crate) fn rules(&self) -> Result<&crate::resolve::macro_rules::Rules, ImmutableString> {
+        self.rules
+            .get_or_init(|| crate::resolve::macro_rules::Rules::parse(&self.source))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn digest(&self) -> [u8; 32] {
+        use sha2::Digest as _;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(self.krate.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.source.as_bytes());
+        hasher.finalize().into()
+    }
+}
+
+impl std::fmt::Debug for MacroRules {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacroRules")
+            .field("krate", &self.krate)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for MacroRules {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.krate == other.krate
+    }
+}
+
+impl Eq for MacroRules {}
 
 /// One validated static host item declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,6 +115,8 @@ pub struct Definition {
     /// The output borrows what the call takes: the call opens a scope
     /// frame the statement it is in runs inside (D558 tier 1).
     opens: bool,
+    /// A `macro_rules!` macro's source.
+    rules: Option<crate::Shared<MacroRules>>,
 }
 
 /// How an imported method's borrow guard output is reached: Rawr types the
@@ -89,6 +150,7 @@ pub struct Fingerprint {
     imported: Option<[u8; 32]>,
     guard: Option<Guard>,
     opens: bool,
+    rules: Option<[u8; 32]>,
 }
 
 impl Definition {
@@ -103,6 +165,7 @@ impl Definition {
             && self.stream_identity == other.stream_identity
             && self.guard == other.guard
             && self.opens == other.opens
+            && self.rules == other.rules
     }
 
     #[cfg(feature = "rust-import")]
@@ -153,7 +216,40 @@ impl Definition {
                 .transpose()?,
             guard: self.guard,
             opens: self.opens,
+            rules: self.rules.clone(),
         })
+    }
+
+    /// Declare a dependency's `macro_rules!` macro at `path`, from its
+    /// `source`, its `$crate` reading as `krate`.
+    pub fn macro_rules(
+        path: impl Into<ImmutableString>,
+        source: impl Into<ImmutableString>,
+        krate: impl Into<ImmutableString>,
+    ) -> Result<Self, host::Error> {
+        Ok(Self {
+            path: host::path::Path::parse(path)?,
+            kind: Kind::MacroRules,
+            receiver: None,
+            signature: host::signature::Builder::new().finish(),
+            outcome: host::usage::Outcome::Conservative,
+            evaluation: host::usage::Evaluation::Required,
+            stream_identity: None,
+            imported: None,
+            guard: None,
+            opens: false,
+            rules: Some(crate::Shared::new(MacroRules {
+                source: source.into(),
+                krate: krate.into(),
+                rules: once_cell::sync::OnceCell::new(),
+            })),
+        })
+    }
+
+    /// A `macro_rules!` macro's source, for a [`Kind::MacroRules`] item.
+    #[must_use]
+    pub fn macro_rules_source(&self) -> Option<&MacroRules> {
+        self.rules.as_deref()
     }
 
     /// Declare a typed value in a module namespace.
@@ -174,6 +270,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -195,6 +292,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -214,6 +312,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -233,6 +332,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -253,6 +353,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -272,6 +373,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -294,6 +396,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -313,6 +416,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -333,6 +437,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -353,6 +458,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            rules: None,
         })
     }
 
@@ -473,6 +579,7 @@ impl Definition {
             imported,
             guard: self.guard,
             opens: self.opens,
+            rules: self.rules.as_deref().map(MacroRules::digest),
         }
     }
 
@@ -489,6 +596,7 @@ impl Definition {
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
             opens: self.opens,
+            rules: self.rules.as_deref().map(MacroRules::digest),
         })
     }
 
@@ -517,7 +625,7 @@ impl Definition {
                     });
                 }
             }
-            Kind::IntrinsicMacro => {
+            Kind::IntrinsicMacro | Kind::MacroRules => {
                 if !parent_is_root
                     && modules.binary_search(&parent).is_err()
                     && types
@@ -584,6 +692,7 @@ impl Definition {
             imported: self.imported.clone(),
             guard: self.guard,
             opens: self.opens,
+            rules: self.rules.clone(),
         })
     }
 
@@ -615,7 +724,7 @@ impl Definition {
                     });
                 }
             }
-            Kind::IntrinsicMacro => {
+            Kind::IntrinsicMacro | Kind::MacroRules => {
                 if !parent_is_root
                     && modules.binary_search(&parent).is_err()
                     && types
@@ -715,6 +824,7 @@ impl crate::preview::digest::Write for Fingerprint {
             Kind::Method => 0x2518,
             Kind::Operation => 0x2519,
             Kind::StreamOperation => 0x251a,
+            Kind::MacroRules => 0x251b,
         });
         writer.tag(0x2503);
         write_receiver(writer, self.receiver);
@@ -759,6 +869,10 @@ impl crate::preview::digest::Write for Fingerprint {
         }
         if self.opens {
             writer.tag(0x2563);
+        }
+        if let Some(rules) = self.rules {
+            writer.tag(0x250a);
+            writer.bytes(&rules);
         }
         Ok(())
     }

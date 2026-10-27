@@ -955,10 +955,18 @@ fn imported_lowering_report(
     let crate::ParseErrorType::Resolution(resolution) = error.err_type() else {
         return Ok(None);
     };
-    let Some((path, namespace)) = diagnostic_path(resolution) else {
-        return Ok(None);
+    let mut outcomes = match diagnostic_path(resolution) {
+        Some((path, namespace)) => diagnostic_outcomes(paths, &path, namespace)?,
+        None => Vec::new(),
     };
-    let outcomes = diagnostic_outcomes(paths, &path, namespace)?;
+    // A member the importer saw and couldn't bind: its own outcome says why.
+    if let crate::resolve::Error::UnknownMember { owner, member, .. } = resolution {
+        let retained = paths.outcomes(&format!("{owner}::{member}"));
+        outcomes
+            .try_reserve(retained.len())
+            .map_err(|_| diagnostic::Error::Allocation)?;
+        outcomes.extend(retained);
+    }
     if outcomes.is_empty() {
         return Ok(None);
     }
@@ -992,15 +1000,27 @@ fn augment_external(
     spans
         .try_reserve_exact(span_capacity)
         .map_err(|_| diagnostic::Error::Allocation)?;
+    let mut reasons = Vec::new();
     for outcome in outcomes {
         if let Some(origin) = outcome.origin() {
             spans.push(origin.source());
             spans.push(origin.declaration());
         }
+        if let rawr_import::classify::representability::Representability::Rejected(reason) =
+            outcome.representability()
+        {
+            reasons.push(format!(
+                "rawr has no binding for `{}`: {}",
+                outcome.name(),
+                reason.kind().describe()
+            ));
+        }
     }
     spans.sort_unstable();
     spans.dedup();
-    if spans.is_empty() {
+    reasons.sort_unstable();
+    reasons.dedup();
+    if spans.is_empty() && reasons.is_empty() {
         return Ok(None);
     }
 
@@ -1030,6 +1050,9 @@ fn augment_external(
     }
     for note in report.notes() {
         builder = builder.note(note);
+    }
+    for reason in reasons {
+        builder = builder.note(reason);
     }
     builder.reserve_external_labels(spans.len())?;
     for span in spans {
@@ -1195,6 +1218,8 @@ struct Facade<'contract> {
         rawr_import::surface::identity::Definition,
         &'contract str,
     )>,
+    /// The root's `macro_rules!` macros, as in the facade plan.
+    macros: Vec<&'contract rawr_import::surface::facade::Macro>,
 }
 
 struct Entry<'contract> {
@@ -1343,10 +1368,31 @@ fn install(
                 bytes.checked_add(facade_count.checked_mul(std::mem::size_of::<Facade<'_>>())?)
             }),
     )?;
+    let macros = rawr_import::surface::facade::macros(contract.raw_graph())?;
     let mut facades = Vec::<Facade<'_>>::new();
     facades
         .try_reserve_exact(facade_count)
         .map_err(|_| Error::Allocation)?;
+    for (root, rules) in &macros {
+        let index = match facades.binary_search_by(|facade| facade.root.cmp(root)) {
+            Ok(index) => index,
+            Err(index) => {
+                facades.try_reserve(1).map_err(|_| Error::Allocation)?;
+                facades.insert(
+                    index,
+                    Facade {
+                        root,
+                        entries: Vec::new(),
+                        traits: Vec::new(),
+                        variants: Vec::new(),
+                        macros: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        facades[index].macros.push(rules);
+    }
     for outcome in contract.outcomes() {
         let named_trait = matches!(
             outcome.representability(),
@@ -1367,6 +1413,7 @@ fn install(
                             entries: Vec::new(),
                             traits: Vec::new(),
                             variants: Vec::new(),
+                            macros: Vec::new(),
                         },
                     );
                     index
@@ -1402,6 +1449,7 @@ fn install(
                         entries: Vec::new(),
                         traits: Vec::new(),
                         variants: Vec::new(),
+                        macros: Vec::new(),
                     },
                 );
                 index
@@ -1557,8 +1605,20 @@ fn build(
         builder.imported_module(&module, allocation)?;
     }
     // A trait the program names is a module (`use rand::Rng;`), unless a
-    // type already has its path.
-    for path in &facade.traits {
+    // type already has its path; so is the module a macro is in.
+    let macro_modules = facade.macros.iter().filter_map(|rules| {
+        rules
+            .path()
+            .rsplit_once("::")
+            .map(|(module, _)| Box::from(module))
+    });
+    let modules = facade
+        .traits
+        .iter()
+        .cloned()
+        .chain(macro_modules)
+        .collect::<Vec<_>>();
+    for path in &modules {
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes.chain(std::iter::once(path.as_ref())) {
             match builder.imported_module(module, allocation) {
@@ -1768,6 +1828,19 @@ fn build(
         let target = format!("{}::{variant}", owner.relative);
         allocation.retain(1, target.len())?;
         builder.variant_alias(path.as_ref(), &target)?;
+    }
+    // A dependency's `macro_rules!` macros, which Rawr expands: `$crate`
+    // reads as the defining crate's root through this root.
+    for rules in &facade.macros {
+        let item = host::item::Definition::macro_rules(
+            rules.path(),
+            rules.source(),
+            format!("{}::{}", facade.root, rules.krate()),
+        )?;
+        match builder.item(item) {
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     builder.finish_imported(allocation).map_err(Error::from)
 }

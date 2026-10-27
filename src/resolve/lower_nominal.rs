@@ -5,6 +5,7 @@ mod cargo_env;
 pub(crate) mod cell;
 mod drops;
 mod error_object;
+mod expand;
 mod fmt_write;
 mod iterator;
 mod keyed;
@@ -705,7 +706,9 @@ struct ImportedFunctionProof {
 pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
     let start = u32::try_from(location::byte_at(source, span.start())?).ok()?;
     let end = u32::try_from(location::byte_at(source, span.end())?).ok()?;
-    Some((start, end))
+    // A use a macro's expansion makes may end at the macro's own token, at
+    // its call, before a token the caller passed in: it is the use's start.
+    Some((start, end.max(start)))
 }
 
 #[cfg(feature = "rust-import")]
@@ -2132,6 +2135,60 @@ fn write_method(
 /// The index of a free function's `&mut` parameter, which is its receiver
 /// `this` at runtime: the function changes the caller's place in place,
 /// and a call `f(&mut v, x)` is the method call `v.f(x)`.
+/// `source` lexed as checked Rawr reads Rust, through its EOF marker.
+pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> {
+    let inputs = [source];
+    let (mut stream, control) = engine.lex_raw(&inputs, None);
+    control.borrow_mut().rust = true;
+    let mut tokens = Vec::new();
+    loop {
+        let token = stream
+            .next()
+            .expect("token streams always produce their EOF marker");
+        let is_eof = token.0 == Token::EOF;
+        // `switch`, `debug`, `call` and kin are legacy keywords; in
+        // checked Rawr they are names, as in Rust (`RUST_NAMES`).
+        let token = match token {
+            (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
+                (Token::Identifier(Box::new(name.into())), position)
+            }
+            // After such a keyword the lexer reads `+`/`-` as unary; after
+            // the name they are binary.
+            (Token::UnaryPlus | Token::UnaryMinus, position)
+                if matches!(tokens.last(), Some((Token::Identifier(name), _))
+                    if crate::tokenizer::demangle_names(name).len() < name.len()) =>
+            {
+                let binary = if token.0 == Token::UnaryPlus {
+                    Token::Plus
+                } else {
+                    Token::Minus
+                };
+                (binary, position)
+            }
+            // Rust has no power operator: binary `**` is `*` then a
+            // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
+            // script lexer keeps `**`.
+            (Token::PowerOf | Token::PowerOfAssign, position) => {
+                let second = if token.0 == Token::PowerOf {
+                    Token::Multiply
+                } else {
+                    Token::MultiplyAssign
+                };
+                let mut next = position;
+                next.advance();
+                tokens.push((Token::Multiply, position));
+                (second, next)
+            }
+            token => token,
+        };
+        tokens.push(token);
+        if is_eof {
+            break;
+        }
+    }
+    tokens
+}
+
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(
@@ -9686,6 +9743,8 @@ struct Parser<'a> {
     /// passes down to each leaf, as Rust's `Formatter` does.
     debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
+    /// The `macro_rules!` expansions made so far (`expand`).
+    expansions: usize,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<ClosureOutput>>,
@@ -9967,55 +10026,7 @@ impl<'a> Parser<'a> {
         pattern_offset: usize,
         #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
     ) -> Self {
-        let inputs = [source];
-        let (mut stream, control) = engine.lex_raw(&inputs, None);
-        control.borrow_mut().rust = true;
-        let mut tokens = Vec::new();
-        loop {
-            let token = stream
-                .next()
-                .expect("token streams always produce their EOF marker");
-            let is_eof = token.0 == Token::EOF;
-            // `switch`, `debug`, `call` and kin are legacy keywords; in
-            // checked Rawr they are names, as in Rust (`RUST_NAMES`).
-            let token = match token {
-                (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
-                    (Token::Identifier(Box::new(name.into())), position)
-                }
-                // After such a keyword the lexer reads `+`/`-` as unary; after
-                // the name they are binary.
-                (Token::UnaryPlus | Token::UnaryMinus, position)
-                    if matches!(tokens.last(), Some((Token::Identifier(name), _))
-                        if crate::tokenizer::demangle_names(name).len() < name.len()) =>
-                {
-                    let binary = if token.0 == Token::UnaryPlus {
-                        Token::Plus
-                    } else {
-                        Token::Minus
-                    };
-                    (binary, position)
-                }
-                // Rust has no power operator: binary `**` is `*` then a
-                // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
-                // script lexer keeps `**`.
-                (Token::PowerOf | Token::PowerOfAssign, position) => {
-                    let second = if token.0 == Token::PowerOf {
-                        Token::Multiply
-                    } else {
-                        Token::MultiplyAssign
-                    };
-                    let mut next = position;
-                    next.advance();
-                    tokens.push((Token::Multiply, position));
-                    (second, next)
-                }
-                token => token,
-            };
-            tokens.push(token);
-            if is_eof {
-                break;
-            }
-        }
+        let mut tokens = lex_rust(engine, source);
         if models.imports_variants() {
             tokens = expand_imported_variants(&models, tokens);
         }
@@ -10075,6 +10086,7 @@ impl<'a> Parser<'a> {
             closure_hints: Vec::new(),
             debug_spec: None,
             closure_hint: None,
+            expansions: 0,
             closure_outputs: Vec::new(),
             closure_output: None,
             async_step: None,
@@ -12862,6 +12874,85 @@ impl<'a> Parser<'a> {
         self.parse_closure(Token::Pipe, owner_span, false)
     }
 
+    /// `Type::method(receiver, a, ..)` read from its `(`: the tokens of
+    /// `(receiver.method(a, ..))`, the receiver without its `&` or `&mut`,
+    /// which the method call takes again. `None`, consuming the arguments,
+    /// when there is no receiver argument.
+    fn path_method_call(
+        &mut self,
+        member: &str,
+        member_span: Span,
+    ) -> Option<Vec<(Token, Position)>> {
+        let (arguments, end) = self.take_argument_tokens().ok()?;
+        let mut depth = 0_usize;
+        let comma = arguments.iter().position(|(token, _)| {
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                Token::Comma => return depth == 0,
+                _ => {}
+            }
+            false
+        });
+        let (receiver, rest) = match comma {
+            Some(comma) => (&arguments[..comma], &arguments[comma + 1..]),
+            None => (&arguments[..], &[][..]),
+        };
+        let receiver = match receiver {
+            [(Token::Ampersand, _), (Token::Mut, _), rest @ ..]
+            | [(Token::Ampersand, _), rest @ ..] => rest,
+            receiver => receiver,
+        };
+        if receiver.is_empty() {
+            return None;
+        }
+        let at = member_span.start();
+        // A place (`a`, `a.b`, `v[i].c`) stays one, so a `&mut self`
+        // method changes it; any other receiver is parenthesised.
+        let mut depth = 0_usize;
+        let plain = receiver.iter().all(|(token, _)| match token {
+            Token::LeftBracket => {
+                depth += 1;
+                true
+            }
+            Token::RightBracket => {
+                depth = depth.saturating_sub(1);
+                true
+            }
+            _ if depth > 0 => true,
+            token => matches!(
+                token,
+                Token::Identifier(_) | Token::Period | Token::IntegerConstant(_)
+            ),
+        });
+        // What follows the receiver takes its last position, so each span
+        // the call makes runs forward.
+        let after = receiver.last().map_or(end, |(_, position)| *position);
+        let mut tokens = vec![(Token::LeftParen, at)];
+        if !plain {
+            tokens.push((Token::LeftParen, at));
+        }
+        tokens.extend(receiver.iter().cloned());
+        if !plain {
+            tokens.push((Token::RightParen, after));
+        }
+        tokens.push((Token::Period, after));
+        tokens.push((Token::Identifier(Box::new(member.into())), after));
+        if rest.is_empty() {
+            tokens.push((Token::Unit, end));
+        } else {
+            tokens.push((Token::LeftParen, after));
+            tokens.extend(rest.iter().cloned());
+            tokens.push((Token::RightParen, end));
+        }
+        tokens.push((Token::RightParen, end));
+        Some(tokens)
+    }
+
     /// Put `tokens` before the rest of the input, to be parsed next.
     /// After `name`, a path `::seg::<A, B>::member`: the type `name::seg<A,
     /// B>` it writes, its arguments taken from the input so the path reads
@@ -13651,6 +13742,76 @@ impl<'a> Parser<'a> {
                 reference: member_span,
             });
         };
+        // `Trait::f` or `<T as Trait>::f` as a value: the closure
+        // `|a, ..| Trait::f(a, ..)`, the receiver first.
+        if let Some(receiver) = &function.receiver
+            && !function.body.constant
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            let arity = function.parameters.len() + 1;
+            let at = member_span.start();
+            let parameter =
+                |index: usize| Token::Identifier(Box::new(format!("__rawr_method{index}").into()));
+            let mut tokens = Vec::new();
+            for index in 0..arity {
+                if index > 0 {
+                    tokens.push((Token::Comma, at));
+                }
+                tokens.push((parameter(index), at));
+            }
+            tokens.push((Token::Pipe, at));
+            tokens.push((
+                Token::Identifier(Box::new(trait_name.as_str().into())),
+                trait_span.start(),
+            ));
+            tokens.push((Token::DoubleColon, at));
+            tokens.push((Token::Identifier(Box::new(member.as_str().into())), at));
+            tokens.push((Token::LeftParen, at));
+            for index in 0..arity {
+                if index > 0 {
+                    tokens.push((Token::Comma, at));
+                }
+                tokens.push((parameter(index), at));
+            }
+            tokens.push((Token::RightParen, at));
+            // The written type is the receiver's, as Rust takes it.
+            if let Some(self_ty) = self_ty {
+                let receiver = match receiver {
+                    crate::item::Receiver::Shared(_) => Ty::Reference {
+                        mutable: false,
+                        target: Box::new(self_ty),
+                    },
+                    crate::item::Receiver::Mutable(_) => Ty::Reference {
+                        mutable: true,
+                        target: Box::new(self_ty),
+                    },
+                    _ => self_ty,
+                };
+                let mut hint = vec![receiver];
+                hint.extend((1..arity).map(|_| self.inference.fresh()));
+                self.closure_hint = Some(hint.into_boxed_slice());
+            }
+            self.splice_tokens(tokens);
+            return self.parse_closure(Token::Pipe, span(start, member_span.end()), false);
+        }
+        // `Trait::f(&mut x, ..)` of a `&mut self` function: the receiver
+        // is the place `x`, which the call changes as `x.f(..)` does.
+        let mut lent = false;
+        if matches!(function.receiver, Some(crate::item::Receiver::Mutable(_)))
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            let mut ahead = self.input.clone();
+            ahead.next();
+            if matches!(ahead.next(), Some((Token::Ampersand, _)))
+                && matches!(ahead.next(), Some((Token::Mut, _)))
+            {
+                let open = self.next();
+                self.next();
+                self.next();
+                self.splice_tokens(vec![open]);
+                lent = true;
+            }
+        }
         let (mut arguments, end) = if function.body.constant {
             (Vec::new(), text_end(member_span.start(), &member))
         } else {
@@ -13718,6 +13879,7 @@ impl<'a> Parser<'a> {
             crate::item::Receiver::Shared(_) | crate::item::Receiver::Mutable(_)
         );
         let receiver_ty = match (by_reference, self.inference.resolve(&receiver.ty)) {
+            (true, ty) if lent => ty,
             (true, Ty::Reference { target, .. }) => *target,
             (true, ty) => {
                 return Err(Error::TypeMismatch {
@@ -14909,11 +15071,22 @@ impl<'a> Parser<'a> {
     fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
         match self.inference.resolve(ty) {
             Ty::Unit => true,
-            Ty::Callable { .. } => false,
-            // Function pointers and items are `Copy`, as in Rust.
-            Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
+            // Function pointers and items are `Copy`, as in Rust: a host's
+            // callable and an imported function are its Rust items.
+            Ty::Fn { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 matches!(capability, capability::Kind::Clone | capability::Kind::Copy)
             }
+            #[cfg(feature = "rust-import")]
+            Ty::ImportedFunctionItem { .. } => {
+                matches!(capability, capability::Kind::Clone | capability::Kind::Copy)
+            }
+            // A closure is `Copy` unless it owns a capture that is not, or
+            // captures by `&mut`.
+            Ty::FnItem { key, .. } => match capability {
+                capability::Kind::Clone => true,
+                capability::Kind::Copy => !self.owning_closures.contains(&*key),
+                _ => false,
+            },
             // `[T; N]` is `Copy` when `T` is; `Vec<T>` is only `Clone`.
             Ty::Array { element, length } => {
                 (capability != capability::Kind::Copy || length.is_some())
@@ -14932,8 +15105,6 @@ impl<'a> Parser<'a> {
                     && self.type_provides(&ok, capability)
                     && self.type_provides(&err, capability)
             }
-            #[cfg(feature = "rust-import")]
-            Ty::ImportedFunctionItem { .. } => false,
             #[cfg(feature = "rust-import")]
             Ty::ProfileMapper { .. } => false,
             #[cfg(feature = "rust-import")]
@@ -18318,6 +18489,17 @@ impl<'a> Parser<'a> {
                 operation: name_span,
             });
         };
+        // A dependency's `macro_rules!` macro expands from its source. A
+        // facade's own macro of the name wins on the facade path (D594.3).
+        if !items
+            .iter()
+            .any(|item| item.kind() == crate::host::item::Kind::IntrinsicMacro)
+            && let Some(rules) = items
+                .iter()
+                .find_map(crate::host::item::Definition::macro_rules_source)
+        {
+            return self.expand_macro_rules(rules, name_span);
+        }
         if item.kind() != crate::host::item::Kind::IntrinsicMacro {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
@@ -19999,6 +20181,17 @@ impl<'a> Parser<'a> {
         }
         let declaration = binding.declaration;
         if !self.moves_by_value(&value.ty) {
+            self.note_unsettled_copy(value);
+            // A parameter of a function type may be `impl Fn` or `F: Fn`,
+            // which is not `Copy`: Rawr's one function type doesn't say.
+            if matches!(self.inference.resolve(&value.ty), Ty::Fn { .. })
+                && self.parameter_declarations.contains(&declaration)
+            {
+                self.flow().unmodeled(
+                    "a by-value use of a parameter of a function type, which may not be `Copy`",
+                    value.span,
+                );
+            }
             // A copy of a `Copy` closure has its own copies of what it
             // changes, as Rust copies the closure's captured values.
             if let Ty::FnItem { key, .. } = self.inference.resolve(&value.ty)
@@ -20206,6 +20399,7 @@ impl<'a> Parser<'a> {
             });
         }
         if !value.prelude.is_empty() || !self.moves_by_value(&value.ty) {
+            self.note_unsettled_copy(value);
             return Ok(());
         }
         // The field moves out, and the move check follows what is left: in a
@@ -20368,7 +20562,7 @@ impl<'a> Parser<'a> {
         // With `impl Drop` in the crate, a value of a generic type moves as
         // in Rust, unless its bounds make it `Copy`: its drop is its last
         // owner's.
-        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) && self.drops() {
+        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) {
             return !self.type_provides(&resolved, capability::Kind::Copy);
         }
         !matches!(
@@ -20385,6 +20579,50 @@ impl<'a> Parser<'a> {
                 | Ty::Param(_)
                 | Ty::Projection(..)
         ) && !self.type_provides(&resolved, capability::Kind::Copy)
+            && !self.copy_unsettled(&resolved)
+    }
+
+    /// Whether `ty` being `Copy` waits on inference: none of its parts
+    /// makes it not `Copy`, and one still unsettled may (`(None, 1)` before
+    /// the `Option`'s element is known).
+    fn copy_unsettled(&self, ty: &Ty) -> bool {
+        let parts = match self.inference.resolve(ty) {
+            Ty::Infer(_) | Ty::Unknown => return true,
+            Ty::Tuple(members) => members.into_vec(),
+            Ty::Array {
+                element,
+                length: Some(_),
+            }
+            | Ty::Option(element)
+            | Ty::Reverse(element) => vec![*element],
+            Ty::Result(ok, err) => vec![*ok, *err],
+            Ty::Script(id, arguments)
+                if self
+                    .models
+                    .definition(id)
+                    .capabilities()
+                    .contains(capability::Kind::Copy) =>
+            {
+                arguments.into_vec()
+            }
+            _ => return false,
+        };
+        let unsettled = |part: &Ty| self.copy_unsettled(part);
+        parts.iter().any(unsettled)
+            && parts
+                .iter()
+                .all(|part| unsettled(part) || self.type_provides(part, capability::Kind::Copy))
+    }
+
+    /// A by-value use of `value`, whose type may not be `Copy` once it is
+    /// settled: the move check leaves it to rustc.
+    fn note_unsettled_copy(&self, value: &ParsedExpr) {
+        if self.copy_unsettled(&value.ty) {
+            self.flow().unmodeled(
+                "a by-value use of a value whose type is not settled there",
+                value.span,
+            );
+        }
     }
 
     fn consume_imported_value(
@@ -35053,9 +35291,10 @@ impl<'a> Parser<'a> {
             if this_parameter(&function.definition).is_some()
                 || !copied_parameters(&function.definition.parameters, None).is_empty()
             {
-                return Err(
-                    self.unsupported("a function with a `&mut` parameter as a value; call it")
-                );
+                // A `&mut` parameter is copied in and back out of a call, so
+                // the value is the closure `|a, ..| f(a, ..)` over the
+                // function's parameter types, whose call does that.
+                return self.mutable_function_value(&function, name, name_span);
             }
             return Ok(self.function_value(&function, name_span));
         }
@@ -35789,6 +36028,47 @@ impl<'a> Parser<'a> {
             },
             span,
         )
+    }
+
+    /// A named function with a `&mut` parameter used as a value: the
+    /// closure `|a, ..| name(a, ..)` over its parameter types, as a call of
+    /// it copies the `&mut` arguments in and back out.
+    fn mutable_function_value(
+        &mut self,
+        function: &ScriptFunction,
+        name: ImmutableString,
+        span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let substitution = self.fresh_generics(&function.definition.generics, span);
+        let inputs: Box<[Ty]> = function
+            .definition
+            .parameters
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect();
+        let at = span.start();
+        let parameter =
+            |index: usize| Token::Identifier(Box::new(format!("__rawr_argument_{index}").into()));
+        let mut tokens = Vec::new();
+        for index in 0..inputs.len() {
+            if index > 0 {
+                tokens.push((Token::Comma, at));
+            }
+            tokens.push((parameter(index), at));
+        }
+        tokens.push((Token::Pipe, at));
+        tokens.push((Token::Identifier(Box::new(name.as_str().into())), at));
+        tokens.push((Token::LeftParen, at));
+        for index in 0..inputs.len() {
+            if index > 0 {
+                tokens.push((Token::Comma, at));
+            }
+            tokens.push((parameter(index), at));
+        }
+        tokens.push((Token::RightParen, at));
+        self.splice_tokens(tokens);
+        self.closure_hint = Some(inputs);
+        self.parse_closure(Token::Pipe, span, false)
     }
 
     /// An enum variant with a payload used as a value: the function from
@@ -40498,14 +40778,22 @@ impl<'a> Parser<'a> {
                 construction: name_span,
             });
         }
+        // A generic struct whose every parameter has a default, as palette's
+        // `Rgb<S = Srgb, T = f32>`, is made at that instance, which `Rgb`
+        // names as a type: the bridge's constructor makes that one.
+        let mut instance = Vec::new();
         if !definition.parameters().is_empty() {
-            return Err(Error::InvalidConstruction {
-                owner: path,
-                reason: "generic imported construction requires a sealed Phase 4 substitution"
-                    .into(),
-                construction: name_span,
-            });
+            self.default_host_arguments(&definition, owner.as_ref(), &mut instance);
+            if instance.len() != definition.parameters().len() {
+                return Err(Error::InvalidConstruction {
+                    owner: path,
+                    reason: "generic imported construction requires a sealed Phase 4 substitution"
+                        .into(),
+                    construction: name_span,
+                });
+            }
         }
+        let instance = instance.into_boxed_slice();
         let fields = fields.clone();
         let form = *form;
         let selected_owner = self.models.host.type_owner(&path).cloned();
@@ -40579,7 +40867,7 @@ impl<'a> Parser<'a> {
                                 Some(definition.clone()),
                                 owner.clone(),
                             ),
-                            arguments: Box::default(),
+                            arguments: instance.clone(),
                         };
                         self.coerce_expr(&ty, &mut base)?;
                         for field in &order {
@@ -40652,7 +40940,12 @@ impl<'a> Parser<'a> {
                 construction: span(name_span.start(), end),
             });
         }
-        let mut parameters = BTreeMap::new();
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(instance.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
         for (argument, field) in arguments.iter_mut().zip(&fields) {
             let expected = self.instantiate_host_type(
                 field.ty(),
@@ -40679,7 +40972,7 @@ impl<'a> Parser<'a> {
                 })?;
         let output = Ty::Host {
             proof: HostTyProof::new(definition.clone(), Some(definition.clone()), owner),
-            arguments: Box::default(),
+            arguments: instance,
         };
         let imported = ImportedOperation {
             kind: crate::host::structural::Kind::Constructor,
@@ -42161,9 +42454,7 @@ impl<'a> Parser<'a> {
             let item_owner = self.models.item_owner(&path).cloned();
             let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
             let items = value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
-            return if items
-                .first()
-                .is_some_and(|item| item.kind() == crate::host::item::Kind::IntrinsicMacro)
+            return if items.first().is_some_and(|item| item.kind().is_macro())
                 && matches!(self.peek(), Token::Bang)
             {
                 self.parse_host_macro(
@@ -42398,12 +42689,30 @@ impl<'a> Parser<'a> {
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
             });
+            // `Trait::method(receiver, ..)` through a crate's trait, which
+            // Rawr names as a module (`iced::advanced::Widget::_boxed(w)`,
+            // as a macro writes it): the method called on its receiver.
+            if matches!(
+                self.models.host.entry(&owner),
+                Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+            ) && owner
+                .rsplit("::")
+                .next()
+                .and_then(|name| name.chars().next())
+                .is_some_and(char::is_uppercase)
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
             // A library module or type that exists lacks only the member:
             // `iced::widget::Column::missing`.
             let error = if self.models.host.entry(&owner).is_some() {
                 Error::UnknownMember {
                     owner,
-                    member,
+                    member: member.clone(),
                     reference: member_span,
                 }
             } else {
@@ -42411,6 +42720,36 @@ impl<'a> Parser<'a> {
                     name: owner,
                     reference: owner_span,
                 }
+            };
+            // A crate's module path no binding names, as a macro's
+            // `$crate::module::function` is: the whole path is unresolved,
+            // so the importer is asked for all of it.
+            #[cfg(feature = "rust-import")]
+            let crate_path = segments.first().is_some_and(|(root, _)| {
+                matches!(
+                    self.models.host.entry(root),
+                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                ) && self.models.import(root).is_none()
+                    && self.models.get(root).is_none()
+                    && self.models.function(root).is_none()
+                    && !self.bindings.contains_key(root)
+            });
+            #[cfg(feature = "rust-import")]
+            let error = match error {
+                Error::UnknownType { name, .. }
+                    if crate_path
+                        && name
+                            .rsplit("::")
+                            .next()
+                            .and_then(|segment| segment.chars().next())
+                            .is_some_and(|first| first.is_lowercase() || first == '_') =>
+                {
+                    Error::UnknownImport {
+                        path: format!("{name}::{member}").into(),
+                        reference: span(owner_span.start(), member_span.end()),
+                    }
+                }
+                error => error,
             };
             #[cfg(feature = "rust-import")]
             let error = self.native_miss(native, error);
@@ -42485,29 +42824,41 @@ impl<'a> Parser<'a> {
             .method(model.definition().id(), &member)
             .cloned()
         {
-            // `Type::method` as a value: `fn(&Type, ..) -> Output`.
+            // `Type::method` as a value: `fn(&Type, ..) -> Output`, or
+            // `fn(&mut Type, ..)` for a `&mut self` method.
             if let Some(mode) = definition.receiver()
-                && mode != receiver::Mode::Mutable
                 && !definition.constant()
-                && definition.generics().is_empty()
                 && !matches!(self.peek(), Token::LeftParen | Token::Unit)
             {
                 let receiver = match mode {
                     receiver::Mode::Owned => model.ty(),
-                    _ => Ty::Reference {
-                        mutable: false,
+                    mode => Ty::Reference {
+                        mutable: mode == receiver::Mode::Mutable,
                         target: Box::new(model.ty()),
                     },
                 };
+                // A generic method's parameters take its turbofish, or are
+                // inferred where the value is used, as in Rust.
+                let substitution = self.instantiate_generics(
+                    definition.generics(),
+                    span(owner_span.start(), member_span.end()),
+                )?;
                 let inputs = std::iter::once(receiver)
-                    .chain(
-                        definition
-                            .parameters()
-                            .iter()
-                            .map(|parameter| Ty::from_resolved(&parameter.ty)),
-                    )
+                    .chain(definition.parameters().iter().map(|parameter| {
+                        instantiate(&Ty::from_resolved(&parameter.ty), &substitution)
+                    }))
                     .collect();
                 return self.method_value(member, inputs, owner_span, member_span);
+            }
+            // `Type::method(receiver, ..)`: the method called on its first
+            // argument, as Rust's path call is.
+            if definition.receiver().is_some()
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
             }
             if definition.receiver().is_some() {
                 return Err(Error::InvalidMethodCall {
@@ -48471,10 +48822,37 @@ fn stringify_tokens(text: &str, tokens: &[(Token, Position)], end: Position) -> 
         .map(|(_, at)| offset(*at))
         .chain(std::iter::once(offset(end)))
         .collect::<Option<Vec<usize>>>()?;
+    // A token runs to the next one's start. One a macro's expansion put
+    // before tokens from elsewhere (`stringify!($hex)`) runs as far as it
+    // is written: a word, a number or a quoted literal.
+    let written = |start: usize| -> String {
+        let rest = &chars[start..];
+        match rest.first() {
+            Some(quote @ ('"' | '\'')) => {
+                let mut end = 1;
+                while end < rest.len() && rest[end] != *quote {
+                    end += if rest[end] == '\\' { 2 } else { 1 };
+                }
+                rest[..(end + 1).min(rest.len())].iter().collect()
+            }
+            _ => rest
+                .iter()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+                .collect(),
+        }
+    };
     let pieces: Vec<String> = starts
         .windows(2)
-        .map(|pair| {
-            chars[pair[0]..pair[1].max(pair[0])]
+        .zip(tokens)
+        .map(|(pair, (token, _))| {
+            // Tokens a macro's own body wrote share its call's position.
+            if pair[1] == pair[0] {
+                return token.to_string();
+            }
+            if pair[1] < pair[0] {
+                return written(pair[0]);
+            }
+            chars[pair[0]..pair[1]]
                 .iter()
                 .collect::<String>()
                 .trim_end()
@@ -50432,7 +50810,7 @@ mod tests {
             std::mem::size_of::<super::Op>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::Op>(), 632);
+        assert_eq!(std::mem::size_of::<super::Op>(), 640);
         #[cfg(not(feature = "rust-import"))]
         assert!(
             std::mem::size_of::<super::ExecutableOp>() < 1_112,
@@ -50440,7 +50818,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1008);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1040);
         assert_eq!(
             std::mem::size_of::<Box<crate::host::operation::Proof>>(),
             std::mem::size_of::<usize>()

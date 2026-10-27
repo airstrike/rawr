@@ -400,7 +400,8 @@ fn generics(definition: &model::Definition) -> Option<&model::Generics> {
         | model::Kind::Const { .. }
         | model::Kind::TypeConst { .. }
         | model::Kind::Static { .. }
-        | model::Kind::Sysroot { .. } => None,
+        | model::Kind::Sysroot { .. }
+        | model::Kind::MacroRules { .. } => None,
     }
 }
 

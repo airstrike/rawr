@@ -1555,9 +1555,9 @@ fn attest_inner(
     } else {
         None
     };
-    if let Some((inner, index)) = inner
+    if let Some((inner, index)) = &inner
         && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| value.clone())
-        && let Some(witness) = witness.argument_witness(index)
+        && let Some(witness) = witness.argument_witness(*index)
     {
         arena.attest(handle, witness)?;
     } else if let Some((inner, index)) = inner_tuple(value)
@@ -1571,6 +1571,14 @@ fn attest_inner(
                 arena.attest(handle, witness)?;
             }
         }
+    } else if let Some((inner, index)) = &inner
+        && inner.as_array_ref().is_ok()
+        && let Some(witness) = witness.argument_witness(*index)
+    {
+        // A tuple or a `Vec` inside a `Result`, as changelog's `Result<(Self,
+        // Vec<Contribution>), Error>`: each Rust value in it takes the
+        // witness of its own type.
+        attest_elements(inner, &witness, arena)?;
     }
     Ok(())
 }
@@ -4390,7 +4398,12 @@ fn render_source(
     let _type_paths = TypePaths::install(facade.as_ref());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
-            for path in facade.traits() {
+            // A macro's `$crate` path to a trait is no Rust path; the
+            // trait's spelling through the root brings it into scope.
+            for path in facade
+                .traits()
+                .filter(|path| !path.contains(crate::api::ledger::CRATE_SEGMENT))
+            {
                 writeln!(
                     stamps,
                     "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
@@ -5416,7 +5429,10 @@ fn render_adapter_body(
         }
         Operation::StructConstructor { form, fields, .. } => {
             render_fields(fields, 0, output)?;
-            write!(output, "    let output = {path}").map_err(|_| request::Error::Encoding)?;
+            // A generic struct is made at its defaulted instance, which its
+            // path names as a type (palette's `Rgb` is `Rgb<Srgb, f32>`).
+            write!(output, "    let output: {path} = {path}")
+                .map_err(|_| request::Error::Encoding)?;
             render_constructor(*form, fields, output)?;
             output
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
@@ -7358,7 +7374,22 @@ fn rust_path(plan: &Plan) -> String {
         path.push_str("::");
         path.push_str(segment);
     }
-    path
+    if !path.contains(crate::api::ledger::CRATE_SEGMENT) {
+        return path;
+    }
+    // A macro's `$crate` path, which Rust cannot write: the root's own
+    // spelling of the item, or of the type an associated item is on.
+    if let Some(spelled) = plan
+        .selector()
+        .and_then(|selector| ITEM_PATHS.with_borrow(|paths| paths.get(selector).cloned()))
+        .filter(|_| plan.export().path().last() == Some(plan.name()))
+    {
+        return spelled;
+    }
+    PATH_IDENTITIES
+        .with_borrow(|identities| identities.get(&path).copied())
+        .and_then(|identity| TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned()))
+        .unwrap_or(path)
 }
 
 fn render_constructor(
@@ -7372,7 +7403,14 @@ fn render_constructor(
             output
                 .write_all(b"(")
                 .map_err(|_| request::Error::Encoding)?;
-            argument_list(fields.len(), 0, output)?;
+            for (index, field) in fields.iter().enumerate() {
+                if index != 0 {
+                    output
+                        .write_all(b", ")
+                        .map_err(|_| request::Error::Encoding)?;
+                }
+                render_field_value(index, field, output)?;
+            }
             output.write_all(b")").map_err(|_| request::Error::Encoding)
         }
         crate::api::model::FieldForm::Record => {
@@ -7385,14 +7423,33 @@ fn render_constructor(
                         .write_all(b", ")
                         .map_err(|_| request::Error::Encoding)?;
                 }
-                write!(output, "{}: argument_{index}", field.name())
-                    .map_err(|_| request::Error::Encoding)?;
+                write!(output, "{}: ", field.name()).map_err(|_| request::Error::Encoding)?;
+                render_field_value(index, field, output)?;
             }
             output
                 .write_all(b" }")
                 .map_err(|_| request::Error::Encoding)
         }
     }
+}
+
+/// A constructor's value for one field: the argument taken for it, or for
+/// a field of the unit type, as palette's `standard: PhantomData<S>` is to
+/// Rawr, the field type's default, which `()` and `PhantomData` both have.
+fn render_field_value(
+    index: usize,
+    field: &crate::surface::adapter::Field,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    if matches!(field.ty(), convert::Type::Unit) {
+        write!(
+            output,
+            "{{ let () = argument_{index}; ::core::default::Default::default() }}"
+        )
+    } else {
+        write!(output, "argument_{index}")
+    }
+    .map_err(|_| request::Error::Encoding)
 }
 
 #[derive(Clone, Copy)]
@@ -8252,6 +8309,23 @@ fn render_take_input(
         )
         .map_err(|_| request::Error::Encoding);
     }
+    // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
+    // `from_tuple` and image's `save_buffer` take: the Rust value made from
+    // it, lent to the call, as a `&str` input is.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && is_made_for_call(lent)
+    {
+        let mut converted = String::new();
+        render_from_dynamic(lent, "value", 0, &mut converted)?;
+        return writeln!(
+            output,
+            "    let argument_{local}_made = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    let argument_{local} = &argument_{local}_made;"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -8575,7 +8649,11 @@ fn render_give(
         convert::Type::Builtin(convert::Builtin::Text) => {
             writeln!(output, "    Ok(Dynamic::from({value}.to_string()))")
         }
-        convert::Type::Unit | convert::Type::Builtin(_) => {
+        // The unit type, or a `PhantomData` field, which Rawr holds as it.
+        convert::Type::Unit => {
+            writeln!(output, "    let _ = {value};\n    Ok(Dynamic::from(()))")
+        }
+        convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
         // A `&[T]` a method lends: a copy, as Rawr's array.
@@ -9106,6 +9184,12 @@ fn is_copied(ty: &convert::Type) -> bool {
     )
 }
 
+/// Whether a `&` input of `ty` lends a Rust value the bridge makes from
+/// Rawr's array or tuple for the call: `&[T]` or `&(A, B)`.
+fn is_made_for_call(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Sequence { .. } | convert::Type::Tuple(_))
+}
+
 /// `ty` with every type parameter the signature declares replaced by its
 /// substitution, at any depth: a future of `Option<T>` is a future of
 /// `Option<rawr::Value>` where `T` is erased (D513.2).
@@ -9435,6 +9519,11 @@ thread_local! {
     /// Each imported type's identity, by every Rust path it has.
     static PATH_IDENTITIES: std::cell::RefCell<std::collections::BTreeMap<String, [u8; 32]>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The Rust path of each free imported function and constant reached
+    /// through its root, by selector: a macro's `$crate` path to it is
+    /// written as the root spells it.
+    static ITEM_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The scope families the adapters name, by their type at `'x`: the
     /// family's name and its type's.
     static FAMILIES: std::cell::RefCell<std::collections::BTreeMap<String, (String, Lifetimes)>> =
@@ -9725,22 +9814,44 @@ impl TypePaths {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
                 values.clear();
-                for owner in facade
+                // A type's own spelling through its root comes before a
+                // macro's `$crate` path to it, which Rust cannot write.
+                let through_crate = |path: &str| path.contains(crate::api::ledger::CRATE_SEGMENT);
+                let types = facade
                     .into_iter()
                     .flat_map(crate::surface::facade::Plan::facades)
-                {
-                    for ty in owner.types() {
-                        let path = format!("{}::{}", owner.root(), ty.path());
-                        // The facade's own value at this path, as a view's
-                        // builder takes `iced::Length` (D558 tier 2).
-                        let facade =
-                            *crate::surface::identity::Definition::facade(&path).as_bytes();
-                        values.insert(facade);
-                        paths.entry(facade).or_insert_with(|| path.clone());
-                        paths.entry(*ty.identity()).or_insert(path);
-                    }
+                    .flat_map(|owner| owner.types().map(move |ty| (owner, ty)));
+                let (plain, through): (Vec<_>, Vec<_>) =
+                    types.partition(|(_, ty)| !through_crate(ty.path()));
+                for (owner, ty) in plain.into_iter().chain(through) {
+                    let path = format!("{}::{}", owner.root(), ty.path());
+                    // The facade's own value at this path, as a view's
+                    // builder takes `iced::Length` (D558 tier 2).
+                    let facade = *crate::surface::identity::Definition::facade(&path).as_bytes();
+                    values.insert(facade);
+                    paths.entry(facade).or_insert_with(|| path.clone());
+                    paths.entry(*ty.identity()).or_insert(path);
                 }
             });
+        });
+        ITEM_PATHS.with_borrow_mut(|paths| {
+            paths.clear();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                for item in owner.items().filter(|item| {
+                    matches!(
+                        item.kind(),
+                        crate::surface::facade::ItemKind::Function
+                            | crate::surface::facade::ItemKind::Constant
+                    ) && !item.path().contains(crate::api::ledger::CRATE_SEGMENT)
+                }) {
+                    paths
+                        .entry(item.selector().fingerprint())
+                        .or_insert_with(|| format!("{}::{}", owner.root(), item.path()));
+                }
+            }
         });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
@@ -9806,6 +9917,7 @@ impl Drop for TypePaths {
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
     }
 }
@@ -10583,6 +10695,57 @@ mod tests {
         ] {
             assert!(runtime.contains(expected), "{expected}");
         }
+    }
+
+    /// T204: `&(f64, f64)` and `&[u8]` lend the Rust value made from
+    /// Rawr's tuple or array, and the attestation of a call's output reaches
+    /// into a tuple inside a `Result`.
+    #[test]
+    fn a_tuple_or_slice_reference_lends_the_value_made_for_the_call() {
+        let signature = Signature::new(Box::default(), Box::default(), Type::Unit);
+        for (lent, rust) in [
+            (
+                Type::Tuple(Box::from([
+                    Type::Builtin(Builtin::F64),
+                    Type::Builtin(Builtin::F64),
+                ])),
+                "into_array()",
+            ),
+            (
+                Type::Sequence {
+                    element: Box::new(Type::Builtin(Builtin::U8)),
+                    owned: false,
+                },
+                "int_from::<u8>",
+            ),
+        ] {
+            let mut take = Vec::new();
+            super::render_take_input(
+                2,
+                2,
+                &Type::Borrowed {
+                    mutable: false,
+                    ty: Box::new(lent),
+                },
+                &signature,
+                &[],
+                None,
+                &mut take,
+            )
+            .unwrap();
+            let take = String::from_utf8(take).unwrap();
+            assert!(take.contains("let argument_2_made = {"), "{take}");
+            assert!(take.contains(rust), "{take}");
+            assert!(
+                take.contains("let argument_2 = &argument_2_made;"),
+                "{take}"
+            );
+        }
+        let runtime = std::str::from_utf8(RUNTIME_SOURCE).unwrap();
+        assert!(
+            runtime.contains("attest_elements(inner, &witness, arena)?;"),
+            "a tuple inside a Result is attested"
+        );
     }
 
     #[test]
