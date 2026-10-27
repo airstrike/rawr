@@ -41,7 +41,10 @@ and calls of a `let mut` local of type `impl Fn` or `fn`, with
 nested fields, patterns' by-value bindings, methods that take their value,
 block tails, closures' moves out of a capture, moves across branches and
 loops, and moves out of what can't be moved out of (E0382, E0505, E0507,
-E0508, E0509), with `moves/mutations` what `mutate.py moved` writes. The
+E0508, E0509), with `moves/mutations` what `mutate.py moved` writes, and
+`copy/` the cases written for which values are `Copy` (tuples, arrays,
+`fn` pointers and items, shared references, closures, generic
+parameters), with `copy/mutations` what `mutate.py copied` writes. The
 harness is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 

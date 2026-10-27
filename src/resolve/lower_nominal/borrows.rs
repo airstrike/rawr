@@ -1015,7 +1015,7 @@ impl Parser<'_> {
     /// its type is known.
     pub(super) fn part_copy(&self, ty: &Ty, path: &[Projection]) -> Option<bool> {
         let ty = self.part_ty(ty, path)?;
-        if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
+        if self.copy_unsettled(&ty) {
             return None;
         }
         Some(!self.moves_by_value(&ty))
