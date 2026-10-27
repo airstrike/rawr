@@ -313,31 +313,42 @@ impl Parser<'_> {
         else {
             return;
         };
-        if self.in_async_body() || !argument.prelude.is_empty() || !self.moves_by_value(&target) {
+        if !self.moves_by_value(&target) {
             return;
         }
-        // The local, and the place: the local itself, or a chain of fields
-        // and members below it, each slot a literal.
-        // A coercion that changed the argument's text leaves it as it is.
+        if let Some((_, place)) = self.shared_borrow(argument) {
+            argument.source = origin::Fragment::call(KEYWORD_LEND, [place]);
+        }
+    }
+
+    /// What the `&` borrow `value` borrows where it is: the whole local,
+    /// `self`, or a chain of fields and members below one (each slot a
+    /// literal), and that place's text. `None` for any other value, one a
+    /// coercion changed, or one in an async body, whose locals move
+    /// between scopes.
+    pub(super) fn shared_borrow(
+        &self,
+        value: &ParsedExpr,
+    ) -> Option<(ImmutableString, origin::Fragment)> {
+        if self.in_async_body() || !value.prelude.is_empty() {
+            return None;
+        }
         let (name, place) = self
             .borrowed_fields
-            .get(&argument.span)
-            .filter(|(_, place)| place.as_str() == argument.source.as_str())
+            .get(&value.span)
+            .filter(|(_, place)| place.as_str() == value.source.as_str())
             .cloned()
-            .unwrap_or_else(|| (argument.source.as_str().into(), argument.source.clone()));
-        let name = name.as_str();
-        let lendable = name == KEYWORD_THIS
-            || is_valid_identifier(name)
+            .unwrap_or_else(|| (value.source.as_str().into(), value.source.clone()));
+        let local = name.as_str() == KEYWORD_THIS
+            || is_valid_identifier(name.as_str())
                 && !name.starts_with("__rawr")
                 && self
                     .bindings
-                    .get(name)
+                    .get(name.as_str())
                     .is_some_and(|binding| matches!(binding.kind, BindingKind::Local))
-                && !self.entry_aliases.contains_key(name)
-                && !self.cell_guards.contains_key(name);
-        if lendable {
-            argument.source = origin::Fragment::call(KEYWORD_LEND, [place]);
-        }
+                && !self.entry_aliases.contains_key(name.as_str())
+                && !self.cell_guards.contains_key(name.as_str());
+        local.then_some((name, place))
     }
 }
 

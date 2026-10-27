@@ -20920,6 +20920,38 @@ impl<'a> Parser<'a> {
         {
             return Err(self.unsupported("a closure that changes `self` kept in a local"));
         }
+        // `let r = &s;`, `let r = &s.a.b;` of a value Rust moves: `r` is the
+        // place, read where it is at each use, as Rust's shared borrow
+        // keeps it unchanged meanwhile (D568). A local shadowed ahead is
+        // copied as before.
+        if borrowed_value
+            && !borrowing
+            && !mutable
+            && annotation.is_none()
+            && let Ty::Reference {
+                mutable: false,
+                target,
+            } = self.inference.resolve(&value.ty)
+            && self.moves_by_value(&target)
+            && let Some((root, place)) = self.shared_borrow(&value)
+            && !self.root_shadowed_later(&root)
+        {
+            let rendered = self.with_field_entries(pending, origin::Fragment::default());
+            if !rendered.is_empty() {
+                self.write_output(rendered, value.span);
+            }
+            self.entry_aliases.remove(&name);
+            self.bound_value(&name, name_span, &value, value_start);
+            let lvalue = Lvalue::Place {
+                binding: root,
+                ty: Ty::Unknown,
+                place,
+            };
+            self.borrow_lvalue(name, name_span, value.ty, lvalue);
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         if let Ty::Reference {
             mutable: true,
             target,
@@ -47398,7 +47430,15 @@ fn fields_below_local(value: &ParsedExpr) -> Option<(ImmutableString, origin::Fr
                 .iter()
                 .all(|step| matches!(step, PlaceStep::Field { .. } | PlaceStep::Member(_))) =>
         {
-            Some((variable_name(nested.base.as_str())?, in_place(value)?))
+            let base = nested.base.as_str();
+            if !is_place_chain(base) {
+                return None;
+            }
+            let root = base.trim_start_matches('(');
+            let root = &root[..root
+                .find(|character: char| character != '_' && !character.is_alphanumeric())
+                .unwrap_or(root.len())];
+            Some((root.into(), in_place(value)?))
         }
         _ => None,
     }

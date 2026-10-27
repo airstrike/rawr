@@ -365,6 +365,14 @@ fn structs_passed_by_reference_are_lent() {
             "sum += lens(&s.items) + lens(&s.inner.items) + s.sizes();",
             400000,
         ),
+        (
+            "let r = &s; sum += r.count + r.items.len() as i64 + view(r);",
+            200000,
+        ),
+        (
+            "let r = &s.inner; sum += r.count + lens(&r.items) + r.total();",
+            100000,
+        ),
     ] {
         assert_eq!(struct_places(work), (expected, 0), "{work}");
     }
