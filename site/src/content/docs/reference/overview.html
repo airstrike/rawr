@@ -8,7 +8,7 @@
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
-  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps and those a struct, a collection or an <code>Option</code> holds. It covers temporaries and what a function returns against its signature too. Borrows kept by closures <a href="#lenient">aren&rsquo;t checked yet</a>, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
+  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps, those a struct, a collection or an <code>Option</code> holds, and those a closure captures. It covers temporaries and what a function returns against its signature too. <a href="#lenient">A few borrows</a> aren&rsquo;t checked yet, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
 </ul>
 
 <h2 id="overview">How a program runs</h2>
@@ -107,7 +107,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
 <ul>
-  <li>A borrow kept by a closure past its statement isn&rsquo;t checked.</li>
+  <li>A borrow kept by a closure that takes and returns borrows isn&rsquo;t checked, as <code>|a: &amp;u32| &amp;x</code> passed where <code>impl Fn(&amp;u32) -&gt; &amp;u32</code> is expected. Nor is one an <code>async</code> block captures, or one a closure stores in what it captured.</li>
   <li>A borrow kept by an item that a method gives from a container isn&rsquo;t checked: <code>copied</code>, <code>cloned</code>, <code>collect</code>, <code>next</code> and the like, and an <code>Option</code>&rsquo;s or <code>Result</code>&rsquo;s <code>map</code>. Nor is one held by a value whose type has a <code>Drop</code> impl, or by a type with an impl written for its <code>'static</code> instance.</li>
   <li>A slice pattern&rsquo;s <code>rest @ ..</code> binding and the bindings of a pattern on an imported value aren&rsquo;t checked.</li>
   <li>A returned borrow of a parameter whose type has several lifetimes isn&rsquo;t checked against the output&rsquo;s lifetime. An example is <code>&amp;self</code> of a struct that has a lifetime parameter. A lifetime written in a type inside a body, as in <code>let x: &amp;'static i32 = &amp;n;</code>, isn&rsquo;t checked.</li>

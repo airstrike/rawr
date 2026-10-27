@@ -139,6 +139,11 @@ impl Proof {
         self.receiver == Some(crate::receiver::Mode::Mutable)
     }
 
+    /// Whether this is a method with a `&self` receiver.
+    pub(super) fn borrows_receiver(&self) -> bool {
+        self.receiver == Some(crate::receiver::Mode::Shared)
+    }
+
     pub(super) fn symbol_id(&self) -> u64 {
         crate::program::schema::symbol_id(self)
     }
@@ -246,15 +251,10 @@ impl Proof {
             return Ok(result);
         }
         // `[value, copies..]`: the value is the call's output, and each copy
-        // goes back to the place it was taken from.
-        let value = match result.read_lock::<crate::Array>() {
-            Some(given) if self.copies != 0 && given.len() == usize::from(self.copies) + 1 => {
-                given[0].clone()
-            }
-            _ => result.clone(),
-        };
-        if let Err(error) = self.output.validate(&value, model, runtime) {
-            return Err(EvalAltResult::ErrorRuntime(
+        // goes back to the place it was taken from. The output is checked
+        // where it is, not through a copy (D568).
+        let invalid = |value: &Dynamic, error: host::runtime::type_ref::Error| -> RawrResult {
+            Err(EvalAltResult::ErrorRuntime(
                 format!(
                     "runtime binding for `{}` returned `{}`, expected `{}`: {error}",
                     self.path,
@@ -264,7 +264,17 @@ impl Proof {
                 .into(),
                 self.span.start(),
             )
-            .into());
+            .into())
+        };
+        if self.copies != 0
+            && let Some(given) = result.read_lock::<crate::Array>()
+            && given.len() == usize::from(self.copies) + 1
+        {
+            if let Err(error) = self.output.validate(&given[0], model, runtime) {
+                return invalid(&given[0], error);
+            }
+        } else if let Err(error) = self.output.validate(&result, model, runtime) {
+            return invalid(&result, error);
         }
         Ok(result)
     }

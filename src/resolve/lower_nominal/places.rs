@@ -35,6 +35,7 @@ impl Parser<'_> {
                 kind: BindingKind::Local,
             },
         );
+        self.note_alias_root(declaration, &root);
         self.aliases.insert(
             name,
             (
@@ -46,6 +47,65 @@ impl Parser<'_> {
                 },
             ),
         );
+    }
+
+    /// The alias declared at `declaration` is a place in the local `root`
+    /// as it is now.
+    fn note_alias_root(&mut self, declaration: Span, root: &str) {
+        if let Some(root) = self.bindings.get(root) {
+            self.alias_roots.insert(declaration, root.declaration);
+        }
+    }
+
+    /// A use of `name` (declared at `declaration`) that reaches the local
+    /// holding its place by that local's name: a `&mut` local that is the
+    /// place it borrows, or a `&mut` pattern binding written back into its
+    /// place. Once a new local shadows that name, the name reaches the new
+    /// local, which would be a wrong answer (T125), so the use is refused.
+    /// A `let r = &mut b;` whose `b` is shadowed ahead holds where `b` is
+    /// instead (`reborrow.rs`).
+    pub(super) fn reject_shadowed_root(
+        &self,
+        name: &str,
+        declaration: Span,
+        span: Span,
+    ) -> Result<(), Error> {
+        let moved = |root: &str, at: Span| {
+            self.bindings
+                .get(root)
+                .is_some_and(|binding| binding.declaration != at)
+        };
+        let alias = self
+            .aliases
+            .get(name)
+            .filter(|(aliased, _)| *aliased == declaration)
+            .and_then(|(_, lvalue)| {
+                let at = self.alias_roots.get(&declaration)?;
+                Some((lvalue.binding().clone(), *at))
+            });
+        let written = self.write_backs.iter().find_map(|write_back| {
+            write_back
+                .bindings
+                .iter()
+                .any(|(bound, at)| bound == name && *at == declaration)
+                .then(|| write_back.root.clone())
+                .flatten()
+        });
+        match alias
+            .into_iter()
+            .chain(written)
+            .find(|(root, at)| moved(root, *at))
+        {
+            Some((root, _)) => Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "a borrow of `{root}` used after a new local named `{root}` shadows it: \
+                     not supported in Rawr yet"
+                )
+                .into(),
+                source: span,
+            }),
+            None => Ok(()),
+        }
     }
 
     /// `name` (declared at `declaration`, of type `ty`) is a `&mut` borrow
@@ -68,6 +128,7 @@ impl Parser<'_> {
                 kind: BindingKind::Local,
             },
         );
+        self.note_alias_root(declaration, lvalue.binding());
         self.aliases.insert(name, (declaration, lvalue));
     }
 

@@ -1,0 +1,18 @@
+fn main() {
+    let mut a = vec![1];
+    let b = vec![2];
+    let mut r = &a;
+    let __h = || &r;
+    let __k = __h();
+    println!("{}", r.len());
+    __see(__k);
+    r = &b;
+    a.push(3);
+    println!("{} {:?}", r.len(), a);
+}
+
+fn __touch<T>(_: &mut T) {}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}

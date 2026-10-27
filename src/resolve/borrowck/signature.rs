@@ -203,7 +203,27 @@ impl Reader<'_> {
                 outer: None,
                 inner: vec![Region::Captures],
             },
-            Type::Path(_) if ty.fn_signature().is_some() || ty.dyn_trait().is_some() => Shape {
+            // A function value holds what it captures: within the
+            // lifetimes its type is bounded by (`impl Fn() + 'a`), or any.
+            Type::Path(path) if ty.fn_signature().is_some() => {
+                let bounded: Vec<Region> = path
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Lifetime(span) => Some(self.lifetime(Some(*span), *span)),
+                        Argument::Type(_) => None,
+                    })
+                    .collect();
+                Shape {
+                    outer: None,
+                    inner: if bounded.is_empty() {
+                        vec![Region::Unknown]
+                    } else {
+                        bounded
+                    },
+                }
+            }
+            Type::Path(_) if ty.dyn_trait().is_some() => Shape {
                 outer: None,
                 inner: vec![Region::Unknown],
             },

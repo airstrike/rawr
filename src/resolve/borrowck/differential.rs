@@ -38,22 +38,6 @@ pub(super) enum Verdict {
 /// their path (a case's mutations share its name).
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "patterns/holder_subject_disjoint",
-        "a binding in the default mode of a match on a `&mut` local is not written back",
-    ),
-    (
-        "patterns/mutations/holder_subject_disjoint_",
-        "a binding in the default mode of a match on a `&mut` local is not written back",
-    ),
-    (
-        "patterns/nested_option_ref",
-        "a `ref mut` binding below a tuple member in `if let` is not written back",
-    ),
-    (
-        "patterns/mutations/nested_option_ref_",
-        "a `ref mut` binding below a tuple member in `if let` is not written back",
-    ),
-    (
         "ui/nll/issue-54556-niconii.rs",
         "a field holding `&T` of a type with `Drop` drops a copy of the value with its struct",
     ),
@@ -66,12 +50,16 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
 /// The borrow errors this checker reports, with rustc's codes.
 pub(super) const BORROW_CODES: &[&str] = &[
     "E0106",
+    "E0373",
     "E0499",
+    "E0500",
+    "E0501",
     "E0502",
     "E0503",
     "E0505",
     "E0506",
     "E0515",
+    "E0524",
     "E0597",
     "E0621",
     "E0716",

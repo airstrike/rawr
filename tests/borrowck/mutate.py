@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | temporaries | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | temporaries | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -10,12 +10,13 @@ that names `x`, it writes variants that move a borrow's use past that
 statement, into a branch, and across a loop's back edge, and variants
 where the borrow ends first. With `kept`, the borrow is one a call's value
 keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
-`kept-mutations`. With `temporaries`, the borrow is held through a
-temporary: one a `let` extends (`&__id(&x)`), a method's receiver whose
-value keeps it (`vec![&x].first()`), or one whose value keeps only what it
-holds (`vec![&x].to_vec()`), and the variants go to
-`signatures/mutations`. rustc decides which are errors: run `record.py` on
-the folder afterwards.
+`kept-mutations`. With `closures`, the borrow is a closure's capture, or one
+a closure's call returns, and the variants go to `closures/mutations`. With
+`temporaries`, the borrow is held through a temporary: one a `let` extends
+(`&__id(&x)`), a method's receiver whose value keeps it
+(`vec![&x].first()`), or one whose value keeps only what it holds
+(`vec![&x].to_vec()`), and the variants go to `signatures/mutations`. rustc
+decides which are errors: run `record.py` on the folder afterwards.
 """
 
 import glob
@@ -27,16 +28,24 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 KEPT = sys.argv[1:] == ["kept"]
+CLOSURES = sys.argv[1:] == ["closures"]
 TEMPORARIES = sys.argv[1:] == ["temporaries"]
 OUT = os.path.join(
     HERE,
-    "kept-mutations" if KEPT else "signatures/mutations" if TEMPORARIES else "mutations",
+    "kept-mutations"
+    if KEPT
+    else "closures/mutations"
+    if CLOSURES
+    else "signatures/mutations"
+    if TEMPORARIES
+    else "mutations",
 )
 SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
     + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT or TEMPORARIES else [])
+    + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES else [])
 )
 HELPERS = """
 fn __touch<T>(_: &mut T) {}
@@ -168,6 +177,34 @@ def temporary_variants(indent, name, statement):
     }
 
 
+def closure_variants(indent, name, statement):
+    """A closure that captures `name`, or a borrow its call returns, used past `statement`."""
+    i = indent
+    return {
+        "closure_mut_across": [f"{i}let mut __f = || __touch(&mut {name});", statement, f"{i}__f();"],
+        "closure_mut_ended": [f"{i}let mut __f = || __touch(&mut {name});", f"{i}__f();", statement],
+        "closure_shared_across": [f"{i}let __g = || __see(&{name});", statement, f"{i}__g();"],
+        "closure_into_branch": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            statement,
+            f"{i}if __c() {{ __f(); }}",
+        ],
+        "closure_back_edge": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            f"{i}for __i in 0..2 {{",
+            f"{i}    __f();",
+            statement,
+            f"{i}}}",
+        ],
+        "closure_returned_across": [
+            f"{i}let __h = || &{name};",
+            f"{i}let __k = __h();",
+            statement,
+            f"{i}__see(__k);",
+        ],
+    }
+
+
 def main():
     out, sources = OUT, SOURCES
     if len(sys.argv) > 2:
@@ -185,8 +222,16 @@ def main():
                 continue
             indent, name = declared.group(1), declared.group(2)
             for target in list(statements(lines, start, indent, name))[:PER_LOCAL]:
-                make = kept_variants if KEPT else temporary_variants if TEMPORARIES else variants
-                written = make(indent, name, lines[target])
+                mutate = (
+                    kept_variants
+                    if KEPT
+                    else closure_variants
+                    if CLOSURES
+                    else temporary_variants
+                    if TEMPORARIES
+                    else variants
+                )
+                written = mutate(indent, name, lines[target])
                 for kind, replacement in written.items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")

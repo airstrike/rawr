@@ -95,6 +95,85 @@ impl Parser<'_> {
         false
     }
 
+    /// Whether the whole local that `value` borrows `&mut` is shadowed
+    /// before the block ends: a `let` or a `for` ahead binds its name. A
+    /// `&mut` local that is the place it borrows names that local by name,
+    /// which would then reach the new one (T125), so it holds where the
+    /// local is instead, as one given new borrows does.
+    pub(super) fn shadowed_later(&self, value: &ParsedExpr) -> bool {
+        let root = match value.lvalue.as_ref() {
+            Some(Lvalue::Binding { binding, .. }) => binding,
+            Some(Lvalue::Place { binding, place, .. }) if place.as_str() == binding.as_str() => {
+                binding
+            }
+            _ => return false,
+        };
+        let mut ahead = self.input.clone();
+        let mut depth = 0usize;
+        // The depth of the pattern of a `let` or a `for` being read.
+        let mut pattern: Option<usize> = None;
+        let mut previous = Token::EOF;
+        while let Some((token, _)) = ahead.next() {
+            match &token {
+                Token::EOF => return false,
+                Token::Let | Token::For => pattern = Some(0),
+                Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket => {
+                    if let Some(inner) = pattern.as_mut() {
+                        *inner += 1;
+                    } else if !matches!(token, Token::LeftParen | Token::LeftBracket) {
+                        depth += 1;
+                    }
+                }
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    match pattern.as_mut() {
+                        Some(inner) if *inner > 0 => *inner -= 1,
+                        Some(_) => pattern = None,
+                        None if matches!(token, Token::RightBrace) => match depth.checked_sub(1) {
+                            Some(outer) => depth = outer,
+                            None => return false,
+                        },
+                        None => {}
+                    }
+                }
+                Token::Equals | Token::SemiColon | Token::In | Token::Else => pattern = None,
+                Token::Colon if pattern == Some(0) => pattern = None,
+                Token::Identifier(identifier)
+                    if identifier.as_str() == root.as_str()
+                        && !matches!(previous, Token::Period | Token::DoubleColon)
+                        && !matches!(
+                            ahead.peek(),
+                            Some((Token::DoubleColon | Token::LeftParen | Token::LeftBrace, _))
+                        )
+                        && (pattern.is_some() || Self::arm_pattern_ahead(ahead.clone())) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+            previous = token;
+        }
+        false
+    }
+
+    /// Whether the name just read may be in a match arm's pattern: a `=>`
+    /// follows before a `;`, a `=` or a block. A use in an arm's guard
+    /// counts too, which only makes the `&mut` local hold where its
+    /// referent is when it need not.
+    fn arm_pattern_ahead(mut ahead: impl Iterator<Item = (Token, Position)>) -> bool {
+        ahead
+            .find(|(token, _)| {
+                matches!(
+                    token,
+                    Token::DoubleArrow
+                        | Token::SemiColon
+                        | Token::Equals
+                        | Token::LeftBrace
+                        | Token::EOF
+                )
+            })
+            .is_some_and(|(token, _)| token == Token::DoubleArrow)
+    }
+
     /// `name` (declared at `declaration`, of the type `ty`, a `&mut`) is a
     /// `&mut` local given new borrows, whose runtime local of the same name
     /// holds where its referent is. `mutable` is whether it was declared
@@ -207,119 +286,20 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Each time the runtime copies a `Tally`: the type has no `Clone` for
-    /// Rawr code, so any copy is one standing in for a borrow.
-    static COPIES: AtomicUsize = AtomicUsize::new(0);
-
-    struct Tally(i64);
-
-    impl Clone for Tally {
-        fn clone(&self) -> Self {
-            COPIES.fetch_add(1, Ordering::SeqCst);
-            Self(self.0)
-        }
-    }
-
-    fn facade() -> crate::host::facade::Definition {
-        use crate::host::{facade, item, signature, type_ref};
-        let mut builder = facade::Builder::new("tally", facade::Abi::new(1).unwrap()).unwrap();
-        builder.type_::<Tally>("Tally", &[], &[]).unwrap();
-        let tally = || type_ref::Type::registered("Tally").unwrap();
-        let int = || type_ref::Type::builtin(type_ref::Builtin::I64);
-        let mut new = signature::Builder::new();
-        new.output(tally());
-        builder
-            .item(item::Definition::associated_function("Tally::new", new.finish()).unwrap())
-            .unwrap();
-        let mut add = signature::Builder::new();
-        add.parameter(int()).output(type_ref::Type::unit());
-        builder
-            .item(
-                item::Definition::method(
-                    "Tally::add",
-                    crate::receiver::Mode::Mutable,
-                    add.finish(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        let mut total = signature::Builder::new();
-        total.output(int());
-        builder
-            .item(
-                item::Definition::method(
-                    "Tally::total",
-                    crate::receiver::Mode::Shared,
-                    total.finish(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        builder.finish().unwrap()
-    }
-
-    fn run(source: &str) -> i64 {
-        let mut engine = crate::Engine::new();
-        engine.register_host_facade(facade()).unwrap();
-        let engine = crate::Shared::new(engine);
-        let authority = engine
-            .compile_authority(source)
-            .unwrap_or_else(|error| panic!("{error}"));
-        let mut runtime = crate::host::runtime::Builder::new(facade());
-        runtime
-            .bind("tally::Tally::new", |_| Ok(crate::Dynamic::from(Tally(0))))
-            .unwrap();
-        runtime
-            .bind("tally::Tally::add", |args| {
-                let n = args[1].as_int().expect("an i64");
-                args[0].write_lock::<Tally>().expect("a tally").0 += n;
-                Ok(crate::Dynamic::UNIT)
-            })
-            .unwrap();
-        runtime
-            .bind("tally::Tally::total", |args| {
-                Ok(crate::Dynamic::from_int(
-                    args[0].read_lock::<Tally>().expect("a tally").0,
-                ))
-            })
-            .unwrap();
-        let mut registry = crate::host::runtime::Registry::new();
-        registry.install(runtime.finish()).unwrap();
-        let run = authority
-            .items()
-            .find(|item| item.key().name() == "run")
-            .unwrap()
-            .clone();
-        authority
-            .invoke_bound(&run, &mut [], crate::Shared::new(registry))
-            .unwrap_or_else(|error| panic!("{error}"))
-            .as_int()
-            .unwrap()
-    }
-
-    /// What `run` returns, and how many times the run copied a `Tally`.
-    fn copies(body: &str) -> (i64, usize) {
-        COPIES.store(0, Ordering::SeqCst);
-        let value = run(&format!(
-            "use tally::Tally;\npub fn run() -> i64 {{\n{body}\n}}"
-        ));
-        (value, COPIES.load(Ordering::SeqCst))
-    }
+    use super::super::copies_tests::copies;
 
     const TAIL: &str =
         "a.total() * 1000000 + b.total() * 10000 + low.len() as i64 * 10 + high.len() as i64";
 
     /// A `&mut` local given new borrows reaches a native value that has no
     /// `Clone`, and a large `Vec` of them used in a loop, as the place
-    /// itself: the run copies a `Tally` exactly as often as the same calls
-    /// made on the locals by name do. A copy of the referent at each use
-    /// would add copies for each call through `r`, and one per element
-    /// already pushed for each `push` through `v`.
+    /// itself: the run copies no `Tally`, as the same calls made on the
+    /// locals by name copy none. A copy of the referent at each use would
+    /// add copies for each call through `r`, and one per element already
+    /// pushed for each `push` through `v`.
     #[test]
     fn rebound_borrow_reaches_its_referent_without_a_copy() {
-        let (through, through_copies) = copies(&format!(
+        let through = copies(&format!(
             "let mut a = Tally::new();
             let mut b = Tally::new();
             let mut r = &mut a;
@@ -340,7 +320,7 @@ mod tests {
             }}
             {TAIL}"
         ));
-        let (named, named_copies) = copies(&format!(
+        let named = copies(&format!(
             "let mut a = Tally::new();
             let mut b = Tally::new();
             for n in 0..10 {{
@@ -361,11 +341,8 @@ mod tests {
             }}
             {TAIL}"
         ));
-        assert_eq!(through, 10 * 1000000 + 35 * 10000 + 1000 * 10 + 3000);
-        assert_eq!(named, through);
-        assert_eq!(
-            through_copies, named_copies,
-            "a copy stood in for the borrow"
-        );
+        let expected = (10 * 1000000 + 35 * 10000 + 1000 * 10 + 3000, 0);
+        assert_eq!(through, expected, "a copy stood in for the borrow");
+        assert_eq!(named, expected);
     }
 }

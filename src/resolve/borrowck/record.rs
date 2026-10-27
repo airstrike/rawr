@@ -8,8 +8,8 @@
 //! by where the use starts.
 
 use super::{
-    Access, Block, BlockData, Body, Fact, Flow, Loan, LoanId, Local, LocalInfo, Origin, Place,
-    Point, Projection,
+    Access, Block, BlockData, Body, Capture, Fact, Flow, Loan, LoanId, Local, LocalInfo, Origin,
+    Place, Point, Projection,
 };
 use crate::{ImmutableString, Position, Span};
 use std::collections::{BTreeMap, BTreeSet};
@@ -145,6 +145,60 @@ pub(crate) struct Recorder {
     /// value is a reference, and whether it is made at run time, by the
     /// part's span.
     projections: BTreeMap<Span, (Span, bool, bool)>,
+    /// For each closure being read: what its `return`s give, or `None` for
+    /// one these facts do not follow.
+    closure_returns: Vec<Vec<Option<Vec<Origin>>>>,
+    /// Each closure of the body, as [`Recorder::captures`] found it.
+    closures: BTreeMap<crate::item::Key, Closure>,
+}
+
+/// A closure, as [`Recorder::captures`] finds it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Closure {
+    /// The borrows its value holds.
+    pub(crate) origins: Vec<Origin>,
+    /// What a call of it keeps, or `None` where these facts do not follow
+    /// it.
+    pub(crate) keeps: Option<Vec<Origin>>,
+    /// Whether it changes what it captures (`FnMut`): a call borrows it
+    /// `&mut`.
+    pub(crate) mutable: bool,
+}
+
+/// A local a closure captures, as the lowering knows it: where it is
+/// declared, whether its type may hold borrows, whether it is `Copy`, and
+/// whether it was declared `mut`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Captured {
+    pub(crate) declaration: Span,
+    pub(crate) holder: bool,
+    pub(crate) copy: bool,
+    pub(crate) declared_mut: bool,
+}
+
+/// A closure's body once read: its blocks.
+pub(crate) struct ClosureBody {
+    blocks: std::ops::Range<u32>,
+    returns: Vec<Option<Vec<Origin>>>,
+}
+
+/// How a closure captures a place, from weakest to strongest, as rustc's
+/// capture analysis orders them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CaptureKind {
+    Shared,
+    Mutable,
+    ByValue,
+}
+
+/// A place a closure captures and how.
+struct CapturePlace {
+    local: Local,
+    projection: Vec<Projection>,
+    kind: CaptureKind,
+    /// For a capture by value: whether the place is copied rather than
+    /// moved, when that is known.
+    copy: Option<bool>,
 }
 
 impl Default for Recorder {
@@ -178,6 +232,8 @@ impl Default for Recorder {
             calls: BTreeSet::new(),
             constructors: BTreeSet::new(),
             projections: BTreeMap::new(),
+            closure_returns: Vec::new(),
+            closures: BTreeMap::new(),
         }
     }
 }
@@ -421,7 +477,7 @@ impl Recorder {
             .loans
             .iter()
             .zip(returned)
-            .any(|(loan, returned)| returned && loan.of_reference)
+            .any(|(loan, returned)| returned && loan.of_reference && loan.capture == Capture::No)
         {
             self.unmodeled("a borrow of a reference that a function returns", span);
         }
@@ -820,6 +876,7 @@ impl Recorder {
             place,
             mutable,
             two_phase: false,
+            capture: Capture::No,
             span,
             at: point,
             temporary,
@@ -1141,59 +1198,244 @@ impl Recorder {
         let split = self.current;
         self.arm(split);
         self.returns.push(Vec::new());
+        self.closure_returns.push(Vec::new());
         let outer = std::mem::take(&mut self.loops);
         self.outer_loops.push(outer);
         split
     }
 
-    /// The closure's body ends here: the blocks its body was read into.
-    pub(crate) fn closure_exit(&mut self, split: Block) -> std::ops::Range<u32> {
+    /// The closure being read returns a value holding `origins`, or one
+    /// these facts do not follow (`None`).
+    pub(crate) fn closure_return(&mut self, origins: Option<Vec<Origin>>) {
+        if let Some(returns) = self.closure_returns.last_mut() {
+            returns.push(origins);
+        }
+    }
+
+    /// The closure's body ends here.
+    pub(crate) fn closure_exit(&mut self, split: Block) -> ClosureBody {
         self.flush();
         self.loops = self.outer_loops.pop().unwrap_or_default();
         let mut ends = self.returns.pop().unwrap_or_default();
         ends.push(self.current);
         ends.push(split);
-        let body = split.0 + 1..self.body.blocks.len() as u32;
+        let blocks = split.0 + 1..self.body.blocks.len() as u32;
         self.join(&ends);
-        body
+        ClosureBody {
+            blocks,
+            returns: self.closure_returns.pop().unwrap_or_default(),
+        }
     }
 
-    /// The closure whose body was read into `blocks` captures the locals
-    /// declared at `captured`: it borrows each where it is made, as rustc
-    /// reports it at `span`. One that is `move` takes them by value.
+    /// The closure whose body is `body` captures the locals `captured`, as
+    /// rustc's capture analysis has it from edition 2021: each place its
+    /// body uses, cut above an index or a variant, by the weakest borrow its
+    /// uses need, or by value when the closure is `move` (cut above a
+    /// reference) or its body moves the place. The captures are made here,
+    /// where the closure is, as rustc reports them at `span`, and the body
+    /// reads them through hidden locals of its own, as a closure's body
+    /// reads its environment in rustc.
+    ///
+    /// `parameters` are where the closure's parameters are declared, and
+    /// `tail` what its body's value holds (`None`: a value these facts do
+    /// not follow).
     pub(crate) fn captures(
         &mut self,
-        blocks: std::ops::Range<u32>,
-        captured: &[Span],
+        body: ClosureBody,
+        captured: &[Captured],
+        parameters: &[Span],
+        tail: Option<Vec<Origin>>,
         moved: bool,
         span: Span,
-    ) {
-        let locals: BTreeSet<Local> = captured
-            .iter()
-            .filter_map(|declaration| self.locals.get(declaration).copied())
-            .collect();
-        for block in blocks {
-            for fact in &mut self.body.blocks[block as usize].facts {
-                let Fact::Access {
-                    place,
-                    access,
-                    span: at,
-                    loan,
-                } = fact
-                else {
-                    continue;
-                };
-                if !locals.contains(&place.local) || loan.is_some() {
-                    continue;
-                }
-                *access = match *access {
-                    Access::Read | Access::Shared if !moved => Access::Shared,
-                    Access::Write | Access::Reserve | Access::Mutable if !moved => Access::Mutable,
-                    access => access,
-                };
-                *at = span;
+    ) -> Closure {
+        // Each captured local, and the hidden local its body reads it by.
+        let mut upvars = BTreeMap::<Local, (Local, Captured)>::new();
+        for capture in captured {
+            if let Some(&local) = self.locals.get(&capture.declaration)
+                && !upvars.contains_key(&local)
+            {
+                let name = self.body.locals[local.0 as usize].name.clone();
+                let upvar = self.hidden(&name, capture.declaration);
+                upvars.insert(local, (upvar, *capture));
             }
         }
+        let inside = |point: Point| body.blocks.contains(&point.block.0);
+        let mut places = Vec::<CapturePlace>::new();
+        let mut mutable = false;
+        for block in body.blocks.clone() {
+            for fact in &mut self.body.blocks[block as usize].facts {
+                match fact {
+                    Fact::Use(local) | Fact::Def(local) => {
+                        if let Some((upvar, _)) = upvars.get(local) {
+                            *local = *upvar;
+                        }
+                    }
+                    Fact::Access { place, access, .. } => {
+                        let Some((upvar, capture)) = upvars.get(&place.local) else {
+                            continue;
+                        };
+                        let kind = match access {
+                            Access::Read | Access::Length | Access::Shared => {
+                                Some(CaptureKind::Shared)
+                            }
+                            Access::Reserve | Access::Mutable | Access::Write => {
+                                Some(CaptureKind::Mutable)
+                            }
+                            Access::Move => Some(CaptureKind::ByValue),
+                            Access::None | Access::StorageDead => None,
+                        };
+                        mutable |= kind == Some(CaptureKind::Mutable);
+                        if let Some(kind) = kind {
+                            places.push(capture_place(place, kind, *access, moved, capture));
+                        }
+                        place.local = *upvar;
+                    }
+                    Fact::Nop => {}
+                }
+            }
+        }
+        for loan in &mut self.body.loans {
+            if inside(loan.at)
+                && let Some((upvar, _)) = upvars.get(&loan.place.local)
+            {
+                loan.place.local = *upvar;
+            }
+        }
+        // A borrow the body stores in what it captured, or keeps for
+        // `'static`, outlives the call in ways these facts do not follow.
+        let mut stores = false;
+        for flow in &mut self.body.flows {
+            if !inside(flow.at) {
+                continue;
+            }
+            if let Origin::Local(from) = &mut flow.from
+                && let Some((upvar, _)) = upvars.get(from)
+            {
+                *from = *upvar;
+            }
+            if let Some((upvar, _)) = upvars.get(&flow.into) {
+                flow.into = *upvar;
+                stores = true;
+            }
+            stores |= self.body.everywhere.contains(&flow.into);
+        }
+        if stores {
+            self.unmodeled("a borrow a closure stores in what it captured", span);
+        }
+        // The captures, made here. For each captured local: whether it is
+        // captured by reference, and the loans it is captured by.
+        let mut origins = Vec::new();
+        let mut by_local = BTreeMap::<Local, (bool, Vec<Origin>)>::new();
+        for capture in merge(places) {
+            let (_, captured) = upvars[&capture.local];
+            let place = Place {
+                local: capture.local,
+                projection: capture.projection,
+            };
+            let local = place.local;
+            let through = place.projection.contains(&Projection::Deref);
+            if through {
+                self.push(Fact::Use(local));
+            }
+            if capture.kind == CaptureKind::ByValue {
+                by_local.entry(local).or_insert((false, Vec::new())).0 = false;
+                let copy = capture.copy.unwrap_or_else(|| {
+                    self.unmodeled(
+                        "a part captured by value whose type these facts do not know",
+                        span,
+                    );
+                    true
+                });
+                self.push(Fact::Access {
+                    place,
+                    access: if copy { Access::Read } else { Access::Move },
+                    span,
+                    loan: None,
+                });
+                if captured.holder {
+                    origins.push(Origin::Local(local));
+                }
+                continue;
+            }
+            let mutable = capture.kind == CaptureKind::Mutable;
+            let point = self.push(Fact::Access {
+                place: place.clone(),
+                access: if mutable {
+                    Access::Mutable
+                } else {
+                    Access::Shared
+                },
+                span,
+                loan: None,
+            });
+            let loan = self.make_loan(point, place, mutable, span);
+            self.body.loans[loan.0 as usize].capture =
+                if mutable && through && !captured.declared_mut {
+                    Capture::Unique
+                } else {
+                    Capture::Borrow
+                };
+            if through || captured.holder {
+                let temporary = self.body.loans[loan.0 as usize].temporary;
+                self.body.flows.push(Flow {
+                    from: Origin::Local(local),
+                    into: temporary,
+                    at: point,
+                });
+            }
+            origins.push(Origin::Loan(loan));
+            by_local
+                .entry(local)
+                .or_insert((true, Vec::new()))
+                .1
+                .push(Origin::Loan(loan));
+        }
+        // What a call keeps: what its returns and its value hold, traced
+        // back to what the closure captured.
+        let keeps = if stores {
+            None
+        } else {
+            let tracer = Tracer {
+                body: &self.body,
+                upvars: upvars
+                    .iter()
+                    .flat_map(|(local, (upvar, _))| [(*local, *local), (*upvar, *local)])
+                    .collect(),
+                parameters: parameters
+                    .iter()
+                    .filter_map(|declaration| self.locals.get(declaration).copied())
+                    .collect(),
+                captures: &by_local,
+            };
+            let mut kept = Vec::new();
+            let mut seen = BTreeSet::new();
+            body.returns
+                .iter()
+                .chain(std::iter::once(&tail))
+                .all(|returned| {
+                    returned.as_ref().is_some_and(|origins| {
+                        origins
+                            .iter()
+                            .all(|origin| tracer.trace(*origin, &mut kept, &mut seen))
+                    })
+                })
+                .then_some(kept)
+        };
+        Closure {
+            origins,
+            keeps,
+            mutable,
+        }
+    }
+
+    /// The closure `key` is `closure`.
+    pub(crate) fn set_closure(&mut self, key: crate::item::Key, closure: Closure) {
+        self.closures.insert(key, closure);
+    }
+
+    /// The closure `key` of this body, if these facts know it.
+    pub(crate) fn closure(&self, key: &crate::item::Key) -> Option<&Closure> {
+        self.closures.get(key)
     }
 
     /// A hidden local holding a value across a loop (`for`'s iterator),
@@ -1451,6 +1693,166 @@ impl Recorder {
                 span: end,
                 loan: None,
             });
+        }
+    }
+}
+
+/// The place a closure captures for a use of `place` its body makes with
+/// `access`, needing `kind`: cut above an index, a slice element or a
+/// variant, and for a capture by value above a reference, as rustc's
+/// capture analysis cuts it.
+fn capture_place(
+    place: &Place,
+    kind: CaptureKind,
+    access: Access,
+    moved: bool,
+    captured: &Captured,
+) -> CapturePlace {
+    let mut cut = place
+        .projection
+        .iter()
+        .position(|step| {
+            matches!(
+                step,
+                Projection::Index | Projection::ConstantIndex { .. } | Projection::Downcast(_)
+            )
+        })
+        .unwrap_or(place.projection.len());
+    let kind = if moved { CaptureKind::ByValue } else { kind };
+    if kind == CaptureKind::ByValue
+        && let Some(deref) = place.projection[..cut]
+            .iter()
+            .position(|step| *step == Projection::Deref)
+    {
+        cut = deref;
+    }
+    let whole = cut == place.projection.len();
+    // Whether the place is copied when taken by value: a `Copy` local's
+    // parts are, and a use of the place itself says so by reading or
+    // moving it.
+    let copy = if cut == 0 || captured.copy {
+        Some(captured.copy)
+    } else if whole && access == Access::Move {
+        Some(false)
+    } else if whole && access == Access::Read {
+        Some(true)
+    } else {
+        None
+    };
+    CapturePlace {
+        local: place.local,
+        projection: place.projection[..cut].to_vec(),
+        kind,
+        copy,
+    }
+}
+
+/// The captures of `places`, merged as rustc merges them: a place below
+/// another captured place is captured with it, by the stronger of the two.
+fn merge(places: Vec<CapturePlace>) -> Vec<CapturePlace> {
+    let mut merged: Vec<CapturePlace> = Vec::new();
+    for mut place in places {
+        if let Some(above) = merged.iter_mut().find(|above| {
+            above.local == place.local && place.projection.starts_with(&above.projection)
+        }) {
+            above.kind = above.kind.max(place.kind);
+            if above.projection == place.projection {
+                above.copy = above.copy.or(place.copy);
+            }
+            continue;
+        }
+        merged.retain(|below| {
+            let absorbed =
+                below.local == place.local && below.projection.starts_with(&place.projection);
+            if absorbed {
+                place.kind = place.kind.max(below.kind);
+            }
+            !absorbed
+        });
+        merged.push(place);
+    }
+    merged
+}
+
+/// Traces what a closure's returned value holds back to what the closure
+/// captured.
+struct Tracer<'a> {
+    body: &'a Body,
+    /// The captured locals, and the hidden locals the body reads them by,
+    /// each to the captured local.
+    upvars: BTreeMap<Local, Local>,
+    parameters: BTreeSet<Local>,
+    /// For each captured local: whether it is captured by reference, and
+    /// the loans of its captures.
+    captures: &'a BTreeMap<Local, (bool, Vec<Origin>)>,
+}
+
+impl Tracer<'_> {
+    /// Adds to `kept` what holding `origin` keeps of what the closure
+    /// captured: whether it could tell.
+    fn trace(&self, origin: Origin, kept: &mut Vec<Origin>, seen: &mut BTreeSet<Local>) -> bool {
+        let captured = |local: Local, kept: &mut Vec<Origin>| {
+            if let Some((_, loans)) = self.captures.get(&local) {
+                kept.extend(loans.iter().copied());
+            }
+        };
+        match origin {
+            Origin::Loan(loan) => {
+                let loan = &self.body.loans[loan.0 as usize];
+                let root = self.upvars.get(&loan.place.local).copied();
+                // A reborrow through what a local refers to keeps what the
+                // local holds.
+                if loan.place.projection.first() == Some(&Projection::Deref) {
+                    return match root {
+                        Some(local) => {
+                            kept.push(Origin::Local(local));
+                            captured(local, kept);
+                            true
+                        }
+                        None => self.trace(Origin::Local(loan.place.local), kept, seen),
+                    };
+                }
+                // A borrow of a captured place is of the capture's borrow;
+                // one of what the closure owns, or of its own local, is
+                // refused by rustc.
+                match root {
+                    Some(local)
+                        if self
+                            .captures
+                            .get(&local)
+                            .is_some_and(|(by_reference, _)| *by_reference) =>
+                    {
+                        captured(local, kept);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            Origin::Local(local) => {
+                if !seen.insert(local) {
+                    return true;
+                }
+                if let Some(captured) = self.upvars.get(&local) {
+                    kept.push(Origin::Local(*captured));
+                    return true;
+                }
+                if self.parameters.contains(&local) {
+                    return false;
+                }
+                if let Some(loan) = self
+                    .body
+                    .loans
+                    .iter()
+                    .position(|loan| loan.temporary == local)
+                {
+                    return self.trace(Origin::Loan(LoanId(loan as u32)), kept, seen);
+                }
+                self.body
+                    .flows
+                    .iter()
+                    .filter(|flow| flow.into == local)
+                    .all(|flow| self.trace(flow.from, kept, seen))
+            }
         }
     }
 }

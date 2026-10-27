@@ -330,6 +330,7 @@ impl Engine {
         hash: u64,
         args: &mut FnCallArgs,
         is_ref_mut: bool,
+        by_value: bool,
         non_volatile_only: bool,
         pos: Position,
     ) -> RawrResultOf<(Dynamic, bool)> {
@@ -360,7 +361,11 @@ impl Engine {
             let backup = &mut ArgBackup::new();
 
             // Calling non-method function but the first argument is a reference?
-            let swap = is_ref_mut && !is_method && !args.is_empty();
+            // In a function-call syntax call, `by_value`, a constant first
+            // argument is lent to a pure method and copied for any other.
+            let swap = is_ref_mut
+                && !args.is_empty()
+                && (!is_method || (by_value && !func.is_pure() && args[0].is_read_only()));
 
             if swap {
                 // Clone the first argument
@@ -681,7 +686,16 @@ impl Engine {
         let hash = hashes.native();
 
         let result = self.exec_native_fn_call(
-            global, caches, fn_name, op_token, hash, args, is_ref_mut, false, pos,
+            global,
+            caches,
+            fn_name,
+            op_token,
+            hash,
+            args,
+            is_ref_mut,
+            !_is_method_call,
+            false,
+            pos,
         );
 
         #[cfg(feature = "internals")]
@@ -1467,11 +1481,9 @@ impl Engine {
                     arg_values.push(value.flatten());
                 }
 
-                let mut target = self.search_namespace(global, caches, scope, this_ptr, first)?;
-
-                if target.as_ref().is_read_only() {
-                    target = target.into_owned();
-                }
+                // A constant is lent too: a call that would change it changes
+                // a copy (`exec_native_fn_call`'s `by_value`).
+                let target = self.search_namespace(global, caches, scope, this_ptr, first)?;
 
                 if target.is_shared() || target.is_temp_value() {
                     arg_values.insert(0, target.take_or_clone().flatten());
