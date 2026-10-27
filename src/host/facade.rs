@@ -38,6 +38,8 @@ pub struct Definition {
     items: Box<[host::item::Definition]>,
     aliases: Box<[(host::path::Path, host::path::Path)]>,
     type_aliases: Box<[TypeAlias]>,
+    trait_headers: Box<[TraitHeader]>,
+    impl_headers: Box<[ImplHeader]>,
     fingerprint: Fingerprint,
 }
 
@@ -140,6 +142,139 @@ impl TypeAlias {
     }
 }
 
+/// A crate trait Rawr code names (D604): its qualified path, identity,
+/// type parameters other than `Self`, and each one's default.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TraitHeader {
+    pub(crate) path: host::path::Path,
+    pub(crate) identity: [u8; 32],
+    pub(crate) parameters: Box<[ImmutableString]>,
+    pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
+}
+
+/// One impl of a crate trait (D604): its own type parameters, the trait's
+/// identity and type arguments other than `Self`, the self type, and its
+/// where-clause bounds as (type, trait identity, trait arguments).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImplHeader {
+    pub(crate) parameters: Box<[ImmutableString]>,
+    pub(crate) trait_identity: [u8; 32],
+    pub(crate) arguments: Box<[host::type_ref::Type]>,
+    pub(crate) self_type: host::type_ref::Type,
+    pub(crate) bounds: Box<[ImplBound]>,
+}
+
+/// A where-clause bound of an [`ImplHeader`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImplBound {
+    pub(crate) ty: host::type_ref::Type,
+    pub(crate) trait_identity: [u8; 32],
+    pub(crate) arguments: Box<[host::type_ref::Type]>,
+}
+
+#[cfg(feature = "rust-import")]
+fn clone_types(
+    types: &[host::type_ref::Type],
+) -> Result<Box<[host::type_ref::Type]>, rawr_import::surface::Error> {
+    types.iter().map(host::type_ref::Type::try_clone).collect()
+}
+
+#[cfg(feature = "rust-import")]
+impl TraitHeader {
+    pub(crate) fn try_clone(&self) -> Result<Self, rawr_import::surface::Error> {
+        Ok(Self {
+            path: self.path.try_clone()?,
+            identity: self.identity,
+            parameters: self.parameters.clone(),
+            defaults: self
+                .defaults
+                .iter()
+                .map(|default| {
+                    default
+                        .as_ref()
+                        .map(host::type_ref::Type::try_clone)
+                        .transpose()
+                })
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+#[cfg(feature = "rust-import")]
+impl ImplHeader {
+    pub(crate) fn try_clone(&self) -> Result<Self, rawr_import::surface::Error> {
+        Ok(Self {
+            parameters: self.parameters.clone(),
+            trait_identity: self.trait_identity,
+            arguments: clone_types(&self.arguments)?,
+            self_type: self.self_type.try_clone()?,
+            bounds: self
+                .bounds
+                .iter()
+                .map(|bound| {
+                    Ok(ImplBound {
+                        ty: bound.ty.try_clone()?,
+                        trait_identity: bound.trait_identity,
+                        arguments: clone_types(&bound.arguments)?,
+                    })
+                })
+                .collect::<Result<_, rawr_import::surface::Error>>()?,
+        })
+    }
+}
+
+/// `types` resolved against a facade's own types, with `parameters` as
+/// type parameters: `None` when one names a type the facade lacks.
+#[cfg(feature = "rust-import")]
+fn resolve_header_types(
+    types: &[host::type_ref::Type],
+    root: &host::path::Path,
+    declared: &[host::type_def::Definition],
+    supports: &[host::support::SignatureContract],
+    parameters: &[(host::path::Path, crate::capability::Set)],
+    imported: &host::type_ref::ImportedTypes,
+    item: &host::path::Path,
+) -> Option<Box<[host::type_ref::Type]>> {
+    types
+        .iter()
+        .map(|ty| {
+            ty.resolve(root, declared, supports, parameters, imported, item)
+                .ok()
+        })
+        .collect()
+}
+
+#[cfg(feature = "rust-import")]
+fn header_parameters(
+    names: &[ImmutableString],
+) -> Option<Vec<(host::path::Path, crate::capability::Set)>> {
+    let mut parameters = names
+        .iter()
+        .map(|name| {
+            Some((
+                host::path::Path::parse(name.clone()).ok()?,
+                crate::capability::Set::from_explicit([]),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    parameters.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Some(parameters)
+}
+
+/// A header joins a facade's proof as a pseudo-module under a spelling
+/// no module has: `prefix` and a digest of what it holds.
+#[cfg(feature = "rust-import")]
+fn header_proof_path(
+    root: &host::path::Path,
+    prefix: &str,
+    text: &str,
+) -> Result<host::path::Path, host::Error> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    host::path::Path::parse(format!("{root}::{prefix}_{:016x}", hasher.finish()))
+}
+
 pub(crate) struct RegistryParts {
     pub(crate) root: host::path::Path,
     pub(crate) modules: Box<[host::path::Path]>,
@@ -149,6 +284,8 @@ pub(crate) struct RegistryParts {
     pub(crate) items: Box<[host::item::Definition]>,
     pub(crate) aliases: Box<[(host::path::Path, host::path::Path)]>,
     pub(crate) type_aliases: Box<[TypeAlias]>,
+    pub(crate) trait_headers: Box<[TraitHeader]>,
+    pub(crate) impl_headers: Box<[ImplHeader]>,
     pub(crate) fingerprint: Fingerprint,
 }
 
@@ -243,6 +380,10 @@ pub struct Builder {
     projections: Vec<ProjectionDeclaration>,
     aliases: Vec<(host::path::Path, host::path::Path)>,
     type_aliases: Vec<TypeAlias>,
+    #[cfg(feature = "rust-import")]
+    trait_headers: Vec<TraitHeader>,
+    #[cfg(feature = "rust-import")]
+    impl_headers: Vec<ImplHeader>,
 }
 
 #[derive(Debug)]
@@ -282,6 +423,10 @@ impl Builder {
             projections: Vec::new(),
             aliases: Vec::new(),
             type_aliases: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            trait_headers: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            impl_headers: Vec::new(),
         })
     }
 
@@ -308,6 +453,10 @@ impl Builder {
             projections: Vec::new(),
             aliases: Vec::new(),
             type_aliases: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            trait_headers: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            impl_headers: Vec::new(),
         })
     }
 
@@ -481,6 +630,38 @@ impl Builder {
             defaults,
             target,
         });
+        Ok(self)
+    }
+
+    /// Record a crate trait's header at `path`, relative (D604).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn trait_header(
+        &mut self,
+        path: &str,
+        identity: [u8; 32],
+        parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        self.trait_headers
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.trait_headers.push(TraitHeader {
+            path,
+            identity,
+            parameters,
+            defaults,
+        });
+        Ok(self)
+    }
+
+    /// Record one impl of a crate trait (D604).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn impl_header(&mut self, header: ImplHeader) -> Result<&mut Self, host::Error> {
+        self.impl_headers
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.impl_headers.push(header);
         Ok(self)
     }
 
@@ -1474,6 +1655,8 @@ impl Builder {
             items,
             aliases: self.aliases.into_boxed_slice(),
             type_aliases: type_aliases.into_boxed_slice(),
+            trait_headers: Box::default(),
+            impl_headers: Box::default(),
             fingerprint,
         })
     }
@@ -1588,6 +1771,106 @@ impl Builder {
         for alias in &type_aliases {
             modules.push(alias.proof_path()?);
         }
+        // Trait and impl headers (D604), resolved against the facade's own
+        // types. A header naming a type the facade lacks is left out.
+        let mut trait_headers = Vec::new();
+        for header in &self.trait_headers {
+            let Some(parameters) = header_parameters(&header.parameters) else {
+                continue;
+            };
+            let defaults = header
+                .defaults
+                .iter()
+                .map(|default| match default {
+                    Some(default) => default
+                        .resolve(
+                            &self.root,
+                            &self.types,
+                            &self.supports,
+                            &parameters,
+                            &imported,
+                            &header.path,
+                        )
+                        .ok()
+                        .map(Some),
+                    None => Some(None),
+                })
+                .collect::<Option<Box<[_]>>>();
+            let Some(defaults) = defaults else {
+                continue;
+            };
+            modules.push(header_proof_path(
+                &self.root,
+                "trait",
+                &format!(
+                    "{}|{:?}|{:?}|{defaults:?}",
+                    header.path, header.identity, header.parameters
+                ),
+            )?);
+            trait_headers
+                .try_reserve(1)
+                .map_err(|_| host::Error::Allocation)?;
+            trait_headers.push(TraitHeader {
+                path: header.path.clone(),
+                identity: header.identity,
+                parameters: header.parameters.clone(),
+                defaults,
+            });
+        }
+        trait_headers.sort_by(|left, right| left.path.cmp(&right.path));
+        let mut impl_headers = Vec::new();
+        for header in &self.impl_headers {
+            let Some(parameters) = header_parameters(&header.parameters) else {
+                continue;
+            };
+            let resolve = |types: &[host::type_ref::Type]| {
+                resolve_header_types(
+                    types,
+                    &self.root,
+                    &self.types,
+                    &self.supports,
+                    &parameters,
+                    &imported,
+                    &self.root,
+                )
+            };
+            let (Some(arguments), Some(self_type)) = (
+                resolve(&header.arguments),
+                resolve(std::slice::from_ref(&header.self_type)),
+            ) else {
+                continue;
+            };
+            let bounds = header
+                .bounds
+                .iter()
+                .filter_map(|bound| {
+                    Some(ImplBound {
+                        ty: resolve(std::slice::from_ref(&bound.ty))?.into_vec().pop()?,
+                        trait_identity: bound.trait_identity,
+                        arguments: resolve(&bound.arguments)?,
+                    })
+                })
+                .collect::<Box<[_]>>();
+            let Some(self_type) = self_type.into_vec().pop() else {
+                continue;
+            };
+            let header = ImplHeader {
+                parameters: header.parameters.clone(),
+                trait_identity: header.trait_identity,
+                arguments,
+                self_type,
+                bounds,
+            };
+            modules.push(header_proof_path(
+                &self.root,
+                "impl",
+                &format!("{header:?}"),
+            )?);
+            impl_headers
+                .try_reserve(1)
+                .map_err(|_| host::Error::Allocation)?;
+            impl_headers.push(header);
+        }
         let fingerprint = fingerprint(
             &self.root,
             self.abi,
@@ -1608,6 +1891,8 @@ impl Builder {
             items,
             aliases: self.aliases.into_boxed_slice(),
             type_aliases: type_aliases.into_boxed_slice(),
+            trait_headers: trait_headers.into_boxed_slice(),
+            impl_headers: impl_headers.into_boxed_slice(),
             fingerprint,
         })
     }
@@ -1872,6 +2157,8 @@ impl Definition {
             items: self.items,
             aliases: self.aliases,
             type_aliases: self.type_aliases,
+            trait_headers: self.trait_headers,
+            impl_headers: self.impl_headers,
             fingerprint: self.fingerprint,
         }
     }

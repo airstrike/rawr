@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 36;
+const CLASSIFIER_VERSION: u32 = 37;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -298,6 +298,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     scope_lifetimes: Cell<bool>,
     /// The classification account the retained and scratch targets record on.
     account: Account,
+    /// The crate type aliases that are the only name of the type they
+    /// name, by definition index (`instance_aliases`).
+    instance_aliases: std::cell::OnceCell<Box<[usize]>>,
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -588,6 +591,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
             account: Account::new(),
+            instance_aliases: std::cell::OnceCell::new(),
         };
         let initialized = (|| {
             context.retain(
@@ -4201,6 +4205,12 @@ impl<P: api::Phase> Context<'_, P> {
             model::Kind::Const { ty, value } => {
                 self.constant(ty, value).map(Representability::Constant)
             }
+            // The only name of the type it names is a type of its own.
+            model::Kind::TypeAlias { ty, .. }
+                if self.instance_aliases().contains(&definition_index) =>
+            {
+                Ok(Representability::Struct(self.instance_alias_plan(ty)))
+            }
             model::Kind::TypeAlias { ty, generics } => {
                 self.value(ty, generics).map(Representability::Value)
             }
@@ -5043,6 +5053,13 @@ impl<P: api::Phase> Context<'_, P> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
             model::Type::Tuple(members) if members.is_empty() => Type::Unit,
+            // A type only a crate's alias names is the alias's own type.
+            model::Type::Definition { .. } if let Some(alias) = self.instance_alias(ty) => {
+                Type::Nominal {
+                    definition: crate::surface::identity::Definition::of(alias.id()),
+                    arguments: Box::default(),
+                }
+            }
             model::Type::Primitive(name) => Type::Builtin(
                 Builtin::primitive(name)
                     .ok_or(representability::reject::Kind::UnsupportedPrimitive)?,
@@ -5229,6 +5246,97 @@ impl<P: api::Phase> Context<'_, P> {
             }
             model::Type::Never => return Err(representability::reject::Kind::NeverType.into()),
         })
+    }
+
+    /// The crate type aliases that are the only name of the type they
+    /// name, by definition index: an exported alias with no parameters of
+    /// a generic type at arguments some of which no import reaches, as
+    /// iced's `pub type Renderer = fallback::Renderer<iced_wgpu::Renderer,
+    /// iced_tiny_skia::Renderer>` is where the crate re-exports neither
+    /// backend. Rust code can write that type only through the alias, so
+    /// it is a type of its own, named by the alias, wherever a signature
+    /// or a parameter's default names it.
+    fn instance_aliases(&self) -> &[usize] {
+        self.instance_aliases.get_or_init(|| {
+            let exported = self
+                .graph
+                .exports()
+                .filter_map(|path| match path {
+                    ledger::Path::Imported(export) => {
+                        Some(crate::surface::identity::Definition::of(export.target()))
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            self.graph
+                .definitions()
+                .enumerate()
+                .filter(|(_, definition)| {
+                    matches!(definition.visibility(), model::Visibility::Public)
+                        && exported
+                            .contains(&crate::surface::identity::Definition::of(definition.id()))
+                        && matches!(
+                            definition.kind(),
+                            model::Kind::TypeAlias {
+                                ty: target @ model::Type::Definition { id, arguments },
+                                generics,
+                            } if generics.parameters().len() == 0
+                                && !matches!(id.unit().crate_name(), "core" | "alloc" | "std")
+                                && self
+                                    .graph
+                                    .definition_index(id)
+                                    .and_then(|index| self.graph.definitions().nth(index))
+                                    .is_some_and(|target| {
+                                        matches!(
+                                            target.kind(),
+                                            model::Kind::Struct { .. } | model::Kind::Enum { .. }
+                                        )
+                                    })
+                                && generics.predicates().len() == 0
+                                && arguments
+                                    .iter()
+                                    .any(|argument| matches!(argument, model::Argument::Type(_)))
+                                && !reaches_only_exported(target, &exported)
+                        )
+                })
+                .map(|(index, _)| index)
+                .collect()
+        })
+    }
+
+    /// The alias that is the only name of `ty` (`instance_aliases`).
+    fn instance_alias(&self, ty: &model::Type) -> Option<&model::Definition> {
+        self.instance_aliases()
+            .iter()
+            .filter_map(|index| self.graph.definitions().nth(*index))
+            .find(|definition| {
+                matches!(definition.kind(), model::Kind::TypeAlias { ty: target, .. } if target == ty)
+            })
+    }
+
+    /// An instance alias's type: opaque, with no fields or constructor,
+    /// and the core traits its target's definition implements.
+    fn instance_alias_plan(&self, target: &model::Type) -> representability::structure::Plan {
+        let index = match target {
+            model::Type::Definition { id, .. } => self.graph.definition_index(id),
+            _ => None,
+        };
+        let implements = |name| index.is_some_and(|index| self.implements_for_any(index, name));
+        representability::structure::Plan::new(
+            None,
+            Box::default(),
+            model::FieldForm::Unit,
+            Box::default(),
+            false,
+            false,
+            implements("Copy"),
+            implements("Default"),
+            implements("Debug"),
+            implements("Clone"),
+            implements("PartialEq"),
+            implements("Eq"),
+            implements("Hash"),
+        )
     }
 
     /// A function's output. A Rust future, an `impl Future<Output = T>` or
@@ -6009,6 +6117,30 @@ impl<P: api::Phase> Context<'_, P> {
                     exact_definition(implementation.self_type(), definition.id())
                 }
         })
+    }
+}
+
+/// Whether every definition `ty` names is the target of an import.
+fn reaches_only_exported(
+    ty: &model::Type,
+    exported: &std::collections::BTreeSet<crate::surface::identity::Definition>,
+) -> bool {
+    match ty {
+        model::Type::Definition { id, arguments } => {
+            exported.contains(&crate::surface::identity::Definition::of(id))
+                && arguments.iter().all(|argument| match argument {
+                    model::Argument::Type(ty) => reaches_only_exported(ty, exported),
+                    model::Argument::Lifetime(_) | model::Argument::Const(_) => true,
+                })
+        }
+        model::Type::Tuple(members) => members
+            .iter()
+            .all(|member| reaches_only_exported(member, exported)),
+        model::Type::Reference { ty, .. } | model::Type::Slice(ty) => {
+            reaches_only_exported(ty, exported)
+        }
+        model::Type::Array { element, .. } => reaches_only_exported(element, exported),
+        _ => true,
     }
 }
 

@@ -1219,6 +1219,9 @@ struct Facade<'contract> {
     entries: Vec<Entry<'contract>>,
     /// The traits the program names: modules, as in the facade plan.
     traits: Vec<Box<str>>,
+    /// Each trait the program names with its identity, whose header fixes
+    /// a type its defaults leave open (D604).
+    trait_identities: Vec<(Box<str>, [u8; 32])>,
     /// The re-exported enum variants, as `pub use Alignment::Center;`: each
     /// path, its enum and the variant's name.
     variants: Vec<(
@@ -1394,6 +1397,7 @@ fn install(
                         traits: Vec::new(),
                         variants: Vec::new(),
                         macros: Vec::new(),
+                        trait_identities: Vec::new(),
                     },
                 );
                 index
@@ -1422,11 +1426,17 @@ fn install(
                             traits: Vec::new(),
                             variants: Vec::new(),
                             macros: Vec::new(),
+                            trait_identities: Vec::new(),
                         },
                     );
                     index
                 }
             };
+            if let Some(definition) = outcome.identity().definition() {
+                let identities = &mut facades[index].trait_identities;
+                identities.try_reserve(1).map_err(|_| Error::Allocation)?;
+                identities.push((relative.clone().into_boxed_str(), *definition.as_bytes()));
+            }
             let traits = &mut facades[index].traits;
             if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
                 traits.try_reserve(1).map_err(|_| Error::Allocation)?;
@@ -1458,6 +1468,7 @@ fn install(
                         traits: Vec::new(),
                         variants: Vec::new(),
                         macros: Vec::new(),
+                        trait_identities: Vec::new(),
                     },
                 );
                 index
@@ -1538,7 +1549,7 @@ fn install(
 }
 
 fn build(
-    _contract: &rawr_import::Contract<rawr_import::Classified>,
+    contract: &rawr_import::Contract<rawr_import::Classified>,
     mut facade: Facade<'_>,
     declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
     shapes: &mut Vec<(
@@ -1822,6 +1833,85 @@ fn build(
                 builder.item(item)?;
             }
         }
+    }
+    // The headers of the traits the program names and of the crate's trait
+    // impls, which fix a type a trait's defaults leave open (D604). A header
+    // naming a type the facade can't write is left out.
+    let declared_bytes = declared
+        .iter()
+        .map(|definition| *definition.as_bytes())
+        .collect::<std::collections::BTreeSet<_>>();
+    let (trait_headers, impl_headers) = rawr_import::surface::headers::headers(
+        contract.raw_graph(),
+        &declared_bytes,
+        &facade.trait_identities,
+    );
+    for header in trait_headers {
+        let defaults = header
+            .defaults
+            .iter()
+            .map(|default| {
+                default
+                    .as_ref()
+                    .map(|default| types.convert(default, &header.parameters, allocation))
+                    .transpose()
+            })
+            .collect::<Result<Box<[_]>, _>>();
+        let Ok(defaults) = defaults else {
+            continue;
+        };
+        builder.trait_header(
+            &header.path,
+            header.identity,
+            header
+                .parameters
+                .iter()
+                .map(|parameter| ImmutableString::from(parameter.name()))
+                .collect(),
+            defaults,
+        )?;
+    }
+    for header in impl_headers {
+        let mut convert = |ty: &representability::convert::Type| {
+            types.convert(ty, &header.parameters, allocation).ok()
+        };
+        let Some(arguments) = header
+            .arguments
+            .iter()
+            .map(&mut convert)
+            .collect::<Option<Box<[_]>>>()
+        else {
+            continue;
+        };
+        let Some(self_type) = convert(&header.self_type) else {
+            continue;
+        };
+        let bounds = header
+            .bounds
+            .iter()
+            .filter_map(|bound| {
+                Some(host::facade::ImplBound {
+                    ty: convert(&bound.ty)?,
+                    trait_identity: bound.trait_identity,
+                    arguments: bound
+                        .arguments
+                        .iter()
+                        .map(&mut convert)
+                        .collect::<Option<Box<[_]>>>()?,
+                })
+            })
+            .collect();
+        builder.impl_header(host::facade::ImplHeader {
+            parameters: header
+                .parameters
+                .iter()
+                .map(|parameter| ImmutableString::from(parameter.name()))
+                .collect(),
+            trait_identity: header.trait_identity,
+            arguments,
+            self_type,
+            bounds,
+        })?;
     }
     // A re-exported variant names its enum's variant, through a path the
     // facade declares the enum at. One of an enum it does not declare is

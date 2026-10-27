@@ -1094,6 +1094,67 @@ fn build(
             .type_alias(path, parameters, defaults, target)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
+    // The headers of the traits the program names and of the crate's trait
+    // impls, which fix a type a trait's defaults leave open (D604). A header
+    // naming a type Rawr can't install is left out.
+    for header in facade.trait_headers() {
+        let defaults = header
+            .defaults()
+            .iter()
+            .map(|default| {
+                default
+                    .as_ref()
+                    .map(|default| self::ty(facade, default, profile, installed))
+                    .transpose()
+            })
+            .collect::<Result<Box<[_]>, _>>();
+        let Ok(defaults) = defaults else {
+            continue;
+        };
+        builder
+            .trait_header(
+                header.path(),
+                *header.identity(),
+                header.parameters().map(ImmutableString::from).collect(),
+                defaults,
+            )
+            .map_err(|source| entry_error(facade.root(), header.path(), source.into()))?;
+    }
+    for header in facade.impls() {
+        let types = |types: &[facade::Type]| {
+            types
+                .iter()
+                .map(|ty| self::ty(facade, ty, profile, installed))
+                .collect::<Result<Box<[_]>, _>>()
+                .ok()
+        };
+        let (Some(arguments), Some(self_type)) = (
+            types(header.arguments()),
+            self::ty(facade, header.self_type(), profile, installed).ok(),
+        ) else {
+            continue;
+        };
+        let bounds = header
+            .bounds()
+            .iter()
+            .filter_map(|bound| {
+                Some(host::facade::ImplBound {
+                    ty: self::ty(facade, bound.ty(), profile, installed).ok()?,
+                    trait_identity: *bound.trait_identity(),
+                    arguments: types(bound.arguments())?,
+                })
+            })
+            .collect();
+        builder
+            .impl_header(host::facade::ImplHeader {
+                parameters: header.parameters().map(ImmutableString::from).collect(),
+                trait_identity: *header.trait_identity(),
+                arguments,
+                self_type,
+                bounds,
+            })
+            .map_err(|source| entry_error(facade.root(), "<impl>", source.into()))?;
+    }
     // A re-exported variant, as `pub use Alignment::Center;`, names its
     // enum's variant.
     for (path, variant) in facade.variants() {

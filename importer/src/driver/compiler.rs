@@ -57,7 +57,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 20 adds the selected crate's name index for demanded units. Schema 21
 // keeps a Future impl's `Output`; schema 22 keeps an Iterator impl's `Item` and
 // `next`; schema 23 keeps an AsRef impl's `as_ref`.
-const PROTOCOL_SCHEMA: u32 = 24;
+const PROTOCOL_SCHEMA: u32 = 26;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -149,6 +149,12 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// A blanket trait implementation applied to one concrete type, as if
     /// the crate wrote `impl Trait for Type`.
     applications: BTreeMap<String, Implementation>,
+    /// The selected crate's public aliases with no parameters of a generic
+    /// type at fixed arguments, found once (`instance_alias`).
+    instance_aliases: Option<Vec<(DefId, Ty<'tcx>)>>,
+    /// The selected crate's public aliases that pass their own parameters
+    /// on to a type, by that type (`passing_alias`).
+    passing_aliases: HashMap<DefId, DefId>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
 }
@@ -1334,6 +1340,8 @@ fn extract<'tcx>(
         member_demands: Vec::new(),
         crate_roots: Vec::new(),
         applications: BTreeMap::new(),
+        instance_aliases: None,
+        passing_aliases: HashMap::new(),
         budget,
         diagnostic,
     };
@@ -2673,6 +2681,95 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
     }
 
+    /// The public alias of the selected crate with no parameters that
+    /// names `ty`, a generic type at fixed arguments, as iced's
+    /// `Renderer` names `fallback::Renderer<iced_wgpu::Renderer,
+    /// iced_tiny_skia::Renderer>` (D604.5). The selected crate's modules
+    /// are walked once.
+    fn instance_alias(&mut self, ty: Ty<'tcx>) -> Option<DefId> {
+        if !matches!(ty.kind(), ty::Adt(_, arguments) if !arguments.is_empty()) {
+            return None;
+        }
+        self.find_aliases();
+        self.instance_aliases
+            .as_ref()?
+            .iter()
+            .find(|(_, aliased)| *aliased == ty)
+            .map(|(alias, _)| *alias)
+    }
+
+    /// The selected crate's public alias that passes its own parameters on,
+    /// all and in order, to the struct or enum `target`, as iced's
+    /// `widget::Text<'a, Theme = ..> = core::widget::Text<'a, Theme>`: Rust
+    /// code outside the crates may write the type only through it.
+    fn passing_alias(&mut self, target: DefId) -> Option<DefId> {
+        self.find_aliases();
+        self.passing_aliases.get(&target).copied()
+    }
+
+    /// Walks the selected crate's modules once for its public aliases.
+    fn find_aliases(&mut self) {
+        if self.instance_aliases.is_none() {
+            let tcx = self.tcx;
+            let mut found = Vec::new();
+            let mut passing = HashMap::new();
+            let mut modules = vec![self.selected.as_def_id()];
+            let mut seen = HashSet::new();
+            while let Some(module) = modules.pop() {
+                if !seen.insert(module) {
+                    continue;
+                }
+                for child in tcx.module_children(module) {
+                    if !child.vis.is_public() {
+                        continue;
+                    }
+                    let Res::Def(kind, def_id) = child.res else {
+                        continue;
+                    };
+                    match kind {
+                        DefKind::Mod if def_id.krate == self.selected => modules.push(def_id),
+                        DefKind::TyAlias if tcx.generics_of(def_id).count() == 0 => {
+                            let aliased =
+                                tcx.type_of(def_id).instantiate_identity().skip_norm_wip();
+                            if matches!(aliased.kind(), ty::Adt(_, arguments) if !arguments.is_empty())
+                                && !found.iter().any(|(known, _)| *known == def_id)
+                            {
+                                found.push((def_id, aliased));
+                            }
+                        }
+                        DefKind::TyAlias => {
+                            let generics = tcx.generics_of(def_id);
+                            let aliased =
+                                tcx.type_of(def_id).instantiate_identity().skip_norm_wip();
+                            if generics.parent_count == 0
+                                && let ty::Adt(definition, arguments) = aliased.kind()
+                                && arguments.len() == generics.own_params.len()
+                                && arguments.iter().enumerate().all(|(index, argument)| {
+                                    match argument.kind() {
+                                        ty::GenericArgKind::Type(ty) => matches!(
+                                            ty.kind(),
+                                            ty::Param(parameter) if parameter.index as usize == index
+                                        ),
+                                        ty::GenericArgKind::Lifetime(region) => matches!(
+                                            region.kind(),
+                                            ty::ReEarlyParam(parameter) if parameter.index as usize == index
+                                        ),
+                                        ty::GenericArgKind::Const(_) => false,
+                                    }
+                                })
+                            {
+                                passing.entry(definition.did()).or_insert(def_id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.instance_aliases = Some(found);
+            self.passing_aliases = passing;
+        }
+    }
+
     fn ensure_with_demand(
         &mut self,
         def_id: DefId,
@@ -2690,6 +2787,21 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         owner: Owner,
         demand: Demand,
     ) -> Result<(), String> {
+        // A type the root reaches only through an alias that passes its
+        // parameters on is written through that alias, so the alias comes
+        // with it (D604.5).
+        if namespace == Namespace::Type
+            && matches!(self.tcx.def_kind(def_id), DefKind::Struct | DefKind::Enum)
+            && let Some(alias) = self.passing_alias(def_id)
+        {
+            let key = SemanticKey {
+                def_path_hash: self.tcx.def_path_hash(alias).to_raw_def_path_hash().0,
+                namespace: Namespace::Type,
+            };
+            if !self.scheduler.entries.contains_key(&key) {
+                self.ensure_with_demand(alias, Namespace::Type, Demand::ShapeOnly)?;
+            }
+        }
         let key = SemanticKey {
             def_path_hash: self.tcx.def_path_hash(def_id).to_raw_def_path_hash().0,
             namespace,
@@ -5162,6 +5274,24 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 .unwrap_or_default();
             bounds.sort_unstable();
             bounds.dedup();
+            // A default only an alias of the selected crate names, as
+            // `Widget`'s `Renderer = crate::Renderer` names
+            // `fallback::Renderer<iced_wgpu::Renderer,
+            // iced_tiny_skia::Renderer>`: the alias is demanded, so Rust
+            // code can write the default (D604.5).
+            if let ty::GenericParamDefKind::Type {
+                has_default: true, ..
+            } = parameter.kind
+            {
+                let default = self
+                    .tcx
+                    .type_of(parameter.def_id)
+                    .instantiate_identity()
+                    .skip_norm_wip();
+                if let Some(alias) = self.instance_alias(default) {
+                    self.ensure_with_demand(alias, Namespace::Type, Demand::ShapeOnly)?;
+                }
+            }
             let parameter_kind = match parameter.kind {
                 ty::GenericParamDefKind::Lifetime => ParameterKind::Lifetime { bounds },
                 ty::GenericParamDefKind::Type { has_default, .. } => ParameterKind::Type {

@@ -2041,14 +2041,23 @@ fn qualify_opaque_bounds(
                                 .and_then(|first| modules.get(&first.name.text))
                         {
                             let (at, span) = (bound.segments[0].name.span, bound.segments[0].span);
+                            // The first segment's arguments (`Widget<Message>`)
+                            // stay on the segment that names the trait.
+                            let written = bound.segments[0].arguments.clone();
+                            let count = module.split("::").count();
                             bound.segments = module
                                 .split("::")
-                                .map(|text| Segment {
+                                .enumerate()
+                                .map(|(index, text)| Segment {
                                     name: crate::item::Name {
                                         text: text.into(),
                                         span: at,
                                     },
-                                    arguments: Box::default(),
+                                    arguments: if index + 1 == count {
+                                        written.clone()
+                                    } else {
+                                        Box::default()
+                                    },
                                     span,
                                 })
                                 .chain(bound.segments.iter().skip(1).cloned())

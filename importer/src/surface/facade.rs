@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 12;
+const SCHEMA: u32 = 13;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -160,6 +160,113 @@ pub struct Facade {
     /// The `macro_rules!` macros the root exports, sorted by path.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     macros: Box<[Macro]>,
+    /// The traits Rawr code names with their type parameters and defaults,
+    /// in path order (D604).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    trait_headers: Box<[TraitHeader]>,
+    /// The crate's trait impls whose types the facade names (D604).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    impls: Box<[ImplHeader]>,
+}
+
+/// A trait Rawr code names (D604): its path, relative to the root, its
+/// identity, and its type parameters other than `Self` with their
+/// defaults, as `Widget<Message, Theme = crate::Theme, Renderer =
+/// crate::Renderer>` has.
+#[derive(Deserialize, Serialize)]
+pub struct TraitHeader {
+    path: Box<str>,
+    identity: [u8; 32],
+    parameters: Box<[Box<str>]>,
+    defaults: Box<[Option<Type>]>,
+}
+
+impl TraitHeader {
+    /// The trait's path, relative to the root.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    /// The trait's identity.
+    #[must_use]
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+    /// Its type parameters other than `Self`, in order.
+    pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.parameters.iter().map(AsRef::as_ref)
+    }
+    /// Each parameter's default, by position.
+    #[must_use]
+    pub fn defaults(&self) -> &[Option<Type>] {
+        &self.defaults
+    }
+}
+
+/// One impl of a trait (D604), as `impl<W, M, T, R> Widget<M, T, R> for
+/// Column<W> where W: Widget<M, T, R>`: its own type parameters, the trait
+/// and its type arguments other than `Self`, the self type, and the bounds
+/// of its where-clauses that name a trait.
+#[derive(Deserialize, Serialize)]
+pub struct ImplHeader {
+    parameters: Box<[Box<str>]>,
+    trait_identity: [u8; 32],
+    arguments: Box<[Type]>,
+    self_type: Type,
+    bounds: Box<[ImplBound]>,
+}
+
+/// A where-clause bound of an [`ImplHeader`]: `ty: Trait<arguments>`.
+#[derive(Deserialize, Serialize)]
+pub struct ImplBound {
+    ty: Type,
+    trait_identity: [u8; 32],
+    arguments: Box<[Type]>,
+}
+
+impl ImplHeader {
+    /// The impl's own type parameters.
+    pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.parameters.iter().map(AsRef::as_ref)
+    }
+    /// The implemented trait's identity.
+    #[must_use]
+    pub const fn trait_identity(&self) -> &[u8; 32] {
+        &self.trait_identity
+    }
+    /// The trait's type arguments other than `Self`.
+    #[must_use]
+    pub fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
+    /// The type the impl is for.
+    #[must_use]
+    pub const fn self_type(&self) -> &Type {
+        &self.self_type
+    }
+    /// Its where-clause bounds that name a trait.
+    #[must_use]
+    pub fn bounds(&self) -> &[ImplBound] {
+        &self.bounds
+    }
+}
+
+impl ImplBound {
+    /// The bounded type.
+    #[must_use]
+    pub const fn ty(&self) -> &Type {
+        &self.ty
+    }
+    /// The bound's trait identity.
+    #[must_use]
+    pub const fn trait_identity(&self) -> &[u8; 32] {
+        &self.trait_identity
+    }
+    /// The trait's type arguments other than `Self`.
+    #[must_use]
+    pub fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
 }
 
 /// One crate type alias: its path, relative to the root, its type
@@ -565,6 +672,9 @@ impl Plan {
         // Each re-exported variant: its root, its path, its enum and its
         // name, named through a path to the enum once every type is in.
         let mut variants = Vec::<(Box<str>, Box<str>, [u8; 32], Box<str>)>::new();
+        // Each trait Rawr code names: its root, its path and its identity,
+        // whose header is written once every type is in (D604).
+        let mut named_traits = Vec::<(Box<str>, Box<str>, [u8; 32])>::new();
         for outcome in outcomes {
             let named_trait = matches!(
                 outcome.representability(),
@@ -597,6 +707,8 @@ impl Plan {
                             variants: Box::default(),
                             type_aliases: Box::default(),
                             macros: Box::default(),
+                            trait_headers: Box::default(),
+                            impls: Box::default(),
                         },
                     );
                     index
@@ -605,6 +717,12 @@ impl Plan {
             let relative = path(outcome.export().path())?;
             let facade = &mut facades[index];
             if named_trait {
+                if let Some(definition) = outcome.identity().definition() {
+                    named_traits
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    named_traits.push((copy(root)?, copy(&relative)?, *definition.as_bytes()));
+                }
                 let mut traits = std::mem::take(&mut facade.traits).into_vec();
                 if let Err(position) = traits.binary_search(&relative) {
                     traits
@@ -724,6 +842,8 @@ impl Plan {
                             variants: Box::default(),
                             type_aliases: Box::default(),
                             macros: Box::default(),
+                            trait_headers: Box::default(),
+                            impls: Box::default(),
                         },
                     );
                     index
@@ -763,6 +883,79 @@ impl Plan {
                         .all(|default| default.declared(&declared))
             });
             facade.type_aliases = aliases.into_boxed_slice();
+        }
+        // The trait headers and impl headers each facade's types reach,
+        // which fix a type a trait's defaults leave open (D604).
+        for facade in &mut facades {
+            let declared = facade
+                .types
+                .iter()
+                .map(|ty| ty.identity)
+                .collect::<std::collections::BTreeSet<_>>();
+            let traits = named_traits
+                .iter()
+                .filter(|(root, _, _)| *root == facade.root)
+                .map(|(_, path, identity)| (path.clone(), *identity))
+                .collect::<Vec<_>>();
+            let (trait_headers, impls) = super::headers::headers(graph, &declared, &traits);
+            let mut converted = Vec::new();
+            for header in trait_headers {
+                let Ok(defaults) = header
+                    .defaults
+                    .iter()
+                    .map(|default| {
+                        default
+                            .as_ref()
+                            .map(|default| ty(default, &header.parameters))
+                            .transpose()
+                    })
+                    .collect::<Result<Box<[_]>, _>>()
+                else {
+                    continue;
+                };
+                converted.push(TraitHeader {
+                    path: header.path,
+                    identity: header.identity,
+                    parameters: parameters(&header.parameters)?,
+                    defaults,
+                });
+            }
+            facade.trait_headers = converted.into_boxed_slice();
+            let mut converted = Vec::new();
+            for header in impls {
+                let types = |types: &[representability::convert::Type]| {
+                    types
+                        .iter()
+                        .map(|source| ty(source, &header.parameters))
+                        .collect::<Result<Box<[_]>, _>>()
+                        .ok()
+                };
+                let (Some(arguments), Ok(self_type)) = (
+                    types(&header.arguments),
+                    ty(&header.self_type, &header.parameters),
+                ) else {
+                    continue;
+                };
+                let bounds = header
+                    .bounds
+                    .iter()
+                    .filter_map(|bound| {
+                        Some(ImplBound {
+                            ty: ty(&bound.ty, &header.parameters).ok()?,
+                            trait_identity: bound.trait_identity,
+                            arguments: types(&bound.arguments)?,
+                        })
+                    })
+                    .collect();
+                converted.push(ImplHeader {
+                    parameters: parameters(&header.parameters)?,
+                    trait_identity: header.trait_identity,
+                    arguments,
+                    self_type,
+                    bounds,
+                });
+            }
+            facade.impls = converted.into_boxed_slice();
         }
         for (root, path, identity, variant) in variants {
             let Ok(index) = facades.binary_search_by(|facade| facade.root.cmp(&root)) else {
@@ -1120,6 +1313,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             variants: Box::default(),
             type_aliases: Box::default(),
             macros: Box::default(),
+            trait_headers: Box::default(),
+            impls: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -1241,6 +1436,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 variants: Box::default(),
                 type_aliases: Box::default(),
                 macros: Box::default(),
+                trait_headers: Box::default(),
+                impls: Box::default(),
             },
             iced,
         ]),
@@ -1400,6 +1597,16 @@ impl Facade {
     /// Iterate the root's `macro_rules!` macros, sorted by path.
     pub fn macros(&self) -> impl ExactSizeIterator<Item = &Macro> {
         self.macros.iter()
+    }
+
+    /// Iterate the headers of the traits Rawr code names (D604).
+    pub fn trait_headers(&self) -> impl ExactSizeIterator<Item = &TraitHeader> {
+        self.trait_headers.iter()
+    }
+
+    /// Iterate the crate's trait impls whose types the facade names (D604).
+    pub fn impls(&self) -> impl ExactSizeIterator<Item = &ImplHeader> {
+        self.impls.iter()
     }
 }
 

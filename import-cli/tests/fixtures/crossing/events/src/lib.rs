@@ -221,3 +221,265 @@ pub fn application<State, Message, Theme, Renderer>(
     }
     println!("last view {}", view.view(&state).label());
 }
+
+// ---- iced's counter: a view only `impl Widget<Message>`'s defaults fix ----
+
+/// A view's widgets in the shape of iced's: the renderer is named only by
+/// a parameterless alias of a generic type at a backend no path reaches,
+/// `Widget`'s defaulted `Renderer` is that alias, and nothing a view calls
+/// names a renderer: the crate's impls and the trait's defaults decide it.
+pub mod widgets {
+    use std::fmt::{Debug, Display};
+
+    mod backend {
+        /// A backend no public path reaches.
+        pub struct Gpu;
+        /// Another.
+        pub struct Soft;
+    }
+
+    pub mod fallback {
+        /// A renderer over two backends.
+        pub struct Renderer<A, B>(std::marker::PhantomData<(A, B)>);
+    }
+
+    /// The only name of the renderer the crate draws with.
+    pub type Renderer = fallback::Renderer<backend::Gpu, backend::Soft>;
+
+    /// What a view gives, at a theme and renderer that default to the
+    /// crate's.
+    pub trait Widget<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer> {
+        /// The labels it shows, in order.
+        fn labels(&self, labels: &mut Vec<String>);
+
+        /// The message a press on the button labelled `label` sends.
+        fn press(&self, label: &str) -> Option<Message>;
+
+        /// The widget as an element.
+        fn boxed<'a>(self) -> element::Element<'a, Message, Theme, Renderer>
+        where
+            Self: Sized + 'a,
+        {
+            element::Element(Box::new(self))
+        }
+    }
+
+    pub mod element {
+        /// Any widget, boxed.
+        pub struct Element<'a, Message, Theme, Renderer>(
+            pub(crate) Box<dyn super::Widget<Message, Theme, Renderer> + 'a>,
+        );
+    }
+
+    /// An element at the crate's theme and renderer.
+    pub type Element<'a, Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer> =
+        element::Element<'a, Message, Theme, Renderer>;
+
+    impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+        for element::Element<'_, Message, Theme, Renderer>
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            self.0.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.0.press(label)
+        }
+    }
+
+    /// A button showing `content`.
+    pub struct Button<'a, Message, W, Theme = crate::Theme> {
+        content: W,
+        on_press: Option<Message>,
+        look: std::marker::PhantomData<&'a Theme>,
+    }
+
+    /// A button showing `content`, which a string literal fills as
+    /// `&'static str`.
+    pub fn button<'a, Message, W, Theme>(content: W) -> Button<'a, Message, W, Theme> {
+        Button {
+            content,
+            on_press: None,
+            look: std::marker::PhantomData,
+        }
+    }
+
+    impl<Message, W, Theme> Button<'_, Message, W, Theme> {
+        /// The message a press sends.
+        pub fn on_press(mut self, message: Message) -> Self {
+            self.on_press = Some(message);
+            self
+        }
+    }
+
+    impl<Message: Clone, W: Display, Theme, Renderer> Widget<Message, Theme, Renderer>
+        for Button<'_, Message, W, Theme>
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("[{}]", self.content));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (self.content.to_string() == label)
+                .then(|| self.on_press.clone())
+                .flatten()
+        }
+    }
+
+    /// Text showing a value, at a size.
+    pub struct Text<'a, Theme = crate::Theme> {
+        text: String,
+        size: u32,
+        look: std::marker::PhantomData<&'a Theme>,
+    }
+
+    /// Text showing `value`.
+    pub fn text<'a, Theme>(value: impl ToString) -> Text<'a, Theme> {
+        Text {
+            text: value.to_string(),
+            size: 16,
+            look: std::marker::PhantomData,
+        }
+    }
+
+    impl<Theme> Text<'_, Theme> {
+        /// The text at `size`.
+        pub fn size(mut self, size: u32) -> Self {
+            self.size = size;
+            self
+        }
+    }
+
+    impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Text<'_, Theme> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("{}@{}", self.text, self.size));
+        }
+
+        fn press(&self, _label: &str) -> Option<Message> {
+            None
+        }
+    }
+
+    /// Widgets one above another.
+    pub struct Column<W> {
+        children: Vec<W>,
+        padding: u16,
+    }
+
+    impl<W> Column<W> {
+        /// A column of `children`.
+        pub fn with_children(children: impl IntoIterator<Item = W>) -> Self {
+            Column {
+                children: children.into_iter().collect(),
+                padding: 0,
+            }
+        }
+
+        /// The column with `padding` around it.
+        pub fn padding(mut self, padding: u16) -> Self {
+            self.padding = padding;
+            self
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Column<W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("pad {}", self.padding));
+            for child in &self.children {
+                child.labels(labels);
+            }
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.children.iter().find_map(|child| child.press(label))
+        }
+    }
+
+    /// A column of widgets, each boxed, as iced's `column!`. Its own name
+    /// differs from the root's `column` function's.
+    #[macro_export]
+    macro_rules! widgets_column {
+        ($($x:expr),+ $(,)?) => (
+            $crate::widgets::Column::with_children([$($crate::widgets::Widget::boxed($x)),+])
+        );
+    }
+
+    pub use crate::widgets_column as column;
+
+    /// The view logic of a program: any `Fn(&State)` that gives a widget.
+    pub trait ViewFn<'a, State, Message, Theme, Renderer> {
+        /// The widget showing the state.
+        fn view(&self, state: &'a State) -> impl Widget<Message, Theme, Renderer> + 'a;
+    }
+
+    impl<'a, T, State, Message, Theme, Renderer, W> ViewFn<'a, State, Message, Theme, Renderer> for T
+    where
+        T: Fn(&'a State) -> W,
+        State: 'static,
+        Message: 'static,
+        Theme: 'static,
+        Renderer: 'static,
+        W: Widget<Message, Theme, Renderer> + 'a,
+    {
+        fn view(&self, state: &'a State) -> impl Widget<Message, Theme, Renderer> + 'a {
+            self(state)
+        }
+    }
+
+    /// Show `view` and press `Increment` `EVENTS_COUNT` times (3 by
+    /// default), then `Decrement` once, every 250 ms when there are more
+    /// than 3, until the file `EVENTS_STOP` names exists.
+    pub fn run<State, Message, Theme, Renderer>(
+        update: impl crate::UpdateFn<State, Message> + 'static,
+        view: impl for<'a> ViewFn<'a, State, Message, Theme, Renderer> + 'static,
+    ) where
+        State: Default + 'static,
+        Message: Send + Debug + Clone + 'static,
+        Theme: Default + 'static,
+        Renderer: 'static,
+    {
+        let stop = std::env::var_os("EVENTS_STOP");
+        let events = std::env::var("EVENTS_COUNT")
+            .ok()
+            .and_then(|count| count.parse::<i64>().ok())
+            .unwrap_or(3);
+        println!("title {}", std::any::type_name::<State>());
+        println!("renderer {}", std::any::type_name::<Renderer>());
+        println!("pid {}", std::process::id());
+        let mut state = State::default();
+        for event in 1..=events + 1 {
+            if stop
+                .as_ref()
+                .is_some_and(|path| std::path::Path::new(path).exists())
+            {
+                break;
+            }
+            let label = if event > events {
+                "Decrement"
+            } else {
+                "Increment"
+            };
+            let pressed = {
+                let widget = view.view(&state);
+                let mut labels = Vec::new();
+                widget.labels(&mut labels);
+                println!("{event} view {}", labels.join(" "));
+                widget.press(label)
+            };
+            if let Some(message) = pressed {
+                println!("{event} message {message:?}");
+                let _task = update.update(&mut state, message);
+            }
+            if events > 3 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        let widget = view.view(&state);
+        let mut labels = Vec::new();
+        widget.labels(&mut labels);
+        println!("last view {}", labels.join(" "));
+    }
+}
