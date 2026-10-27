@@ -207,3 +207,42 @@ fn native_calls_reach_their_values_without_a_copy() {
         assert_eq!(copies(body), (expected, 0), "{body}");
     }
 }
+
+/// A closure passed as a function's `&mut impl FnMut` argument, named or
+/// written in place, is called where the caller has it: a thousand calls
+/// through each copy no `Tally` beyond what the same calls by name copy
+/// (T175). Before, the call didn't find the parameter, and a closure
+/// written in place was refused.
+#[test]
+fn closures_passed_by_mut_reference_copy_nothing() {
+    let items = "fn twice(f: &mut impl FnMut(i64)) {
+        f(1);
+        f(2);
+    }";
+    let through = copies_with(
+        items,
+        "let mut t = Tally::new();
+        let mut u = Tally::new();
+        let mut add = |k| t.add(k);
+        for _ in 0..1000 {
+            twice(&mut add);
+            twice(&mut |k| u.add(k * 10));
+        }
+        t.total() + u.total()",
+    );
+    let named = copies(
+        "let mut t = Tally::new();
+        let mut u = Tally::new();
+        let mut add = |k| t.add(k);
+        let mut add_ten = |k| u.add(k * 10);
+        for _ in 0..1000 {
+            add(1);
+            add(2);
+            add_ten(1);
+            add_ten(2);
+        }
+        t.total() + u.total()",
+    );
+    assert_eq!(through.0, 33000);
+    assert_eq!(through, named, "a copy stood in for a closure's borrow");
+}

@@ -865,6 +865,22 @@ impl Parser<'_> {
         }
     }
 
+    /// `&mut value` (spanning `whole`) of a closure written in place, as a
+    /// function's `&mut impl FnMut` argument: a `&mut` borrow of a
+    /// temporary holding what the closure holds of its captures.
+    pub(super) fn borrow_temporary_mut(&self, value: &ParsedExpr, whole: Span) {
+        let held = self.flow().origins(value.span).map(<[_]>::to_vec);
+        let Some(held) = held else {
+            self.flow().unmodeled(
+                "a `&mut` borrow of a value these facts do not follow",
+                whole,
+            );
+            return;
+        };
+        let reference = self.flow().borrow_temporary(value.span, true, &held, false);
+        self.flow().set_origins(whole, reference);
+    }
+
     /// `&value` (spanning `whole`) of a value that is no place: a borrow of
     /// a temporary its temporary scope holds, which a `let` may extend, or
     /// of a constant promoted to `'static` (`&1`, `&[1, 2]`), which borrows

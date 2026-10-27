@@ -26,7 +26,10 @@ own signature and for temporaries (E0515, E0716, E0106), with
 `signatures/mutations/` what `mutate.py temporaries` writes, and
 `closure-places/` the cases written for closures that use a `&mut` local,
 a function's `&mut` parameter, a `&mut` pattern binding or a mutable
-loop's element (E0500, E0501, E0524). The harness
+loop's element (E0500, E0501, E0524), and `closure-runtime/` the cases
+written for how closures run: a copy of a `Copy` closure, a closure
+passed as `&mut impl FnMut`, and closures reaching parts of a local a
+call is changing. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 

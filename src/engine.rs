@@ -30,6 +30,11 @@ pub const KEYWORD_MOVE: &str = "__rawr_move";
 /// Rust's `drop(value)`: the value drops here, and the call is `()`, so a
 /// statement of it keeps nothing.
 pub const KEYWORD_DROP: &str = "__rawr_drop";
+/// A copy of a `Copy` closure that changes what it captured by value:
+/// `__rawr_copy_closure(c, "n", ..)` is `c` with each named capture in a
+/// cell of its own, holding a copy of its value, as Rust's copy of the
+/// closure copies its captured values.
+pub const KEYWORD_COPY_CLOSURE: &str = "__rawr_copy_closure";
 /// A move out of a part of a local, which checked Rawr writes where Rust
 /// moves a part with drop glue out of it: `__rawr_clear(x, 0, 2)` leaves
 /// `()` at field or element 0, then 2, of the local, so the local's own
