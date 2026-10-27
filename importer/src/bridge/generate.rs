@@ -4409,7 +4409,7 @@ fn render_source(
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
-    let _type_paths = TypePaths::install(facade.as_ref());
+    let _type_paths = TypePaths::install(facade.as_ref(), profile.has_generated_projections());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
             // A macro's `$crate` path to a trait is no Rust path; the
@@ -10336,8 +10336,11 @@ use super::*;
 struct TypePaths;
 
 impl TypePaths {
-    fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
-        view::install(facade);
+    /// `views` when a host profile makes view recipes (D558 tier 2); a
+    /// runner with the neutral profile makes none, and an imported type
+    /// that renders is an ordinary scoped type (D594).
+    fn install(facade: Option<&crate::surface::facade::Plan>, views: bool) -> Self {
+        view::install(facade.filter(|_| views));
         TYPE_PATHS.with_borrow_mut(|paths| {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
