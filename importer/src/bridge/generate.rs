@@ -84,7 +84,7 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]> }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
@@ -464,7 +464,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None });
                 slot
             }
         };
@@ -479,8 +479,28 @@ impl Arena {
         entry.witness = None;
         entry.project = None;
         entry.mapper = None;
+        entry.default_of = None;
         let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
+    }
+
+    /// Mark the value at `handle` as made by the `Default` of the imported
+    /// type `identity`, outside any call: it takes that type's witness where
+    /// it is first checked as it.
+    #[allow(dead_code)]
+    fn made_by_default(&mut self, handle: &NativeHandle, identity: [u8; 32]) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.default_of = Some(identity);
+        }
+    }
+
+    /// The imported type whose `Default` made the value at `handle`, while
+    /// it has no witness.
+    fn default_of(&self, handle: &NativeHandle) -> Option<[u8; 32]> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        (handle.epoch == self.epoch && handle.generation == entry.generation && entry.witness.is_none())
+            .then_some(entry.default_of)
+            .flatten()
     }
 
     fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>, clone: Option<CloneValue>) -> Result<NativeHandle, Error> {
@@ -1654,7 +1674,17 @@ fn native_attestation(
     expected: &__rawr_internal::host::runtime::Instantiation<'_>,
 ) -> Option<__rawr_internal::host::runtime::Attested> {
     let handle = value.read_lock::<NativeHandle>().map(|value| value.clone())?;
-    arena_access(|arena| expected.attest_native_witness(arena.witness(handle))).flatten()
+    arena_access(|arena| {
+        // A value an imported type's `Default` made takes its witness here.
+        if let Some(witness) = arena
+            .default_of(&handle)
+            .and_then(|identity| expected.default_witness(&identity))
+        {
+            arena.attest(handle.clone(), witness).ok()?;
+        }
+        expected.attest_native_witness(arena.witness(handle))
+    })
+    .flatten()
 }
 
 /// `==` of two imported values by their Rust type's `PartialEq`.
@@ -6523,11 +6553,23 @@ fn render_imported_defaults(
             {
                 continue;
             }
-            let path = format!("{}::{}", owner.root(), ty.path());
+            // The type's Rust spelling, which a macro's `$crate` path isn't.
+            let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(ty.identity()).cloned())
+            else {
+                continue;
+            };
+            if path.contains(crate::api::ledger::CRATE_SEGMENT) {
+                continue;
+            }
             let give = if FACADE_VALUES.with_borrow(|values| values.contains(ty.identity())) {
-                "Ok(Dynamic::from(output))"
+                "Ok(Dynamic::from(output))".to_owned()
             } else {
-                "insert_native!(arguments.arena, output).map(Dynamic::from)"
+                let mut identity = Vec::new();
+                byte_array(&mut identity, ty.identity())?;
+                format!(
+                    "let handle = insert_native!(arguments.arena, output)?;\n        arguments.arena.made_by_default(&handle, {});\n        Ok(Dynamic::from(handle))",
+                    String::from_utf8(identity).map_err(|_| request::Error::Encoding)?
+                )
             };
             output
                 .write_all(b"    __rawr_internal::host::value::register_imported_default(")

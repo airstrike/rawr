@@ -1679,6 +1679,26 @@ impl Instantiation<'_> {
         self.attest(witness.is_some_and(|witness| witness.matches(self.registry.witness, self.ty)))
     }
 
+    /// The witness of a value the runner made by the `Default` of the
+    /// imported type `identity`, which has no arguments: a script type's
+    /// derived `Default` builds such a field outside any call, so the value
+    /// takes its witness where it is first checked as this exact type.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn default_witness(&self, identity: &[u8; 32]) -> Option<Witness> {
+        match self.ty {
+            type_ref::Type::Imported {
+                identity: expected,
+                arguments,
+                ..
+            } if arguments.is_empty() && expected.as_bytes() == identity => {
+                Some(self.registry.witness_for(self.ty))
+            }
+            _ => None,
+        }
+    }
+
     /// Mint evidence when a native Rust value's witness comes from this runner
     /// and names this exact type, in any of the runner's script generations.
     ///
