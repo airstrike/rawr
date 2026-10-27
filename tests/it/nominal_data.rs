@@ -99,8 +99,9 @@ fn stale_nested_values_are_rejected_at_construction_and_field_boundaries() {
     let construction = engine.call_fn::<Dynamic>(&mut Scope::new(), &ast, "wrap", (stale_inner,)).unwrap_err();
     let field = engine.call_fn::<bool>(&mut Scope::new(), &ast, "read", (stale_outer,)).unwrap_err();
 
+    // A script-typed parameter is checked where the call enters, before
+    // the value reaches a construction or a field read.
     let construction = construction.to_string();
-    assert!(construction.contains("member 0 failed validation"), "{construction}");
     assert!(construction.contains("main::Inner has a stale schema"), "{construction}");
     let field = field.to_string();
     assert!(field.contains("main::Inner has a stale schema"), "{field}");

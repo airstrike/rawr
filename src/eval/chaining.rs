@@ -143,6 +143,21 @@ impl Engine {
                 arr.get_mut(arr_idx).unwrap().try_into()
             }
 
+            // A struct's field by its slot, as checked Rawr writes a field
+            // place (`s.a.b` is `s[0][1]`): the field itself, not a copy.
+            Dynamic(Union::Struct(value, ..)) => {
+                let index = idx
+                    .as_int()
+                    .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, idx_pos))?;
+                let fields = value.fields_mut();
+                let len = fields.len();
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|slot| fields.get_mut(slot))
+                    .ok_or_else(|| ERR::ErrorArrayBounds(len, index, idx_pos))?
+                    .try_into()
+            }
+
             Dynamic(Union::Blob(arr, ..)) => {
                 // val_blob[idx]
                 let index = idx
@@ -646,12 +661,12 @@ impl Engine {
         result.map(|(value, _)| Some(value))
     }
 
-    /// The element of `value` that `indexes` reach, itself, through
-    /// arrays that are not shared (the element itself may be); `None` for
-    /// any other value or index.
+    /// The element or field of `value` that `indexes` reach, itself,
+    /// through arrays and structs that are not shared (the part itself may
+    /// be); `None` for any other value or index.
     fn part_at<'v>(mut value: &'v mut Dynamic, indexes: &[Dynamic]) -> Option<&'v mut Dynamic> {
         for index in indexes {
-            if !value.is_array() {
+            if !value.is_array() && !value.is::<crate::types::nominal::Struct>() {
                 return None;
             }
             let index = usize::try_from(index.as_int().ok()?).ok()?;

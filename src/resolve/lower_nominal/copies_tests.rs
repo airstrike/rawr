@@ -276,3 +276,58 @@ fn captured_locals_are_read_without_a_copy() {
         assert_eq!(copies(body), (expected, 0), "{body}");
     }
 }
+
+/// Script structs holding 100 native values in each `Vec`, for
+/// `struct_places`.
+const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
+    impl Inner {
+        fn bump(&mut self, n: i64) { self.count += n; }
+        fn total(&self) -> i64 { self.count }
+    }
+    struct State { inner: Inner, items: Vec<Tally>, count: i64 }
+    fn set(state: &mut State, n: i64) { state.count = n; }
+    fn filled() -> Vec<Tally> {
+        let mut items = Vec::new();
+        for _ in 0..100 { items.push(Tally::new()); }
+        items
+    }";
+
+/// What `work`, run a thousand times on a `State` made of `STATE`'s
+/// structs, adds to `sum`, and how many `Tally` values the run copied.
+fn struct_places(work: &str) -> (i64, usize) {
+    copies_with(
+        STATE,
+        &format!(
+            "let mut s = State {{ inner: Inner {{ items: filled(), count: 0 }}, items: filled(), count: 0 }};
+            let mut sum = 0;
+            for n in 0..1000 {{ {work} }}
+            sum"
+        ),
+    )
+}
+
+/// A field read, a field written directly or through `&mut`, a nested
+/// field, a method called on a field and a field's element reach the
+/// place itself: a thousand of each copy no `Tally` (T248, T143, T167).
+/// Before, each field read copied the struct, so its 100 values, once,
+/// and each write through `&mut` twice.
+#[test]
+fn struct_fields_are_reached_without_a_copy() {
+    for (work, expected) in [
+        ("sum += s.count; s.count = n;", 498501),
+        ("set(&mut s, n); sum += s.count;", 499500),
+        ("let r = &mut s; r.count = n; sum += r.count;", 499500),
+        (
+            "s.inner.count = n; sum += s.inner.count + s.inner.items.len() as i64;",
+            599500,
+        ),
+        ("s.inner.bump(1); sum += s.inner.total();", 500500),
+        ("s.items[0].add(n); sum += s.items[0].total();", 166666500),
+        (
+            "s.items.push(Tally::new()); sum += s.items.len() as i64;",
+            600500,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+}
