@@ -7,6 +7,7 @@
 //! assignment to it, a `&mut self` call on it) refines that record, found
 //! by where the use starts.
 
+use super::region::{self, Held, Path, Step};
 use super::{
     Access, Block, BlockData, Body, Capture, Fact, Flow, Loan, LoanId, Local, LocalInfo, Origin,
     Place, Point, Projection,
@@ -21,13 +22,12 @@ struct LoopFrame {
 }
 
 /// A call's argument: where it is, whether its type may hold a borrow, and
-/// whether it is a reference (`&T`, `&str`), whose own loan is apart from
-/// what it refers to.
+/// whether calling it may return a borrow.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Argument {
     pub(crate) span: Span,
     pub(crate) holds: bool,
-    pub(crate) reference: bool,
+    pub(crate) returns: bool,
 }
 
 /// What a value expression began with, so the `let` that takes it can tell
@@ -46,10 +46,10 @@ pub(crate) enum Matched {
     /// A reference made for the match (`&mut s`): what a pattern binds
     /// below it holds these loans, and what it reads through it conflicts
     /// with none.
-    Origins(Vec<Origin>),
+    Origins(Held),
     /// A value of its own, not a reference, that holds these loans (a
     /// call's value, `v.first()`): what a pattern binds in it holds them.
-    Held(Vec<Origin>),
+    Held(Held),
     /// A value of its own, made for the match: whether making it borrowed,
     /// which a binding that may hold a borrow would keep.
     Value { made: bool },
@@ -63,8 +63,8 @@ pub(crate) struct Recorder {
     /// The access each use of a local made, by where the use starts.
     mentions: BTreeMap<Position, Point>,
     /// The loans and the holders' loans each expression's value is, by its
-    /// span: `&v`, `r`, `if c { &a } else { &b }`.
-    origins: BTreeMap<Span, Vec<Origin>>,
+    /// span, at the positions of its type: `&v`, `r`, `if c { &a } else { &b }`.
+    origins: BTreeMap<Span, Held>,
     /// The holders used, the places a call borrowed, and the closures that
     /// captured, so far: the borrows a value may have been made from, for
     /// [`ValueStart`].
@@ -99,19 +99,21 @@ pub(crate) struct Recorder {
     everywhere: Option<Local>,
     /// For each closure being read: what its `return`s give, or `None` for
     /// one these facts do not follow.
-    closure_returns: Vec<Vec<Option<Vec<Origin>>>>,
+    closure_returns: Vec<Vec<Option<Held>>>,
     /// Each closure of the body, as [`Recorder::captures`] found it.
     closures: BTreeMap<crate::item::Key, Closure>,
+    /// What a call of each closure keeps, by where the closure is written.
+    closure_keeps: BTreeMap<Span, Option<Held>>,
 }
 
 /// A closure, as [`Recorder::captures`] finds it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Closure {
     /// The borrows its value holds.
-    pub(crate) origins: Vec<Origin>,
+    pub(crate) origins: Held,
     /// What a call of it keeps, or `None` where these facts do not follow
     /// it.
-    pub(crate) keeps: Option<Vec<Origin>>,
+    pub(crate) keeps: Option<Held>,
     /// Whether it changes what it captures (`FnMut`): a call borrows it
     /// `&mut`.
     pub(crate) mutable: bool,
@@ -131,7 +133,7 @@ pub(crate) struct Captured {
 /// A closure's body once read: its blocks.
 pub(crate) struct ClosureBody {
     blocks: std::ops::Range<u32>,
-    returns: Vec<Option<Vec<Origin>>>,
+    returns: Vec<Option<Held>>,
 }
 
 /// How a closure captures a place, from weakest to strongest, as rustc's
@@ -179,6 +181,7 @@ impl Default for Recorder {
             everywhere: None,
             closure_returns: Vec::new(),
             closures: BTreeMap::new(),
+            closure_keeps: BTreeMap::new(),
         }
     }
 }
@@ -221,7 +224,7 @@ impl Recorder {
         self.flush();
         self.arguments.insert(end, arguments.to_vec());
         for argument in arguments {
-            for origin in self
+            for (_, origin) in self
                 .origins
                 .get(&argument.span)
                 .cloned()
@@ -238,28 +241,38 @@ impl Recorder {
     fn origin_local(&self, origin: Origin) -> Local {
         match origin {
             Origin::Loan(loan) => self.body.loans[loan.0 as usize].temporary,
-            Origin::Local(local) => local,
+            Origin::Local(local, _) => local,
+        }
+    }
+
+    /// Where an origin's borrows flow from: a holder's position, or a
+    /// borrow's hidden local.
+    fn source(&self, origin: Origin) -> Origin {
+        match origin {
+            Origin::Loan(loan) => Origin::local(self.body.loans[loan.0 as usize].temporary),
+            origin @ Origin::Local(..) => origin,
         }
     }
 
     /// `into` takes the loans of the value spanning `value` here, which
     /// are used here: whether it is a value these facts follow.
     fn take_origins(&mut self, into: Local, value: Span) -> bool {
-        let Some(origins) = self.origins.get(&value).cloned() else {
+        let Some(held) = self.origins.get(&value).cloned() else {
             return false;
         };
-        self.flow_into(into, &origins);
+        self.flow_into(into, &held);
         true
     }
 
-    /// `into` takes `origins` here, which are used here.
-    fn flow_into(&mut self, into: Local, origins: &[Origin]) {
-        for origin in origins {
-            let from = self.origin_local(*origin);
-            let at = self.push(Fact::Use(from));
+    /// `into` takes `held` here, each at its position, which are used here.
+    fn flow_into(&mut self, into: Local, held: &[(Path, Origin)]) {
+        for &(path, origin) in held {
+            let from = self.source(origin);
+            let at = self.push(Fact::Use(self.origin_local(origin)));
             self.body.flows.push(Flow {
-                from: Origin::Local(from),
+                from,
                 into,
+                path,
                 at,
             });
         }
@@ -272,14 +285,14 @@ impl Recorder {
 
     /// The loans and holders the value spanning `span` is, when these facts
     /// follow it.
-    pub(crate) fn origins(&self, span: Span) -> Option<&[Origin]> {
+    pub(crate) fn origins(&self, span: Span) -> Option<&[(Path, Origin)]> {
         self.origins.get(&span).map(Vec::as_slice)
     }
 
-    /// The value spanning `span` is `origins`: it holds those borrows and
-    /// no others.
-    pub(crate) fn set_origins(&mut self, span: Span, origins: Vec<Origin>) {
-        self.origins.insert(span, origins);
+    /// The value spanning `span` is `held`: it holds those borrows and no
+    /// others.
+    pub(crate) fn set_origins(&mut self, span: Span, held: Held) {
+        self.origins.insert(span, held);
     }
 
     /// The value spanning `whole` holds what the one spanning `part` does
@@ -292,36 +305,14 @@ impl Recorder {
         }
     }
 
-    /// What the value spanning `span` holds below its own reference: the
-    /// holder a borrow `&place` was made of (`&v` of a `Vec<&T>` holds
-    /// `v`'s borrows inside). `None` when that can't be told apart from the
-    /// reference's own loan.
-    pub(crate) fn inner_origins(&self, span: Span) -> Option<Vec<Origin>> {
-        let [Origin::Loan(loan)] = self.origins.get(&span)?.as_slice() else {
-            return None;
-        };
-        let loan = &self.body.loans[loan.0 as usize];
-        if loan.place.projection.contains(&Projection::Deref) {
-            return None;
-        }
-        let local = loan.place.local;
-        let temporary = loan.temporary;
-        Some(
-            self.body
-                .flows
-                .iter()
-                .any(|flow| flow.from == Origin::Local(local) && flow.into == temporary)
-                .then_some(Origin::Local(local))
-                .into_iter()
-                .collect(),
-        )
-    }
-
     /// The holder the use starting at `start` reads, when it reads all of
-    /// a local's value below no reference: what that value holds.
+    /// a local's value: what that value holds.
     pub(crate) fn held(&self, start: Position) -> Option<Origin> {
         let (_, place) = self.mention_place(start)?;
-        (!place.projection.contains(&Projection::Deref)).then_some(Origin::Local(place.local))
+        place
+            .projection
+            .is_empty()
+            .then_some(Origin::local(place.local))
     }
 
     /// The use starting at `start`, a call's receiver, is borrowed for the
@@ -382,32 +373,38 @@ impl Recorder {
         if place.projection.first() == Some(&Projection::Deref) || inner {
             let temporary = self.body.loans[loan.0 as usize].temporary;
             self.body.flows.push(Flow {
-                from: Origin::Local(place.local),
+                from: Origin::local(place.local),
                 into: temporary,
+                path: Path::ROOT,
                 at: point,
             });
         }
         Some(Origin::Loan(loan))
     }
 
-    /// The place the use starting at `start` reads takes `origins` here, as
+    /// The place the use starting at `start` reads takes `held` here, as
     /// `v.push(&x)` stores a borrow in `v`: whether it is a local's value
-    /// below no reference, which these facts follow.
-    pub(crate) fn store(&mut self, start: Position, origins: &[Origin]) -> bool {
+    /// below no reference, which these facts follow. Into all of a local,
+    /// `held` is placed as it is; into a part of one, everywhere in it.
+    pub(crate) fn store(&mut self, start: Position, held: &[(Path, Origin)]) -> bool {
         let Some((_, place)) = self.mention_place(start) else {
             return false;
         };
         if place.projection.contains(&Projection::Deref) {
             return false;
         }
-        self.flow_into(place.local, origins);
+        if place.projection.is_empty() {
+            self.flow_into(place.local, held);
+        } else {
+            self.flow_into(place.local, &region::collapse(held));
+        }
         true
     }
 
-    /// The function returns `origins` here: they flow into its output's
-    /// region. A returned borrow of one of its own locals is rustc's E0515,
-    /// which these facts leave to it.
-    pub(crate) fn give_back(&mut self, origins: &[Origin], span: Span) {
+    /// The function returns `held` here: it flows into its output's region.
+    /// A returned borrow of one of its own locals is rustc's E0515, which
+    /// these facts leave to it.
+    pub(crate) fn give_back(&mut self, held: &[(Path, Origin)], span: Span) {
         let local = match self.body.returned.first() {
             Some(local) => *local,
             None => {
@@ -416,8 +413,8 @@ impl Recorder {
                 local
             }
         };
-        self.flow_into(local, origins);
-        let returned = super::reaches(&self.body, &self.body.returned);
+        self.flow_into(local, held);
+        let returned = region::reaches_any(&region::reach(&self.body), &self.body.returned);
         if self
             .body
             .loans
@@ -433,9 +430,8 @@ impl Recorder {
         }
     }
 
-    /// `origins` are borrowed for `'static` here: their region is every
-    /// point.
-    pub(crate) fn forever(&mut self, origins: &[Origin]) {
+    /// `held` is borrowed for `'static` here: its region is every point.
+    pub(crate) fn forever(&mut self, held: &[(Path, Origin)]) {
         let local = match self.everywhere {
             Some(local) => local,
             None => {
@@ -445,7 +441,7 @@ impl Recorder {
                 local
             }
         };
-        self.flow_into(local, origins);
+        self.flow_into(local, held);
     }
 
     fn fact_mut(&mut self, point: Point) -> &mut Fact {
@@ -507,7 +503,8 @@ impl Recorder {
         if holder || reference {
             self.push(Fact::Use(local));
             self.borrowed += 1;
-            self.origins.insert(span, vec![Origin::Local(local)]);
+            self.origins
+                .insert(span, vec![(Path::ROOT, Origin::local(local))]);
         }
         let projection = if reference {
             vec![Projection::Deref]
@@ -625,14 +622,20 @@ impl Recorder {
     /// matches (`ref x`, or a binding below a reference): a borrow of the
     /// part made here, at `span`, which `into` takes, given its value here
     /// when `define` says so (once for an or-pattern's alternatives).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn part_borrow(
         &mut self,
         place: Place,
         mutable: bool,
+        holds: bool,
         span: Span,
         into: Local,
         define: bool,
     ) {
+        // A part that holds borrows (`ref x` of a `&T` field) keeps them, as
+        // `&'a T<'b>` has `'b: 'a`.
+        let inner = (holds && !place.projection.contains(&Projection::Deref))
+            .then(|| region::narrow(place_origin(&place), Path::OWN));
         let through = (place.projection.first() == Some(&Projection::Deref)).then_some(place.local);
         if let Some(holder) = through {
             self.push(Fact::Use(holder));
@@ -650,32 +653,25 @@ impl Recorder {
         let loan = self.make_loan(point, place, mutable, span);
         let temporary = self.body.loans[loan.0 as usize].temporary;
         // A reborrow through a holder keeps what the holder borrows.
-        if let Some(holder) = through {
+        for from in through.map(Origin::local).into_iter().chain(inner) {
             self.body.flows.push(Flow {
-                from: Origin::Local(holder),
+                from,
                 into: temporary,
+                path: Path::ROOT,
                 at: point,
             });
         }
-        self.take(into, &[Origin::Loan(loan)], define);
+        self.take(into, &[(Path::ROOT, Origin::Loan(loan))], define);
     }
 
-    /// `into` takes the loans `origins` here: a pattern's binding of a
-    /// reference's part, or of the reference itself. It is given its value
-    /// here when `define` says so.
-    pub(crate) fn take(&mut self, into: Local, origins: &[Origin], define: bool) {
+    /// `into` takes `held` here: a pattern's binding of a reference's part,
+    /// or of the reference itself. It is given its value here when `define`
+    /// says so.
+    pub(crate) fn take(&mut self, into: Local, held: &[(Path, Origin)], define: bool) {
         if define {
             self.push(Fact::Def(into));
         }
-        for origin in origins {
-            let from = self.origin_local(*origin);
-            let at = self.push(Fact::Use(from));
-            self.body.flows.push(Flow {
-                from: Origin::Local(from),
-                into,
-                at,
-            });
-        }
+        self.flow_into(into, held);
     }
 
     /// The expression spanning `span` is a place (`*r`).
@@ -752,12 +748,14 @@ impl Recorder {
     }
 
     /// `&place` or `&mut place` (spanning `span`) of the use starting at
-    /// `start`: the use becomes the borrow, which makes a loan. `inner`
-    /// when the borrowed place's type may hold borrows, which the reference
-    /// keeps (`&'a T<'b>` has `'b: 'a`).
+    /// `start`, whose operand spans `operand`: the use becomes the borrow,
+    /// which makes a loan. `inner` when the borrowed place's type may hold
+    /// borrows, which the reference keeps (`&'a T<'b>` has `'b: 'a`) below
+    /// its own region.
     pub(crate) fn borrow(
         &mut self,
         start: Position,
+        operand: Span,
         span: Span,
         mutable: bool,
         inner: bool,
@@ -767,15 +765,13 @@ impl Recorder {
         if place.projection == [Projection::Deref] && !self.dereferenced.contains(&point) {
             place.projection.clear();
         }
-        let through =
-            (place.projection.first() == Some(&Projection::Deref) || inner).then_some(place.local);
         // `&v[i]` of a `Vec` is the borrow `Index::index` made.
         let loan = match self.index_loans.get(&point).copied() {
             Some(loan) => {
                 self.body.loans[loan.0 as usize].mutable = mutable;
                 loan
             }
-            None => self.make_loan(point, place, mutable, span),
+            None => self.make_loan(point, place.clone(), mutable, span),
         };
         self.set_access(
             point,
@@ -786,17 +782,32 @@ impl Recorder {
             },
         );
         let temporary = self.body.loans[loan.0 as usize].temporary;
-        // A reborrow through a holder (`&mut *r`, `&r.a`), or a borrow of a
-        // place that holds borrows (`&v` of a `Vec<&i32>`), keeps what the
-        // holder holds for as long as it lives.
-        if let Some(holder) = through {
+        // What the place holds, below the reference's own region.
+        let below = match self.origins.get(&operand) {
+            Some(held) if inner => held.clone(),
+            _ if inner => vec![(Path::ROOT, place_origin(&place))],
+            _ => Vec::new(),
+        };
+        // A reborrow through a holder (`&mut *r`, `&r.a`) keeps what the
+        // holder holds, and a borrow of a place that holds borrows (`&v` of
+        // a `Vec<&i32>`) keeps them, for as long as it lives.
+        let reborrowed = (place.projection.first() == Some(&Projection::Deref))
+            .then(|| Origin::local(place.local));
+        let kept: Vec<Origin> = region::collapse(&below)
+            .into_iter()
+            .map(|(_, origin)| self.source(origin))
+            .collect();
+        for from in reborrowed.into_iter().chain(kept) {
             self.body.flows.push(Flow {
-                from: Origin::Local(holder),
+                from,
                 into: temporary,
+                path: Path::ROOT,
                 at: point,
             });
         }
-        self.origins.insert(span, vec![Origin::Loan(loan)]);
+        let mut held = vec![(Path::OWN, Origin::Loan(loan))];
+        held.extend(region::place(&below, Path::of(&[Step::Arg(0)])));
+        self.origins.insert(span, held);
         Some(loan)
     }
 
@@ -1008,7 +1019,7 @@ impl Recorder {
     /// an `if`'s or a `match`'s is one of its branches'.
     pub(crate) fn either(&mut self, whole: Span, parts: &[Span]) {
         // A branch that diverges, or holds nothing that borrows, adds none.
-        let followed: Vec<&Vec<Origin>> = parts
+        let followed: Vec<&Held> = parts
             .iter()
             .filter_map(|part| self.origins.get(part))
             .collect();
@@ -1133,11 +1144,11 @@ impl Recorder {
         split
     }
 
-    /// The closure being read returns a value holding `origins`, or one
-    /// these facts do not follow (`None`).
-    pub(crate) fn closure_return(&mut self, origins: Option<Vec<Origin>>) {
+    /// The closure being read returns a value holding `held`, or one these
+    /// facts do not follow (`None`).
+    pub(crate) fn closure_return(&mut self, held: Option<Held>) {
         if let Some(returns) = self.closure_returns.last_mut() {
-            returns.push(origins);
+            returns.push(held);
         }
     }
 
@@ -1173,7 +1184,7 @@ impl Recorder {
         body: ClosureBody,
         captured: &[Captured],
         parameters: &[Span],
-        tail: Option<Vec<Origin>>,
+        tail: Option<Held>,
         moved: bool,
         span: Span,
     ) -> Closure {
@@ -1237,7 +1248,7 @@ impl Recorder {
             if !inside(flow.at) {
                 continue;
             }
-            if let Origin::Local(from) = &mut flow.from
+            if let Origin::Local(from, _) = &mut flow.from
                 && let Some((upvar, _)) = upvars.get(from)
             {
                 *from = *upvar;
@@ -1282,7 +1293,7 @@ impl Recorder {
                     loan: None,
                 });
                 if captured.holder {
-                    origins.push(Origin::Local(local));
+                    origins.push(Origin::local(local));
                 }
                 continue;
             }
@@ -1307,8 +1318,9 @@ impl Recorder {
             if through || captured.holder {
                 let temporary = self.body.loans[loan.0 as usize].temporary;
                 self.body.flows.push(Flow {
-                    from: Origin::Local(local),
+                    from: Origin::local(local),
                     into: temporary,
+                    path: Path::ROOT,
                     at: point,
                 });
             }
@@ -1342,16 +1354,15 @@ impl Recorder {
                 .iter()
                 .chain(std::iter::once(&tail))
                 .all(|returned| {
-                    returned.as_ref().is_some_and(|origins| {
-                        origins
-                            .iter()
-                            .all(|origin| tracer.trace(*origin, &mut kept, &mut seen))
+                    returned.as_ref().is_some_and(|held| {
+                        region::origins(held)
+                            .all(|origin| tracer.trace(origin, &mut kept, &mut seen))
                     })
                 })
-                .then_some(kept)
+                .then(|| region::everywhere(kept))
         };
         Closure {
-            origins,
+            origins: region::everywhere(origins),
             keeps,
             mutable,
         }
@@ -1360,6 +1371,17 @@ impl Recorder {
     /// The closure `key` is `closure`.
     pub(crate) fn set_closure(&mut self, key: crate::item::Key, closure: Closure) {
         self.closures.insert(key, closure);
+    }
+
+    /// The closure written at `span` keeps `keeps` when called.
+    pub(crate) fn set_closure_keeps(&mut self, span: Span, keeps: Option<Held>) {
+        self.closure_keeps.insert(span, keeps);
+    }
+
+    /// What a call of the closure written at `span` keeps, if one is
+    /// written there.
+    pub(crate) fn closure_keeps(&self, span: Span) -> Option<&Option<Held>> {
+        self.closure_keeps.get(&span)
     }
 
     /// The closure `key` of this body, if these facts know it.
@@ -1380,14 +1402,18 @@ impl Recorder {
     }
 
     /// `into` takes what `from` holds here (a loop's element from its
-    /// iterator).
-    pub(crate) fn flow(&mut self, from: Local, into: Local) {
+    /// iterator): for each pair, `into`'s first position takes `from`'s
+    /// second.
+    pub(crate) fn flow(&mut self, from: Local, into: Local, positions: &[(Path, Path)]) {
         let at = self.push(Fact::Def(into));
-        self.body.flows.push(Flow {
-            from: Origin::Local(from),
-            into,
-            at,
-        });
+        for &(path, position) in positions {
+            self.body.flows.push(Flow {
+                from: Origin::Local(from, position),
+                into,
+                path,
+                at,
+            });
+        }
     }
 
     /// The locals declared at `declared` end here, with their block: a loan
@@ -1408,6 +1434,24 @@ impl Recorder {
             });
         }
     }
+}
+
+/// What `place` holds, as far as its steps tell without its type: the
+/// local's position below references and elements, or all of what is above
+/// a field or a variant, whose position only the type tells.
+pub(crate) fn place_origin(place: &Place) -> Origin {
+    let mut path = Path::ROOT;
+    for step in &place.projection {
+        match step {
+            Projection::Deref | Projection::Index | Projection::ConstantIndex { .. } => {
+                path = path.push(Step::Arg(0));
+            }
+            Projection::Field(_) | Projection::Downcast(_) => {
+                return region::narrow(Origin::Local(place.local, path), Path::OWN);
+            }
+        }
+    }
+    Origin::Local(place.local, path)
 }
 
 /// The place a closure captures for a use of `place` its body makes with
@@ -1518,11 +1562,11 @@ impl Tracer<'_> {
                 if loan.place.projection.first() == Some(&Projection::Deref) {
                     return match root {
                         Some(local) => {
-                            kept.push(Origin::Local(local));
+                            kept.push(Origin::local(local));
                             captured(local, kept);
                             true
                         }
-                        None => self.trace(Origin::Local(loan.place.local), kept, seen),
+                        None => self.trace(Origin::local(loan.place.local), kept, seen),
                     };
                 }
                 // A borrow of a captured place is of the capture's borrow;
@@ -1541,12 +1585,12 @@ impl Tracer<'_> {
                     _ => false,
                 }
             }
-            Origin::Local(local) => {
+            Origin::Local(local, _) => {
                 if !seen.insert(local) {
                     return true;
                 }
                 if let Some(captured) = self.upvars.get(&local) {
-                    kept.push(Origin::Local(*captured));
+                    kept.push(Origin::local(*captured));
                     return true;
                 }
                 if self.parameters.contains(&local) {

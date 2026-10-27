@@ -24,7 +24,10 @@ mod language_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
 
-use super::borrowck::{record, record::Matched, Access as FactAccess, Projection as FactStep};
+use super::borrowck::{
+    record, record::Matched, Access as FactAccess, Path as FactPath, Projection as FactStep,
+    Step as FactRegion,
+};
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
@@ -2704,6 +2707,15 @@ struct ScriptFunction {
     definition: item::Function,
     generated: ImmutableString,
 }
+
+/// A `for` loop's iterator, its element, and the positions where the
+/// element takes what the iterator holds: pairs of the element's position
+/// and the iterator's.
+type LoopElement = (
+    super::borrowck::Local,
+    super::borrowck::Local,
+    Vec<(FactPath, FactPath)>,
+);
 
 #[derive(Clone)]
 enum Nominal {
@@ -9722,8 +9734,9 @@ struct Parser<'a> {
     /// The hidden local holding the borrows of the `for` loop about to be
     /// read's iterator (`for x in &v`), used at its head each iteration.
     loop_iterator: Option<super::borrowck::Local>,
-    /// That iterator and the loop's element, which takes what it holds.
-    loop_element: Option<(super::borrowck::Local, super::borrowck::Local)>,
+    /// That iterator and the loop's element, which takes what it holds at
+    /// the positions `borrows::element_positions` gives.
+    loop_element: Option<LoopElement>,
     /// What each call keeps of its inputs, by where its `)` is, for its
     /// receiver's method call to read once its value is made.
     call_summaries: BTreeMap<Position, super::borrowck::signature::Summary>,
@@ -25030,8 +25043,8 @@ impl<'a> Parser<'a> {
             if !value {
                 self.flow().loop_test();
             }
-            if let Some((iterator, element)) = self.loop_element.take() {
-                self.flow().flow(iterator, element);
+            if let Some((iterator, element, positions)) = self.loop_element.take() {
+                self.flow().flow(iterator, element, &positions);
             }
             self.push_loop(label, value, drop_depth);
         }
@@ -25635,8 +25648,9 @@ impl<'a> Parser<'a> {
         let iterator = self.flow().hold("<iterator>", lhs.span);
         if let Some(iterator) = iterator {
             let element = self.flow().local(&name, declaration);
+            let positions = self.element_positions(&lhs.ty);
             self.loop_iterator = Some(iterator);
-            self.loop_element = Some((iterator, element));
+            self.loop_element = Some((iterator, element, positions));
         }
         // A `Box<dyn Iterator>` is its iterator at runtime.
         if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
@@ -31313,7 +31327,8 @@ impl<'a> Parser<'a> {
                 }
                 let whole = span(start, operand.span.end());
                 let inner = self.may_hold_borrow(&operand.ty);
-                self.flow().borrow(operand.span.start(), whole, true, inner);
+                self.flow()
+                    .borrow(operand.span.start(), operand.span, whole, true, inner);
                 self.flow().alias(operand.span.start(), start);
                 operand.ty = Ty::Reference {
                     mutable: true,
@@ -31327,11 +31342,11 @@ impl<'a> Parser<'a> {
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
                 self.flow()
-                    .borrow(operand.span.start(), whole, false, inner);
+                    .borrow(operand.span.start(), operand.span, whole, false, inner);
             } else if self.may_hold_borrow(&operand.ty) {
                 // `&v.first()`: a reference to a value made here holds
-                // what the value holds.
-                self.flow().same_origins(whole, operand.span);
+                // what the value holds, below its own region.
+                self.borrowed_value(whole, operand.span);
             } else {
                 // `&1`, `&v.len()`: a temporary of the statement, or a
                 // constant promoted to `'static`, borrowing nothing else.
@@ -31572,7 +31587,12 @@ impl<'a> Parser<'a> {
                 let base = (value.span, value.ty.clone());
                 value = self.parse_index(value)?;
                 self.flow().index_end(value.span.start());
-                self.part_of((base.0, &base.1), value.span, &value.ty);
+                self.part_of(
+                    (base.0, &base.1),
+                    value.span,
+                    &value.ty,
+                    borrows::PartOf::Element,
+                );
                 continue;
             }
             // `make()(x)`, `(self.f)(x)`: a call of a function value.
@@ -32174,6 +32194,7 @@ impl<'a> Parser<'a> {
                     (value.span, &value.ty),
                     span(value.span.start(), end),
                     &members[index],
+                    borrows::PartOf::Member(index),
                 );
                 value = self.operator_expr(
                     source,
@@ -32512,9 +32533,15 @@ impl<'a> Parser<'a> {
                 }
                 (lvalue, _) => lvalue,
             };
+            let owner = definition.id();
             let helper = self.push_op(Op::Field { definition, slot });
             let expression_span = span(value.span.start(), member_span.end());
-            self.part_of((value.span, &value.ty), expression_span, &ty);
+            self.part_of(
+                (value.span, &value.ty),
+                expression_span,
+                &ty,
+                borrows::PartOf::Field(owner, slot),
+            );
             if through_reference && lvalue.is_none() && self.drops() {
                 self.borrowed.insert(expression_span);
             }
@@ -33301,7 +33328,16 @@ impl<'a> Parser<'a> {
                 .map(|member| self.inference.resolve(&member.ty))
                 .collect(),
         );
-        let parts: Vec<&ParsedExpr> = members.iter().collect();
+        let parts: Vec<_> = members
+            .iter()
+            .enumerate()
+            .map(|(index, member)| {
+                (
+                    member,
+                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                )
+            })
+            .collect();
         self.compose(span(open, end), &ty, &parts);
         let source = origin::Fragment::join(members.iter().map(ParsedExpr::rendered_source), ", ")
             .surrounded("[", "]");
@@ -35156,7 +35192,7 @@ impl<'a> Parser<'a> {
                 .flow()
                 .unmodeled("a borrow a closure's value keeps", call),
             (None, _) => {
-                let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+                let summary = super::borrowck::signature::Summary::unknown();
                 self.kept_by_call(call, &kept, None, &summary);
             }
         }
@@ -35724,7 +35760,11 @@ impl<'a> Parser<'a> {
             self.coerce_expr(expected, value)?;
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        let parts: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| (value, borrows::Slot::Field(definition.id(), None, slot)))
+            .collect();
         self.compose(span(expression.start(), end), &struct_ty, &parts);
         let source = origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source));
         Ok(Some(self.operator_expr(
@@ -36123,7 +36163,15 @@ impl<'a> Parser<'a> {
         for value in &mut elements {
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = elements.iter().collect();
+        let parts: Vec<_> = elements
+            .iter()
+            .map(|element| {
+                (
+                    element,
+                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(0)])),
+                )
+            })
+            .collect();
         let array_ty = Ty::Array {
             element: Box::new(element.clone()),
             length: None,
@@ -36288,7 +36336,15 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         };
-        self.compose(expression, &ty, &[&*value]);
+        let at = match variant {
+            Prelude::Err => FactRegion::Arg(1),
+            _ => FactRegion::Arg(0),
+        };
+        self.compose(
+            expression,
+            &ty,
+            &[(&*value, borrows::Slot::At(FactPath::of(&[at])))],
+        );
         let source = self.prelude_op(op, [value.rendered_source()]);
         let mut value = self.operator_expr(source, ty, expression);
         value.lvalue = place;
@@ -39169,7 +39225,9 @@ impl<'a> Parser<'a> {
         // A closure holds its captures' borrows. An async block's are left
         // to `cargo check`: its value is a future the facts don't follow.
         if !scope.asynchronous {
-            self.flow().set_origins(expression, closure.origins.clone());
+            let mut flow = self.flow();
+            flow.set_origins(expression, closure.origins.clone());
+            flow.set_closure_keeps(expression, closure.keeps.clone());
         }
         // `move` moves each capture that is not `Copy` into the closure as
         // it is created, and copies the others. A closure that is not
@@ -39560,7 +39618,7 @@ impl<'a> Parser<'a> {
                 .native_output(&name, arguments.len())
                 .unwrap_or(Ty::Unknown);
             let kept = self.inference.resolve(&output);
-            let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+            let summary = super::borrowck::signature::Summary::unknown();
             self.kept_by_call(span(name_span.start(), end), &kept, None, &summary);
             output
         };
@@ -39760,11 +39818,21 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let parts: Vec<&ParsedExpr> = values
-            .values()
-            .map(|(value, _)| value)
-            .chain(base.as_ref())
-            .collect();
+        let mut parts = Vec::new();
+        for (name, (value, _)) in &values {
+            let slot = item
+                .fields
+                .iter()
+                .position(|field| field.name.text == *name);
+            parts.push((
+                value,
+                match slot {
+                    Some(slot) => borrows::Slot::Field(definition.id(), None, slot),
+                    None => borrows::Slot::At(FactPath::ROOT),
+                },
+            ));
+        }
+        parts.extend(base.iter().map(|base| (base, borrows::Slot::Whole)));
         self.compose(span(name_span.start(), end), &struct_ty, &parts);
         let declared_order = base.is_none()
             && order
@@ -42357,7 +42425,20 @@ impl<'a> Parser<'a> {
             )?;
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        let parts: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| {
+                (
+                    value,
+                    borrows::Slot::Field(
+                        definition.id(),
+                        Some(declaration.name.text.as_str()),
+                        slot,
+                    ),
+                )
+            })
+            .collect();
         self.compose(span(owner_span.start(), end), &enum_ty, &parts);
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),

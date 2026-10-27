@@ -14,7 +14,10 @@
 
 pub(crate) mod nll;
 pub(crate) mod record;
+pub(crate) mod region;
 pub(crate) mod signature;
+
+pub(crate) use region::{Path, Step};
 
 #[cfg(test)]
 mod differential;
@@ -98,11 +101,20 @@ pub(crate) enum Access {
     None,
 }
 
-/// Where a loan or a holder's loans flow: into a local's type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where a loan or a holder's loans flow from: a loan, or what a local
+/// holds at a position of its type ([`Path::ROOT`]: all of it, position by
+/// position).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Origin {
     Loan(LoanId),
-    Local(Local),
+    Local(Local, Path),
+}
+
+impl Origin {
+    /// All a local holds.
+    pub(crate) fn local(local: Local) -> Self {
+        Self::Local(local, Path::ROOT)
+    }
 }
 
 /// One fact of a block, in the order the body runs them.
@@ -170,12 +182,14 @@ pub(crate) struct BlockData {
     pub(crate) successors: Vec<Block>,
 }
 
-/// A loan flowing into a local at a point: the local's region is within
-/// the loan's (`'loan: 'local`).
+/// A loan flowing into a local at a point: the local's region at `path` is
+/// within the loan's (`'loan: 'local`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Flow {
     pub(crate) from: Origin,
     pub(crate) into: Local,
+    /// The position of `into`'s type the borrows flow into.
+    pub(crate) path: Path,
     /// Where it flows. NLL's constraints hold at every point and do not
     /// read it; a location-sensitive rule such as the Polonius alpha does.
     #[allow(dead_code)]
@@ -238,8 +252,9 @@ impl Body {
 /// The rule that says where each loan is live, from the body's facts.
 pub(crate) trait Rule {
     /// For each loan, the points where it is in scope, by [`point_index`]:
-    /// an access there that conflicts with it is an error.
-    fn loans_in_scope(&self, body: &Body) -> Vec<Points>;
+    /// an access there that conflicts with it is an error. `reach` is
+    /// [`region::reach`] of the body: the locals each loan flows into.
+    fn loans_in_scope(&self, body: &Body, reach: &[Vec<bool>]) -> Vec<Points>;
 }
 
 /// A set of a body's points, by [`point_index`].
@@ -288,7 +303,8 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     if body.loans.is_empty() {
         return None;
     }
-    let in_scope = rule.loans_in_scope(body);
+    let reach = region::reach(body);
+    let in_scope = rule.loans_in_scope(body, &reach);
     let index = point_index(body);
     // Only a loan of the same local can conflict with an access.
     let mut by_local = std::collections::BTreeMap::<Local, Vec<usize>>::new();
@@ -298,8 +314,8 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             .or_default()
             .push(loan_index);
     }
-    let forever = reaches(body, &body.everywhere);
-    let returned = reaches(body, &body.returned);
+    let forever = region::reaches_any(&reach, &body.everywhere);
+    let returned = region::reaches_any(&reach, &body.returned);
     for point in body.points() {
         let Some(Fact::Access {
             place,
@@ -366,39 +382,6 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
         }
     }
     None
-}
-
-/// Whether each loan flows into one of `sinks` ([`Body::everywhere`]: it is
-/// borrowed for `'static`; [`Body::returned`]: the function returns it).
-pub(crate) fn reaches(body: &Body, sinks: &[Local]) -> Vec<bool> {
-    let mut reaches = vec![false; body.locals.len()];
-    for local in sinks {
-        reaches[local.0 as usize] = true;
-    }
-    // Backwards over the flows, until nothing changes.
-    let mut changed = !sinks.is_empty();
-    while changed {
-        changed = false;
-        for flow in &body.flows {
-            if let Origin::Local(from) = flow.from
-                && reaches[flow.into.0 as usize]
-                && !reaches[from.0 as usize]
-            {
-                reaches[from.0 as usize] = true;
-                changed = true;
-            }
-        }
-    }
-    body.loans
-        .iter()
-        .enumerate()
-        .map(|(index, loan)| {
-            reaches[loan.temporary.0 as usize]
-                || body.flows.iter().any(|flow| {
-                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
-                })
-        })
-        .collect()
 }
 
 /// The index of each point in a flat numbering of the body's points.
