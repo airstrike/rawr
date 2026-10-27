@@ -7,6 +7,15 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 
+## 0.2.7 (2026-10-27)
+
+- Upstream iced's `counter` example runs under `rawr run` without rawr-iced, through generated bindings only. It has iced's own title and theme, and a save applies at the next event with the count kept.
+- A type that only a trait's default parameters and a crate's impls decide, such as the renderer behind `impl Widget<Message>`, is worked out from the crate's own impls.
+- A crate's type alias that is the only name of its type, such as `iced::Renderer`, works.
+- Generated code names crate types through the crate's own aliases, so iced's `text(..)` works.
+- A trait that a dependency's macro reaches through `$crate` is in scope.
+- A string literal passed to a crate's generic parameter is a `&'static str`, as in Rust.
+
 ## 0.2.6 (2026-10-27)
 
 - Reading or writing a struct's field no longer copies the struct.
