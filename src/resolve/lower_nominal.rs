@@ -42060,6 +42060,26 @@ impl<'a> Parser<'a> {
         let imported_owner = (qualified_model.is_none() && segments.len() == 1)
             .then(|| self.models.import(&owner).cloned())
             .flatten()
+            // A crate's type alias of a crate type, as `Element::new`
+            // through `use iced::Element;`, is that type's.
+            .map(|binding| match &binding.target {
+                item::Import::Alias => match self
+                    .models
+                    .alias(&owner)
+                    .and_then(|alias| alias.target.as_deref().cloned())
+                {
+                    Some(type_ref::Type::Path(type_ref::Path {
+                        target: type_ref::Target::Host { definition, owner },
+                        ..
+                    })) => item::Binding {
+                        name: binding.name,
+                        qualified: definition.path().as_str().into(),
+                        target: item::Import::Type { definition, owner },
+                    },
+                    _ => binding,
+                },
+                _ => binding,
+            })
             .filter(|binding| {
                 matches!(
                     &binding.target,
@@ -43226,37 +43246,7 @@ impl<'a> Parser<'a> {
             && !self.generics.contains_key(name.as_str())
             && let Some(alias) = self.models.alias(&name).cloned()
         {
-            let mut arguments = Vec::new();
-            if matches!(self.peek(), Token::LessThan) {
-                self.next();
-                while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                    if !self.skip_lifetime() {
-                        arguments.push(self.parse_local_type()?);
-                    }
-                    if matches!(self.peek(), Token::Comma) {
-                        self.next();
-                    } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                        return Err(self.unsupported("generic arguments"));
-                    }
-                }
-                self.expect_close_angle("'>' after generic arguments")?;
-            }
-            if arguments.len() != alias.params.len() {
-                return Err(Error::InvalidTypeArguments {
-                    ty: name,
-                    expected: alias.params.len(),
-                    actual: arguments.len(),
-                    reference: name_span,
-                });
-            }
-            let Some(target) = &alias.target else {
-                return Err(Error::UnknownType {
-                    name,
-                    reference: name_span,
-                });
-            };
-            let substitution = alias.params.iter().cloned().zip(arguments).collect();
-            return Ok(instantiate(&Ty::from_resolved(target), &substitution));
+            return self.parse_alias_type(name, name_span, &alias);
         }
         let mut qualified = None;
         // `T::Output`, `Self::Output`, `Square::Output`: an associated type.
@@ -43327,6 +43317,12 @@ impl<'a> Parser<'a> {
                 && let Some(ty) = builtin_path_type(builtin)
             {
                 return Ok(ty);
+            }
+            // A crate's type alias, as `iced::Result`.
+            if let Some(crate::host::Entry::TypeAlias(alias)) = self.models.host.entry(&path)
+                && let Some(alias) = type_ref::Alias::host(alias, &self.models.host, name_span)
+            {
+                return self.parse_alias_type(name, name_span, &alias);
             }
             let Some(definition) = self.models.host.source_type(&path).cloned() else {
                 return Err(Error::UnknownType {
@@ -45877,6 +45873,61 @@ impl<'a> Parser<'a> {
             capability: capability.name().into(),
             operation: span,
         })
+    }
+
+    /// A type alias's target, with the generic arguments written after its
+    /// name, and each parameter not written its default, as
+    /// `Element<'a, Message>` leaves `Theme` to its own.
+    fn parse_alias_type(
+        &mut self,
+        name: ImmutableString,
+        name_span: Span,
+        alias: &type_ref::Alias,
+    ) -> Result<Ty, Error> {
+        let mut arguments = Vec::new();
+        if matches!(self.peek(), Token::LessThan) {
+            self.next();
+            while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                if !self.skip_lifetime() {
+                    arguments.push(self.parse_local_type()?);
+                }
+                if matches!(self.peek(), Token::Comma) {
+                    self.next();
+                } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                    return Err(self.unsupported("generic arguments"));
+                }
+            }
+            self.expect_close_angle("'>' after generic arguments")?;
+        }
+        let written = arguments.len();
+        while arguments.len() < alias.params.len() {
+            let Some(Some(default)) = alias.defaults.get(arguments.len()) else {
+                break;
+            };
+            let substitution = alias
+                .params
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            arguments.push(instantiate(&Ty::from_resolved(default), &substitution));
+        }
+        if arguments.len() != alias.params.len() {
+            return Err(Error::InvalidTypeArguments {
+                ty: name,
+                expected: alias.params.len(),
+                actual: written,
+                reference: name_span,
+            });
+        }
+        let Some(target) = &alias.target else {
+            return Err(Error::UnknownType {
+                name,
+                reference: name_span,
+            });
+        };
+        let substitution = alias.params.iter().cloned().zip(arguments).collect();
+        Ok(instantiate(&Ty::from_resolved(target), &substitution))
     }
 
     #[cfg(feature = "rust-import")]

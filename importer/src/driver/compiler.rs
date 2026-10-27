@@ -2296,7 +2296,44 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
                         (target, tcx.def_kind(target))
                     }
-                    _ => (def_id, kind),
+                    // A generic alias, as `pub type Element<'a, M, Theme =
+                    // Plain> = element::Element<'a, M, Theme>;`, or one with
+                    // fixed arguments, as `pub type Result = Result<(),
+                    // Error>;`, selects each type it and its defaults name,
+                    // with their impl tables, as rustc proves their bounds.
+                    // `Alias::member` is its type's member.
+                    aliased => {
+                        let defaults = tcx
+                            .generics_of(def_id)
+                            .own_params
+                            .iter()
+                            .filter_map(|parameter| parameter.default_value(tcx))
+                            .filter_map(|default| {
+                                default.instantiate_identity().skip_norm_wip().as_type()
+                            })
+                            .collect::<Vec<_>>();
+                        let named = tcx
+                            .type_of(def_id)
+                            .instantiate_identity()
+                            .skip_norm_wip()
+                            .walk()
+                            .chain(defaults.into_iter().flat_map(|default| default.walk()))
+                            .filter_map(|argument| argument.as_type())
+                            .filter_map(|ty| match ty.kind() {
+                                ty::Adt(definition, _) => Some(definition.did()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        for target in named {
+                            self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
+                        }
+                        match aliased {
+                            ty::Adt(definition, _) => {
+                                (definition.did(), tcx.def_kind(definition.did()))
+                            }
+                            _ => (def_id, kind),
+                        }
+                    }
                 },
                 _ => (def_id, kind),
             };

@@ -1570,6 +1570,21 @@ fn build(
                     && let Some(builtin) = rawr_import::surface::facade::builtin_alias(plan.ty())
                 {
                     builder.builtin_alias(entry.relative.as_ref(), builtin)?;
+                } else if ty_ok(plan.ty(), declared)
+                    && plan
+                        .parameters()
+                        .iter()
+                        .filter_map(representability::signature::Parameter::default)
+                        .all(|default| ty_ok(default, declared))
+                {
+                    // Any other type alias, as `iced::Result`, names its
+                    // target with its own parameters.
+                    builder.type_alias(
+                        entry.relative.as_ref(),
+                        names(plan.parameters(), allocation)?,
+                        defaults(&types, plan.parameters(), allocation)?,
+                        types.convert(plan.ty(), plan.parameters(), allocation)?,
+                    )?;
                 }
                 continue;
             }

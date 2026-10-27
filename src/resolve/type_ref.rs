@@ -63,6 +63,10 @@ pub(crate) enum Target {
 pub(crate) struct Alias {
     pub params: Box<[ImmutableString]>,
     pub target: Option<Box<Type>>,
+    /// Each parameter's default, by position, as a crate alias's `Theme =
+    /// Plain` has; empty when none has one. A default may name the
+    /// parameters before it.
+    pub defaults: Box<[Option<Type>]>,
 }
 
 impl Alias {
@@ -77,7 +81,67 @@ impl Alias {
                 arguments: Box::default(),
                 span,
             }))),
+            defaults: Box::default(),
         }
+    }
+
+    /// A crate's type alias (`host::Entry::TypeAlias`), as `iced::Result`
+    /// is `Result<(), iced::Error>`. `None` when a header cannot name what
+    /// it names.
+    pub(crate) fn host(
+        alias: &host::facade::TypeAlias,
+        host: &host::Registry,
+        span: Span,
+    ) -> Option<Self> {
+        let params = alias.parameters();
+        let owner = host.type_owner(&alias.path().to_string()).cloned();
+        let parameters = params
+            .iter()
+            .map(|name| {
+                Type::Path(Path {
+                    name: name.clone(),
+                    target: Target::Parameter,
+                    arguments: Box::default(),
+                    span,
+                })
+            })
+            .collect::<Vec<_>>();
+        let named = |ty: &host::type_ref::Type| {
+            host_type(ty, params, &parameters, owner.as_ref(), None, host, span)
+        };
+        Some(Self {
+            params: params.into(),
+            target: Some(Box::new(named(alias.target())?)),
+            defaults: alias
+                .defaults()
+                .iter()
+                .map(|default| match default {
+                    Some(default) => named(default).map(Some),
+                    None => Some(None),
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
+
+    /// `arguments` with each parameter not written filled by its default,
+    /// as `Element<'a, Message>` leaves `Theme` to its default. `None` when
+    /// they don't fill the parameters.
+    pub(crate) fn complete(&self, arguments: Vec<Type>, span: Span) -> Option<Vec<Type>> {
+        let mut arguments = arguments;
+        if arguments.len() > self.params.len() {
+            return None;
+        }
+        while arguments.len() < self.params.len() {
+            let mut default = self.defaults.get(arguments.len())?.clone()?;
+            substitute(
+                &mut default,
+                &self.params[..arguments.len()],
+                &arguments,
+                span,
+            );
+            arguments.push(default);
+        }
+        Some(arguments)
     }
 
     /// The alias's target with `arguments` for its parameters, written at
@@ -182,7 +246,17 @@ pub(super) fn resolve(
             if super::std_phantom(&written) && !types.contains_key("PhantomData") {
                 return Ok(Type::Unit(path.span));
             }
-            if let Some(Target::Alias(alias)) = types.get(written.as_str()) {
+            // A crate's type alias written by its path, as `iced::Result`.
+            let host_alias = (!types.contains_key(written.as_str()))
+                .then(|| match host.entry(&super::std_reexport(&written, host)) {
+                    Some(host::Entry::TypeAlias(alias)) => {
+                        Alias::host(alias, host, path.span).map(Target::Alias)
+                    }
+                    _ => None,
+                })
+                .flatten();
+            if let Some(Target::Alias(alias)) = host_alias.as_ref().or(types.get(written.as_str()))
+            {
                 let span = path.span;
                 let mut arguments = Vec::new();
                 for segment in path.segments {
@@ -198,14 +272,15 @@ pub(super) fn resolve(
                         }
                     }
                 }
-                if arguments.len() != alias.params.len() {
+                let written_count = arguments.len();
+                let Some(arguments) = alias.complete(arguments, span) else {
                     return Err(Error::InvalidTypeArguments {
                         ty: written.into(),
                         expected: alias.params.len(),
-                        actual: arguments.len(),
+                        actual: written_count,
                         reference: span,
                     });
-                }
+                };
                 return alias.expand(&arguments, span).ok_or(Error::UnknownType {
                     name: written.into(),
                     reference: span,
@@ -740,8 +815,15 @@ fn defaulted_arguments(
             return;
         };
         let parameters = &definition.parameters()[..index];
-        let Some(ty) = host_type(default, parameters, &filled, owner, definition, host, span)
-        else {
+        let Some(ty) = host_type(
+            default,
+            parameters,
+            &filled,
+            owner,
+            Some(definition),
+            host,
+            span,
+        ) else {
             return;
         };
         filled.push(ty);
@@ -756,7 +838,7 @@ fn host_type(
     parameters: &[ImmutableString],
     arguments: &[Type],
     owner: Option<&host::facade::Dependency>,
-    originating: &host::type_def::Definition,
+    originating: Option<&host::type_def::Definition>,
     host: &host::Registry,
     span: Span,
 ) -> Option<Type> {
@@ -832,7 +914,7 @@ fn host_type(
             identity,
             arguments: inner,
         } => {
-            let imported = host.imported_type(identity, owner?, Some(originating))?;
+            let imported = host.imported_type(identity, owner?, originating)?;
             let definition = imported.definition.clone();
             let owner = imported.owner.cloned();
             let inner = convert(inner, owner.as_ref())?;

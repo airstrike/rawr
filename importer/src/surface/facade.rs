@@ -153,6 +153,49 @@ pub struct Facade {
     /// of the facade's paths to its enum, in path order.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     variants: Box<[(Box<str>, Box<str>)]>,
+    /// The crate's type aliases, as `pub type Result = std::result::Result<
+    /// (), Error>;`, other than those of a builtin, in path order.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    type_aliases: Box<[TypeAlias]>,
+}
+
+/// One crate type alias: its path, relative to the root, its type
+/// parameters with their defaults, and the type it names.
+#[derive(Deserialize, Serialize)]
+pub struct TypeAlias {
+    path: Box<str>,
+    parameters: Box<[Box<str>]>,
+    /// Each parameter's default type, by position, or none when no
+    /// parameter has one.
+    #[serde(default)]
+    defaults: Box<[Option<Type>]>,
+    target: Type,
+}
+
+impl TypeAlias {
+    /// The alias's path, relative to the root.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Its type parameters, in order.
+    pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.parameters.iter().map(AsRef::as_ref)
+    }
+
+    /// Each parameter's default type, by position, or none when no
+    /// parameter has one.
+    #[must_use]
+    pub fn defaults(&self) -> &[Option<Type>] {
+        &self.defaults
+    }
+
+    /// The type it names, in which each parameter is a [`Type::Parameter`].
+    #[must_use]
+    pub const fn target(&self) -> &Type {
+        &self.target
+    }
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -477,6 +520,7 @@ impl Plan {
                             traits: Box::default(),
                             builtins: Box::default(),
                             variants: Box::default(),
+                            type_aliases: Box::default(),
                         },
                     );
                     index
@@ -511,6 +555,27 @@ impl Plan {
                     builtins.insert(position, (copy(&relative)?, copy(builtin)?));
                 }
                 facade.builtins = builtins.into_boxed_slice();
+                continue;
+            }
+            // Any other type alias, as `pub type Result = std::result::Result<
+            // (), Error>;`, names its target with its own parameters.
+            if let Representability::Value(plan) = outcome.representability() {
+                let alias = TypeAlias {
+                    path: copy(&relative)?,
+                    parameters: parameters(plan.parameters())?,
+                    defaults: defaults(plan.parameters())?,
+                    target: ty(plan.ty(), plan.parameters())?,
+                };
+                let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
+                if let Err(position) =
+                    aliases.binary_search_by(|alias| alias.path.as_ref().cmp(relative.as_ref()))
+                {
+                    aliases
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    aliases.insert(position, alias);
+                }
+                facade.type_aliases = aliases.into_boxed_slice();
                 continue;
             }
             // A re-exported variant, as `pub use Alignment::Center;`, is its
@@ -581,6 +646,17 @@ impl Plan {
             items.retain(|item| item.signature.declared(&declared));
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
+            // So is a type alias of such a type.
+            let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
+            aliases.retain(|alias| {
+                alias.target.declared(&declared)
+                    && alias
+                        .defaults
+                        .iter()
+                        .flatten()
+                        .all(|default| default.declared(&declared))
+            });
+            facade.type_aliases = aliases.into_boxed_slice();
         }
         for (root, path, identity, variant) in variants {
             let Ok(index) = facades.binary_search_by(|facade| facade.root.cmp(&root)) else {
@@ -936,6 +1012,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             traits: Box::default(),
             builtins: Box::default(),
             variants: Box::default(),
+            type_aliases: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -1055,6 +1132,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 traits: Box::default(),
                 builtins: Box::default(),
                 variants: Box::default(),
+                type_aliases: Box::default(),
             },
             iced,
         ]),
@@ -1194,6 +1272,12 @@ impl Facade {
         self.builtins
             .iter()
             .map(|(path, builtin)| (path.as_ref(), builtin.as_ref()))
+    }
+
+    /// Iterate the crate's type aliases other than those of a builtin, in
+    /// path order.
+    pub fn type_aliases(&self) -> impl ExactSizeIterator<Item = &TypeAlias> {
+        self.type_aliases.iter()
     }
 
     /// Iterate the re-exported enum variants: each path, relative to the

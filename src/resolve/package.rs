@@ -1965,6 +1965,13 @@ fn host_target(
         Some(host::Entry::Builtin(builtin)) => Ok(Target::Type(type_ref::Target::Alias(
             type_ref::Alias::builtin(builtin, reference),
         ))),
+        // A crate's type alias, as `use iced::Result;`.
+        Some(host::Entry::TypeAlias(alias)) => type_ref::Alias::host(alias, host, reference)
+            .map(|alias| Target::Type(type_ref::Target::Alias(alias)))
+            .ok_or_else(|| Error::UnknownType {
+                name: qualified.clone(),
+                reference,
+            }),
         Some(host::Entry::Item(definitions)) => Ok(Target::HostItem {
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),

@@ -77,3 +77,12 @@ fn impl_fn_parameters_of_a_generic_builder_take_script_closures() {
 fn a_re_exported_variant_and_a_used_variant_are_the_enums_variants() {
     runs_as_cargo_does("alignment", "Center\ncenter end start\ntrue\ntrue\n");
 }
+
+/// A crate's type aliases, as `iced::Result` (`std::result::Result<(),
+/// Error>`) and `iced::Element` (a generic type with a default parameter)
+/// are, name their targets in headers and bodies, through a `use` and by
+/// their path, with each parameter not written its default.
+#[test]
+fn a_crates_type_aliases_name_their_targets_with_defaults() {
+    runs_as_cargo_does("aliases", "message 7\nErr(Failed(\"no\"))\n");
+}

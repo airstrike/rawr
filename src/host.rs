@@ -152,6 +152,8 @@ pub struct Registry {
     facades: Vec<facade::Dependency>,
     /// Facade re-exports, sorted: a path and the canonical path it names.
     aliases: Vec<(path::Path, path::Path)>,
+    /// Crate type aliases, sorted by path (`iced::Result`).
+    type_aliases: Vec<facade::TypeAlias>,
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
@@ -180,6 +182,8 @@ pub(crate) enum Entry<'a> {
     /// A facade's alias of a builtin type, as iced's `markdown::Uri` is
     /// `String`: the builtin's name.
     Builtin(&'a str),
+    /// A crate's type alias, as `iced::Result` is.
+    TypeAlias(&'a facade::TypeAlias),
 }
 
 #[cfg(feature = "rust-import")]
@@ -213,6 +217,7 @@ impl Registry {
             items: Vec::new(),
             facades: Vec::new(),
             aliases: Vec::new(),
+            type_aliases: Vec::new(),
             exported: Vec::new(),
         }
     }
@@ -361,6 +366,13 @@ impl Registry {
                 .aliases
                 .push((alias.try_clone()?, target.try_clone()?));
         }
+        clone
+            .type_aliases
+            .try_reserve_exact(self.type_aliases.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for alias in &self.type_aliases {
+            clone.type_aliases.push(alias.try_clone()?);
+        }
         clone.exported.clone_from(&self.exported);
         Ok(clone)
     }
@@ -500,6 +512,12 @@ impl Registry {
             .map_err(|_| Error::Allocation)?;
         self.aliases.extend(parts.aliases);
         self.aliases.sort();
+        self.type_aliases
+            .try_reserve(parts.type_aliases.len())
+            .map_err(|_| Error::Allocation)?;
+        self.type_aliases.extend(parts.type_aliases);
+        self.type_aliases
+            .sort_by(|left, right| left.path().cmp(right.path()));
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
@@ -788,6 +806,8 @@ impl Registry {
             (ty.visibility() == type_def::Visibility::Public).then_some(Entry::Type(ty))
         } else if let Some(builtin) = self.builtin_alias(&path) {
             Some(Entry::Builtin(builtin))
+        } else if let Some(alias) = self.type_alias(&path) {
+            Some(Entry::TypeAlias(alias))
         } else {
             if let Some((endpoint, _)) = self.operation_endpoint(qualified) {
                 return Some(Entry::Endpoint(endpoint));
@@ -824,6 +844,7 @@ impl Registry {
                     .filter(|(_, target)| is_builtin_alias_target(target))
                     .map(|(alias, _)| alias),
             )
+            .chain(self.type_aliases.iter().map(facade::TypeAlias::path))
             .chain(
                 self.aliases
                     .iter()
@@ -1051,6 +1072,18 @@ impl Registry {
             .then(|| ty.path_ref().to_string().into())
     }
 
+    /// The crate type alias at `path` (`Entry::TypeAlias`), or at the path
+    /// a facade re-export of it names.
+    pub(crate) fn type_alias(&self, path: &path::Path) -> Option<&facade::TypeAlias> {
+        let found = |path: &path::Path| {
+            self.type_aliases
+                .binary_search_by(|alias| alias.path().cmp(path))
+                .ok()
+                .map(|index| &self.type_aliases[index])
+        };
+        found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
     /// The builtin a facade names at `path` (`Entry::Builtin`).
     pub(crate) fn builtin_alias(&self, path: &path::Path) -> Option<&str> {
         self.aliases.iter().find_map(|(alias, target)| {
@@ -1127,6 +1160,7 @@ impl Registry {
                 .type_by_path(path)
                 .is_some_and(type_def::Definition::exact_arity)
             || self.item_slice(path).is_some()
+            || self.type_alias(path).is_some()
             || self
                 .canonical(path)
                 .is_some_and(|canonical| self.item_slice(&canonical).is_some());
