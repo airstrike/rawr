@@ -1,0 +1,30 @@
+struct Guard<'a>(&'a Vec<i32>);
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        println!("guard drops with {}", self.0.len());
+    }
+}
+
+struct Holder<'a> {
+    g: Guard<'a>,
+}
+
+fn main() {
+    let mut v = vec![];
+    let h = Holder { g: Guard(&v) };
+    let __v = vec![&v];
+    v.push(1);
+}
+
+fn __c() -> bool {
+    false
+}
+fn __eat<T>(_: T) {}
+struct __See<'a, T>(&'a T);
+impl<T> Drop for __See<'_, T> {
+    fn drop(&mut self) {}
+}
+struct __Hold<'a, T> {
+    s: __See<'a, T>,
+}

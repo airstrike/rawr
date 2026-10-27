@@ -4013,7 +4013,6 @@ impl PreludeOp {
             | Self::UnwrapErr
             | Self::GenericDebug
             | Self::TypeIndex
-            | Self::DropParts
             | Self::Discriminant
             | Self::ReverseWrap
             | Self::DisplayText
@@ -4022,7 +4021,8 @@ impl PreludeOp {
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone => vec![TypeId::of::<Dynamic>()],
-            Self::CellBorrow
+            Self::DropParts
+            | Self::CellBorrow
             | Self::CellSet
             | Self::CellReplace
             | Self::ErrorNew
@@ -4225,7 +4225,7 @@ impl PreludeOp {
                     ImmutableString::from(debug_value_spec(args[0], models, Some(&spec))).into(),
                 );
             }
-            Self::DropParts => return Ok(drops::parts(args[0], models)),
+            Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -9855,6 +9855,9 @@ struct Parser<'a> {
     /// The temporary scopes being read (`drops.rs`), innermost last: the
     /// hidden locals holding the values made in each that nothing moves.
     temporary_scopes: Vec<Vec<String>>,
+    /// The `drops::Shape` of each temporary there whose type needs more
+    /// than the walk of every part.
+    temporary_shapes: BTreeMap<String, String>,
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
@@ -10076,6 +10079,7 @@ impl<'a> Parser<'a> {
             loop_drop_depth: None,
             subject_deref: false,
             temporary_scopes: Vec::new(),
+            temporary_shapes: BTreeMap::new(),
             borrowed: BTreeSet::new(),
             deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
@@ -21288,7 +21292,10 @@ impl<'a> Parser<'a> {
         if let Some(otherwise) = otherwise {
             rendered.push_text(",\n_ => ");
             if made {
-                rendered.push_text(format!("{{ {}", drops::glue_call(&scrutinee)));
+                rendered.push_text(format!(
+                    "{{ {}",
+                    drops::glue_call(&scrutinee, &self.drop_shape(&written_ty))
+                ));
                 rendered.push(otherwise.value.rendered_block());
                 rendered.push_text(" }");
             } else {
@@ -21327,7 +21334,7 @@ impl<'a> Parser<'a> {
             )?;
             rendered.push_text(format!("\n{clears}"));
             if made {
-                rendered.push_text(drops::glue_call(&scrutinee));
+                rendered.push_text(drops::glue_call(&scrutinee, &self.drop_shape(&written_ty)));
             }
         }
         // Copies of the outer locals the bindings shadow, once the moves
@@ -21964,10 +21971,7 @@ impl<'a> Parser<'a> {
                 }
                 block.push(statement);
                 block.push_text(" ");
-                for temporary in temporaries.iter().rev() {
-                    block.push_text(drops::glue_call(temporary));
-                    block.push_text(" ");
-                }
+                block.push_text(self.temporary_drops(temporaries));
                 block.push_text("}\n");
                 self.output.push(block);
             }
@@ -24672,7 +24676,7 @@ impl<'a> Parser<'a> {
             drops::Holder::Local(place, _)
                 if place == scrutinee && self.needs_drop(&subject.ty, subject.span)? =>
             {
-                drops::glue_call(scrutinee)
+                drops::glue_call(scrutinee, &self.drop_shape(&subject.ty))
             }
             _ => String::new(),
         };
@@ -25198,6 +25202,7 @@ impl<'a> Parser<'a> {
             }
         }
         let flow_depth = self.loops[target].flow_depth;
+        self.exit_drop_uses(self.loops[target].drop_depth);
         self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
         let drops =
@@ -25265,6 +25270,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let copied = self.copied_return("()".into());
                 source = self.jump_with_drops(&drops, "return", copied);
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25288,6 +25294,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let returned = self.copied_return(returned.clone()).unwrap_or(returned);
                 source = self.jump_with_drops(&drops, "return", Some(returned));
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25295,6 +25302,7 @@ impl<'a> Parser<'a> {
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         }
         source.push_text("; }");
+        self.exit_drop_uses(self.drop_base);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
     }
@@ -27361,7 +27369,9 @@ impl<'a> Parser<'a> {
                 .map(|binding| binding.declaration)
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
-            self.flow().storage_dead(&declared, point_span(end));
+            let drop_uses = self.block_drop_uses();
+            self.flow()
+                .storage_dead(&declared, &drop_uses, point_span(end));
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
             let ty = std::mem::replace(&mut self.last_type, outer_last_type);
             let inner_last_expression =
@@ -36584,7 +36594,7 @@ impl<'a> Parser<'a> {
                 source.push(test);
                 source.push_text(" { ");
                 if self.needs_drop(&element, member_span)? {
-                    source.push_text(drops::glue_call("__rawr_or"));
+                    source.push_text(drops::glue_call("__rawr_or", &self.drop_shape(&element)));
                     source.push_text(" ");
                 }
                 let unwrapped = unwrap(self);
@@ -38319,10 +38329,11 @@ impl<'a> Parser<'a> {
                         Vec::new()
                     };
                     source.push(self.mutation_call(&value, member.as_str(), operands)?);
+                    let drop =
+                        drops::glue_call(&format!("{kept}[{at}]"), &self.drop_shape(&element));
                     source.push_text(format!(
-                        "; let {at} = {length}; while {at} < {kept}.len() {{ {}({kept}[{at}]); \
-                         {at} += 1; }} }}",
-                        drops::GLUE
+                        "; let {at} = {length}; while {at} < {kept}.len() {{ {drop} \
+                         {at} += 1; }} }}"
                     ));
                     return Ok(self.operator_expr(source, Ty::Unit, expression));
                 }
@@ -39479,12 +39490,12 @@ impl<'a> Parser<'a> {
             }
             self.move_local(argument)?;
             // A value with drop glue runs it here.
-            let dropping = if self.needs_drop(&argument.ty, argument.span)? {
-                drops::GLUE
+            let source = if self.needs_drop(&argument.ty, argument.span)? {
+                let shape = origin::Fragment::plain(self.drop_shape(&argument.ty));
+                origin::Fragment::call(drops::GLUE, [argument.rendered_source(), shape])
             } else {
-                crate::engine::KEYWORD_DROP
+                origin::Fragment::call(crate::engine::KEYWORD_DROP, [argument.rendered_source()])
             };
-            let source = origin::Fragment::call(dropping, [argument.rendered_source()]);
             return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the

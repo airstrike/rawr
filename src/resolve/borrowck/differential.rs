@@ -38,14 +38,6 @@ pub(super) enum Verdict {
 /// their path (a case's mutations share its name).
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "ui/nll/issue-54556-niconii.rs",
-        "a field holding `&T` of a type with `Drop` drops a copy of the value with its struct",
-    ),
-    (
-        "ui/nll/issue-54556-temps-in-tail-diagnostic.rs",
-        "a field holding `&T` of a type with `Drop` drops a copy of the value with its struct",
-    ),
-    (
         "closure-moves/move_copy_capture_copied.rs",
         "a copy of a `move` closure shares the state it changes with the closure it copies",
     ),

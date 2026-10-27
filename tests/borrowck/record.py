@@ -26,9 +26,12 @@ own signature and for temporaries (E0515, E0716, E0106), with
 `signatures/mutations/` what `mutate.py temporaries` writes, and
 `closure-places/` the cases written for closures that use a `&mut` local,
 a function's `&mut` parameter, a `&mut` pattern binding or a mutable
-loop's element (E0500, E0501, E0524), and `misc/` the cases written for
+loop's element (E0500, E0501, E0524), `misc/` the cases written for
 `format!`'s borrows of its arguments, a bare `break` or `continue` in a
-`while` condition (E0590) and or-patterns' binding types. The harness
+`while` condition (E0590) and or-patterns' binding types, and `drops/` the
+cases written for drop glue that follows a value's type and for a `Drop`
+value's drop as a use of its borrows, with `drops/mutations/` what
+`mutate.py drops` writes. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 

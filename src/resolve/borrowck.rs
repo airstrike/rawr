@@ -125,6 +125,11 @@ pub(crate) enum Fact {
     /// The local is given a new value (`let`, an assignment): it is dead
     /// before this point unless something uses it here.
     Def(Local),
+    /// The local's value drops here (its scope ends, or a jump leaves it),
+    /// and its type's `Drop` may use the borrows it holds: a use, as
+    /// rustc's drop liveness has it, where the local may still hold a
+    /// value that was not moved out.
+    DropUse(Local),
     /// An access to a place, which may make a loan.
     Access {
         place: Place,
