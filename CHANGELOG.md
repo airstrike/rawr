@@ -7,6 +7,15 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 
+## 0.2.4 (2026-10-27)
+
+- A crate method that takes an `impl Fn(..) + 'a` closure, such as iced's `Button::style`, takes a script closure.
+- An enum variant a crate re-exports with `pub use`, such as `iced::Center`, works in expressions and patterns.
+- A crate's type aliases work, with default type parameters filled in, as in `iced::Element` and `iced::Result`.
+- A default method of a crate's generic trait, such as `Widget::boxed`, is found through a type's own impl.
+- A crate module and a function with the same name both resolve.
+- The release's smoke test retries a fresh bot that drops a connection or runs out of render time.
+
 ## 0.2.3 (2026-10-27)
 
 - A dependency's `macro_rules!` macros expand from the crate's own source.
