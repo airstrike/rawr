@@ -342,6 +342,20 @@ fn struct_fields_are_reached_without_a_copy() {
     ] {
         assert_eq!(struct_places(work), (expected, 0), "{work}");
     }
+    // The same reads, writes and borrows of locals copy nothing either.
+    let named = copies_with(
+        STATE,
+        "let items = filled();
+        let mut count = 0;
+        let mut sum = 0;
+        for n in 0..1000 {
+            sum += count;
+            count = n;
+            sum += count + items.len() as i64 + lens(&items);
+        }
+        sum",
+    );
+    assert_eq!(named, (498501 + 499500 + 200000, 0));
 }
 
 /// A struct or a field of one passed by `&` to a function, passed on from
