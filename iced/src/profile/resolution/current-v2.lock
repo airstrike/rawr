@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "rawr"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ahash",
  "bitflags",
@@ -2182,14 +2182,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-canonical"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rawr-directory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "libc",
  "thiserror 2.0.19",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-iced"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "iced",
  "iced_runtime",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anstream",
  "fd-lock",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-toml"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "thiserror 2.0.19",
  "toml_datetime",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-watch"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rawr",
  "rawr-notify",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "rawr_codegen"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proc-macro2",
  "quote",
