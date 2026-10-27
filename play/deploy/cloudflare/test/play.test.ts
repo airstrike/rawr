@@ -299,7 +299,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/reference/patterns.html"), [
     "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
   ]);
-  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "struct-update.rs"]);
+  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "method-path.rs", "struct-update.rs"]);
   assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "drop-order.rs", "clone-out.rs", "rc-refcell.rs"]);
   assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "write.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
