@@ -7,6 +7,16 @@ use crate::{item, Span};
 /// inputs and then the output.
 pub(crate) const FN_TYPE: &str = "fn";
 
+/// The builtin path name of `impl FnMut`, `impl FnOnce` and their `dyn`
+/// and bound forms: a function type ([`FN_TYPE`]) whose call takes the
+/// function `&mut` (or by value), which no Rust path can spell.
+pub(crate) const FN_MUT_TYPE: &str = "fn mut";
+
+/// Whether `name` is a function type's builtin path name.
+pub(crate) fn is_fn_type(name: &str) -> bool {
+    name == FN_TYPE || name == FN_MUT_TYPE
+}
+
 /// The builtin path names of `impl Iterator<Item = T>` (also written
 /// `impl DoubleEndedIterator` or `impl ExactSizeIterator`) and `impl
 /// IntoIterator<Item = T>`, and of a generic parameter bounded by one with

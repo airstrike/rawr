@@ -9607,6 +9607,10 @@ struct Parser<'a> {
     /// The `Copy` closures that change what they captured by value, with
     /// those captures: a copy of one has its own (`KEYWORD_COPY_CLOSURE`).
     copied_state: BTreeMap<crate::item::Key, Vec<ImmutableString>>,
+    /// Calls whose value is a function a call borrows shared (`impl Fn`,
+    /// `fn`), by their span, and the locals declared with one, by their
+    /// declaration (T179).
+    shared_call_fns: BTreeSet<Span>,
     closure_count: usize,
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
@@ -9989,6 +9993,7 @@ impl<'a> Parser<'a> {
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),
             copied_state: BTreeMap::new(),
+            shared_call_fns: BTreeSet::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -20445,6 +20450,10 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.expect_name("binding name")?;
         let annotation = if matches!(self.peek(), Token::Colon) {
             self.next();
+            // `let mut f: fn(i32) -> i32`: a call of `f` borrows it shared.
+            if matches!(self.peek(), Token::Fn) {
+                self.shared_call_fns.insert(name_span);
+            }
             Some(self.parse_local_type()?)
         } else {
             None
@@ -20488,6 +20497,11 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr_expecting(annotation.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
+        // borrows it shared, as `Fn::call` does (T179).
+        if self.shared_call_fns.contains(&value.span) {
+            self.shared_call_fns.insert(name_span);
+        }
         // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
         if let Some(borrow) = self.last_cell_borrow.take()
             && borrow.span == value.span
@@ -34984,13 +34998,14 @@ impl<'a> Parser<'a> {
                 .flow()
                 .closure(&key)
                 .is_some_and(|closure| closure.mutable),
-            // A closure a function returned, as `impl FnMut(i32)`: its type
-            // doesn't say which `Fn` trait it has, and a call of one
-            // declared `mut` is an `FnMut` call, which borrows it `&mut`.
+            // A closure a function returned, as `impl FnMut(i32)`: a call of
+            // one declared `mut` is an `FnMut` call, which borrows it `&mut`,
+            // unless its type is `impl Fn` or `fn` (T179).
             Ty::Fn { .. } => {
                 binding.mutable
                     && matches!(binding.kind, BindingKind::Local)
                     && !self.parameter_declarations.contains(&binding.declaration)
+                    && !self.shared_call_fns.contains(&binding.declaration)
             }
             _ => false,
         };
@@ -39632,6 +39647,14 @@ impl<'a> Parser<'a> {
                 self.kept_by_call(call, &kept, None, summary);
             }
             name = function.generated;
+            if function
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(type_ref::Type::is_shared_call_fn)
+            {
+                self.shared_call_fns.insert(call);
+            }
             let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver

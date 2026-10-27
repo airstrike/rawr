@@ -1,0 +1,28 @@
+fn apply<F: FnMut(i32) -> i32>(f: &mut F, values: &[i32]) -> i32 {
+    let mut last = 0;
+    for value in values {
+        last = f(*value);
+    }
+    last
+}
+
+fn main() {
+    let mut sum = 0;
+    let mut running = |x| {
+        sum += x;
+        sum
+    };
+    println!("{}", apply(&mut running, &[1, 2, 3]));
+    println!("{}", apply(&mut running, &[4]));
+    let __b = &mut sum;
+    for __i in 0..2 {
+        __touch(__b);
+        println!("{sum}");
+    }
+}
+
+fn __touch<T>(_: &mut T) {}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}
