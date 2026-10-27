@@ -1316,6 +1316,22 @@ impl Parser<'_> {
         }
     }
 
+    /// A `format!` argument `value`, borrowed until the macro has read the
+    /// arguments after it: a place's shared borrow, made where it is read,
+    /// or the borrows a value made for it holds (`&p`, `s.as_str()`).
+    pub(super) fn format_argument_borrow(&self, value: &ParsedExpr, borrowed: &mut Held) {
+        if value.lvalue.is_some() {
+            // `&r` of a reference keeps what `r` borrows.
+            let inner = self.may_hold_borrow(&self.inference.resolve(&value.ty));
+            let loan = self
+                .flow()
+                .autoref(value.span.start(), value.span, false, inner);
+            borrowed.extend(loan.map(|loan| (Path::OWN, loan)));
+        } else if let Some(held) = self.flow().origins(value.span) {
+            borrowed.extend_from_slice(held);
+        }
+    }
+
     /// The place `value` is borrowed `&mut` for a call made here, after its
     /// arguments: a two-phase borrow, reserved where it was read.
     pub(super) fn mutable_use(&self, value: &ParsedExpr, at: Span) {

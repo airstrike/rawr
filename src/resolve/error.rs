@@ -64,6 +64,9 @@ pub enum Category {
     UnsupportedNominalSyntax,
     /// Syntax Rust does not have, as rustc reports it.
     Syntax,
+    /// A `break` or `continue` with no label in a `while` condition, as
+    /// rustc's E0590.
+    UnlabeledJumpInWhileCondition,
     /// The restricted application-root contract was violated.
     InvalidApplication,
     /// A local preview declaration cannot be normalized at compile time.
@@ -103,6 +106,9 @@ impl fmt::Display for Category {
             Self::InvalidMatch => formatter.write_str("invalid match"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
             Self::Syntax => formatter.write_str("syntax error"),
+            Self::UnlabeledJumpInWhileCondition => {
+                formatter.write_str("unlabeled jump in a `while` condition")
+            }
             Self::InvalidApplication => formatter.write_str("invalid application"),
             Self::InvalidPreview => formatter.write_str("invalid preview"),
             Self::InvalidWidget => formatter.write_str("invalid widget protocol"),
@@ -388,6 +394,14 @@ pub enum Error {
         /// The token's span.
         at: Span,
     },
+    /// A `break` or `continue` with no label in a `while` condition, which
+    /// rustc refuses (E0590).
+    UnlabeledJumpInWhileCondition {
+        /// `break` or `continue`.
+        keyword: ImmutableString,
+        /// The jump's span.
+        at: Span,
+    },
     /// Restricted application-root discovery failed.
     Application(crate::application::Error),
     /// Local preview metadata or one of its exact callback proofs is invalid.
@@ -447,6 +461,7 @@ impl Error {
             Self::InvalidMatch { .. } => Category::InvalidMatch,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
+            Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::Application(_) => Category::InvalidApplication,
             Self::InvalidPreview { .. } => Category::InvalidPreview,
             Self::InvalidWidget { .. } => Category::InvalidWidget,
@@ -486,6 +501,7 @@ impl Error {
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
             Self::Syntax { message, .. } => message.as_str(),
+            Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::Application(_) => "application",
             Self::InvalidPreview { preview, .. } => preview.as_str(),
             Self::InvalidWidget { widget, .. } => widget.as_str(),
@@ -525,7 +541,7 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
-            Self::Syntax { at, .. } => *at,
+            Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
             Self::Application(error) => error.primary_span(),
             Self::InvalidPreview { reference, .. } => *reference,
             Self::InvalidWidget { reference, .. } => *reference,
@@ -571,7 +587,8 @@ impl Error {
             | Self::MissingCapability { .. }
             | Self::InvalidMatch { .. }
             | Self::UnsupportedNominalSyntax { .. }
-            | Self::Syntax { .. } => None,
+            | Self::Syntax { .. }
+            | Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::Application(error) => error.secondary_span(),
             Self::InvalidPreview { declaration, .. } => *declaration,
             Self::InvalidWidget { declaration, .. } => *declaration,
@@ -800,6 +817,8 @@ impl fmt::Display for Written<'_> {
                 "nominal operation uses unsupported syntax `{construct}` at {source}"
             ),
             Error::Syntax { message, .. } => formatter.write_str(message),
+            Error::UnlabeledJumpInWhileCondition { .. } => formatter
+                .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::Application(error) => error.fmt(formatter),
             Error::InvalidPreview {
                 preview,
