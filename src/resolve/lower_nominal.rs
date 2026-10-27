@@ -9604,6 +9604,13 @@ struct Parser<'a> {
     /// The closures that move out a capture: `FnOnce`, so a call moves
     /// the closure.
     once_closures: BTreeSet<crate::item::Key>,
+    /// The `Copy` closures that change what they captured by value, with
+    /// those captures: a copy of one has its own (`KEYWORD_COPY_CLOSURE`).
+    copied_state: BTreeMap<crate::item::Key, Vec<ImmutableString>>,
+    /// Calls whose value is a function a call borrows shared (`impl Fn`,
+    /// `fn`), by their span, and the locals declared with one, by their
+    /// declaration (T179).
+    shared_call_fns: BTreeSet<Span>,
     closure_count: usize,
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
@@ -9992,6 +9999,8 @@ impl<'a> Parser<'a> {
             moved_at: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),
+            copied_state: BTreeMap::new(),
+            shared_call_fns: BTreeSet::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -19906,6 +19915,20 @@ impl<'a> Parser<'a> {
         }
         let declaration = binding.declaration;
         if !self.moves_by_value(&value.ty) {
+            // A copy of a `Copy` closure has its own copies of what it
+            // changes, as Rust copies the closure's captured values.
+            if let Ty::FnItem { key, .. } = self.inference.resolve(&value.ty)
+                && let Some(state) = self.copied_state.get(&*key)
+            {
+                let mut operands = vec![value.source.clone()];
+                operands.extend(
+                    state
+                        .iter()
+                        .map(|name| origin::Fragment::plain(format!("\"{name}\""))),
+                );
+                value.source =
+                    origin::Fragment::call(crate::engine::KEYWORD_COPY_CLOSURE, operands);
+            }
             return Ok(());
         }
         // A closure that moves out a capture is `FnOnce`. One that is not
@@ -20436,6 +20459,10 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.expect_name("binding name")?;
         let annotation = if matches!(self.peek(), Token::Colon) {
             self.next();
+            // `let mut f: fn(i32) -> i32`: a call of `f` borrows it shared.
+            if matches!(self.peek(), Token::Fn) {
+                self.shared_call_fns.insert(name_span);
+            }
             Some(self.parse_local_type()?)
         } else {
             None
@@ -20479,6 +20506,11 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr_expecting(annotation.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
+        // borrows it shared, as `Fn::call` does (T179).
+        if self.shared_call_fns.contains(&value.span) {
+            self.shared_call_fns.insert(name_span);
+        }
         // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
         if let Some(borrow) = self.last_cell_borrow.take()
             && borrow.span == value.span
@@ -25361,6 +25393,11 @@ impl<'a> Parser<'a> {
     /// `value` stored into the `&mut` place `place`: a local, an element or
     /// a field.
     fn store_into(&mut self, place: &ParsedExpr, value: &str) -> Result<origin::Fragment, Error> {
+        // A closure written in place (`&mut |x| ..`) is a temporary: its
+        // captures are where it reaches them, and nothing is stored back.
+        if place.lvalue.is_none() {
+            return Ok(origin::Fragment::default());
+        }
         if let Some(Lvalue::Slice(slice)) = &place.lvalue {
             self.require_mutable_binding(&slice.binding, place.span)?;
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
@@ -25429,6 +25466,18 @@ impl<'a> Parser<'a> {
                 });
             }
             let place = &place;
+            // `twice(&mut |x| v.push(x))`: the closure is a temporary the
+            // callee calls where it is; nothing is stored back.
+            if place.lvalue.is_none()
+                && let Ty::Reference {
+                    mutable: true,
+                    target,
+                } = self.inference.resolve(&place.ty)
+                && matches!(self.inference.resolve(&target), Ty::FnItem { .. })
+            {
+                places.push(place.clone());
+                continue;
+            }
             if !matches!(
                 self.inference.resolve(&place.ty),
                 Ty::Reference { mutable: true, .. }
@@ -31260,10 +31309,24 @@ impl<'a> Parser<'a> {
                 }
                 self.next();
                 let mut operand = self.parse_operand()?;
-                if operand.lvalue.is_none() {
-                    return Err(self.unsupported("`&mut` of a value that is not a place"));
-                }
                 let whole = span(start, operand.span.end());
+                if operand.lvalue.is_none() {
+                    // `twice(&mut |x| v.push(x))`: the closure is the
+                    // borrowed temporary, and the callee calls it where it
+                    // is, as its captures are where the closure reaches them.
+                    if !matches!(self.inference.resolve(&operand.ty), Ty::FnItem { .. }) {
+                        return Err(self.unsupported("`&mut` of a value that is not a place"));
+                    }
+                    self.borrow_temporary_mut(&operand, whole);
+                    operand.source = operand.rendered_source().surrounded("(", ")");
+                    operand.prelude = origin::Fragment::default();
+                    operand.ty = Ty::Reference {
+                        mutable: true,
+                        target: Box::new(self.inference.resolve(&operand.ty)),
+                    };
+                    operand.span = whole;
+                    return Ok(operand.retain_origin());
+                }
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
                 self.flow().borrow(
@@ -34992,13 +35055,14 @@ impl<'a> Parser<'a> {
                 .flow()
                 .closure(&key)
                 .is_some_and(|closure| closure.mutable),
-            // A closure a function returned, as `impl FnMut(i32)`: its type
-            // doesn't say which `Fn` trait it has, and a call of one
-            // declared `mut` is an `FnMut` call, which borrows it `&mut`.
+            // A closure a function returned, as `impl FnMut(i32)`: a call of
+            // one declared `mut` is an `FnMut` call, which borrows it `&mut`,
+            // unless its type is `impl Fn` or `fn` (T179).
             Ty::Fn { .. } => {
                 binding.mutable
                     && matches!(binding.kind, BindingKind::Local)
                     && !self.parameter_declarations.contains(&binding.declaration)
+                    && !self.shared_call_fns.contains(&binding.declaration)
             }
             _ => false,
         };
@@ -35044,12 +35108,16 @@ impl<'a> Parser<'a> {
             ty = self.inference.resolve(&target);
         }
         self.reject_invocation(&ty, name_span, "called as a function")?;
-        self.call_function_value(
-            origin::Fragment::plain(name.to_string()),
-            ty,
-            name,
-            name_span,
-        )
+        // `f: &mut impl FnMut(i32)` is the closure where the caller has it
+        // (`this`, or a place a closure reaches): the call goes through it.
+        let declaration = self.bindings[name.as_str()].declaration;
+        let reference = self.bindings[name.as_str()].ty.clone();
+        self.reject_shadowed_root(&name, declaration, name_span)?;
+        let callee = match self.aliased_element(&name, declaration, &reference, name_span)? {
+            Some(place) => place.rendered_source().surrounded("(", ")"),
+            None => origin::Fragment::plain(name.to_string()),
+        };
+        self.call_function_value(callee, ty, name, name_span)
     }
 
     /// A call of a function value of type `ty` (a closure, `fn` pointer or
@@ -39025,6 +39093,7 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), Token::LeftBrace) {
             self.parse_match_action().map(|branch| branch.value)
         } else {
+            let pending = self.field_entries.len();
             self.open_temporaries();
             self.flow().open_temporaries();
             // A closure's body opens its own scope frames (D558 tier 1).
@@ -39061,6 +39130,30 @@ impl<'a> Parser<'a> {
                     Ty::Unit,
                     span(start.start(), end.end()),
                 ))
+            })
+            // A place the body changes through a field (`|x| p.b.push(x)`)
+            // is reached in the body, at each call, not where the closure
+            // is made.
+            .map(|mut value| {
+                if self.field_entries.len() > pending {
+                    let entries = self.field_entries.split_off(pending);
+                    let result = self.temporary("body");
+                    let mut block = origin::Fragment::plain("{ ");
+                    for (read, _) in &entries {
+                        block.push(read.clone());
+                    }
+                    block.push_text(format!(" let {result} = "));
+                    block.push(value.rendered_source());
+                    block.push_text("; ");
+                    for (_, store) in entries {
+                        block.push(store);
+                    }
+                    block.push_text(format!(" {result} }}"));
+                    value.source = block;
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
+                }
+                value
             })
         };
         let parameter_drops = self.close_drops();
@@ -39345,6 +39438,25 @@ impl<'a> Parser<'a> {
         // A closure that owns a capture which is not `Copy` is not `Copy`,
         // and one that moves out a capture is called once.
         if let Ty::FnItem { key, .. } = &ty {
+            // A `Copy` closure changes only what it captured by value: a
+            // copy of it copies those, and changes its own (T150).
+            if moved && copy && closure.mutable && !scope.asynchronous {
+                let state: Vec<ImmutableString> = scope
+                    .captures
+                    .iter()
+                    .filter(|name| {
+                        name.as_str() != "this"
+                            && !self.aliases.contains_key(name.as_str())
+                            && self.bindings.get(name.as_str()).is_some_and(|binding| {
+                                !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
+                            })
+                    })
+                    .cloned()
+                    .collect();
+                if !state.is_empty() {
+                    self.copied_state.insert((**key).clone(), state);
+                }
+            }
             if !scope.asynchronous {
                 self.flow().set_closure((**key).clone(), closure);
             }
@@ -39593,6 +39705,14 @@ impl<'a> Parser<'a> {
                 self.kept_by_call(call, &kept, None, summary);
             }
             name = function.generated;
+            if function
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(type_ref::Type::is_shared_call_fn)
+            {
+                self.shared_call_fns.insert(call);
+            }
             let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
@@ -39636,6 +39756,15 @@ impl<'a> Parser<'a> {
                         source.push_text("); ");
                         source.push(store);
                         source.push_text(format!("{result} }})"));
+                        source
+                    }
+                    // A closure written in place (`&mut |x| ..`) is called
+                    // where it is.
+                    None => {
+                        let mut source = place.rendered_source();
+                        source.push_text(format!(".{name}("));
+                        source.push(origin::Fragment::join(operands, ", "));
+                        source.push_text(")");
                         source
                     }
                     _ => self.mutation_call(&place, &name, operands)?,

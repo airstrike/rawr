@@ -36,16 +36,7 @@ pub(super) enum Verdict {
 /// Programs both accept that rawr runs differently from rustc's build for
 /// reasons other than borrow checking, each an open item, by the start of
 /// their path (a case's mutations share its name).
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "closure-moves/move_copy_capture_copied.rs",
-        "a copy of a `move` closure shares the state it changes with the closure it copies",
-    ),
-    (
-        "closure-moves/mutations/move_copy_capture_copied_",
-        "a copy of a `move` closure shares the state it changes with the closure it copies",
-    ),
-];
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Programs where rustc reports a use after move (E0382) that rawr's move
 /// check does not find yet, or finds as another error, each an open item,
@@ -271,7 +262,13 @@ fn recorded() -> Vec<(String, Recorded)> {
 fn borrowck_differential() {
     let mut counts = BTreeMap::<&str, usize>::new();
     let mut failures = Vec::new();
+    // `RAWR_BORROWCK_ONLY=closure-runtime/` checks the programs whose path
+    // starts with it, as one folder's work does.
+    let only = std::env::var("RAWR_BORROWCK_ONLY").unwrap_or_default();
     for (path, rustc) in recorded() {
+        if !path.starts_with(&only) {
+            continue;
+        }
         let file = corpus().join(&path);
         super::UNMODELED.with(|notes| notes.borrow_mut().clear());
         let rawr = frontend(&file);

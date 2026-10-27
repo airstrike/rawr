@@ -1302,6 +1302,38 @@ impl Engine {
                 return Ok(Dynamic::UNIT);
             }
 
+            // Handle __rawr_copy_closure(c, "n", ..): a copy of the closure
+            // whose named captures are cells of their own.
+            crate::engine::KEYWORD_COPY_CLOSURE if num_args >= 1 => {
+                let arg = first_arg.unwrap();
+                let (value, pos) =
+                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), arg)?;
+                let mut names = Vec::with_capacity(args_expr.len());
+                for expr in args_expr {
+                    let (name, pos) =
+                        self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
+                    names.push(
+                        name.into_immutable_string().map_err(|typ| {
+                            self.make_type_mismatch_err::<ImmutableString>(typ, pos)
+                        })?,
+                    );
+                }
+                let mut pointer = value.try_cast_result::<crate::FnPtr>().map_err(|value| {
+                    self.make_type_mismatch_err::<crate::FnPtr>(value.type_name(), pos)
+                })?;
+                if let crate::types::fn_ptr::FnPtrType::Script(definition) = &pointer.typ {
+                    let definition = definition.clone();
+                    for (capture, parameter) in
+                        pointer.curry.iter_mut().zip(definition.params.iter())
+                    {
+                        if names.iter().any(|name| name == parameter) {
+                            *capture = capture.flatten_clone().into_shared();
+                        }
+                    }
+                }
+                return Ok(pointer.into());
+            }
+
             // Handle __rawr_move(x): the local's value, leaving `()` in it.
             // A shared local (one a closure captured) gives its value up for
             // every holder, so the value drops with its new owner.
@@ -1561,7 +1593,13 @@ impl Engine {
 
                 // A place a closure reaches through a shared handle is the
                 // place itself, held locked for the call, not a copy.
-                if held_place(first, &target) {
+                // A local a closure captured (shared) is lent locked for the
+                // call too, not copied, when no closure is passed beside it
+                // that could reach it while the call holds it (T178).
+                if held_place(first, &target)
+                    || matches!(target, crate::eval::Target::SharedValue { .. })
+                        && !arg_values.iter().any(Dynamic::is_fnptr)
+                {
                     is_ref_mut = true;
                     args.push(lent.insert(target).as_mut());
                 } else if target.is_shared() || target.is_temp_value() {

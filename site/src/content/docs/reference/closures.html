@@ -30,6 +30,7 @@ fn main() {
 <p>A closure that changes what it captures is <code>FnMut</code>. A <code>move</code> closure takes what it captures. It captures only the fields it uses, so <code>move || s.a.len()</code> moves <code>s.a</code> and leaves <code>s.b</code> usable. A closure that moves a captured value out, as <code>|| drop(s)</code> does, can be called once.</p>
 <p>A closure that doesn&rsquo;t take what it captures borrows it, and keeps the borrow while the closure is used, as in Rust. It captures only the fields it uses. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</p>
 <p>A closure can use a <code>&amp;mut</code> local, a function&rsquo;s <code>&amp;mut</code> parameter, a <code>&amp;mut</code> pattern binding or a mutable loop&rsquo;s element. It changes the place itself, so <code>fn bump(r: &amp;mut Vec&lt;i32&gt;) { let mut push = |x| r.push(x); push(1); }</code> pushes onto the caller&rsquo;s vector. Using the borrow while such a closure is live is rustc&rsquo;s E0501. Making the closure while the borrow is borrowed elsewhere is E0500. Two such closures live at once are E0524.</p>
+<p>A call can change one part of a local while a closure it runs uses another part. In <code>pair.0.retain(|x| !pair.1.contains(x))</code>, <code>retain</code> changes <code>pair.0</code> and the closure reads <code>pair.1</code>, as Rust&rsquo;s disjoint borrows allow.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="capture.rs" id="src-capture">let mut count = 0;
 let mut tick = || count += 1;
@@ -42,7 +43,7 @@ println!("{count} {}", greet());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-capture" data-out="out-capture" aria-label="Run capture.rs" hidden></button><b>rawr run capture.rs</b><span id="out-capture" aria-live="polite">2 hi, rawr</span></div>
 </div>
 <h2 id="passing">Passing and returning closures</h2>
-<p>A function takes a closure as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. It returns one as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
+<p>A function takes a closure as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. It returns one as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>. A function can also take <code>&amp;mut impl FnMut(..)</code>. The closure passed can be a variable, as in <code>twice(&amp;mut add)</code>, or written in place, as in <code>twice(&amp;mut |x| v.push(x))</code>. Each call changes what the closure captured where the caller has it.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="boxed-fn.rs" id="src-boxed-fn">struct Button {
     on_click: Box&lt;dyn Fn() -&gt; String&gt;,
@@ -58,7 +59,7 @@ println!("{} {four}", (b.on_click)());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-boxed-fn" data-out="out-boxed-fn" aria-label="Run boxed-fn.rs" hidden></button><b>rawr run boxed-fn.rs</b><span id="out-boxed-fn" aria-live="polite">clicked 4</span></div>
 </div>
 <h2 id="values">Closures as values</h2>
-<p>A closure in a variable can be passed to a function, copied to another variable, or called from another closure. A closure that holds a value that is not <code>Copy</code>, or captures something by <code>&amp;mut</code>, is not <code>Copy</code>, so <code>let g = f;</code> moves it. A use of <code>f</code> after that is rustc&rsquo;s E0382. A parameter can be <code>_</code> or another pattern.</p>
+<p>A closure in a variable can be passed to a function, copied to another variable, or called from another closure. A closure that holds a value that is not <code>Copy</code>, or captures something by <code>&amp;mut</code>, is not <code>Copy</code>, so <code>let g = f;</code> moves it. A use of <code>f</code> after that is rustc&rsquo;s E0382. A copy of a <code>Copy</code> closure has its own copy of what it captured by value, as in Rust. After <code>let mut d = c;</code>, calling <code>d</code> doesn&rsquo;t change what <code>c</code> sees. A parameter can be <code>_</code> or another pattern.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="copy-closure.rs" id="src-copy-closure">let add = |(a, b): (i64, i64)| a + b;
 let also_add = add;

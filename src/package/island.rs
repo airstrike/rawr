@@ -653,7 +653,7 @@ impl<'a> Generator<'a> {
                 .segments
                 .first()
                 .map_or("", |segment| segment.name.text.as_str());
-            if first.starts_with("impl") || first == type_ref::FN_TYPE {
+            if first.starts_with("impl") || type_ref::is_fn_type(first) {
                 return Err(format!(
                     "`{path}` returns `{}`, and native code can't call it through rawr yet. \
                      Return a named type, or make it private to the marked module.",
