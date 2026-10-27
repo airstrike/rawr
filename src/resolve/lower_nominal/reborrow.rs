@@ -276,6 +276,10 @@ impl Parser<'_> {
                 source: replacement.span,
             });
         };
+        // A borrow a `move` closure took is given a new one.
+        if let Some(binding) = self.bindings.get_mut(selector.as_str()) {
+            binding.available = true;
+        }
         let whole = span(target.start(), replacement.span.end());
         let into = self.flow().rebound(target.start(), whole);
         if let Some(into) = into {

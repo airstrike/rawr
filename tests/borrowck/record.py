@@ -23,7 +23,10 @@ returns, with `closures/mutations/` what `mutate.py closures` writes, and
 closure is `Copy`, with `closure-moves/mutations/` what `mutate.py moves`
 writes, and `signatures/` the cases written for a body checked against its
 own signature and for temporaries (E0515, E0716, E0106), with
-`signatures/mutations/` what `mutate.py temporaries` writes. The harness
+`signatures/mutations/` what `mutate.py temporaries` writes, and
+`closure-places/` the cases written for closures that use a `&mut` local,
+a function's `&mut` parameter, a `&mut` pattern binding or a mutable
+loop's element (E0500, E0501, E0524). The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 

@@ -1,0 +1,45 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+closure-places/binding_get_mut.rs	ok	0	"[1, 22, 3]\n"
+closure-places/binding_get_mut_conflict.rs	E0503:5
+closure-places/binding_if_let.rs	ok	0	"Some([1, 2, 3])\n"
+closure-places/binding_if_let_twice.rs	ok	0	"Some([1, 2, 2])\n"
+closure-places/binding_match_ref_mut.rs	ok	0	"([1, 5, 6], 2)\n"
+closure-places/binding_param_match.rs	ok	0	"Some([0, 1, 2])\n"
+closure-places/binding_struct_field.rs	ok	0	"[1, 2] a!\n"
+closure-places/binding_two_closures.rs	E0524:5
+closure-places/binding_use_while_captured.rs	E0501:5
+closure-places/local_element.rs	ok	0	"[[1], [2, 3, 4]]\n"
+closure-places/local_field.rs	ok	0	"[1, 2] 2\n"
+closure-places/local_field_disjoint_while_captured.rs	ok	0	"[1, 2] 2\n"
+closure-places/local_push.rs	ok	0	"[1, 2, 2]\n"
+closure-places/local_read_closure.rs	ok	0	"3\n[1, 2, 3, 4]\n"
+closure-places/local_reborrowed_closure.rs	E0500:5
+closure-places/local_root_while_captured.rs	E0499:5
+closure-places/local_shared_closure_and_unique.rs	E0500:5
+closure-places/local_two_closures.rs	E0524:5
+closure-places/local_use_while_captured.rs	E0501:5
+closure-places/loop_element.rs	ok	0	"[2, 4, 6]\n"
+closure-places/loop_element_closures_kept.rs	ok	0	"[101, 102, 103]\n"
+closure-places/loop_element_conflict.rs	E0503:5
+closure-places/loop_element_iter_mut.rs	ok	0	"[[1, 0], [2, 10]]\n"
+closure-places/method_field_alias.rs	ok	0	"[1, 2]\n"
+closure-places/param_borrowed_then_captured.rs	E0500:3
+closure-places/param_closure_passed.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_field_closure.rs	ok	0	"[4, 5] 2\n"
+closure-places/param_move_closure.rs	ok	0	"[0, 1, 2]\n"
+closure-places/param_move_closure_then_param.rs	E0382:4
+closure-places/param_nested_closure.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/param_nested_closure_conflict.rs	E0499:4
+closure-places/param_push.rs	ok	0	"[0, 1, 2, 1, 2]\n"
+closure-places/param_push_then_param.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_returned_closure.rs	E0502:10
+closure-places/param_returned_closure_conflict.rs	E0499:9 E0502:11
+closure-places/param_returned_closure_scoped.rs	ok	0	"[0, 1, 2, 3]\n"
+closure-places/param_second_mut.rs	ok	0	"[2] [1, 3]\n"
+closure-places/param_shared_read_while_captured.rs	E0501:3
+closure-places/param_struct_element.rs	ok	0	"[[0], [5, 1, 7]] [[0], [5, 1]]\n"
+closure-places/param_two_closures.rs	E0524:3
+closure-places/param_two_closures_in_turn.rs	ok	0	"[0, 1, 2]\n"
+closure-places/param_use_while_captured.rs	E0501:4
+closure-places/rebound_local.rs	ok	0	"[1, 10] [2, 20, 20]\n"
+closure-places/rebound_local_in_loop.rs	ok	0	"[1, 0, 1] [2, 2, 3]\n"

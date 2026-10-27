@@ -1398,6 +1398,42 @@ impl Engine {
                 return Ok(Dynamic::from_array(path));
             }
 
+            // Handle __rawr_share(path): the local the path starts at made
+            // shared where it is, as a closure's capture makes it, and its
+            // shared handle, which reaches the same value.
+            crate::engine::KEYWORD_SHARE if num_args == 1 => {
+                let arg = first_arg.unwrap();
+                let (path, pos) =
+                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), arg)?;
+                let missing = || -> crate::RawrError {
+                    ERR::ErrorVariableNotFound(crate::engine::KEYWORD_SHARE.into(), pos).into()
+                };
+                let (root, _) = Self::held_path(&path).ok_or_else(missing)?;
+                let place = match root.as_int() {
+                    Ok(-1) => this_ptr.ok_or_else(missing)?,
+                    Ok(slot) => {
+                        let slot = usize::try_from(slot).map_err(|_| missing())?;
+                        if slot >= scope.len() {
+                            return Err(missing());
+                        }
+                        scope.get_mut_by_index(slot)
+                    }
+                    // An async body's local, by its name.
+                    Err(_) => {
+                        let local = root
+                            .read_lock::<crate::ImmutableString>()
+                            .ok_or_else(missing)?
+                            .clone();
+                        let index = scope.search(&local).ok_or_else(missing)?;
+                        scope.get_mut_by_index(index)
+                    }
+                };
+                if !place.is_shared() {
+                    *place = place.take().into_shared();
+                }
+                return Ok(place.clone());
+            }
+
             // Handle is_def_var(fn_name)
             KEYWORD_IS_DEF_VAR if num_args == 1 => {
                 let arg = first_arg.unwrap();
@@ -1452,6 +1488,8 @@ impl Engine {
         }
 
         // Normal function call - except for Fn, curry, call and eval (handled above)
+        // A place a closure reaches (`KEYWORD_HELD`), lent to the call.
+        let mut lent: Option<crate::eval::Target> = None;
         let mut arg_values = FnArgsVec::with_capacity(num_args);
         let mut args = FnArgsVec::with_capacity(num_args + curry.len());
         let mut is_ref_mut = false;
@@ -1521,7 +1559,12 @@ impl Engine {
                 // a copy (`exec_native_fn_call`'s `by_value`).
                 let target = self.search_namespace(global, caches, scope, this_ptr, first)?;
 
-                if target.is_shared() || target.is_temp_value() {
+                // A place a closure reaches through a shared handle is the
+                // place itself, held locked for the call, not a copy.
+                if held_place(first, &target) {
+                    is_ref_mut = true;
+                    args.push(lent.insert(target).as_mut());
+                } else if target.is_shared() || target.is_temp_value() {
                     arg_values.insert(0, target.take_or_clone().flatten());
                 } else {
                     // Turn it into a method call only if the object is not shared and not a simple value
@@ -1562,6 +1605,8 @@ impl Engine {
         hash: u64,
         pos: Position,
     ) -> RawrResult {
+        // A place a closure reaches (`KEYWORD_HELD`), lent to the call.
+        let mut lent: Option<crate::eval::Target> = None;
         let mut arg_values = FnArgsVec::with_capacity(args_expr.len());
         let args = &mut FnArgsVec::with_capacity(args_expr.len());
         let mut first_arg_value = None;
@@ -1610,7 +1655,11 @@ impl Engine {
 
                 let target = self.search_namespace(global, caches, scope, this_ptr, first)?;
 
-                if target.is_shared() || target.is_temp_value() {
+                if held_place(first, &target) {
+                    let (_, rest) = arg_values.split_first_mut().unwrap();
+                    args.push(lent.insert(target).as_mut());
+                    args.extend(rest.iter_mut());
+                } else if target.is_shared() || target.is_temp_value() {
                     arg_values[0] = target.take_or_clone().flatten();
                     args.extend(arg_values.iter_mut());
                 } else {
@@ -1926,5 +1975,20 @@ fn clear_part(value: &mut Dynamic, path: &[usize]) {
     };
     if let Some(part) = part {
         clear_part(part, rest);
+    }
+}
+
+/// Whether `first`, a call's first argument, is a place reached under a
+/// shared value's lock: a part of a local a closure captured, or the place
+/// a closure reaches through a shared handle (`KEYWORD_HELD`) or a `&mut`
+/// local or binding names (`KEYWORD_THROUGH`). The call is lent the place
+/// itself, not a copy.
+fn held_place(first: &Expr, target: &crate::eval::Target) -> bool {
+    match target {
+        crate::eval::Target::SharedPart { .. } => true,
+        crate::eval::Target::SharedValue { .. } => matches!(first, Expr::Variable(v, ..)
+            if v.1.starts_with(crate::engine::KEYWORD_HELD)
+                || v.1.starts_with(crate::engine::KEYWORD_THROUGH)),
+        _ => false,
     }
 }

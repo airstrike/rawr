@@ -5,7 +5,21 @@
 //! reads `v[i]`, and `*x = ..` (or `x.push(..)`) writes it there.
 
 use super::*;
-use crate::engine::{KEYWORD_LOCATE, KEYWORD_THIS, KEYWORD_THROUGH};
+use crate::engine::{
+    HELD_STEPS, KEYWORD_HELD, KEYWORD_LOCATE, KEYWORD_SHARE, KEYWORD_THIS, KEYWORD_THROUGH,
+};
+
+/// A `&mut` borrow of a place declared outside a closure that its body
+/// uses (`Parser::held`): the borrow's name and declaration, the runtime
+/// local holding the shared handle of the place's local (the place's path
+/// is in that name followed by `HELD_STEPS`), and the place's path, taken
+/// where the closure is made.
+pub(super) struct Held {
+    pub(super) name: ImmutableString,
+    declaration: Span,
+    holder: ImmutableString,
+    located: origin::Fragment,
+}
 
 /// What a mutable loop walks: a `Vec`'s elements, or a map's values with
 /// or without their keys.
@@ -174,6 +188,9 @@ impl Parser<'_> {
             *binding = name.clone();
         }
         if let Some(binding) = self.bindings.get_mut(name) {
+            if !binding.mutable {
+                self.undeclared_mut.insert(binding.declaration);
+            }
             binding.mutable = true;
         }
     }
@@ -212,17 +229,38 @@ impl Parser<'_> {
         if aliased != declaration {
             return Ok(None);
         }
-        if self
+        // A borrow a `move` closure took is used after the move.
+        if let Some(binding) = self.bindings.get(name.as_str())
+            && !binding.available
+            && self.peek() != Token::Equals
+        {
+            return Err(Error::MovedValue {
+                moved: self
+                    .moved_at
+                    .get(&declaration)
+                    .copied()
+                    .unwrap_or(declaration),
+                name: name.clone(),
+                reference: span,
+                previous_iteration: false,
+            });
+        }
+        // A closure using the borrow reaches the place through what it
+        // captured where it was made.
+        if let Some(closure) = self
             .closures
             .iter()
-            .any(|scope| scope.outer.get(name) == Some(&declaration))
+            .position(|scope| scope.outer.get(name) == Some(&declaration))
         {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a closure using a `&mut` borrow of a place, such as a mutable loop's \
-                            element or a `&mut` pattern binding"
-                    .into(),
-                source: span,
+            let holder = self.held(closure, name, declaration, &lvalue, span)?;
+            let source = origin::Fragment::plain(format!("{KEYWORD_HELD}{holder}"));
+            let mut value = self.operator_expr(source.clone(), ty.clone(), span);
+            value.lvalue = Some(Lvalue::Place {
+                binding: root,
+                ty: ty.clone(),
+                place: source,
             });
+            return Ok(Some(value));
         }
         let (source, lvalue) = match lvalue {
             Lvalue::Place { place, .. } => (
@@ -1306,6 +1344,12 @@ impl Parser<'_> {
     /// a function's `&mut` output by the path the function gives, and a
     /// range of elements last. `None` for a place no path reaches.
     pub(super) fn place_located(&mut self, lvalue: &Lvalue) -> Option<origin::Fragment> {
+        let by_name = self.in_async_body();
+        self.place_located_by(lvalue, by_name)
+    }
+
+    /// `place_located`, with an async body's locals found `by_name`.
+    fn place_located_by(&mut self, lvalue: &Lvalue, by_name: bool) -> Option<origin::Fragment> {
         let (mut chain, steps, range) = match lvalue {
             Lvalue::Binding { binding, .. } => {
                 (origin::Fragment::plain(binding.as_str()), &[][..], None)
@@ -1319,7 +1363,6 @@ impl Parser<'_> {
             Lvalue::Nested(nested) => (nested.base.clone(), &nested.steps[..], None),
             Lvalue::Slice(slice) => (slice.base.clone(), &[][..], Some(&**slice)),
         };
-        let by_name = self.in_async_body();
         let mut root = located_root(chain.as_str(), by_name)?;
         let mut located = origin::Fragment::plain("{ ");
         let index = |chain: &mut origin::Fragment, index: origin::Fragment| {
@@ -1374,6 +1417,81 @@ impl Parser<'_> {
         located.push(chain);
         located.push_text(format!(", {root}) }}"));
         Some(located)
+    }
+
+    /// The runtime local through which the closure `closure` (by its depth)
+    /// reaches the place of the `&mut` borrow `name` (declared at
+    /// `declaration` outside it, the place `lvalue`): a `&mut` local, a
+    /// function's `&mut` parameter, a `&mut` pattern binding or a mutable
+    /// loop's element. A closure's body runs in a scope of its own, so it
+    /// can't name the place's local or its slot. Where the closure is made,
+    /// the place's path is taken and its local made shared, as a closure's
+    /// capture makes a local it uses; the closure captures that handle and
+    /// the path, and each use reaches the place itself below the handle.
+    pub(super) fn held(
+        &mut self,
+        closure: usize,
+        name: &ImmutableString,
+        declaration: Span,
+        lvalue: &Lvalue,
+        span: Span,
+    ) -> Result<ImmutableString, Error> {
+        if let Some(held) = self.closures[closure]
+            .held
+            .iter()
+            .find(|held| held.name == *name && held.declaration == declaration)
+        {
+            return Ok(held.holder.clone());
+        }
+        let unreached = |construct: &str| Error::UnsupportedNominalSyntax {
+            construct: format!("a closure using `{name}`, {construct}: not supported in Rawr yet")
+                .into(),
+            source: span,
+        };
+        if self.closures[closure..]
+            .iter()
+            .any(|scope| scope.asynchronous)
+        {
+            return Err(unreached("a `&mut` borrow of a place, in an async block"));
+        }
+        if matches!(lvalue, Lvalue::Slice(_)) {
+            return Err(unreached("a `&mut` borrow of a range of elements"));
+        }
+        let by_name = self.closures[..closure]
+            .last()
+            .is_some_and(|scope| scope.asynchronous);
+        let located = self
+            .place_located_by(lvalue, by_name)
+            .ok_or_else(|| unreached("a `&mut` borrow of a place behind a borrow guard"))?;
+        let holder: ImmutableString = self.temporary("held").into();
+        self.closures[closure].held.push(Held {
+            name: name.clone(),
+            declaration,
+            holder: holder.clone(),
+            located,
+        });
+        Ok(holder)
+    }
+
+    /// The closure `source`, made where each place its body reaches
+    /// (`held`) is taken: `{ let h_at = path; let h = __rawr_share(h_at);
+    /// source }`.
+    pub(super) fn with_held(held: &[Held], source: origin::Fragment) -> origin::Fragment {
+        if held.is_empty() {
+            return source;
+        }
+        let mut made = origin::Fragment::plain("{ ");
+        for held in held {
+            let holder = &held.holder;
+            made.push_text(format!("let {holder}{HELD_STEPS} = "));
+            made.push(held.located.clone());
+            made.push_text(format!(
+                "; let {holder} = {KEYWORD_SHARE}({holder}{HELD_STEPS}); "
+            ));
+        }
+        made.push(source);
+        made.push_text(" }");
+        made
     }
 
     /// Each `&mut` binding of a place pattern is a `&mut` local that is

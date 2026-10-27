@@ -99,6 +99,14 @@ pub enum Target<'a> {
         /// Copy of the shared value.
         shared_value: Dynamic,
     },
+    /// The target is a part of a _shared_ [`Dynamic`]: the part `steps`
+    /// reach below it (a field, an element, a payload), itself.
+    SharedPart {
+        /// Lock guard to the shared [`Dynamic`].
+        guard: crate::types::dynamic::DynamicWriteLock<'a, Dynamic>,
+        /// The parts below the shared value, each by its index.
+        steps: crate::StaticVec<usize>,
+    },
     /// The target is a temporary [`Dynamic`] value (i.e. its mutation can cause no side effects).
     TempValue(Dynamic),
     /// The target is a bit inside an [`INT`][crate::INT].
@@ -167,7 +175,7 @@ impl<'a> Target<'a> {
     pub const fn is_ref(&self) -> bool {
         match self {
             Self::RefMut(..) => true,
-            Self::SharedValue { .. } => true,
+            Self::SharedValue { .. } | Self::SharedPart { .. } => true,
             Self::TempValue(..) => false,
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -182,7 +190,7 @@ impl<'a> Target<'a> {
     pub const fn is_temp_value(&self) -> bool {
         match self {
             Self::RefMut(..) => false,
-            Self::SharedValue { .. } => false,
+            Self::SharedValue { .. } | Self::SharedPart { .. } => false,
             Self::TempValue(..) => true,
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -198,6 +206,8 @@ impl<'a> Target<'a> {
         match self {
             Self::RefMut(r) => r.is_shared(),
             Self::SharedValue { .. } => true,
+            // The part is reached below the shared value; it is not shared.
+            Self::SharedPart { .. } => false,
             Self::TempValue(value) => value.is_shared(),
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -212,6 +222,7 @@ impl<'a> Target<'a> {
         match self {
             Self::RefMut(r) => r.clone(), // Referenced value is cloned
             Self::SharedValue { shared_value, .. } => shared_value, // Original shared value is simply taken
+            part @ Self::SharedPart { .. } => part.as_ref().clone(), // Referenced part is cloned
             Self::TempValue(value) => value,                        // Owned value is simply taken
             Self::Bit { value, .. }
             | Self::BitField { value, .. }
@@ -236,6 +247,7 @@ impl<'a> Target<'a> {
         match self {
             Self::RefMut(r) => r,
             Self::SharedValue { guard, .. } => guard,
+            Self::SharedPart { .. } => self.as_ref(),
             Self::TempValue(value) => value,
             Self::Bit { source, .. }
             | Self::BitField { source, .. }
@@ -250,7 +262,7 @@ impl<'a> Target<'a> {
     pub fn propagate_changed_value(&mut self, _pos: Position) -> RawrResultOf<()> {
         match self {
             Self::RefMut(..) | Self::TempValue(..) => (),
-            Self::SharedValue { .. } => (),
+            Self::SharedValue { .. } | Self::SharedPart { .. } => (),
             Self::Bit { source, value, bit } => {
                 // Replace the bit at the specified index position
                 let new_bit = value.as_bool().map_err(|err| {
@@ -393,6 +405,11 @@ impl AsRef<Dynamic> for Target<'_> {
         match self {
             Self::RefMut(r) => r,
             Self::SharedValue { guard, .. } => guard,
+            Self::SharedPart { guard, steps } => steps.iter().fold(&**guard, |place, &step| {
+                place
+                    .part(step)
+                    .expect("a shared part checked when it was reached")
+            }),
             Self::TempValue(value) => value,
             Self::StringSlice { value, .. } => value,
             Self::Bit { value, .. }
@@ -416,6 +433,11 @@ impl AsMut<Dynamic> for Target<'_> {
         match self {
             Self::RefMut(r) => r,
             Self::SharedValue { guard, .. } => &mut *guard,
+            Self::SharedPart { guard, steps } => steps.iter().fold(&mut **guard, |place, &step| {
+                place
+                    .part_mut(step)
+                    .expect("a shared part checked when it was reached")
+            }),
             Self::TempValue(value) => value,
             Self::StringSlice { value, .. } => value,
             Self::Bit { value, .. }

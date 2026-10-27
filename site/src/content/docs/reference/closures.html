@@ -29,6 +29,7 @@ fn main() {
 <h2 id="capture">Captures</h2>
 <p>A closure that changes what it captures is <code>FnMut</code>. A <code>move</code> closure takes what it captures. It captures only the fields it uses, so <code>move || s.a.len()</code> moves <code>s.a</code> and leaves <code>s.b</code> usable. A closure that moves a captured value out, as <code>|| drop(s)</code> does, can be called once.</p>
 <p>A closure that doesn&rsquo;t take what it captures borrows it, and keeps the borrow while the closure is used, as in Rust. It captures only the fields it uses. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</p>
+<p>A closure can use a <code>&amp;mut</code> local, a function&rsquo;s <code>&amp;mut</code> parameter, a <code>&amp;mut</code> pattern binding or a mutable loop&rsquo;s element. It changes the place itself, so <code>fn bump(r: &amp;mut Vec&lt;i32&gt;) { let mut push = |x| r.push(x); push(1); }</code> pushes onto the caller&rsquo;s vector. Using the borrow while such a closure is live is rustc&rsquo;s E0501. Making the closure while the borrow is borrowed elsewhere is E0500. Two such closures live at once are E0524.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="capture.rs" id="src-capture">let mut count = 0;
 let mut tick = || count += 1;
