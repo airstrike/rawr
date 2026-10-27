@@ -2486,28 +2486,41 @@ fn callable_signature(
     if !crossings.is_empty() {
         builder.crossing();
     }
-    let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {
+    let convert = |ty: &representability::convert::Type,
+                   allocation: &mut rawr_import::contract::Allocation| {
         types.convert(ty, signature.parameters(), allocation)
     };
+    let closure = |call: &representability::callable::Call,
+                   allocation: &mut rawr_import::contract::Allocation|
+     -> Result<host::type_ref::Type, Error> {
+        let input = match call.inputs() {
+            [] => host::type_ref::Type::unit(),
+            [single] => convert(single, allocation)?,
+            many => host::type_ref::Type::tuple(
+                many.iter()
+                    .map(|ty| convert(ty, allocation))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?,
+        };
+        Ok(host::type_ref::Type::callable(
+            input,
+            convert(call.output(), allocation)?,
+        ))
+    };
     for input in signature.inputs() {
-        let call = crossings
+        let found = crossings
             .iter()
             .chain(call)
             .find(|call| *input == representability::convert::Type::Parameter(call.parameter()));
-        if let Some(call) = call {
-            let input = match call.inputs() {
-                [] => host::type_ref::Type::unit(),
-                [single] => convert(single, allocation)?,
-                many => host::type_ref::Type::tuple(
-                    many.iter()
-                        .map(|ty| convert(ty, allocation))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )?,
-            };
-            builder.try_parameter(host::type_ref::Type::callable(
-                input,
-                convert(call.output(), allocation)?,
-            ))?;
+        // An `Option` of the closure Rawr makes, as `on_toggle_maybe` takes.
+        let optional = call.filter(|call| {
+            matches!(input, representability::convert::Type::Option(inner)
+                if **inner == representability::convert::Type::Parameter(call.parameter()))
+        });
+        if let Some(call) = found {
+            builder.try_parameter(closure(call, allocation)?)?;
+        } else if let Some(call) = optional {
+            builder.try_parameter(host::type_ref::Type::option(closure(call, allocation)?))?;
         } else {
             builder.try_parameter(convert(input, allocation)?)?;
         }

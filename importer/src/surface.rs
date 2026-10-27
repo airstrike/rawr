@@ -893,16 +893,58 @@ fn validate_function_items(
             matches!(ty, convert::Type::FunctionItem { .. }).then_some((position, ty))
         })
         .collect::<Vec<_>>();
+    // A crate function may fill the callable parameter a script closure
+    // would, as `.style(container::rounded_box)` does: the adapter passes
+    // the Rust function itself, and rustc checks it against the bound.
+    let call = match outcome.representability() {
+        Representability::FunctionItem(plan) => plan.call(),
+        Representability::Invocation(plan) => plan.call(),
+        _ => None,
+    };
+    let callable_at = |position: u32| {
+        call.zip(usize::try_from(position).ok())
+            .and_then(|(call, position)| Some((call, signature.inputs().get(position)?)))
+            .is_some_and(|(call, ty)| *ty == convert::Type::Parameter(call.parameter()))
+    };
+    for selected in instance.function_items() {
+        if !callable_at(selected.position()) {
+            continue;
+        }
+        let call = call.ok_or(Error::InstanceMismatch)?;
+        let selected_outcome = contract
+            .outcome(selected.identity())
+            .ok_or(Error::ForeignIdentity)?;
+        let selected_signature = match selected_outcome.representability() {
+            Representability::Function(plan) => plan.signature(),
+            Representability::FunctionItem(plan)
+                if plan.signature().parameters().is_empty()
+                    && plan.receiver().is_none()
+                    && plan.predicates().is_empty() =>
+            {
+                plan.signature()
+            }
+            _ => return Err(Error::InstanceMismatch),
+        };
+        if !selected_signature.parameters().is_empty()
+            || selected_signature.inputs().len() != call.inputs().len()
+        {
+            return Err(Error::InstanceMismatch);
+        }
+    }
+    let statics = instance
+        .function_items()
+        .iter()
+        .filter(|selected| !callable_at(selected.position()));
     if expected.len()
-        != instance
-            .function_items()
-            .len()
+        != statics
+            .clone()
+            .count()
             .checked_add(instance.event_mappers().len())
             .ok_or(Error::InstanceMismatch)?
     {
         return Err(Error::InstanceMismatch);
     }
-    let mut functions = instance.function_items().iter().peekable();
+    let mut functions = statics.peekable();
     let mut mappers = instance.event_mappers().iter().peekable();
     let mut projections = Vec::new();
     projections

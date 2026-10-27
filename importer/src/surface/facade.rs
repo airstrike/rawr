@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 13;
+const SCHEMA: u32 = 14;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -2891,15 +2891,19 @@ fn callable_signature(
         .try_reserve_exact(source.inputs().len())
         .map_err(|_| super::Error::Allocation)?;
     for input in source.inputs() {
-        inputs.push(
-            match calls
+        let made = |input: &representability::convert::Type| {
+            calls
                 .iter()
                 .find(|call| *input == representability::convert::Type::Parameter(call.parameter()))
-            {
-                Some(call) => closure(call)?,
-                None => ty(input, all)?,
-            },
-        );
+        };
+        inputs.push(match input {
+            input if let Some(call) = made(input) => closure(call)?,
+            // An `Option` of a closure, as `on_toggle_maybe(Option<F>)`.
+            representability::convert::Type::Option(inner) if let Some(call) = made(inner) => {
+                Type::Option(Box::new(closure(call)?))
+            }
+            input => ty(input, all)?,
+        });
     }
     Ok(Signature {
         parameters,

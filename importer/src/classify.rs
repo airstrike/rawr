@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 37;
+const CLASSIFIER_VERSION: u32 = 38;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4944,14 +4944,23 @@ impl<P: api::Phase> Context<'_, P> {
         // can name `B` only as the input that takes the closure. Freya's
         // `VirtualScrollView<D, B>::auto_hide_scrollbars(self, bool) -> Self`
         // names it in its receiver and output.
-        for callable in call
+        // A closure Rawr makes may also come as an `Option` of one, as
+        // iced's `on_toggle_maybe(Option<F>)` takes it.
+        let made = call.as_ref().map(|(callable, ..)| *callable);
+        for callable in made
             .iter()
-            .map(|(callable, ..)| *callable)
+            .copied()
             .chain(crossings.iter().map(|(callable, ..)| *callable))
         {
+            let closure = representability::convert::Type::Parameter(callable);
             if inputs
                 .iter()
-                .filter(|input| **input != representability::convert::Type::Parameter(callable))
+                .filter(|input| {
+                    **input != closure
+                        && !(made == Some(callable)
+                            && matches!(input, representability::convert::Type::Option(inner)
+                                if **inner == closure))
+                })
                 .chain([&output])
                 .any(|ty| names_parameter(ty, callable))
             {

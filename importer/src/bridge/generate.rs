@@ -1691,6 +1691,7 @@ fn imported_runtime(
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Scoped>(native_equal, native_compare);
+    register_defaults();
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     // The core's future, which a crate's async functions give in a program
     // with no host profile (D513.3), before the facades that name it.
@@ -4633,6 +4634,7 @@ fn render_source(
             b"];\n\nfn adapters() -> impl Iterator<Item = &'static Adapter> {\n    ADAPTER_MODULES.iter().flat_map(|rows| rows.iter())\n}\n\n",
         )
         .map_err(|_| request::Error::Encoding)?;
+    render_imported_defaults(facade.as_ref(), output)?;
     output
         .write_all(
             b"static STRUCTURAL_ROWS: &[__rawr_internal::package::import::runner::StructuralRow] = &[\n",
@@ -5806,15 +5808,7 @@ fn render_adapter_body(
                     convert::Type::Nominal { definition, .. }
                         if *definition == crate::surface::identity::Definition::future()
                 );
-                // A native call lends the arena to the script closures it
-                // calls back, as Freya's `launch` calls `fn app()` (D551.6).
-                output
-                    .write_all(if lazy {
-                        b"    let output = __rawr_profile_host::task::lazy(move || ".as_slice()
-                    } else {
-                        b"    let output = lend(arguments.arena, || ".as_slice()
-                    })
-                    .map_err(|_| request::Error::Encoding)?;
+                let mut call = Vec::new();
                 render_function_path(
                     plan,
                     signature,
@@ -5822,18 +5816,16 @@ fn render_adapter_body(
                     constants,
                     *container_parameters,
                     *associated,
-                    output,
+                    &mut call,
                 )?;
                 render_item_turbofish(
                     signature,
                     substitutions,
                     constants,
                     *container_parameters,
-                    output,
+                    &mut call,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                call.write_all(b"(").map_err(|_| request::Error::Encoding)?;
                 function_argument_list(
                     signature,
                     substitutions,
@@ -5841,12 +5833,25 @@ fn render_adapter_body(
                     mappers,
                     None,
                     crossed,
-                    output,
+                    &mut call,
                 )?;
-                output
-                    .write_all(b"));\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                call.write_all(b")").map_err(|_| request::Error::Encoding)?;
+                let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
+                if !lazy && !lifetime_inputs(signature, substitutions)? {
+                    render_anchored_output(returned, &call, output)?;
+                }
+                // A native call lends the arena to the script closures it
+                // calls back, as Freya's `launch` calls `fn app()` (D551.6).
+                if lazy {
+                    writeln!(
+                        output,
+                        "    let output = __rawr_profile_host::task::lazy(move || {call});"
+                    )
+                } else {
+                    writeln!(output, "    let output = lend(arguments.arena, || {call});")
+                }
+                .map_err(|_| request::Error::Encoding)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
                     render_give_sipper(sipped, progress, "output", output)?;
                 } else if let Some(element) = facade_task_output(returned, facade) {
@@ -5883,17 +5888,18 @@ fn render_adapter_body(
             constants,
             container_parameters,
             call,
+            functions,
             ..
         } => {
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
             } else if let Some(call) = call {
                 // A script closure a method takes, as Freya's `on_press`
-                // does (D551.6).
+                // does (D551.6), or a crate function in its place.
                 render_function_arguments(
                     signature,
                     substitutions,
-                    &[],
+                    functions,
                     &[],
                     None,
                     Some(call),
@@ -6086,6 +6092,25 @@ fn render_adapter_body(
                             *container_parameters,
                             output,
                         )?;
+                        // A `&str` lent to a receiver out of any region,
+                        // whose output keeps it, has no lifetime to borrow
+                        // at but `'static`: such a call needs the region a
+                        // view's widgets are made in.
+                        let returned = substituted(signature.output(), signature, substitutions)?;
+                        if carries_lifetime(&returned)
+                            && signature
+                                .inputs()
+                                .iter()
+                                .any(|input| lends_str(input, signature, substitutions))
+                        {
+                            writeln!(
+                                output,
+                                "    Err(Error::Lent({:?}, __rawr_internal::scope::Error::Mismatch))",
+                                format!("{}::{}", rust_path(plan), plan.name())
+                            )
+                            .map_err(|_| request::Error::Encoding)?;
+                            return Ok(());
+                        }
                         output
                             .write_all(b"    let receiver: ")
                             .map_err(|_| request::Error::Encoding)?;
@@ -6292,6 +6317,49 @@ fn render_opening(
         back,
         with,
     } = frame_copies(signature, substitutions)?;
+    // A frame is a script value, so what it holds is `Send` and `Sync`. A
+    // native input stays in its arena slot by its handle until the frame
+    // opens, on the thread that holds the arena, and a value another
+    // region holds can't be parked so: such a call needs a view's region.
+    let mut parked = String::new();
+    let mut unparked = String::new();
+    let mut selected = functions
+        .iter()
+        .map(|function| function.position())
+        .peekable();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if selected
+            .peek()
+            .is_some_and(|at| usize::try_from(*at).ok() == Some(position))
+        {
+            selected.next();
+            continue;
+        }
+        let ty = substituted(input, signature, substitutions)?;
+        let native = matches!(ty, convert::Type::Nominal { .. })
+            && !is_value(&ty)
+            && !is_duration(&ty)
+            && !is_facade_value(&ty)
+            && !copy_scalar(&ty);
+        if !native {
+            continue;
+        }
+        if REGION_ARGUMENTS.get() || carries_lifetime(&ty) {
+            return writeln!(
+                output,
+                "    let _ = argument_{position};\n    Err(Error::Lent({name:?}, __rawr_internal::scope::Error::Mismatch))"
+            )
+            .map_err(encoding);
+        }
+        parked.push_str(&format!(
+            "let argument_{position} = arguments.arena.insert(argument_{position})?;\n    "
+        ));
+        unparked.push_str(&format!(
+            "\n        let argument_{position} = with_arena(|arena| arena.take(argument_{position})).map_err(runtime_error)?;"
+        ));
+    }
+    let before = format!("{parked}{before}");
+    let rebound = format!("{unparked}{rebound}");
     writeln!(
         output,
         "    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
@@ -6396,6 +6464,25 @@ fn render_anchored_opening(
         }
     }
     let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    // An input that carries a lifetime, as a widget `view` made, is in a
+    // region. In the slot's own region, which pins strings, the output
+    // goes there too, at the lifetime the input has.
+    if REGION_ARGUMENTS.get() {
+        return writeln!(
+            output,
+            "    if let Some(pins) = region.pins() {{
+{taken}        let _ = &pins;{pinned}
+        let made = {call};
+        return {converted};
+    }}"
+        )
+        .map_err(encoding);
+    }
+    // Out of any region, such an input is at `'static`, which a string
+    // pinned at the slot's lifetime can't join.
+    if lifetime_inputs(signature, substitutions)? {
+        return Ok(());
+    }
     writeln!(
         output,
         "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
@@ -6408,6 +6495,104 @@ fn render_anchored_opening(
     }}"
     )
     .map_err(encoding)
+}
+
+/// `register_defaults`, which gives the core each imported type's own
+/// `Default`, so a script type's derived `Default` builds a field of that
+/// type as Rust's derive does: `Tooltip { position: Position::default(),
+/// .. }`. Only types with no parameters or lifetimes, whose `Default` the
+/// crate implements for the type itself.
+fn render_imported_defaults(
+    facade: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    output
+        .write_all(b"fn register_defaults() {\n")
+        .map_err(encoding)?;
+    let mut seen = std::collections::BTreeSet::new();
+    for owner in facade
+        .into_iter()
+        .flat_map(crate::surface::facade::Plan::facades)
+    {
+        for ty in owner.types() {
+            if !ty.default()
+                || ty.parameters().len() != 0
+                || ty.lifetimes() != 0
+                || !seen.insert(*ty.identity())
+            {
+                continue;
+            }
+            let path = format!("{}::{}", owner.root(), ty.path());
+            let give = if FACADE_VALUES.with_borrow(|values| values.contains(ty.identity())) {
+                "Ok(Dynamic::from(output))"
+            } else {
+                "insert_native!(arguments.arena, output).map(Dynamic::from)"
+            };
+            output
+                .write_all(b"    __rawr_internal::host::value::register_imported_default(")
+                .map_err(encoding)?;
+            byte_array(output, ty.identity())?;
+            writeln!(
+                output,
+                ", || with_arena(|arena| {{
+        let mut values: [&mut Dynamic; 0] = [];
+        let arguments = &mut Arguments {{ values: &mut values, arena }};
+        let output = <{path} as Default>::default();
+        {give}
+    }}).unwrap_or_else(|error| panic!(\"rawr: `{path}`'s `Default`: {{error:?}}\")));"
+            )
+            .map_err(encoding)?;
+        }
+    }
+    output.write_all(b"}\n\n").map_err(encoding)
+}
+
+/// A call that gives a value carrying a lifetime, made while a slot's
+/// region is open, as `view(&state)`'s `checkbox(state.done)`: the call is
+/// made at that region's lifetime and its output stays there, so a widget
+/// invariant in its lifetime joins the strings and widgets pinned there,
+/// as rustc infers one lifetime for the whole view.
+fn render_anchored_output(
+    returned: &convert::Type,
+    call: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    if REGION_ARGUMENTS.get() || !matches!(returned, convert::Type::Nominal { .. }) {
+        return Ok(());
+    }
+    let Some(family) = family_of(returned) else {
+        return Ok(());
+    };
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let made = lend(arguments.arena, || {call});
+            Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>(made)))
+        }})
+        .map_err(|error| Error::Lent(\"a slot's region\", error))?;
+    }}"
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// Whether an input of the call is a native value that carries a lifetime,
+/// as a widget a view made does.
+fn lifetime_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<bool, request::Error> {
+    for input in signature.inputs() {
+        if lends_str(input, signature, substitutions) {
+            continue;
+        }
+        let ty = substituted(input, signature, substitutions)?;
+        if matches!(ty, convert::Type::Nominal { .. }) && carries_lifetime(&ty) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// What a frame's opening of a call whose output borrows what it takes
@@ -6702,6 +6887,17 @@ fn render_scoped_receiver(
         render_to_dynamic(&returned, "output", 0, &mut converted)?;
         converted
     };
+    // A `&str` the call lends the receiver, as `label(impl IntoFragment<'a>)`
+    // takes one, is pinned in the region the receiver is in, at its
+    // lifetime, as a slot's region pins its strings.
+    let mut pinned = String::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if lends_str(input, signature, substitutions) {
+            pinned.push_str(&format!(
+                "\n        let argument_{position} = region.pins().ok_or(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))?.pin(argument_{position}_owned.clone());"
+            ));
+        }
+    }
     // In the region the adapter's body already runs in, which an argument
     // of the call is in too.
     if REGION_ARGUMENTS.get() {
@@ -6709,7 +6905,7 @@ fn render_scoped_receiver(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
         #[allow(unused_mut)]
-        let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+        let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
         let output = {call};
         return {converted};
     }}"
@@ -6721,7 +6917,7 @@ fn render_scoped_receiver(
         "    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unused_mut)]
-            let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+            let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
             let output = {call};
             {converted}
         }})
@@ -7333,17 +7529,17 @@ fn arguments(plan: &Plan) -> Result<u32, request::Error> {
             mappers,
             ..
         } => dynamic_function_arity(signature, functions, mappers)?,
-        Operation::Method { signature, .. } => {
-            signature
-                .inputs()
-                .len()
-                .checked_add(1)
-                .ok_or(request::Error::Limit {
-                    resource: "adapter argument cardinality",
-                    limit: u32::MAX as usize,
-                    actual: usize::MAX,
-                })?
-        }
+        Operation::Method {
+            signature,
+            functions,
+            ..
+        } => dynamic_function_arity(signature, functions, &[])?
+            .checked_add(1)
+            .ok_or(request::Error::Limit {
+                resource: "adapter argument cardinality",
+                limit: u32::MAX as usize,
+                actual: usize::MAX,
+            })?,
         Operation::Builder { steps } => steps
             .iter()
             .flat_map(|step| step.arguments())
@@ -8325,7 +8521,10 @@ fn dynamic_function_arity(
             .peek()
             .is_some_and(|mapper| usize::try_from(mapper.position()).ok() == Some(position));
         match (ty, selected_here, mapped_here) {
-            (convert::Type::FunctionItem { .. }, true, false) => {
+            (ty, true, false)
+                if matches!(ty, convert::Type::FunctionItem { .. })
+                    || callable_parameter(ty, signature) =>
+            {
                 selected.next();
             }
             (convert::Type::FunctionItem { .. }, false, true) => {
@@ -8577,6 +8776,20 @@ fn render_function_arguments(
             (convert::Type::FunctionItem { .. }, true, false) => {
                 selected.next();
             }
+            // A crate function filling a callable parameter a script
+            // closure would, as `.style(container::rounded_box)`: the Rust
+            // function itself, with no runtime argument.
+            (ty, true, false) if callable_parameter(ty, signature) => {
+                let function = selected.next().ok_or(request::Error::Drift {
+                    field: "generated static function item cardinality",
+                })?;
+                write!(output, "    let argument_{position} = ")
+                    .map_err(|_| request::Error::Encoding)?;
+                render_function_callable(function.plan(), output)?;
+                output
+                    .write_all(b";\n")
+                    .map_err(|_| request::Error::Encoding)?;
+            }
             (convert::Type::FunctionItem { .. }, false, true) => {
                 let mapper = mapped.next().ok_or(request::Error::Drift {
                     field: "generated profile mapper cardinality",
@@ -8603,6 +8816,15 @@ fn render_function_arguments(
                     call.filter(|call| *ty == convert::Type::Parameter(call.parameter()))
                 {
                     render_take_callable(
+                        position,
+                        runtime,
+                        call,
+                        signature,
+                        substitutions,
+                        output,
+                    )?;
+                } else if let Some(call) = call.filter(|call| optional_callable(ty, call)) {
+                    render_take_optional_callable(
                         position,
                         runtime,
                         call,
@@ -8667,6 +8889,12 @@ fn function_argument_list(
                 })?;
                 render_function_callable(function.plan(), output)?;
             }
+            // A crate function filling a callable parameter, which
+            // `render_function_arguments` bound to its local.
+            (ty, true, false) if callable_parameter(ty, signature) => {
+                selected.next();
+                write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+            }
             (convert::Type::FunctionItem { .. }, false, true) => {
                 let mapper = mapped.next().ok_or(request::Error::Drift {
                     field: "generated profile mapper cardinality",
@@ -8693,8 +8921,11 @@ fn function_argument_list(
             _ if crossed.slot_at(position, ty).is_some() => {
                 write!(output, "slot_{position}").map_err(|_| request::Error::Encoding)?;
             }
-            // A script closure, made a Rust closure (D513.7 b).
-            _ if callable_parameter(ty, signature) => {
+            // A script closure, made a Rust closure (D513.7 b), or an
+            // `Option` of one.
+            _ if callable_parameter(ty, signature)
+                || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature)) =>
+            {
                 write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
             }
             _ => {
@@ -9076,6 +9307,54 @@ fn render_take_callable(
     substitutions: &[convert::Type],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    let closure = render_callable_closure(
+        index,
+        &format!("(**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()"),
+        call,
+        signature,
+        substitutions,
+    )?;
+    writeln!(output, "    let argument_{local} = {closure};").map_err(|_| request::Error::Encoding)
+}
+
+/// Whether `ty` is an `Option` of the callable parameter `call` fills, as
+/// `on_toggle_maybe(f: Option<F>)` takes it.
+fn optional_callable(
+    ty: &convert::Type,
+    call: &crate::classify::representability::callable::Call,
+) -> bool {
+    matches!(ty, convert::Type::Option(inner)
+        if **inner == convert::Type::Parameter(call.parameter()))
+}
+
+/// An `Option` of a script closure where a generic item takes
+/// `Option<F>`: `None`, or `Some` of the Rust closure that calls it, as
+/// [`render_take_callable`] makes.
+fn render_take_optional_callable(
+    local: usize,
+    index: usize,
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let closure = render_callable_closure(index, "inner", call, signature, substitutions)?;
+    writeln!(
+        output,
+        "    let argument_{local} = match __rawr_internal::option::take(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).ok_or(Error::TypeMismatch)? {{\n        None => None,\n        Some(inner) => Some({closure}),\n    }};"
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// The block that makes a Rust closure calling the script callable
+/// `source` gives, for [`render_take_callable`].
+fn render_callable_closure(
+    index: usize,
+    source: &str,
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
     let by_value = |ty: &convert::Type| {
         !matches!(ty, convert::Type::Nominal { .. }) || is_value(ty) || is_duration(ty)
     };
@@ -9160,12 +9439,10 @@ fn render_take_callable(
     } else {
         format!("({converted})")
     };
-    writeln!(
-        output,
-        "    let argument_{local} = {{\n        let callable = __rawr_internal::future::Callable::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }};",
+    Ok(format!(
+        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
         parameters.join(", "),
-    )
-    .map_err(|_| request::Error::Encoding)
+    ))
 }
 
 fn render_fields(
@@ -9185,11 +9462,12 @@ fn render_take(
     ty: &convert::Type,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    // A `&str` input lends the string taken from Rawr.
+    // A `&str` input lends the string taken from Rawr, which a region can
+    // pin by its shared handle: no text is copied.
     if matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
         return writeln!(
             output,
-            "    let argument_{local}_owned = take_string(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
+            "    let argument_{local}_owned = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
         )
         .map_err(|_| request::Error::Encoding);
     }
@@ -10736,9 +11014,11 @@ impl TypePaths {
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),
                             };
-                            // An iced view type's value is a recipe, not
-                            // a scope frame's (D558 tier 2).
-                            if ty.lifetimes() != 0 && !ty.view() {
+                            // A view type's value is a recipe, not a scope
+                            // frame's, where a host profile makes view
+                            // recipes (D558 tier 2). With the neutral profile
+                            // it is an ordinary scoped type (D594).
+                            if ty.lifetimes() != 0 && !(views && ty.view()) {
                                 types.entry(*ty.identity()).or_insert(lifetimes);
                             }
                             traits.entry(*ty.identity()).or_insert(lifetimes);
@@ -11662,7 +11942,9 @@ mod tests {
         super::render_take(1, 1, &Type::Builtin(Builtin::Str), &mut take).unwrap();
         let take = String::from_utf8(take).unwrap();
         assert!(
-            take.contains("let argument_1_owned = take_string(arguments, 1)?;"),
+            take.contains(
+                "let argument_1_owned = take_primitive::<ImmutableString>(arguments, 1)?;"
+            ),
             "{take}"
         );
         assert!(

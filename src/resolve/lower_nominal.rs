@@ -17951,13 +17951,12 @@ impl<'a> Parser<'a> {
         }
         let signature = self.instantiate_host_signature(item, None, None)?;
         let owner = owner.expect("guard proves one imported function owner");
-        let [input] = signature.inputs.as_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "compile-time imported function item must accept exactly one owned input"
-                    .into(),
-                operation: expression,
-            });
+        // One input is itself; none is `()`, and several are their tuple,
+        // as a host callable's are (`checkbox::primary(&Theme, Status)`).
+        let input = match signature.inputs.as_slice() {
+            [input] => input.clone(),
+            [] => Ty::Unit,
+            inputs => Ty::Tuple(inputs.into()),
         };
         if !signature.requirements.is_empty() {
             return Err(Error::InvalidHostOperation {
@@ -17970,7 +17969,7 @@ impl<'a> Parser<'a> {
             prelude: origin::Fragment::default(),
             source: origin::Fragment::plain(item.path()),
             ty: Ty::ImportedFunctionItem {
-                input: Box::new(input.clone()),
+                input: Box::new(input),
                 output: Box::new(signature.output),
                 item: Some(Box::new(ImportedFunctionProof {
                     item: item.clone(),
@@ -46393,6 +46392,45 @@ impl<'a> Parser<'a> {
                     .iter()
                     .zip(actual_inputs.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
+                    && self.unify_type(expected_output, actual_output)
+            }
+            // A crate's function where a host callable is expected, as
+            // `.style(container::rounded_box)`: the adapter passes the Rust
+            // function itself, so a `&T` it takes is the callable's `&T`.
+            #[cfg(feature = "rust-import")]
+            (
+                Ty::Callable {
+                    inputs: expected_inputs,
+                    output: expected_output,
+                    ..
+                },
+                Ty::ImportedFunctionItem {
+                    input: actual_input,
+                    output: actual_output,
+                    item: Some(proof),
+                },
+            ) if proof.item.signature().parameters().len() == expected_inputs.len() => {
+                let actual_inputs: Box<[Ty]> = match (expected_inputs.len(), actual_input.as_ref())
+                {
+                    (1, input) => Box::new([input.clone()]),
+                    (_, Ty::Tuple(members)) => members.clone(),
+                    (_, _) => Box::default(),
+                };
+                expected_inputs
+                    .iter()
+                    .zip(actual_inputs.iter())
+                    .all(|(expected, actual)| {
+                        let unborrowed = |ty: Ty| match ty {
+                            Ty::Reference {
+                                mutable: false,
+                                target,
+                            } => *target,
+                            ty => ty,
+                        };
+                        let expected = unborrowed(self.inference.resolve(expected));
+                        let actual = unborrowed(self.inference.resolve(actual));
+                        self.unify_type(&expected, &actual)
+                    })
                     && self.unify_type(expected_output, actual_output)
             }
             #[cfg(feature = "rust-import")]
