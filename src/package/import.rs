@@ -445,7 +445,7 @@ impl crate::Engine {
                         source_identity: source.identity().into(),
                     })
                     .map_err(super::Error::import)?;
-            if used.types.is_empty() && used.functions.is_empty() {
+            if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
                 compiler
                     .require_selected(identity, used.selector, source.identity(), start, end)
                     .map_err(Error::from)
@@ -537,53 +537,61 @@ impl crate::Engine {
                 })
                 .map(|binders| binders.to_vec().into_boxed_slice())
                 .unwrap_or_default();
-            let instance =
-                if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
-                    rawr_import::surface::instance::Arguments::borrowed(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        limits,
-                    )
-                } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
-                    rawr_import::surface::instance::Arguments::shared(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        proof.scope(),
-                        limits,
-                    )
-                } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
-                    rawr_import::surface::instance::Arguments::mutable(
-                        used.types,
-                        Box::default(),
-                        binders,
-                        limits,
-                    )
-                } else if used.callable {
-                    rawr_import::surface::instance::Arguments::once(
-                        used.types,
-                        Box::default(),
-                        Box::default(),
-                        limits,
-                    )
-                } else {
-                    rawr_import::surface::instance::Arguments::new(
-                        used.types,
-                        Box::default(),
-                        Box::default(),
-                        None,
-                        limits,
-                    )
-                }
-                .and_then(|instance| {
-                    instance.with_function_items(functions.into_boxed_slice(), limits)
-                })
-                .and_then(|instance| {
-                    instance.with_event_mappers(mappers.into_boxed_slice(), limits)
-                })
-                .map_err(Error::from)
-                .map_err(super::Error::import)?;
+            // Script functions that fill callables as slots (D594) take
+            // no closure class.
+            let class = class.filter(|_| used.slots.is_empty());
+            let slotted = !used.slots.is_empty();
+            let instance = if slotted {
+                rawr_import::surface::instance::Arguments::new(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    None,
+                    limits,
+                )
+                .and_then(|instance| instance.with_slots(used.slots))
+            } else if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
+                rawr_import::surface::instance::Arguments::borrowed(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    limits,
+                )
+            } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
+                rawr_import::surface::instance::Arguments::shared(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    proof.scope(),
+                    limits,
+                )
+            } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
+                rawr_import::surface::instance::Arguments::mutable(
+                    used.types,
+                    Box::default(),
+                    binders,
+                    limits,
+                )
+            } else if used.callable && !slotted {
+                rawr_import::surface::instance::Arguments::once(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    limits,
+                )
+            } else {
+                rawr_import::surface::instance::Arguments::new(
+                    used.types,
+                    Box::default(),
+                    Box::default(),
+                    None,
+                    limits,
+                )
+            }
+            .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
+            .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
+            .map_err(Error::from)
+            .map_err(super::Error::import)?;
             compiler
                 .require_instance(
                     identity,
@@ -1677,6 +1685,13 @@ fn build(
     }
 
     for entry in &facade.entries {
+        if std::env::var_os("RAWR_DEBUG_ITEMS").is_some() {
+            eprintln!(
+                "DEBUG item {} {:?}",
+                entry.relative,
+                entry.outcome.representability()
+            );
+        }
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
         if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
             builder.item(item)?;
@@ -1865,7 +1880,10 @@ fn ty_ok(
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. } => ty_ok(element, declared),
-        Type::Tuple(members) => members.iter().all(|ty| ty_ok(ty, declared)),
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
@@ -1875,6 +1893,18 @@ fn ty_ok(
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
     match plan.class() {
+        // A script function fills each callable parameter as a slot,
+        // as `iced::run(update, view)` takes them (D594).
+        None if !plan.crossings().is_empty() => {
+            plan.signature().parameters().iter().all(|parameter| {
+                matches!(
+                    parameter.kind(),
+                    representability::signature::Kind::Type
+                        | representability::signature::Kind::Future
+                        | representability::signature::Kind::Callable
+                )
+            })
+        }
         // `F: Future` takes a script future (D527).
         None => plan.signature().parameters().iter().all(|parameter| {
             matches!(
@@ -2006,6 +2036,9 @@ impl Types {
                     .map(|member| Self::convert_charged(member, parameters))
                     .collect::<Result<Vec<_>, _>>()?,
             )?,
+            // A script type's proxy fills a call's instance; no Rust
+            // declaration names one (D594).
+            Type::Script { .. } => return Err(Error::Cardinality),
         })
     }
 }
@@ -2153,9 +2186,9 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
     match ty {
         Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
         Type::Unit | Type::Builtin(_) => false,
-        Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
-            arguments.iter().any(names_impl_parameter)
-        }
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => arguments.iter().any(names_impl_parameter),
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
@@ -2176,9 +2209,9 @@ fn callable_signature(
     plan: &representability::callable::Item,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<host::signature::Definition, Error> {
-    let Some(call) = plan.call() else {
+    if plan.call().is_none() && plan.crossings().is_empty() {
         return signature(types, plan.signature(), allocation);
-    };
+    }
     let signature = plan.signature();
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
@@ -2186,11 +2219,19 @@ fn callable_signature(
             builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
         }
     }
+    // A script function fills each callable parameter as a slot (D594).
+    if !plan.crossings().is_empty() {
+        builder.crossing();
+    }
     let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {
         types.convert(ty, signature.parameters(), allocation)
     };
     for input in signature.inputs() {
-        if *input == representability::convert::Type::Parameter(call.parameter()) {
+        let call =
+            plan.crossings().iter().chain(plan.call()).find(|call| {
+                *input == representability::convert::Type::Parameter(call.parameter())
+            });
+        if let Some(call) = call {
             let input = match call.inputs() {
                 [] => host::type_ref::Type::unit(),
                 [single] => convert(single, allocation)?,
@@ -2256,17 +2297,18 @@ fn type_usage(
         | Type::Sequence {
             element: payload, ..
         } => type_usage(payload, parameters)?,
-        Type::Tuple(members) => {
-            members
-                .iter()
-                .try_fold((0_usize, 0_usize), |(items, bytes), member| {
-                    let (member_items, member_bytes) = type_usage(member, parameters)?;
-                    Ok::<_, Error>((
-                        items.checked_add(member_items).ok_or(Error::Allocation)?,
-                        bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
-                    ))
-                })?
-        }
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members
+            .iter()
+            .try_fold((0_usize, 0_usize), |(items, bytes), member| {
+                let (member_items, member_bytes) = type_usage(member, parameters)?;
+                Ok::<_, Error>((
+                    items.checked_add(member_items).ok_or(Error::Allocation)?,
+                    bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
+                ))
+            })?,
         Type::Unit | Type::Builtin(_) => (0, 0),
     };
     Ok((

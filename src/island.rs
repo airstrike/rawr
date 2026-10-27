@@ -485,11 +485,29 @@ pub(crate) fn shared(
         .filter(|item| item.kind() == item::Kind::Method && item.key().name() == "Clone::clone")
         .filter_map(|item| Some((item.key().owner()?.clone(), item.clone())))
         .collect();
+    let defaults = authority
+        .items()
+        .filter(|item| {
+            item.kind() == item::Kind::AssociatedFunction && item.key().name() == "Default::default"
+        })
+        .filter_map(|item| match item.key().owner()? {
+            type_def::Identity::Script(owner) => {
+                let mut path = owner.modules().join("::");
+                if !path.is_empty() {
+                    path.push_str("::");
+                }
+                path.push_str(owner.name());
+                Some((path, item.clone()))
+            }
+            type_def::Identity::Host(_) => None,
+        })
+        .collect();
     let layouts = layouts(authority.items());
     std::sync::Arc::new(Shared {
         authority,
         runtime,
         clones,
+        defaults,
         layouts,
     })
 }
@@ -713,6 +731,8 @@ struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
     clones: HashMap<type_def::Identity, item::Value>,
+    /// Each script type's own `impl Default`, by its path (D594).
+    defaults: HashMap<String, item::Value>,
     /// The closures each function writes (D553.5).
     layouts: HashMap<String, Box<[item::Value]>>,
 }
@@ -752,6 +772,17 @@ impl crate::future::Remote for Shared {
 
     fn debug(&self, value: &Dynamic) -> Option<String> {
         self.authority.model().debug_text(value)
+    }
+
+    fn default_of(&self, path: &str) -> Option<crate::RawrResultOf<Dynamic>> {
+        if let Some(default) = self.defaults.get(path) {
+            return Some(self.invoke(default, &mut []));
+        }
+        self.authority.model().default_by_path(path).map(|made| {
+            made.map_err(|error| {
+                crate::future::error(format!("rawr: `{path}`'s `Default`: {error}"))
+            })
+        })
     }
 
     fn rebinds(&self, function: &item::Value, from: &dyn crate::future::Remote) -> bool {

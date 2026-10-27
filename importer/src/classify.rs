@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 33;
+const CLASSIFIER_VERSION: u32 = 34;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -31,7 +31,15 @@ struct FunctionParameters {
     predicates: Box<[representability::predicate::Bound]>,
     /// The callable parameter, its `Fn*` inputs and its `Output`.
     call: Option<(u32, Box<[model::Type]>, model::Type)>,
+    /// Every callable parameter, its `Fn*` inputs, its `Output`, and
+    /// whether the output borrows at the bound's own lifetime: what a
+    /// script function crosses as when it fills the parameter (D594).
+    crossings: Vec<Crossing>,
 }
+
+/// A callable parameter's index, its `Fn*` inputs, its `Output`, and
+/// whether that output borrows at the bound's own lifetime.
+type Crossing = (u32, Box<[model::Type]>, model::Type, bool);
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct OutcomeRecord {
@@ -454,6 +462,42 @@ fn type_late_input(
     }
 }
 
+/// `ty` with each late-bound lifetime as `'static`: the type a callable's
+/// output names, whose borrow the slot that makes it gives its own
+/// lifetime (D594).
+fn late_as_static(ty: &model::Type) -> model::Type {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Lifetime(model::Lifetime::Late { .. }) => {
+            model::Argument::Lifetime(model::Lifetime::Static)
+        }
+        model::Argument::Type(ty) => model::Argument::Type(late_as_static(ty)),
+        other => other.clone(),
+    };
+    match ty {
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: match lifetime {
+                model::Lifetime::Late { .. } => model::Lifetime::Static,
+                other => other.clone(),
+            },
+            mutability: *mutability,
+            ty: Box::new(late_as_static(ty)),
+        },
+        model::Type::Tuple(members) => {
+            model::Type::Tuple(members.iter().map(late_as_static).collect())
+        }
+        model::Type::Slice(element) => model::Type::Slice(Box::new(late_as_static(element))),
+        other => other.clone(),
+    }
+}
+
 fn callable_projection<'a>(
     projection: &model::Type,
     parameter: u32,
@@ -861,7 +905,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         generics: &model::Generics,
         strings: &[u32],
     ) -> Result<FunctionParameters, Failure> {
-        let mut parameters = self.declared_parameters(generics, strings, true)?;
+        let parameters = self.declared_parameters(generics, strings, true)?;
         if generics.predicates().len() == 0 {
             return Ok(FunctionParameters {
                 parameters,
@@ -869,8 +913,122 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 binders: Box::default(),
                 predicates: Box::default(),
                 call: None,
+                crossings: Vec::new(),
             });
         }
+        let mut bounds = Vec::new();
+        for predicate in generics.predicates() {
+            let model::Predicate::Bound {
+                ty: model::Type::Parameter { index, .. },
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    },
+            } = predicate
+            else {
+                continue;
+            };
+            if matches!(
+                self.definition_name(trait_id),
+                Some("Fn" | "FnMut" | "FnOnce")
+            ) {
+                bounds.push((*index, arguments.as_ref(), binders.as_ref()));
+            }
+        }
+        // A script function crosses into every callable parameter as a
+        // slot (D594): several callables, a `&mut` input, or an output that
+        // borrows an input, as `iced::run(update, view)` takes them.
+        let crossings = self.crossings(generics, &bounds);
+        let crossed = |parameters: Box<[representability::signature::Parameter]>,
+                       crossings: Vec<Crossing>|
+         -> Option<FunctionParameters> {
+            let mut parameters = parameters;
+            for (index, ..) in &crossings {
+                let parameter = parameters
+                    .iter_mut()
+                    .find(|candidate| candidate.index() == *index)?;
+                if parameter.kind() != representability::signature::Kind::Type {
+                    return None;
+                }
+                parameter.mark_callable();
+            }
+            Some(FunctionParameters {
+                parameters,
+                callable: None,
+                binders: Box::default(),
+                predicates: Box::default(),
+                call: None,
+                crossings,
+            })
+        };
+        if bounds.len() > 1 {
+            return crossed(parameters, crossings?)
+                .ok_or_else(|| representability::reject::Kind::CallableProtocol.into());
+        }
+        match self.single_callable(generics, parameters.clone()) {
+            Ok(mut single) => {
+                single.crossings = crossings.unwrap_or_default();
+                Ok(single)
+            }
+            Err(Failure::Reject(kind)) => crossings
+                .ok()
+                .filter(|crossings| !crossings.is_empty())
+                .and_then(|crossings| crossed(parameters, crossings))
+                .ok_or(Failure::Reject(kind)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Each callable parameter's inputs and output, as a script function
+    /// fills it by a slot (D594): its inputs may borrow, shared or `&mut`,
+    /// at the bound's own lifetimes, and its output may borrow at them, as
+    /// `for<'a> Fn(&'a S) -> Element<'a, M>` does. Any other predicate
+    /// holds or fails where rustc compiles the call.
+    fn crossings(
+        &self,
+        generics: &model::Generics,
+        bounds: &[(u32, &[model::Argument], &[model::Binder])],
+    ) -> Result<Vec<Crossing>, Failure> {
+        let mut crossings = Vec::new();
+        for (parameter, arguments, binders) in bounds {
+            let [model::Argument::Type(model::Type::Tuple(inputs))] = arguments else {
+                return Err(representability::reject::Kind::CallableProtocol.into());
+            };
+            for argument in arguments.iter() {
+                argument_late_input(argument, binders).map_err(Failure::Reject)?;
+            }
+            let returned = generics.predicates().find_map(|predicate| match predicate {
+                model::Predicate::ProjectionEquality { projection, ty }
+                    if callable_projection(projection, *parameter, |trait_id| {
+                        self.definition_name(trait_id)
+                    }) =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            });
+            let Some(returned) = returned else {
+                return Err(representability::reject::Kind::CallableProtocol.into());
+            };
+            // An output borrows only at a lifetime its own bound declares,
+            // which an input takes.
+            let borrows = type_has_late_lifetime(returned);
+            if borrows && type_late_input(returned, binders).is_err() {
+                return Err(representability::reject::Kind::EscapingBorrow.into());
+            }
+            crossings.push((*parameter, inputs.clone(), returned.clone(), borrows));
+        }
+        Ok(crossings)
+    }
+
+    fn single_callable(
+        &self,
+        generics: &model::Generics,
+        mut parameters: Box<[representability::signature::Parameter]>,
+    ) -> Result<FunctionParameters, Failure> {
         let mut selected = None;
         for predicate in generics.predicates() {
             let model::Predicate::Bound {
@@ -944,6 +1102,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 binders: Box::default(),
                 predicates: predicates.into_boxed_slice(),
                 call: None,
+                crossings: Vec::new(),
             });
         };
         let callable_parameter = parameters
@@ -1074,6 +1233,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             call: inputs
                 .zip(returned)
                 .map(|(inputs, returned)| (parameter, inputs, returned)),
+            crossings: Vec::new(),
         })
     }
 
@@ -2852,7 +3012,10 @@ fn field_type_nameable(
         Type::Result(ok, err) => {
             field_type_nameable(ok, nominal) && field_type_nameable(err, nominal)
         }
-        Type::Tuple(members) => members
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members
             .iter()
             .all(|member| field_type_nameable(member, nominal)),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
@@ -3016,9 +3179,10 @@ fn type_nameable(
         representability::convert::Type::Result(ok, err) => {
             all_nameable([&**ok, &**err], root, names)
         }
-        representability::convert::Type::Tuple(members) => {
-            all_nameable(members.iter(), root, names)
-        }
+        representability::convert::Type::Tuple(members)
+        | representability::convert::Type::Script {
+            arguments: members, ..
+        } => all_nameable(members.iter(), root, names),
         representability::convert::Type::Unit
         | representability::convert::Type::Builtin(_)
         | representability::convert::Type::Parameter(_) => (true, false),
@@ -3920,6 +4084,32 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// An input native code gives a script function that fills a callable
+    /// parameter by a slot (D594): a value, or a shared or `&mut` borrow
+    /// of one, which the slot lends the function for the call, as
+    /// `update(&mut state, message)` takes `&mut S`.
+    fn convert_crossing_input(
+        &self,
+        input: &model::Type,
+    ) -> Option<representability::convert::Type> {
+        if let Ok(input) = self.convert_value(input) {
+            return Some(input);
+        }
+        let model::Type::Reference { mutability, ty, .. } = input else {
+            return None;
+        };
+        let target = self.convert_value(ty).ok()?;
+        matches!(
+            target,
+            representability::convert::Type::Parameter(_)
+                | representability::convert::Type::Nominal { .. }
+        )
+        .then(|| representability::convert::Type::Borrowed {
+            mutable: matches!(mutability, model::Mutability::Mutable),
+            ty: Box::new(target),
+        })
+    }
+
     /// Whether `output` is an iced view type ([`Self::renders`]).
     fn view_output(&self, output: &model::Type) -> bool {
         let model::Type::Definition { id, .. } = output else {
@@ -4214,7 +4404,10 @@ impl<P: api::Phase> Context<'_, P> {
             | Type::Sequence { element, .. } => self.clones(element),
             Type::Result(ok, err) => self.clones(ok) && self.clones(err),
             Type::Tuple(members) => members.iter().all(|member| self.clones(member)),
-            Type::FunctionItem { .. } | Type::ProfileMessage { .. } | Type::Parameter(_) => false,
+            Type::FunctionItem { .. }
+            | Type::ProfileMessage { .. }
+            | Type::Parameter(_)
+            | Type::Script { .. } => false,
         }
     }
 
@@ -4316,7 +4509,15 @@ impl<P: api::Phase> Context<'_, P> {
             binders,
             mut predicates,
             call,
+            crossings,
         } = self.function_parameters(generics, &strings)?;
+        // A callable an `impl Into<T>` converts from crosses as a closure
+        // `T`'s `From` takes (D552.3), not as a slot.
+        let crossings = if converted.is_some() {
+            Vec::new()
+        } else {
+            crossings
+        };
         // `F: Future` takes a script future as `rawr::future::Script`, and
         // `F::Output` is a synthetic type parameter the script infers (D527).
         let futures = self.future_parameters(generics, &mut parameters, callable_class.is_some());
@@ -4444,14 +4645,19 @@ impl<P: api::Phase> Context<'_, P> {
         // can name `B` only as the input that takes the closure. Freya's
         // `VirtualScrollView<D, B>::auto_hide_scrollbars(self, bool) -> Self`
         // names it in its receiver and output.
-        if let Some((callable, ..)) = &call
-            && inputs
-                .iter()
-                .filter(|input| **input != representability::convert::Type::Parameter(*callable))
-                .chain([&output])
-                .any(|ty| names_parameter(ty, *callable))
+        for callable in call
+            .iter()
+            .map(|(callable, ..)| *callable)
+            .chain(crossings.iter().map(|(callable, ..)| *callable))
         {
-            return Err(representability::reject::Kind::CallableProtocol.into());
+            if inputs
+                .iter()
+                .filter(|input| **input != representability::convert::Type::Parameter(callable))
+                .chain([&output])
+                .any(|ty| names_parameter(ty, callable))
+            {
+                return Err(representability::reject::Kind::CallableProtocol.into());
+            }
         }
         let mut relations = self.relations(generics)?.into_vec();
         relations.extend(self.projection_relations(&projected)?);
@@ -4499,9 +4705,26 @@ impl<P: api::Phase> Context<'_, P> {
                 let returned = self.convert_value(&returned).ok()?;
                 Some(callable::Call::new(parameter, inputs, returned))
             });
+            // What each callable parameter takes and gives when a script
+            // function fills it by a slot (D594); all or none.
+            let crossings = crossings
+                .iter()
+                .map(|(parameter, inputs, returned, borrows)| {
+                    let inputs = inputs
+                        .iter()
+                        .map(|input| self.convert_crossing_input(input))
+                        .collect::<Option<Box<[_]>>>()?;
+                    // The output's own lifetimes are the slot's, which the
+                    // runner writes; the type is converted without them.
+                    let returned = self.convert_value(&late_as_static(returned)).ok()?;
+                    Some(callable::Call::new(*parameter, inputs, returned).borrowing(*borrows))
+                })
+                .collect::<Option<Box<[_]>>>()
+                .unwrap_or_default();
             // An argument's `impl Fn(..)` has no name a signature can
             // declare, so only an item whose closure Rawr can make keeps it.
             if call.is_none()
+                && crossings.is_empty()
                 && signature_plan
                     .parameters()
                     .iter()
@@ -4517,7 +4740,8 @@ impl<P: api::Phase> Context<'_, P> {
                     binders,
                     predicates,
                 )
-                .with_call(call),
+                .with_call(call)
+                .with_crossings(crossings),
             ));
         }
         Ok(match receiver {
@@ -5861,7 +6085,9 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
     match ty {
         Type::Parameter(index) => *index != except,
         Type::Unit | Type::Builtin(_) => false,
-        Type::Nominal { arguments, .. } | Type::Tuple(arguments) => arguments.iter().any(other),
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => arguments.iter().any(other),
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
@@ -5886,7 +6112,10 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
         | Type::Range(element)
         | Type::Sequence { element, .. } => names_parameter(element, index),
         Type::Result(ok, err) => names_parameter(ok, index) || names_parameter(err, index),
-        Type::Tuple(members) => members.iter().any(|member| names_parameter(member, index)),
+        Type::Tuple(members)
+        | Type::Script {
+            arguments: members, ..
+        } => members.iter().any(|member| names_parameter(member, index)),
         Type::FunctionItem { input, output } => {
             names_parameter(input, index) || names_parameter(output, index)
         }

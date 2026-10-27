@@ -364,6 +364,30 @@ impl Model {
         }
     }
 
+    /// The derived `Default` of the script type at `path` (`State`,
+    /// `app::State`), by its modules and name. `None` when no type is
+    /// there (D594).
+    #[cfg(feature = "sync")]
+    pub(crate) fn default_by_path(
+        &self,
+        path: &str,
+    ) -> Option<Result<Dynamic, construction::Error>> {
+        let (identity, definition) = self.definitions.iter().find(|(identity, _)| {
+            let type_def::Identity::Script(key) = identity else {
+                return false;
+            };
+            let mut segments = path.rsplit("::");
+            segments.next() == Some(key.name())
+                && key
+                    .modules()
+                    .iter()
+                    .rev()
+                    .map(ImmutableString::as_str)
+                    .eq(segments)
+        })?;
+        Some(self.materialize_default(identity, &definition.schema))
+    }
+
     pub(crate) fn materialize_default(
         &self,
         identity: &type_def::Identity,

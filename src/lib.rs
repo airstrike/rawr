@@ -110,6 +110,8 @@ mod ast;
 /// Compile-time capabilities proven for Rawr values and callables.
 pub mod capability;
 pub mod config;
+#[cfg(feature = "sync")]
+pub mod crossing;
 /// Canonical structured diagnostics shared by compilers, hosts, and tools.
 pub mod diagnostic;
 mod engine;

@@ -59,6 +59,12 @@ pub(crate) enum Operation {
         /// and output (D513.7 b).
         #[serde(default)]
         call: Option<crate::classify::representability::callable::Call>,
+        /// The script functions that fill callable parameters as slots,
+        /// and what each parameter takes and gives (D594).
+        #[serde(default)]
+        slots: Box<[crate::surface::instance::Slot]>,
+        #[serde(default)]
+        crossings: Box<[crate::classify::representability::callable::Call]>,
     },
     Method {
         receiver: ownership::Receiver,
@@ -70,6 +76,12 @@ pub(crate) enum Operation {
         /// `on_press` takes (D551.6).
         #[serde(default)]
         call: Option<crate::classify::representability::callable::Call>,
+        /// The script functions that fill callable parameters as slots,
+        /// and what each parameter takes and gives (D594).
+        #[serde(default)]
+        slots: Box<[crate::surface::instance::Slot]>,
+        #[serde(default)]
+        crossings: Box<[crate::classify::representability::callable::Call]>,
     },
     Constant {
         ty: convert::Type,
@@ -641,6 +653,8 @@ fn clone_operation(
             container_parameters: 0,
             associated: matches!(selector, identity::Selector::AssociatedFunction { .. }),
             call: None,
+            slots: Box::default(),
+            crossings: Box::default(),
         }),
         (representability::Representability::Method(plan), identity::Selector::Method { .. }) => {
             Ok(Operation::Method {
@@ -650,6 +664,8 @@ fn clone_operation(
                 constants: Box::default(),
                 container_parameters: 0,
                 call: None,
+                slots: Box::default(),
+                crossings: Box::default(),
             })
         }
         (
@@ -665,6 +681,8 @@ fn clone_operation(
             container_parameters: 0,
             associated: matches!(selector, identity::Selector::AssociatedFunction { .. }),
             call: plan.call().cloned(),
+            slots: selected.slots().into(),
+            crossings: plan.crossings().into(),
         }),
         (
             representability::Representability::Invocation(plan),
@@ -678,6 +696,8 @@ fn clone_operation(
             container_parameters: plan.container_parameters(),
             associated: true,
             call: plan.call().cloned(),
+            slots: selected.slots().into(),
+            crossings: plan.crossings().into(),
         }),
         (
             representability::Representability::FunctionItem(plan),
@@ -691,6 +711,8 @@ fn clone_operation(
             constants: clone_constants(selected.constants())?,
             container_parameters: 0,
             call: plan.call().cloned(),
+            slots: selected.slots().into(),
+            crossings: plan.crossings().into(),
         }),
         (
             representability::Representability::Invocation(plan),
@@ -704,6 +726,8 @@ fn clone_operation(
             constants: clone_constants(selected.constants())?,
             container_parameters: plan.container_parameters(),
             call: plan.call().cloned(),
+            slots: selected.slots().into(),
+            crossings: plan.crossings().into(),
         }),
         (
             representability::Representability::Constant(plan),
@@ -905,6 +929,10 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
             owned: *owned,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
+        convert::Type::Script { path, arguments } => convert::Type::Script {
+            path: path.clone(),
+            arguments: all(arguments)?,
+        },
         convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
             input: one(input)?,
             output: one(output)?,
@@ -994,6 +1022,10 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
             owned: *owned,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(clone_types(members)?),
+        convert::Type::Script { path, arguments } => convert::Type::Script {
+            path: clone_str(path)?,
+            arguments: clone_types(arguments)?,
+        },
         convert::Type::Parameter(index) => convert::Type::Parameter(*index),
     })
 }
@@ -1098,6 +1130,9 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
             .checked_add(type_dynamic_bytes(err)?)?
             .checked_add(mem::size_of::<convert::Type>().checked_mul(2)?),
         convert::Type::Tuple(members) => type_slice_bytes(members),
+        convert::Type::Script { path, arguments } => {
+            type_slice_bytes(arguments)?.checked_add(path.len())
+        }
         convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
     }
 }

@@ -696,7 +696,10 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => concrete(element, depth + 1),
         convert::Type::Result(ok, err) => concrete(ok, depth + 1) && concrete(err, depth + 1),
-        convert::Type::Tuple(members) => members.iter().all(|ty| concrete(ty, depth + 1)),
+        convert::Type::Tuple(members)
+        | convert::Type::Script {
+            arguments: members, ..
+        } => members.iter().all(|ty| concrete(ty, depth + 1)),
         convert::Type::Unit | convert::Type::Builtin(_) => true,
     }
 }

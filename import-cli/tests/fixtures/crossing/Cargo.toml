@@ -1,0 +1,11 @@
+[package]
+name = "crossing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+events = { path = "events" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

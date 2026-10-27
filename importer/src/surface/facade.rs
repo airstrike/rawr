@@ -2541,6 +2541,9 @@ fn ty(
                 .ok_or(super::Error::ForeignIdentity)?;
             Type::Parameter(copy(parameter.name())?)
         }
+        // A script type's proxy fills a call's instance, never a facade's
+        // declaration.
+        Source::Script { .. } => return Err(super::Error::ForeignIdentity),
     })
 }
 
