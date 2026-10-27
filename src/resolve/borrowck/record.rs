@@ -55,6 +55,35 @@ pub(crate) enum Matched {
     Value { made: bool },
 }
 
+/// A value an expression made and holds until its temporary scope ends
+/// (`String::from("a")` of `String::from("a").as_str()`), or its block's
+/// when a `let` extends it (`let r = &String::from("a");`).
+#[derive(Clone, Copy, Debug)]
+struct Temporary {
+    local: Local,
+    span: Span,
+    /// Made by `&` in a place a `let` may extend: not a call's receiver.
+    extendable: bool,
+    /// Where it ends unless a `let` extends it: the end of the innermost
+    /// scope it outlived because that scope's value may borrow it (a
+    /// block's tail), held by a [`Fact::Nop`] until then.
+    ends: Option<Point>,
+}
+
+/// How a temporary scope ends ([`Recorder::close_temporaries`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScopeEnd {
+    /// A `let`: a temporary its value borrows in an extending place lives
+    /// to the end of the `let`'s block.
+    Let,
+    /// A statement ending in `;`, or a condition: its temporaries end.
+    Statement,
+    /// A scope whose value goes on into the expression around it (a
+    /// block's tail, a match arm): a temporary that value may borrow in an
+    /// extending place goes on with it.
+    Value,
+}
+
 /// The facts of a body being read.
 pub(crate) struct Recorder {
     body: Body,
@@ -97,6 +126,25 @@ pub(crate) struct Recorder {
     /// The hidden local whose region is every point: what flows into it is
     /// borrowed for `'static`.
     everywhere: Option<Local>,
+    /// The temporary scopes being read, innermost last, with the
+    /// temporaries made in each.
+    temporary_scopes: Vec<Vec<Temporary>>,
+    /// The blocks being read, innermost last, with the temporaries a `let`
+    /// in each extended to its end.
+    blocks: Vec<Vec<Temporary>>,
+    /// Temporaries a call took a borrow of, which no `let` extends.
+    pinned: BTreeSet<Local>,
+    /// A constant's initializer, whose value's temporaries are `'static`.
+    constant: bool,
+    /// Where each call without arguments ends.
+    calls: BTreeSet<Position>,
+    /// Where each tuple struct's or variant's constructor ends (`Some(1)`),
+    /// which is no call that makes a value at run time.
+    constructors: BTreeSet<Position>,
+    /// The value each part (a field, an element) is read from, whether that
+    /// value is a reference, and whether it is made at run time, by the
+    /// part's span.
+    projections: BTreeMap<Span, (Span, bool, bool)>,
     /// For each closure being read: what its `return`s give, or `None` for
     /// one these facts do not follow.
     closure_returns: Vec<Vec<Option<Held>>>,
@@ -117,6 +165,13 @@ pub(crate) struct Closure {
     /// Whether it changes what it captures (`FnMut`): a call borrows it
     /// `&mut`.
     pub(crate) mutable: bool,
+    /// Whether it is `Copy`: it captures nothing by `&mut` and nothing by
+    /// value that is not `Copy`, as rustc has it.
+    pub(crate) copy: bool,
+    /// The places it captures by value: each captured local's declaration,
+    /// the path below it, and whether the place is copied rather than
+    /// moved.
+    pub(crate) by_value: Vec<(Span, Vec<Projection>, bool)>,
 }
 
 /// A local a closure captures, as the lowering knows it: where it is
@@ -179,6 +234,13 @@ impl Default for Recorder {
             activations: BTreeMap::new(),
             arguments: BTreeMap::new(),
             everywhere: None,
+            temporary_scopes: Vec::new(),
+            blocks: Vec::new(),
+            pinned: BTreeSet::new(),
+            constant: false,
+            calls: BTreeSet::new(),
+            constructors: BTreeSet::new(),
+            projections: BTreeMap::new(),
             closure_returns: Vec::new(),
             closures: BTreeMap::new(),
             closure_keeps: BTreeMap::new(),
@@ -415,32 +477,42 @@ impl Recorder {
         true
     }
 
-    /// The function returns `held` here: it flows into its output's region.
-    /// A returned borrow of one of its own locals is rustc's E0515, which
-    /// these facts leave to it.
+    /// The function returns `held`, its value spanning `span`, here: it
+    /// flows into its output's region. A returned borrow of one of its own
+    /// locals is rustc's E0515 ([`super::check`]). A borrow of a reference
+    /// itself may be a deref coercion's reborrow of what it refers to,
+    /// which these facts do not tell apart. These two notes read the flows
+    /// through any position, more than the check finds.
     pub(crate) fn give_back(&mut self, held: &[(Path, Origin)], span: Span) {
-        let local = match self.body.returned.first() {
-            Some(local) => *local,
-            None => {
-                let local = self.hidden("<return>", Span::NONE);
-                self.body.returned.push(local);
-                local
-            }
-        };
+        if self.constant {
+            return;
+        }
+        let local = self.hidden("<return>", span);
+        self.body.returned.push(local);
         self.flow_into(local, held);
-        let returned = region::reaches_ignoring_paths(&self.body, &self.body.returned);
+        let returned = super::reaches(&self.body, &[local]);
         if self
             .body
             .loans
             .iter()
             .zip(returned)
-            .any(|(loan, returned)| {
-                returned
-                    && loan.capture == Capture::No
-                    && !loan.place.projection.contains(&Projection::Deref)
-            })
+            .any(|(loan, returned)| returned && loan.of_reference && loan.capture == Capture::No)
         {
-            self.unmodeled("a borrow of a function's own local that it returns", span);
+            self.unmodeled("a borrow of a reference that a function returns", span);
+        }
+        // A parameter's borrows returned where the signature's lifetimes
+        // are several, which these facts do not tell apart.
+        if let Some(own) = &self.body.own {
+            let reached = super::reaching(&self.body, &[local]);
+            let several = own.parameters.iter().any(|(parameter, borrows, _)| {
+                reached[parameter.0 as usize] && borrows.outlive(&own.output, &own.bounds).is_none()
+            });
+            if several {
+                self.unmodeled(
+                    "a returned borrow whose lifetimes these facts do not tell apart",
+                    span,
+                );
+            }
         }
     }
 
@@ -765,7 +837,7 @@ impl Recorder {
     /// `start`, whose operand spans `operand`: the use becomes the borrow,
     /// which makes a loan. `inner` when the borrowed place's type may hold
     /// borrows, which the reference keeps (`&'a T<'b>` has `'b: 'a`) below
-    /// its own region.
+    /// its own region; `reference` when the place is a reference itself.
     pub(crate) fn borrow(
         &mut self,
         start: Position,
@@ -773,12 +845,16 @@ impl Recorder {
         span: Span,
         mutable: bool,
         inner: bool,
+        reference: bool,
     ) -> Option<LoanId> {
         let (point, mut place) = self.mention_place(start)?;
         // `&r` and `&mut r` of a holder borrow the holder itself.
-        if place.projection == [Projection::Deref] && !self.dereferenced.contains(&point) {
+        let of_reference =
+            place.projection == [Projection::Deref] && !self.dereferenced.contains(&point);
+        if of_reference {
             place.projection.clear();
         }
+        let of_reference = of_reference || reference;
         // `&v[i]` of a `Vec` is the borrow `Index::index` made.
         let loan = match self.index_loans.get(&point).copied() {
             Some(loan) => {
@@ -787,6 +863,7 @@ impl Recorder {
             }
             None => self.make_loan(point, place.clone(), mutable, span),
         };
+        self.body.loans[loan.0 as usize].of_reference = of_reference;
         self.set_access(
             point,
             if mutable {
@@ -835,6 +912,7 @@ impl Recorder {
             span,
             at: point,
             temporary,
+            of_reference: false,
         });
         let loan = LoanId(self.body.loans.len() as u32 - 1);
         if let Fact::Access { loan: made, .. } = self.fact_mut(point) {
@@ -1192,7 +1270,8 @@ impl Recorder {
     ///
     /// `parameters` are where the closure's parameters are declared, and
     /// `tail` what its body's value holds (`None`: a value these facts do
-    /// not follow).
+    /// not follow). `copy_of` says whether the part of a captured local
+    /// (by its declaration) below a path is `Copy`, when the lowering knows.
     pub(crate) fn captures(
         &mut self,
         body: ClosureBody,
@@ -1201,6 +1280,7 @@ impl Recorder {
         tail: Option<Held>,
         moved: bool,
         span: Span,
+        copy_of: &dyn Fn(Span, &[Projection]) -> Option<bool>,
     ) -> Closure {
         // Each captured local, and the hidden local its body reads it by.
         let mut upvars = BTreeMap::<Local, (Local, Captured)>::new();
@@ -1280,6 +1360,8 @@ impl Recorder {
         // captured by reference, and the loans it is captured by.
         let mut origins = Vec::new();
         let mut by_local = BTreeMap::<Local, (bool, Vec<Origin>)>::new();
+        let mut copy_closure = true;
+        let mut by_value = Vec::new();
         for capture in merge(places) {
             let (_, captured) = upvars[&capture.local];
             let place = Place {
@@ -1293,13 +1375,17 @@ impl Recorder {
             }
             if capture.kind == CaptureKind::ByValue {
                 by_local.entry(local).or_insert((false, Vec::new())).0 = false;
-                let copy = capture.copy.unwrap_or_else(|| {
-                    self.unmodeled(
-                        "a part captured by value whose type these facts do not know",
-                        span,
-                    );
-                    true
-                });
+                let copy = copy_of(captured.declaration, &place.projection)
+                    .or(capture.copy)
+                    .unwrap_or_else(|| {
+                        self.unmodeled(
+                            "a part captured by value whose type these facts do not know",
+                            span,
+                        );
+                        true
+                    });
+                copy_closure &= copy;
+                by_value.push((captured.declaration, place.projection.clone(), copy));
                 self.push(Fact::Access {
                     place,
                     access: if copy { Access::Read } else { Access::Move },
@@ -1312,6 +1398,7 @@ impl Recorder {
                 continue;
             }
             let mutable = capture.kind == CaptureKind::Mutable;
+            copy_closure &= !mutable;
             let point = self.push(Fact::Access {
                 place: place.clone(),
                 access: if mutable {
@@ -1379,6 +1466,8 @@ impl Recorder {
             origins: region::everywhere(origins),
             keeps,
             mutable,
+            copy: copy_closure,
+            by_value,
         }
     }
 
@@ -1430,9 +1519,229 @@ impl Recorder {
         }
     }
 
+    /// The body is a constant's initializer: the temporaries its value
+    /// borrows are promoted to `'static`.
+    pub(crate) fn constant(&mut self) {
+        self.constant = true;
+    }
+
+    /// The body is a function's whose own signature says `parameters`
+    /// (each one's name, declaration, borrows' lifetimes, and whether it is
+    /// `self`), `output` and `bounds`: what it returns is checked against
+    /// them.
+    pub(crate) fn own_signature(
+        &mut self,
+        parameters: &[(ImmutableString, Span, super::signature::Borrows, bool)],
+        output: super::signature::Borrows,
+        bounds: &[(ImmutableString, ImmutableString)],
+    ) {
+        let parameters = parameters
+            .iter()
+            .map(|(name, declaration, borrows, receiver)| {
+                (self.local(name, *declaration), borrows.clone(), *receiver)
+            })
+            .collect();
+        self.body.own = Some(super::OwnSignature {
+            parameters,
+            output,
+            bounds: bounds.into(),
+        });
+    }
+
+    /// A temporary scope starts here: a statement, a match arm, a
+    /// condition.
+    pub(crate) fn open_temporaries(&mut self) {
+        self.temporary_scopes.push(Vec::new());
+    }
+
+    /// The temporary scope opened last ends here, as `end` says. A loan of
+    /// one of its temporaries still live is rustc's E0716.
+    pub(crate) fn close_temporaries(&mut self, end: ScopeEnd) {
+        let Some(temporaries) = self.temporary_scopes.pop() else {
+            return;
+        };
+        for mut temporary in temporaries.into_iter().rev() {
+            let goes_on = temporary.extendable && !self.pinned.contains(&temporary.local);
+            match end {
+                ScopeEnd::Let if goes_on => {
+                    // At a body's own level it lives to the body's end.
+                    if let Some(block) = self.blocks.last_mut() {
+                        temporary.ends = None;
+                        block.push(temporary);
+                    }
+                }
+                ScopeEnd::Value if goes_on && !self.temporary_scopes.is_empty() => {
+                    if temporary.ends.is_none() {
+                        temporary.ends = Some(self.push(Fact::Nop));
+                    }
+                    if let Some(outer) = self.temporary_scopes.last_mut() {
+                        outer.push(temporary);
+                    }
+                }
+                _ => self.temporary_dead(temporary),
+            }
+        }
+    }
+
+    /// The temporary ends: here, or where the scope it outlived ended.
+    fn temporary_dead(&mut self, temporary: Temporary) {
+        let fact = Fact::Access {
+            place: local_place(temporary.local),
+            access: Access::StorageDead,
+            span: temporary.span,
+            loan: None,
+        };
+        match temporary.ends {
+            Some(point) => *self.fact_mut(point) = fact,
+            None => {
+                self.push(fact);
+            }
+        }
+    }
+
+    /// A block starts here: what a `let` in it extends ends with it.
+    pub(crate) fn open_block(&mut self) {
+        self.blocks.push(Vec::new());
+    }
+
+    /// Whether the value spanning `span` reads a local or calls something:
+    /// a borrow of it is a temporary's, not a constant promoted to
+    /// `'static`.
+    pub(crate) fn computed(&self, span: Span) -> bool {
+        let range = span.start()..=span.end();
+        self.mentions.range(range.clone()).next().is_some()
+            || self
+                .arguments
+                .range(range.clone())
+                .map(|(end, _)| end)
+                .chain(self.calls.range(range))
+                .any(|end| !self.constructors.contains(end))
+    }
+
+    /// Whether the value spanning `span` is a call's.
+    fn is_call(&self, span: Span) -> bool {
+        let end = span.end();
+        (self.arguments.contains_key(&end) || self.calls.contains(&end))
+            && !self.constructors.contains(&end)
+    }
+
+    /// A call without arguments ends at `end`.
+    pub(crate) fn called(&mut self, end: Position) {
+        self.calls.insert(end);
+    }
+
+    /// A tuple struct's or variant's constructor ends at `end`.
+    pub(crate) fn constructed(&mut self, end: Position) {
+        self.constructors.insert(end);
+    }
+
+    /// The value spanning `part` is a part of the one spanning `base`, read
+    /// through it when it is a `reference`. `made` when that value is made
+    /// at run time rather than a constant.
+    pub(crate) fn projected(&mut self, part: Span, base: Span, reference: bool, made: bool) {
+        // Each step reads from a value written within the part, so a chain
+        // of them ends. One spanning what it reads from adds none.
+        if base != part && part.start() <= base.start() && base.end() <= part.end() {
+            self.projections.insert(part, (base, reference, made));
+        }
+    }
+
+    /// Whether the part spanning `span` is read from a value made at run
+    /// time (`vec![1, 2][0]`), which no constant promotes.
+    pub(crate) fn part_of_made(&self, mut span: Span) -> bool {
+        while let Some(&(base, _, made)) = self.projections.get(&span) {
+            if made {
+                return true;
+            }
+            span = base;
+        }
+        false
+    }
+
+    /// Whether the part spanning `span` is a place in Rust: a part of a
+    /// local's value, or one read through a reference. A part of a value a
+    /// call made is a part of a temporary.
+    pub(crate) fn in_place(&self, mut span: Span) -> bool {
+        let mut projected = false;
+        while let Some(&(base, reference, _)) = self.projections.get(&span) {
+            if reference {
+                return true;
+            }
+            projected = true;
+            span = base;
+        }
+        projected && !self.is_call(span) && self.mentions.contains_key(&span.start())
+    }
+
+    /// A borrow (`&mut` when `mutable`) of the value spanning `value`, made
+    /// here and held in a temporary: the reference, its loan at its own
+    /// region and the temporary's value below it. The value holds `held`.
+    /// `extendable` when a `let` may extend it (`&value`), not when it is a
+    /// call's receiver.
+    pub(crate) fn borrow_temporary(
+        &mut self,
+        value: Span,
+        mutable: bool,
+        held: &[(Path, Origin)],
+        extendable: bool,
+    ) -> Held {
+        let local = self.hidden(super::TEMPORARY, value);
+        self.push(Fact::Def(local));
+        self.flow_into(local, held);
+        let point = self.push(Fact::Access {
+            place: local_place(local),
+            access: if mutable {
+                Access::Mutable
+            } else {
+                Access::Shared
+            },
+            span: value,
+            loan: None,
+        });
+        let loan = self.make_loan(point, local_place(local), mutable, value);
+        // The reference keeps what the value holds.
+        let mut reference = vec![(Path::OWN, Origin::Loan(loan))];
+        if !held.is_empty() {
+            let temporary = self.body.loans[loan.0 as usize].temporary;
+            self.body.flows.push(Flow {
+                from: Origin::local(local),
+                into: temporary,
+                path: Path::ROOT,
+                at: point,
+            });
+            reference.push((Path::of(&[Step::Arg(0)]), Origin::local(local)));
+        }
+        if let Some(scope) = self.temporary_scopes.last_mut() {
+            scope.push(Temporary {
+                local,
+                span: value,
+                extendable,
+                ends: None,
+            });
+        }
+        reference
+    }
+
+    /// A call takes `held`: a temporary one of its loans borrows is no
+    /// `let`'s to extend.
+    pub(crate) fn pin(&mut self, held: &[(Path, Origin)]) {
+        for (_, origin) in held {
+            if let Origin::Loan(loan) = origin {
+                let local = self.body.loans[loan.0 as usize].place.local;
+                if super::is_temporary(&self.body, local) {
+                    self.pinned.insert(local);
+                }
+            }
+        }
+    }
+
     /// The locals declared at `declared` end here, with their block: a loan
-    /// of one still live is rustc's E0597.
+    /// of one still live is rustc's E0597. The temporaries a `let` in the
+    /// block extended end with them.
     pub(crate) fn storage_dead(&mut self, declared: &[Span], end: Span) {
+        for temporary in self.blocks.pop().unwrap_or_default().into_iter().rev() {
+            self.temporary_dead(temporary);
+        }
         for declaration in declared {
             let Some(&local) = self.locals.get(declaration) else {
                 continue;
@@ -1625,5 +1934,13 @@ impl Tracer<'_> {
                     .all(|flow| self.trace(flow.from, kept, seen))
             }
         }
+    }
+}
+
+/// The whole of `local`.
+fn local_place(local: Local) -> Place {
+    Place {
+        local,
+        projection: Vec::new(),
     }
 }

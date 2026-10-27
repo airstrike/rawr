@@ -41,7 +41,18 @@ pub const KEYWORD_CLEAR: &str = "__rawr_clear";
 /// refers to, as the place itself, not a copy (`lower_nominal::reborrow`).
 pub const KEYWORD_SLOT_OF: &str = "__rawr_slot_of_";
 /// The local a `&mut` local given new borrows refers to: [`KEYWORD_SLOT_OF`].
+/// A local may instead hold a place's path, `[slot, part, ..]`: where the
+/// local is, then the part at each step below it ([`KEYWORD_LOCATE`]).
 pub const KEYWORD_THROUGH: &str = "__rawr_through_";
+/// `__rawr_locate(place, root)`: the path of `place`, a local or an index
+/// chain below it, with `root` where the local is (its slot, its name in an
+/// async body, or a path a local holds). Only the chain's indexes are evaluated,
+/// so the place is not read. A `&mut` pattern binding holds the path of the
+/// part it binds (`lower_nominal::places`).
+pub const KEYWORD_LOCATE: &str = "__rawr_locate";
+/// `switch __rawr_some_through_x`: the switch matches `Some(&mut place)`,
+/// where `x` holds the place's path, or `()` for `None` (`get_mut`).
+pub const KEYWORD_SOME_THROUGH: &str = "__rawr_some_through_";
 pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
 pub const KEYWORD_THIS: &str = "this";
 pub const KEYWORD_GLOBAL: &str = "global";

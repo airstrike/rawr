@@ -5,7 +5,8 @@
 
 With folders, or with none for every folder, it records each `.rs` under a
 corpus folder and writes that folder's `rustc.tsv`: one row per program, its
-path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`), or `ok`
+path relative to `tests/borrowck`, rustc's error codes with their lines (`E0502:7`,
+`lifetime:3` for "lifetime may not live long enough", which has no code), or `ok`
 followed by what the program's binary printed (escaped), which the
 differential harness compares with rawr's run. With `.rs` files, it prints
 the rows instead (for picking cases). Builds go under `target/borrowck`.
@@ -15,9 +16,14 @@ tests/ui/nll that rawr's frontend lowers (rustc's tests, MIT OR Apache-2.0
 as rawr is), `slice1/` the cases written for borrows of locals, and
 `mutations/` what `mutate.py` writes from rawr's own programs, and
 `patterns/` the cases written for patterns' bindings and reads, with
-`patterns/mutations/` what `mutate.py` writes from them, and `closures/`
+`patterns/mutations/` what `mutate.py` writes from them, `closures/`
 the cases written for closures' captures and the borrows a closure's call
-returns, with `closures/mutations/` what `mutate.py closures` writes. The harness
+returns, with `closures/mutations/` what `mutate.py closures` writes, and
+`closure-moves/` the cases written for what closures move and when a
+closure is `Copy`, with `closure-moves/mutations/` what `mutate.py moves`
+writes, and `signatures/` the cases written for a body checked against its
+own signature and for temporaries (E0515, E0716, E0106), with
+`signatures/mutations/` what `mutate.py temporaries` writes. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 
@@ -56,6 +62,9 @@ def verdict(path):
         if message.get("level") != "error" or message.get("message", "").startswith("aborting"):
             continue
         code = (message.get("code") or {}).get("code") or "error"
+        # rustc gives this region error no code: `lifetime` names it here.
+        if code == "error" and message.get("message") == "lifetime may not live long enough":
+            code = "lifetime"
         spans = [span for span in message.get("spans", []) if span.get("is_primary")]
         line = spans[0]["line_start"] if spans else 0
         codes.append(f"{code}:{line}")

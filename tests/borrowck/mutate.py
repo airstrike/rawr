@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | regions | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -11,11 +11,17 @@ statement, into a branch, and across a loop's back edge, and variants
 where the borrow ends first. With `kept`, the borrow is one a call's value
 keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
 `kept-mutations`. With `closures`, the borrow is a closure's capture, or one
-a closure's call returns, and the variants go to `closures/mutations`. With
+a closure's call returns, and the variants go to `closures/mutations`.
+With `moves`, a closure moves `x` in, or is moved or copied while it
+captures `x`, and the variants go to `closure-moves/mutations`. With
+`temporaries`, the borrow is held through a temporary: one a `let` extends
+(`&__id(&x)`), a method's receiver whose value keeps it
+(`vec![&x].first()`), or one whose value keeps only what it holds
+(`vec![&x].to_vec()`), and the variants go to `signatures/mutations`. With
 `regions`, the borrow is held at one region position of a value: an item a
 container gives, one lifetime of a type with two, or what an `Option`'s
-`map` returns, and the variants go to `regions/mutations`.
-rustc decides which are errors: run `record.py` on the folder afterwards.
+`map` returns, and the variants go to `regions/mutations`. rustc
+decides which are errors: run `record.py` on the folder afterwards.
 """
 
 import glob
@@ -28,6 +34,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 KEPT = sys.argv[1:] == ["kept"]
 CLOSURES = sys.argv[1:] == ["closures"]
+MOVES = sys.argv[1:] == ["moves"]
+TEMPORARIES = sys.argv[1:] == ["temporaries"]
 REGIONS = sys.argv[1:] == ["regions"]
 OUT = os.path.join(
     HERE,
@@ -35,6 +43,10 @@ OUT = os.path.join(
     if KEPT
     else "closures/mutations"
     if CLOSURES
+    else "closure-moves/mutations"
+    if MOVES
+    else "signatures/mutations"
+    if TEMPORARIES
     else "regions/mutations"
     if REGIONS
     else "mutations",
@@ -43,8 +55,9 @@ SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
-    + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT else [])
-    + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES else [])
+    + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT or TEMPORARIES else [])
+    + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES or MOVES else [])
+    + (glob.glob(os.path.join(HERE, "closure-moves/*.rs")) if MOVES else [])
     + (glob.glob(os.path.join(HERE, "regions/*.rs")) if REGIONS else [])
 )
 HELPERS = """
@@ -57,6 +70,11 @@ fn __keep<T>(x: &T) -> &T { x }
 fn __see<T>(_: &T) {}
 fn __c() -> bool { false }
 struct __Hold<'a, T>(&'a T);
+"""
+TEMPORARY_HELPERS = """
+fn __id<T>(x: &T) -> &T { x }
+fn __see<T>(_: &T) {}
+fn __c() -> bool { false }
 """
 REGION_HELPERS = """
 fn __see<T>(_: &T) {}
@@ -146,6 +164,36 @@ def kept_variants(indent, name, statement):
     }
 
 
+def temporary_variants(indent, name, statement):
+    """A borrow held through a temporary, used past `statement`."""
+    i = indent
+    return {
+        "extended_across": [f"{i}let __t = &__id(&{name});", statement, f"{i}__see(__t);"],
+        "extended_ended": [f"{i}let __t = &__id(&{name});", f"{i}__see(__t);", statement],
+        "extended_branch": [
+            f"{i}let __t = if __c() {{ &__id(&{name}) }} else {{ &__id(&{name}) }};",
+            statement,
+            f"{i}__see(__t);",
+        ],
+        "receiver_kept_across": [
+            f"{i}let __t = vec![&{name}].first();",
+            statement,
+            f"{i}__see(&__t);",
+        ],
+        "receiver_in_statement": [f"{i}__see(&vec![&{name}].first());", statement],
+        "receiver_inner_across": [
+            f"{i}let __t = vec![&{name}].to_vec();",
+            statement,
+            f"{i}__see(&__t);",
+        ],
+        "receiver_inner_ended": [
+            f"{i}let __t = vec![&{name}].to_vec();",
+            f"{i}__see(&__t);",
+            statement,
+        ],
+    }
+
+
 def closure_variants(indent, name, statement):
     """A closure that captures `name`, or a borrow its call returns, used past `statement`."""
     i = indent
@@ -170,6 +218,42 @@ def closure_variants(indent, name, statement):
             f"{i}let __k = __h();",
             statement,
             f"{i}__see(__k);",
+        ],
+    }
+
+
+def move_variants(indent, name, statement):
+    """A closure that moves `name` in, or one moved or copied while it captures `name`."""
+    i = indent
+    return {
+        "move_closure_across": [f"{i}let __m = move || __see(&{name});", statement, f"{i}__m();"],
+        "move_closure_after": [statement, f"{i}let __m = move || __see(&{name});", f"{i}__m();"],
+        "move_closure_into_branch": [
+            f"{i}if __c() {{",
+            f"{i}    let __m = move || __see(&{name});",
+            f"{i}    __m();",
+            f"{i}}}",
+            statement,
+        ],
+        "mut_closure_moved_across": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            f"{i}let mut __g = __f;",
+            statement,
+            f"{i}__g();",
+        ],
+        "mut_closure_moved_then_called": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            f"{i}let mut __g = __f;",
+            f"{i}__g();",
+            f"{i}__f();",
+            statement,
+        ],
+        "shared_closure_copied": [
+            f"{i}let __f = || __see(&{name});",
+            f"{i}let __g = __f;",
+            f"{i}__f();",
+            statement,
+            f"{i}__g();",
         ],
     }
 
@@ -228,6 +312,10 @@ def main():
                     if KEPT
                     else closure_variants
                     if CLOSURES
+                    else move_variants
+                    if MOVES
+                    else temporary_variants
+                    if TEMPORARIES
                     else region_variants
                     if REGIONS
                     else variants
@@ -238,7 +326,13 @@ def main():
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
                     with open(path, "w", encoding="utf-8") as file:
                         helpers = (
-                            KEPT_HELPERS if KEPT else REGION_HELPERS if REGIONS else HELPERS
+                            KEPT_HELPERS
+                            if KEPT
+                            else TEMPORARY_HELPERS
+                            if TEMPORARIES
+                            else REGION_HELPERS
+                            if REGIONS
+                            else HELPERS
                         )
                         file.write("\n".join(mutated) + "\n" + helpers)
                     count += 1

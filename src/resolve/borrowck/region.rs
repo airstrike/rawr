@@ -14,7 +14,7 @@
 //! a position that ends with `Own` reads all of the value it is the own
 //! region of.
 
-use super::{Body, Flow, LoanId, Local, Origin};
+use super::{Body, Flow, Local, Origin};
 
 /// One step from a value toward a region position in its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -216,42 +216,45 @@ pub(crate) fn origins(held: &[(Path, Origin)]) -> impl Iterator<Item = Origin> +
     held.iter().map(|(_, origin)| *origin)
 }
 
-/// For each loan, the locals its region reaches through the flows: where
-/// one of them is live, the loan is live (rustc's outlives constraints at
-/// every point). A loan placed at a position of a local reaches another
-/// local only through a flow from that position, from a position above it,
-/// or from the own region of a value it is below.
-pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
-    let mut by_source = vec![Vec::<&Flow>::new(); body.locals.len()];
-    let mut from_loans = vec![Vec::<&Flow>::new(); body.loans.len()];
-    for flow in &body.flows {
-        match flow.from {
-            Origin::Local(local, _) => by_source[local.0 as usize].push(flow),
-            Origin::Loan(loan) => from_loans[loan.0 as usize].push(flow),
+/// The flows of a body by where they come from, for walking what a region
+/// reaches.
+struct Walker<'a> {
+    by_source: Vec<Vec<&'a Flow>>,
+    /// The positions reached, by local, and the locals with any, cleared
+    /// before each walk.
+    at: Vec<Vec<Path>>,
+    touched: Vec<usize>,
+}
+
+impl<'a> Walker<'a> {
+    fn new(body: &'a Body) -> Self {
+        let mut by_source = vec![Vec::<&Flow>::new(); body.locals.len()];
+        for flow in &body.flows {
+            if let Origin::Local(local, _) = flow.from {
+                by_source[local.0 as usize].push(flow);
+            }
+        }
+        Self {
+            by_source,
+            at: vec![Vec::new(); body.locals.len()],
+            touched: Vec::new(),
         }
     }
-    let mut reaches = Vec::with_capacity(body.loans.len());
-    // The positions reached, by local, and the locals with any, cleared for
-    // each loan.
-    let mut at = vec![Vec::<Path>::new(); body.locals.len()];
-    let mut touched = Vec::<usize>::new();
-    let mut stack = Vec::new();
-    for (index, loan) in body.loans.iter().enumerate() {
-        let mut reached = vec![false; body.locals.len()];
-        for local in touched.drain(..) {
-            at[local].clear();
+
+    /// The locals reached from `seeds`, each a local and a position of it.
+    /// What is at a position of a local reaches another local only through
+    /// a flow from that position, from a position above it, or from the own
+    /// region of a value it is below.
+    fn walk(&mut self, mut stack: Vec<(Local, Path)>) -> Vec<bool> {
+        for local in self.touched.drain(..) {
+            self.at[local].clear();
         }
-        stack.push((loan.temporary, Path::ROOT));
-        stack.extend(
-            from_loans[LoanId(index as u32).0 as usize]
-                .iter()
-                .map(|flow| (flow.into, flow.path)),
-        );
+        let mut reached = vec![false; self.at.len()];
         while let Some((local, path)) = stack.pop() {
-            if at[local.0 as usize].is_empty() {
-                touched.push(local.0 as usize);
+            let positions = &mut self.at[local.0 as usize];
+            if positions.is_empty() {
+                self.touched.push(local.0 as usize);
             }
-            let positions = &mut at[local.0 as usize];
             // Held at a position above already.
             if positions.iter().any(|above| path.starts_with(*above)) {
                 continue;
@@ -259,7 +262,7 @@ pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
             positions.retain(|below| !below.starts_with(path));
             positions.push(path);
             reached[local.0 as usize] = true;
-            for flow in &by_source[local.0 as usize] {
+            for flow in &self.by_source[local.0 as usize] {
                 let Origin::Local(_, from) = flow.from else {
                     continue;
                 };
@@ -274,41 +277,36 @@ pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
                 stack.push((flow.into, into));
             }
         }
-        reaches.push(reached);
+        reached
     }
-    reaches
 }
 
-/// Whether each loan may reach one of `sinks`, through any position: more
-/// than [`reach`] finds, in one pass back over the flows.
-pub(crate) fn reaches_ignoring_paths(body: &Body, sinks: &[Local]) -> Vec<bool> {
-    let mut reaches = vec![false; body.locals.len()];
-    for local in sinks {
-        reaches[local.0 as usize] = true;
-    }
-    let mut changed = !sinks.is_empty();
-    while changed {
-        changed = false;
-        for flow in &body.flows {
-            if let Origin::Local(from, _) = flow.from
-                && reaches[flow.into.0 as usize]
-                && !reaches[from.0 as usize]
-            {
-                reaches[from.0 as usize] = true;
-                changed = true;
-            }
+/// For each loan, the locals its region reaches through the flows: where
+/// one of them is live, the loan is live (rustc's outlives constraints at
+/// every point).
+pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
+    let mut from_loans = vec![Vec::<&Flow>::new(); body.loans.len()];
+    for flow in &body.flows {
+        if let Origin::Loan(loan) = flow.from {
+            from_loans[loan.0 as usize].push(flow);
         }
     }
+    let mut walker = Walker::new(body);
     body.loans
         .iter()
-        .enumerate()
-        .map(|(index, loan)| {
-            reaches[loan.temporary.0 as usize]
-                || body.flows.iter().any(|flow| {
-                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
-                })
+        .zip(&from_loans)
+        .map(|(loan, flows)| {
+            let mut seeds = vec![(loan.temporary, Path::ROOT)];
+            seeds.extend(flows.iter().map(|flow| (flow.into, flow.path)));
+            walker.walk(seeds)
         })
         .collect()
+}
+
+/// The locals what `seeds` hold reaches through the flows: a parameter's
+/// borrows, say.
+pub(crate) fn reach_from(body: &Body, seeds: &[(Local, Path)]) -> Vec<bool> {
+    Walker::new(body).walk(seeds.to_vec())
 }
 
 /// Whether each loan reaches one of `sinks`.
@@ -322,6 +320,7 @@ pub(crate) fn reaches_any(reach: &[Vec<bool>], sinks: &[Local]) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve::borrowck::LoanId;
 
     const A0: Step = Step::Arg(0);
     const A1: Step = Step::Arg(1);

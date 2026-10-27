@@ -8,7 +8,7 @@
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="/docs/reference/macros">built-in macros</a> work.</li>
   <li><code>async</code> code runs in iced apps, in a <code>?play</code> program whose <code>main</code> is <code>async</code>, and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
-  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps, those a struct, a collection or an <code>Option</code> holds, and those a closure captures. <a href="#lenient">A few borrows</a> aren&rsquo;t checked yet, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
+  <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps, those a struct, a collection or an <code>Option</code> holds, and those a closure captures. It covers temporaries and what a function returns against its signature too. <a href="#lenient">A few borrows</a> aren&rsquo;t checked yet, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
 </ul>
 
 <h2 id="overview">How a program runs</h2>
@@ -70,6 +70,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>Giving a new borrow to a <code>&amp;mut</code> local that borrows a field or an element, as in <code>let mut r = &amp;mut s.left; r = &amp;mut s.right;</code>. A <code>&amp;mut</code> local of a whole local can be given new borrows, as in <code>r = &amp;mut b;</code> or <code>prev = r;</code>, except in an async body.</li>
   <li>A <code>&amp;mut</code> chosen by a branch, as in <code>r = if c { &amp;mut a } else { &amp;mut b };</code>. Assign it in each branch instead.</li>
   <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
+  <li>A <code>&amp;mut</code> pattern binding of a slice pattern&rsquo;s rest, as in <code>[first, rest @ ..] = &amp;mut v[..]</code>, or of a whole range of elements.</li>
+  <li>A closure that uses a <code>&amp;mut</code> pattern binding or a mutable loop&rsquo;s element.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
@@ -108,9 +110,11 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <p>Some code passes rawr&rsquo;s own check and fails <code>cargo build</code>. <code>rawr check</code> runs <code>cargo check</code> too, which reports these. <a href="/docs/reference/commands#rawr">Commands</a> describes its output.</p>
 <ul>
   <li>A borrow kept by a closure that takes and returns borrows isn&rsquo;t checked, as <code>|a: &amp;u32| &amp;x</code> passed where <code>impl Fn(&amp;u32) -&gt; &amp;u32</code> is expected. Nor is one an <code>async</code> block captures, or one a closure stores in what it captured.</li>
-  <li>A borrow kept by an item that a method gives from a container isn&rsquo;t checked: <code>copied</code>, <code>cloned</code>, <code>collect</code>, <code>next</code> and the like, and an <code>Option</code>&rsquo;s or <code>Result</code>&rsquo;s <code>map</code>. Nor is one held by a value whose type has a <code>Drop</code> impl, or by a type with an impl written for its <code>'static</code> instance.</li>
+  <li>A borrow held by a value whose type has a <code>Drop</code> impl isn&rsquo;t checked. Nor is one held by a type with an impl written for its <code>'static</code> instance.</li>
   <li>A slice pattern&rsquo;s <code>rest @ ..</code> binding and the bindings of a pattern on an imported value aren&rsquo;t checked.</li>
-  <li>A signature&rsquo;s lifetimes are checked at each call, but not inside the function that declares them. <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code>, which rustc refuses for its missing lifetime (E0106), and returning a reference to a local are accepted. A lifetime written in a type inside a body, as in <code>let x: &amp;'static i32 = &amp;n;</code>, isn&rsquo;t checked.</li>
+  <li>A returned borrow of a parameter whose type has several lifetimes isn&rsquo;t checked against the output&rsquo;s lifetime. An example is <code>&amp;self</code> of a struct that has a lifetime parameter. A lifetime written in a type inside a body, as in <code>let x: &amp;'static i32 = &amp;n;</code>, isn&rsquo;t checked.</li>
+  <li>A block&rsquo;s value that borrows a temporary of its tail, as in <code>let r = { String::from("a").as_str() };</code>, isn&rsquo;t checked.</li>
+  <li>A struct&rsquo;s field whose type leaves out a struct&rsquo;s lifetime, as <code>w: Wrapper</code> of <code>struct Wrapper&lt;'a&gt;</code>, is accepted. rustc refuses it with E0106. A field written as a reference without a lifetime is refused, as in rustc.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>

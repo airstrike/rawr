@@ -99,7 +99,7 @@ println!("{total}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-block-value" data-out="out-block-value" aria-label="Run block-value.rs" hidden></button><b>rawr run block-value.rs</b><span id="out-block-value" aria-live="polite">20</span></div>
 </div>
 <h2 id="mut-patterns">Patterns on <code>&amp;mut</code></h2>
-<p>A binding through <code>&amp;mut</code> writes back to the place it came from. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let else</code>, in nested patterns, and for <code>ref mut</code>.</p>
+<p>A binding through <code>&amp;mut</code> is its part of the place it came from, as in Rust. A change through it is made in the place itself, and nothing is copied out. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let else</code>, in nested patterns, and for <code>ref mut</code>. It holds on a range of elements, as in <code>if let [a, .., b] = &amp;mut v[1..4]</code>, and on what <code>get_mut</code>, <code>last_mut</code> or <code>iter_mut().find(..)</code> gives. Behind a <code>RefCell</code> borrow or an imported type&rsquo;s guard, each use of the binding goes through the guard, which copies its value.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="iter-mut.rs" id="src-iter-mut">struct Point {
     x: i64,
