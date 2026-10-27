@@ -231,17 +231,26 @@ pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
         }
     }
     let mut reaches = Vec::with_capacity(body.loans.len());
+    // The positions reached, by local, and the locals with any, cleared for
+    // each loan.
+    let mut at = vec![Vec::<Path>::new(); body.locals.len()];
+    let mut touched = Vec::<usize>::new();
+    let mut stack = Vec::new();
     for (index, loan) in body.loans.iter().enumerate() {
         let mut reached = vec![false; body.locals.len()];
-        // The positions reached, by local.
-        let mut at = vec![Vec::<Path>::new(); body.locals.len()];
-        let mut stack = vec![(loan.temporary, Path::ROOT)];
+        for local in touched.drain(..) {
+            at[local].clear();
+        }
+        stack.push((loan.temporary, Path::ROOT));
         stack.extend(
             from_loans[LoanId(index as u32).0 as usize]
                 .iter()
                 .map(|flow| (flow.into, flow.path)),
         );
         while let Some((local, path)) = stack.pop() {
+            if at[local.0 as usize].is_empty() {
+                touched.push(local.0 as usize);
+            }
             let positions = &mut at[local.0 as usize];
             // Held at a position above already.
             if positions.iter().any(|above| path.starts_with(*above)) {
@@ -268,6 +277,38 @@ pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
         reaches.push(reached);
     }
     reaches
+}
+
+/// Whether each loan may reach one of `sinks`, through any position: more
+/// than [`reach`] finds, in one pass back over the flows.
+pub(crate) fn reaches_ignoring_paths(body: &Body, sinks: &[Local]) -> Vec<bool> {
+    let mut reaches = vec![false; body.locals.len()];
+    for local in sinks {
+        reaches[local.0 as usize] = true;
+    }
+    let mut changed = !sinks.is_empty();
+    while changed {
+        changed = false;
+        for flow in &body.flows {
+            if let Origin::Local(from, _) = flow.from
+                && reaches[flow.into.0 as usize]
+                && !reaches[from.0 as usize]
+            {
+                reaches[from.0 as usize] = true;
+                changed = true;
+            }
+        }
+    }
+    body.loans
+        .iter()
+        .enumerate()
+        .map(|(index, loan)| {
+            reaches[loan.temporary.0 as usize]
+                || body.flows.iter().any(|flow| {
+                    flow.from == Origin::Loan(LoanId(index as u32)) && reaches[flow.into.0 as usize]
+                })
+        })
+        .collect()
 }
 
 /// Whether each loan reaches one of `sinks`.

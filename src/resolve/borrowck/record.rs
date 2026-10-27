@@ -414,7 +414,7 @@ impl Recorder {
             }
         };
         self.flow_into(local, held);
-        let returned = region::reaches_any(&region::reach(&self.body), &self.body.returned);
+        let returned = region::reaches_ignoring_paths(&self.body, &self.body.returned);
         if self
             .body
             .loans
