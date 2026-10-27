@@ -24,7 +24,7 @@ pub(super) struct CallReceiver {
 
 /// Whether a value of type `ty` is a reference, whose own loan is apart from
 /// what it refers to.
-fn is_reference(ty: &Ty) -> bool {
+pub(super) fn is_reference(ty: &Ty) -> bool {
     matches!(ty, Ty::Reference { .. } | Ty::Str)
 }
 
@@ -464,6 +464,102 @@ impl Parser<'_> {
         signature::summary(&signature, &|target| self.declared_lifetimes(target))
     }
 
+    /// The method's own signature, checked as rustc checks it before its
+    /// body ([`Parser::check_signature`]).
+    pub(super) fn check_method_signature(
+        &self,
+        definition: &method::Definition,
+    ) -> Result<(), Error> {
+        if definition.constant() {
+            return Ok(());
+        }
+        let receiver = definition.receiver().map(|mode| match mode {
+            receiver::Mode::Shared => signature::Receiver::Shared,
+            receiver::Mode::Mutable => signature::Receiver::Mutable,
+            receiver::Mode::Owned => signature::Receiver::Owned,
+        });
+        self.check_signature(
+            &signature::Signature {
+                receiver,
+                parameters: definition
+                    .parameters()
+                    .iter()
+                    .map(|parameter| &parameter.ty)
+                    .collect(),
+                output: definition.output(),
+                lifetimes: definition.lifetimes(),
+            },
+            receiver.and(definition.receiver_span()),
+            definition.parameters(),
+        )
+    }
+
+    /// The function's own signature, checked as rustc checks it before its
+    /// body ([`Parser::check_signature`]).
+    pub(super) fn check_function_signature(&self, function: &item::Function) -> Result<(), Error> {
+        // A constant's type is `'static` where it leaves a lifetime out.
+        let (Some(output), false) = (&function.output, function.body.constant) else {
+            return Ok(());
+        };
+        self.check_signature(
+            &signature::Signature {
+                receiver: None,
+                parameters: function
+                    .parameters
+                    .iter()
+                    .map(|parameter| &parameter.ty)
+                    .collect(),
+                output,
+                lifetimes: &function.lifetimes,
+            },
+            None,
+            &function.parameters,
+        )
+    }
+
+    /// A lifetime of the output that elision gives no input lifetime to is
+    /// rustc's E0106. What the body returns is checked against the rest
+    /// (`borrowck::check`): `self`, declared at `receiver`, and the
+    /// `parameters`, and the output.
+    fn check_signature(
+        &self,
+        signature: &signature::Signature<'_>,
+        receiver: Option<Span>,
+        parameters: &[item::Parameter],
+    ) -> Result<(), Error> {
+        let declared = |target: &type_ref::Target| self.declared_lifetimes(target);
+        if let Some(at) = signature::missing_lifetime(signature, &declared) {
+            return Err(Error::BorrowConflict {
+                code: "E0106",
+                message: "missing lifetime specifier".into(),
+                access: at,
+                borrow: Span::NONE,
+            });
+        }
+        let own = signature::own(signature, &declared);
+        // A parameter a pattern destructures is not one local.
+        let named = parameters
+            .iter()
+            .zip(own.parameters)
+            .filter(|(parameter, _)| parameter.pattern.is_none())
+            .map(|(parameter, borrows)| {
+                (
+                    parameter.name.text.clone(),
+                    parameter.name.span,
+                    borrows,
+                    false,
+                )
+            });
+        let parameters: Vec<_> = receiver
+            .map(|span| (ImmutableString::from("this"), span, own.receiver, true))
+            .into_iter()
+            .chain(named)
+            .collect();
+        self.flow()
+            .own_signature(&parameters, own.output, &signature.lifetimes.bounds);
+        Ok(())
+    }
+
     /// What a call of the crate function `function` keeps of its inputs.
     pub(super) fn function_summary(&self, function: &item::Function) -> Summary {
         let unit = type_ref::Type::Unit(function.body.span);
@@ -543,6 +639,47 @@ impl Parser<'_> {
         }
     }
 
+    /// `&value` (spanning `whole`) of a value that is no place: a borrow of
+    /// a temporary its temporary scope holds, which a `let` may extend, or
+    /// of a constant promoted to `'static` (`&1`, `&[1, 2]`), which borrows
+    /// nothing. A value that reads no local and calls nothing is taken for
+    /// a constant.
+    pub(super) fn borrow_temporary(&self, value: &ParsedExpr, whole: Span) {
+        let ty = self.inference.resolve(&value.ty);
+        let holds = self.may_hold_borrow(&ty);
+        let held = if holds {
+            self.flow().origins(value.span).map(<[Origin]>::to_vec)
+        } else {
+            Some(Vec::new())
+        };
+        // A part of a place (`&v[1..]`), or one read through a reference
+        // (`&s.as_bytes()[1..]`), is a place.
+        let place = self.flow().in_place(value.span);
+        match held {
+            Some(held) if !place && self.made_here(value.span, &ty) => {
+                let loan = self.flow().borrow_temporary(value.span, false, &held, true);
+                self.flow().set_origins(whole, vec![Origin::Loan(loan)]);
+            }
+            // `&v.first()` of a value these facts do not follow: what the
+            // value holds.
+            _ if holds => self.flow().same_origins(whole, value.span),
+            _ => self.flow().set_origins(whole, Vec::new()),
+        }
+    }
+
+    /// Whether the value of type `ty` spanning `span` is made here, at run
+    /// time, rather than a constant promoted to `'static`: it reads a local
+    /// or calls something, or only a call makes a value of its type.
+    fn made_here(&self, span: Span, ty: &Ty) -> bool {
+        if self.flow().part_of_made(span) {
+            return true;
+        }
+        matches!(
+            ty,
+            Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
+        ) || self.flow().computed(span)
+    }
+
     /// The type of the part `path` below a value of type `ty`: a struct's
     /// field, a tuple's member, or what a reference refers to. `None` for
     /// a path these types don't follow.
@@ -588,7 +725,11 @@ impl Parser<'_> {
     /// holds that reference's inner borrows, which these facts can't tell
     /// apart from its own loan yet.
     pub(super) fn part_of(&self, base: (Span, &Ty), whole: Span, ty: &Ty) {
-        if self.may_hold_borrow(ty) && !is_reference(&self.inference.resolve(base.1)) {
+        let base_ty = self.inference.resolve(base.1);
+        let reference = is_reference(&base_ty);
+        let made = self.made_here(base.0, &base_ty);
+        self.flow().projected(whole, base.0, reference, made);
+        if self.may_hold_borrow(ty) && !reference {
             self.flow().same_origins(whole, base.0);
         }
     }
@@ -598,6 +739,7 @@ impl Parser<'_> {
     /// they hold. A type that can hold no borrow of the body holds only
     /// `'static` ones (`Foo { x: &a }` of `x: &'static u32`).
     pub(super) fn compose(&self, whole: Span, ty: &Ty, parts: &[&ParsedExpr]) {
+        self.flow().constructed(whole.end());
         let mut origins = Vec::new();
         for part in parts {
             if !self.may_hold_borrow(&part.ty) {
@@ -695,6 +837,17 @@ impl Parser<'_> {
         summary: &Summary,
     ) {
         let arguments = self.flow().arguments(call.end()).unwrap_or_default();
+        // A temporary a call borrows is no `let`'s to extend.
+        for span in arguments
+            .iter()
+            .map(|argument| argument.span)
+            .chain(receiver.map(|receiver| receiver.span))
+        {
+            let origins = self.flow().origins(span).map(<[Origin]>::to_vec);
+            if let Some(origins) = origins {
+                self.flow().pin(&origins);
+            }
+        }
         let holds = self.may_hold_borrow(ty);
         // An argument that may hold borrows these facts don't follow may be
         // kept in ways they can't see.
@@ -825,9 +978,21 @@ impl Parser<'_> {
                     .autoref(receiver.start, whole, mutable, below)
                     .map(|origin| vec![origin])
             }
-            // A reference made here (`v.iter().as_slice()`) is its loans; a
-            // temporary borrowed for the call ends with its statement.
+            // A reference made here (`v.iter().as_slice()`) is its loans.
             (Keeps::All, _) if reference => value(),
+            // A value made here (`String::from("a").as_str()`): a temporary
+            // borrowed for the call, which its temporary scope holds.
+            (Keeps::All, mode)
+                if !self.flow().in_place(receiver.span)
+                    && self.made_here(receiver.span, &receiver.ty) =>
+            {
+                let held = if holds { value()? } else { Vec::new() };
+                let mutable = mode == signature::Receiver::Mutable;
+                let loan = self
+                    .flow()
+                    .borrow_temporary(receiver.span, mutable, &held, false);
+                Some(vec![Origin::Loan(loan)])
+            }
             (Keeps::All, _) => None,
             (Keeps::Inner, _) if receiver.place && !reference => held(),
             (Keeps::Inner, _) if !reference => value(),

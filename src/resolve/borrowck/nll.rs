@@ -40,7 +40,7 @@ impl Rule for Nll {
             let mut region = Points::new(count);
             // Borrowed for `'static`, or returned through a reference the
             // function was given (its output's region): every point. A
-            // returned borrow of a local is rustc's E0515, left to it.
+            // returned borrow of a local is rustc's E0515 (`check`).
             let returned = loan.place.projection.contains(&Projection::Deref)
                 && body.returned.iter().any(|local| reached[local.0 as usize]);
             if returned
@@ -165,7 +165,35 @@ fn liveness(
             stack.push(predecessor);
         }
     }
+    // A hidden local made in one branch and used after the branches meet
+    // (`if c { f(&a) } else { f(&b) }`'s borrows) holds nothing on the
+    // other branch: it is live only where a value it was given may reach.
+    if body.locals[local.0 as usize].name.starts_with('<') {
+        live.intersect(&given(body, local, points, index, count));
+    }
     live
+}
+
+/// The points a value given to `local` may reach.
+fn given(
+    body: &Body,
+    local: Local,
+    points: &[Point],
+    index: &impl Fn(Point) -> usize,
+    count: usize,
+) -> Points {
+    let mut reached = Points::new(count);
+    let mut stack: Vec<Point> = points
+        .iter()
+        .filter(|point| defines(body, **point, local))
+        .flat_map(|point| body.successors(*point))
+        .collect();
+    while let Some(point) = stack.pop() {
+        if reached.insert(index(point)) {
+            stack.extend(body.successors(point));
+        }
+    }
+    reached
 }
 
 /// Whether the fact at `point` gives `local` a new value: a `Def`, or a

@@ -1,0 +1,1355 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+signatures/branch_call_borrows.rs	E0502:10
+signatures/branch_call_borrows_ok.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/common_signatures_ok.rs	ok	0	"hello world hello world a Some(\"v\")\n1\nab (\"x\", \"y\")\n"
+signatures/common_temporaries_ok.rs	ok	0	"3\nyes\nrwar\n2 6 RAWR 4 rawrrawr rawr 3\n"
+signatures/elided_hidden_input_ok.rs	ok	0	"4 Some(\"b\") n 4\n"
+signatures/elided_input_named_output.rs	E0621:2
+signatures/elided_input_static_output.rs	lifetime:2
+signatures/elided_lifetime_ok.rs	ok	0	"n ab\n"
+signatures/elided_static_input.rs	ok	0	"a\n"
+signatures/method_other_input.rs	lifetime:7
+signatures/missing_lifetime_associated.rs	E0106:4
+signatures/missing_lifetime_field.rs	E0106:2
+signatures/missing_lifetime_generic.rs	E0106:1
+signatures/missing_lifetime_none.rs	E0106:1
+signatures/missing_lifetime_option.rs	E0106:1
+signatures/missing_lifetime_owned_input.rs	E0106:1
+signatures/missing_lifetime_struct_output.rs	E0106:5
+signatures/missing_lifetime_two.rs	E0106:1
+signatures/missing_lifetime_variant.rs	E0106:2
+signatures/other_named_lifetime.rs	lifetime:2
+signatures/other_named_lifetime_bound_ok.rs	ok	0	"b\n"
+signatures/outlives_call_keeps_ok.rs	ok	0	"a\n"
+signatures/outlives_call_keeps_other.rs	lifetime:6
+signatures/outlives_elided_input_i32.rs	E0621:2
+signatures/outlives_method_named_ok.rs	ok	0	" n  n ab\n"
+signatures/outlives_reborrow.rs	lifetime:2
+signatures/outlives_self_into_named.rs	lifetime:7
+signatures/outlives_self_output_named_input.rs	lifetime:7
+signatures/outlives_some.rs	lifetime:2
+signatures/outlives_static_output.rs	lifetime:2
+signatures/outlives_through_let.rs	lifetime:4
+signatures/outlives_through_struct.rs	lifetime:6
+signatures/outlives_where_bound_ok.rs	ok	0	"2\n"
+signatures/return_local_as_str.rs	E0515:3
+signatures/return_local_ref.rs	E0515:3
+signatures/return_local_through_let.rs	E0515:4
+signatures/return_param_owned.rs	E0515:2
+signatures/return_param_ref_ok.rs	ok	0	"n 3 1 2 n\n"
+signatures/return_promoted_constructors_ok.rs	ok	0	"Some(5) None (1, \"a\")\n"
+signatures/return_promoted_ok.rs	ok	0	"5 [1, 2, 3]\n"
+signatures/return_slice_of_local.rs	E0515:3
+signatures/return_slices_ok.rs	ok	0	"[2, 3] he abc [98, 99] yz\n"
+signatures/return_some_local.rs	E0515:3
+signatures/return_statement_local.rs	E0515:4
+signatures/return_static_str.rs	ok	0	"static\n"
+signatures/return_struct_local.rs	E0515:7
+signatures/return_temporary.rs	E0515:2
+signatures/return_temporary_format.rs	E0515:2
+signatures/return_temporary_sum.rs	E0515:2
+signatures/return_temporary_vec.rs	E0515:2
+signatures/temporary_argument_ok.rs	ok	0	"b 1\nc\n1\n"
+signatures/temporary_as_str.rs	E0716:2
+signatures/temporary_as_str_ok.rs	ok	0	"2 c\n"
+signatures/temporary_assigned.rs	E0716:4
+signatures/temporary_block_tail.rs	E0716:2
+signatures/temporary_call_argument_kept.rs	E0716:6
+signatures/temporary_call_argument_ok.rs	ok	0	"1 b\n"
+signatures/temporary_extended_ok.rs	ok	0	"a b\n"
+signatures/temporary_extended_sum_ok.rs	ok	0	"3 [2] 2\n"
+signatures/temporary_function_value.rs	E0716:6
+signatures/temporary_index_assigned.rs	E0716:58
+signatures/temporary_index_extended.rs	ok	0	"1 b\n"
+signatures/temporary_index_returned.rs	E0515:2
+signatures/temporary_inner_let.rs	E0716:4
+signatures/temporary_inner_let_ok.rs	ok	0	"\na\n"
+signatures/temporary_iter.rs	E0716:58
+signatures/temporary_let_else.rs	E0716:6
+signatures/temporary_match_arm_extended_ok.rs	ok	0	"b d\n"
+signatures/temporary_method_ref.rs	E0716:16
+signatures/temporary_method_ref_ok.rs	ok	0	"1 s s\n"
+signatures/temporary_next_statement.rs	E0716:3
+signatures/temporary_promoted_ok.rs	ok	0	"5 [1, 2, 3]\n"
+signatures/temporary_reassigned.rs	E0716:4
+signatures/temporary_some_extended.rs	ok	0	"Some(\"a\")\n"
+signatures/temporary_static_annotation.rs	E0716:2
+signatures/temporary_struct_extended_ok.rs	ok	0	"a b c\n"
+signatures/temporary_sum_assigned.rs	E0716:5
+signatures/temporary_trim_chain.rs	E0716:2
+signatures/temporary_trim_chain_ok.rs	ok	0	"a\nb\n2\n"
+signatures/temporary_vec_first.rs	E0716:58
+signatures/mutations/array_of_refs_a_5_extended_across.rs	E0506:6
+signatures/mutations/array_of_refs_a_5_extended_branch.rs	E0506:6
+signatures/mutations/array_of_refs_a_5_extended_ended.rs	E0506:7
+signatures/mutations/array_of_refs_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/array_of_refs_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/array_of_refs_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/array_of_refs_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/assign_after_last_use_x_5_extended_across.rs	E0506:6
+signatures/mutations/assign_after_last_use_x_5_extended_branch.rs	E0506:6
+signatures/mutations/assign_after_last_use_x_5_extended_ended.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_5_receiver_in_statement.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/assign_after_last_use_x_5_receiver_inner_ended.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/assign_after_last_use_x_6_extended_across.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_extended_branch.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_extended_ended.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_receiver_in_statement.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_receiver_inner_across.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_receiver_inner_ended.rs	ok	0	"3\n"
+signatures/mutations/assign_after_last_use_x_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/assign_borrowed_x_4_extended_across.rs	E0506:5
+signatures/mutations/assign_borrowed_x_4_extended_branch.rs	E0506:5
+signatures/mutations/assign_borrowed_x_4_extended_ended.rs	E0506:6
+signatures/mutations/assign_borrowed_x_4_receiver_in_statement.rs	E0506:5
+signatures/mutations/assign_borrowed_x_4_receiver_inner_across.rs	E0506:5
+signatures/mutations/assign_borrowed_x_4_receiver_inner_ended.rs	E0506:6
+signatures/mutations/assign_borrowed_x_4_receiver_kept_across.rs	E0506:5 E0716:58
+signatures/mutations/assign_borrowed_x_5_extended_across.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_extended_branch.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_extended_ended.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_receiver_in_statement.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_receiver_inner_across.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_receiver_inner_ended.rs	E0506:4
+signatures/mutations/assign_borrowed_x_5_receiver_kept_across.rs	E0506:4 E0716:58
+signatures/mutations/associated_new_ended_x_15_extended_across.rs	E0506:16
+signatures/mutations/associated_new_ended_x_15_extended_branch.rs	E0506:16
+signatures/mutations/associated_new_ended_x_15_extended_ended.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_15_receiver_in_statement.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_15_receiver_inner_across.rs	E0506:16
+signatures/mutations/associated_new_ended_x_15_receiver_inner_ended.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_15_receiver_kept_across.rs	E0506:16 E0716:58
+signatures/mutations/associated_new_ended_x_16_extended_across.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_extended_branch.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_extended_ended.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_receiver_in_statement.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_receiver_inner_across.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_receiver_inner_ended.rs	ok	0	"1\n2\n"
+signatures/mutations/associated_new_ended_x_16_receiver_kept_across.rs	E0716:58
+signatures/mutations/associated_new_keeps_input_x_14_extended_across.rs	E0506:15
+signatures/mutations/associated_new_keeps_input_x_14_extended_branch.rs	E0506:15
+signatures/mutations/associated_new_keeps_input_x_14_extended_ended.rs	E0506:16
+signatures/mutations/associated_new_keeps_input_x_14_receiver_in_statement.rs	E0506:15
+signatures/mutations/associated_new_keeps_input_x_14_receiver_inner_across.rs	E0506:15
+signatures/mutations/associated_new_keeps_input_x_14_receiver_inner_ended.rs	E0506:16
+signatures/mutations/associated_new_keeps_input_x_14_receiver_kept_across.rs	E0506:15 E0716:58
+signatures/mutations/block_scope_dead_v_7_extended_across.rs	E0502:8
+signatures/mutations/block_scope_dead_v_7_extended_branch.rs	E0502:8
+signatures/mutations/block_scope_dead_v_7_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_7_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/block_scope_dead_v_7_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/block_scope_dead_v_8_extended_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_extended_branch.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_receiver_inner_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/block_scope_dead_v_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/branch_value_after_last_use_b_7_extended_across.rs	E0502:8
+signatures/mutations/branch_value_after_last_use_b_7_extended_branch.rs	E0502:8
+signatures/mutations/branch_value_after_last_use_b_7_extended_ended.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_7_receiver_in_statement.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/branch_value_after_last_use_b_7_receiver_inner_ended.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/branch_value_after_last_use_b_8_extended_across.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_extended_branch.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_extended_ended.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_receiver_in_statement.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_receiver_inner_across.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_receiver_inner_ended.rs	ok	0	"1\n[2, 3]\n"
+signatures/mutations/branch_value_after_last_use_b_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/branch_value_holds_both_b_6_extended_across.rs	E0502:7
+signatures/mutations/branch_value_holds_both_b_6_extended_branch.rs	E0502:7
+signatures/mutations/branch_value_holds_both_b_6_extended_ended.rs	E0502:8
+signatures/mutations/branch_value_holds_both_b_6_receiver_in_statement.rs	E0502:7
+signatures/mutations/branch_value_holds_both_b_6_receiver_inner_across.rs	E0502:7
+signatures/mutations/branch_value_holds_both_b_6_receiver_inner_ended.rs	E0502:8
+signatures/mutations/branch_value_holds_both_b_6_receiver_kept_across.rs	E0502:7 E0716:58
+signatures/mutations/break_continue_end_paths_v_16_extended_across.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_extended_branch.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_extended_ended.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_receiver_in_statement.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_receiver_inner_across.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_receiver_inner_ended.rs	ok	0	"[1, 1, 3, 9]\n"
+signatures/mutations/break_continue_end_paths_v_16_receiver_kept_across.rs	E0716:58
+signatures/mutations/closure_inline_use_v_5_extended_across.rs	E0502:6
+signatures/mutations/closure_inline_use_v_5_extended_branch.rs	E0502:6
+signatures/mutations/closure_inline_use_v_5_extended_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_5_receiver_in_statement.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/closure_inline_use_v_5_receiver_inner_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/closure_inline_use_v_6_extended_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_extended_branch.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_extended_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_receiver_in_statement.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_receiver_inner_across.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_receiver_inner_ended.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+signatures/mutations/closure_inline_use_v_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/element_method_cs_12_extended_across.rs	E0502:13
+signatures/mutations/element_method_cs_12_extended_branch.rs	E0502:13
+signatures/mutations/element_method_cs_12_extended_ended.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_12_receiver_in_statement.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_12_receiver_inner_across.rs	E0502:13
+signatures/mutations/element_method_cs_12_receiver_inner_ended.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_12_receiver_kept_across.rs	E0502:13 E0716:58
+signatures/mutations/element_method_cs_13_extended_across.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_extended_branch.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_extended_ended.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_receiver_in_statement.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_receiver_inner_across.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_receiver_inner_ended.rs	ok	0	"[1]\n"
+signatures/mutations/element_method_cs_13_receiver_kept_across.rs	E0716:58
+signatures/mutations/element_method_while_borrowed_cs_12_extended_across.rs	E0502:13
+signatures/mutations/element_method_while_borrowed_cs_12_extended_branch.rs	E0502:13
+signatures/mutations/element_method_while_borrowed_cs_12_extended_ended.rs	E0502:14
+signatures/mutations/element_method_while_borrowed_cs_12_receiver_in_statement.rs	E0502:13
+signatures/mutations/element_method_while_borrowed_cs_12_receiver_inner_across.rs	E0502:13
+signatures/mutations/element_method_while_borrowed_cs_12_receiver_inner_ended.rs	E0502:14
+signatures/mutations/element_method_while_borrowed_cs_12_receiver_kept_across.rs	E0502:13 E0716:58
+signatures/mutations/field_conflict_s_10_extended_across.rs	E0503:8
+signatures/mutations/field_conflict_s_10_extended_branch.rs	E0503:8
+signatures/mutations/field_conflict_s_10_extended_ended.rs	E0503:8
+signatures/mutations/field_conflict_s_10_receiver_in_statement.rs	E0503:8
+signatures/mutations/field_conflict_s_10_receiver_inner_across.rs	E0503:8
+signatures/mutations/field_conflict_s_10_receiver_inner_ended.rs	E0503:8
+signatures/mutations/field_conflict_s_10_receiver_kept_across.rs	E0503:8 E0716:58
+signatures/mutations/field_conflict_s_8_extended_across.rs	E0502:8 E0503:9
+signatures/mutations/field_conflict_s_8_extended_branch.rs	E0502:8 E0502:8 E0503:9
+signatures/mutations/field_conflict_s_8_extended_ended.rs	E0502:8 E0503:10
+signatures/mutations/field_conflict_s_8_receiver_in_statement.rs	E0502:8 E0503:9
+signatures/mutations/field_conflict_s_8_receiver_inner_across.rs	E0502:8 E0503:9
+signatures/mutations/field_conflict_s_8_receiver_inner_ended.rs	E0502:8 E0503:10
+signatures/mutations/field_conflict_s_8_receiver_kept_across.rs	E0502:8 E0503:9 E0716:58
+signatures/mutations/fields_apart_s_10_extended_across.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_extended_branch.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_extended_ended.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_receiver_in_statement.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_receiver_inner_across.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_receiver_inner_ended.rs	ok	0	"101 12\n"
+signatures/mutations/fields_apart_s_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/fields_apart_s_8_extended_across.rs	E0502:8 E0506:9
+signatures/mutations/fields_apart_s_8_extended_branch.rs	E0502:8 E0502:8 E0506:9
+signatures/mutations/fields_apart_s_8_extended_ended.rs	E0502:8
+signatures/mutations/fields_apart_s_8_receiver_in_statement.rs	E0502:8
+signatures/mutations/fields_apart_s_8_receiver_inner_across.rs	E0502:8 E0506:9
+signatures/mutations/fields_apart_s_8_receiver_inner_ended.rs	E0502:8
+signatures/mutations/fields_apart_s_8_receiver_kept_across.rs	E0502:8 E0506:9 E0716:58
+signatures/mutations/fn_elided_ended_v_10_extended_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_extended_branch.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_extended_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_receiver_in_statement.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_receiver_inner_across.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_receiver_inner_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_elided_ended_v_9_extended_across.rs	E0502:10
+signatures/mutations/fn_elided_ended_v_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_elided_ended_v_9_extended_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_9_receiver_in_statement.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_elided_ended_v_9_receiver_inner_ended.rs	ok	0	"1\n[1, 2, 3, 4]\n"
+signatures/mutations/fn_elided_ended_v_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_elided_mut_then_read_v_9_extended_across.rs	E0502:9 E0502:10
+signatures/mutations/fn_elided_mut_then_read_v_9_extended_branch.rs	E0502:9 E0502:9 E0502:10
+signatures/mutations/fn_elided_mut_then_read_v_9_extended_ended.rs	E0502:9 E0502:11
+signatures/mutations/fn_elided_mut_then_read_v_9_receiver_in_statement.rs	E0502:9 E0502:10
+signatures/mutations/fn_elided_mut_then_read_v_9_receiver_inner_across.rs	E0502:9 E0502:10
+signatures/mutations/fn_elided_mut_then_read_v_9_receiver_inner_ended.rs	E0502:9 E0502:11
+signatures/mutations/fn_elided_mut_then_read_v_9_receiver_kept_across.rs	E0502:9 E0502:10 E0716:58
+signatures/mutations/fn_elided_then_push_v_8_extended_across.rs	E0502:9
+signatures/mutations/fn_elided_then_push_v_8_extended_branch.rs	E0502:9
+signatures/mutations/fn_elided_then_push_v_8_extended_ended.rs	E0502:10
+signatures/mutations/fn_elided_then_push_v_8_receiver_in_statement.rs	E0502:9
+signatures/mutations/fn_elided_then_push_v_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/fn_elided_then_push_v_8_receiver_inner_ended.rs	E0502:10
+signatures/mutations/fn_elided_then_push_v_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/fn_generic_copied_out_a_10_extended_across.rs	E0506:11
+signatures/mutations/fn_generic_copied_out_a_10_extended_branch.rs	E0506:11
+signatures/mutations/fn_generic_copied_out_a_10_extended_ended.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_10_receiver_in_statement.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_10_receiver_inner_across.rs	E0506:11
+signatures/mutations/fn_generic_copied_out_a_10_receiver_inner_ended.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_10_receiver_kept_across.rs	E0506:11 E0716:58
+signatures/mutations/fn_generic_copied_out_a_11_extended_across.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_extended_branch.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_extended_ended.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_receiver_in_statement.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_receiver_inner_across.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_receiver_inner_ended.rs	ok	0	"2 2\n"
+signatures/mutations/fn_generic_copied_out_a_11_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_generic_identity_ended_v_10_extended_across.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_extended_branch.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_extended_ended.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_receiver_in_statement.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_receiver_inner_across.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_receiver_inner_ended.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_generic_identity_ended_v_9_extended_across.rs	E0502:10
+signatures/mutations/fn_generic_identity_ended_v_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_generic_identity_ended_v_9_extended_ended.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_9_receiver_in_statement.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_generic_identity_ended_v_9_receiver_inner_ended.rs	ok	0	"[1]\n[1, 2]\n"
+signatures/mutations/fn_generic_identity_ended_v_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_generic_identity_v_8_extended_across.rs	E0502:9
+signatures/mutations/fn_generic_identity_v_8_extended_branch.rs	E0502:9
+signatures/mutations/fn_generic_identity_v_8_extended_ended.rs	E0502:10
+signatures/mutations/fn_generic_identity_v_8_receiver_in_statement.rs	E0502:9
+signatures/mutations/fn_generic_identity_v_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/fn_generic_identity_v_8_receiver_inner_ended.rs	E0502:10
+signatures/mutations/fn_generic_identity_v_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/fn_named_both_kept_x_9_extended_across.rs	E0502:10
+signatures/mutations/fn_named_both_kept_x_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_named_both_kept_x_9_extended_ended.rs	E0502:11
+signatures/mutations/fn_named_both_kept_x_9_receiver_in_statement.rs	E0502:10
+signatures/mutations/fn_named_both_kept_x_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_named_both_kept_x_9_receiver_inner_ended.rs	E0502:11
+signatures/mutations/fn_named_both_kept_x_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_named_one_kept_conflict_x_9_extended_across.rs	E0502:10
+signatures/mutations/fn_named_one_kept_conflict_x_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_named_one_kept_conflict_x_9_extended_ended.rs	E0502:11
+signatures/mutations/fn_named_one_kept_conflict_x_9_receiver_in_statement.rs	E0502:10
+signatures/mutations/fn_named_one_kept_conflict_x_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_named_one_kept_conflict_x_9_receiver_inner_ended.rs	E0502:11
+signatures/mutations/fn_named_one_kept_conflict_x_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_named_one_kept_y_10_extended_across.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_extended_branch.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_extended_ended.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_receiver_in_statement.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_receiver_inner_across.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_receiver_inner_ended.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_named_one_kept_y_9_extended_across.rs	E0502:10
+signatures/mutations/fn_named_one_kept_y_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_named_one_kept_y_9_extended_ended.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_9_receiver_in_statement.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_named_one_kept_y_9_receiver_inner_ended.rs	ok	0	"kept free!\n"
+signatures/mutations/fn_named_one_kept_y_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_named_second_kept_y_9_extended_across.rs	E0502:10
+signatures/mutations/fn_named_second_kept_y_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_named_second_kept_y_9_extended_ended.rs	E0502:11
+signatures/mutations/fn_named_second_kept_y_9_receiver_in_statement.rs	E0502:10
+signatures/mutations/fn_named_second_kept_y_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_named_second_kept_y_9_receiver_inner_ended.rs	E0502:11
+signatures/mutations/fn_named_second_kept_y_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_outlives_bound_y_9_extended_across.rs	E0502:10
+signatures/mutations/fn_outlives_bound_y_9_extended_branch.rs	E0502:10
+signatures/mutations/fn_outlives_bound_y_9_extended_ended.rs	E0502:11
+signatures/mutations/fn_outlives_bound_y_9_receiver_in_statement.rs	E0502:10
+signatures/mutations/fn_outlives_bound_y_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/fn_outlives_bound_y_9_receiver_inner_ended.rs	E0502:11
+signatures/mutations/fn_outlives_bound_y_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/fn_owned_output_v_8_extended_across.rs	E0502:9
+signatures/mutations/fn_owned_output_v_8_extended_branch.rs	E0502:9
+signatures/mutations/fn_owned_output_v_8_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_8_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/fn_owned_output_v_8_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/fn_owned_output_v_9_extended_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_extended_branch.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_receiver_inner_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/fn_owned_output_v_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_static_output_v_8_extended_across.rs	E0502:9
+signatures/mutations/fn_static_output_v_8_extended_branch.rs	E0502:9
+signatures/mutations/fn_static_output_v_8_extended_ended.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_8_receiver_in_statement.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/fn_static_output_v_8_receiver_inner_ended.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/fn_static_output_v_9_extended_across.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_extended_branch.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_extended_ended.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_receiver_in_statement.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_receiver_inner_across.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_receiver_inner_ended.rs	ok	0	"vec [1, 2]\n"
+signatures/mutations/fn_static_output_v_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/fn_where_outlives_bound_y_12_extended_across.rs	E0502:13
+signatures/mutations/fn_where_outlives_bound_y_12_extended_branch.rs	E0502:13
+signatures/mutations/fn_where_outlives_bound_y_12_extended_ended.rs	E0502:14
+signatures/mutations/fn_where_outlives_bound_y_12_receiver_in_statement.rs	E0502:13
+signatures/mutations/fn_where_outlives_bound_y_12_receiver_inner_across.rs	E0502:13
+signatures/mutations/fn_where_outlives_bound_y_12_receiver_inner_ended.rs	E0502:14
+signatures/mutations/fn_where_outlives_bound_y_12_receiver_kept_across.rs	E0502:13 E0716:58
+signatures/mutations/for_over_iter_push_v_8_extended_across.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_extended_branch.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_extended_ended.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_receiver_in_statement.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_receiver_inner_across.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_receiver_inner_ended.rs	E0502:5
+signatures/mutations/for_over_iter_push_v_8_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/for_over_shared_borrow_mutated_v_8_extended_across.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_extended_branch.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_extended_ended.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_receiver_in_statement.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_receiver_inner_across.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_receiver_inner_ended.rs	E0502:5
+signatures/mutations/for_over_shared_borrow_mutated_v_8_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/for_over_shared_borrow_total_7_extended_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_extended_branch.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_receiver_inner_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_total_7_receiver_kept_across.rs	E0716:58
+signatures/mutations/for_over_shared_borrow_v_7_extended_across.rs	E0502:8
+signatures/mutations/for_over_shared_borrow_v_7_extended_branch.rs	E0502:8
+signatures/mutations/for_over_shared_borrow_v_7_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_7_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/for_over_shared_borrow_v_7_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/for_over_shared_borrow_v_8_extended_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_extended_branch.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_receiver_inner_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/for_over_shared_borrow_v_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/holder_copy_keeps_borrow_v_5_extended_across.rs	E0502:6
+signatures/mutations/holder_copy_keeps_borrow_v_5_extended_branch.rs	E0502:6
+signatures/mutations/holder_copy_keeps_borrow_v_5_extended_ended.rs	E0502:7
+signatures/mutations/holder_copy_keeps_borrow_v_5_receiver_in_statement.rs	E0502:6
+signatures/mutations/holder_copy_keeps_borrow_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/holder_copy_keeps_borrow_v_5_receiver_inner_ended.rs	E0502:7
+signatures/mutations/holder_copy_keeps_borrow_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/holder_reassigned_a_7_extended_across.rs	E0502:8
+signatures/mutations/holder_reassigned_a_7_extended_branch.rs	E0502:8
+signatures/mutations/holder_reassigned_a_7_extended_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_7_receiver_in_statement.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/holder_reassigned_a_7_receiver_inner_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/holder_reassigned_a_8_extended_across.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_extended_branch.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_extended_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_receiver_in_statement.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_receiver_inner_across.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_receiver_inner_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_a_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/holder_reassigned_r_5_extended_across.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_extended_branch.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_extended_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_receiver_in_statement.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_receiver_inner_across.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_receiver_inner_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/holder_reassigned_r_6_extended_across.rs	E0506:7 E0502:9
+signatures/mutations/holder_reassigned_r_6_extended_branch.rs	E0506:7 E0502:9
+signatures/mutations/holder_reassigned_r_6_extended_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_6_receiver_in_statement.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_6_receiver_inner_across.rs	E0506:7 E0502:9
+signatures/mutations/holder_reassigned_r_6_receiver_inner_ended.rs	ok	0	"1\n1 [1, 3]\n"
+signatures/mutations/holder_reassigned_r_6_receiver_kept_across.rs	E0506:7 E0502:9 E0716:58
+signatures/mutations/index_assign_after_last_use_v_5_extended_across.rs	E0502:6
+signatures/mutations/index_assign_after_last_use_v_5_extended_branch.rs	E0502:6
+signatures/mutations/index_assign_after_last_use_v_5_extended_ended.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_5_receiver_in_statement.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/index_assign_after_last_use_v_5_receiver_inner_ended.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/index_assign_after_last_use_v_6_extended_across.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_extended_branch.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_extended_ended.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_receiver_in_statement.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_receiver_inner_across.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_receiver_inner_ended.rs	ok	0	"1 [5, 2]\n"
+signatures/mutations/index_assign_after_last_use_v_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/index_assign_borrowed_v_4_extended_across.rs	E0502:5
+signatures/mutations/index_assign_borrowed_v_4_extended_branch.rs	E0502:5
+signatures/mutations/index_assign_borrowed_v_4_extended_ended.rs	E0502:6
+signatures/mutations/index_assign_borrowed_v_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/index_assign_borrowed_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/index_assign_borrowed_v_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/index_assign_borrowed_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/index_assign_index_reads_v_3_extended_across.rs	E0502:4 E0502:4
+signatures/mutations/index_assign_index_reads_v_3_extended_branch.rs	E0502:4 E0502:4
+signatures/mutations/index_assign_index_reads_v_3_extended_ended.rs	E0502:5
+signatures/mutations/index_assign_index_reads_v_3_receiver_in_statement.rs	E0502:4
+signatures/mutations/index_assign_index_reads_v_3_receiver_inner_across.rs	E0502:4 E0502:4
+signatures/mutations/index_assign_index_reads_v_3_receiver_inner_ended.rs	E0502:5
+signatures/mutations/index_assign_index_reads_v_3_receiver_kept_across.rs	E0502:4 E0502:4 E0716:58
+signatures/mutations/index_assign_index_reads_v_4_extended_across.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_extended_branch.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_extended_ended.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_receiver_in_statement.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_receiver_inner_across.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_receiver_inner_ended.rs	E0502:3
+signatures/mutations/index_assign_index_reads_v_4_receiver_kept_across.rs	E0502:3 E0716:58
+signatures/mutations/labeled_break_v_14_extended_across.rs	E0502:15
+signatures/mutations/labeled_break_v_14_extended_branch.rs	E0502:15
+signatures/mutations/labeled_break_v_14_extended_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_14_receiver_in_statement.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_14_receiver_inner_across.rs	E0502:15
+signatures/mutations/labeled_break_v_14_receiver_inner_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_14_receiver_kept_across.rs	E0502:15 E0716:58
+signatures/mutations/labeled_break_v_15_extended_across.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_extended_branch.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_extended_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_receiver_in_statement.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_receiver_inner_across.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_receiver_inner_ended.rs	ok	0	"[1, 1, 2, 7]\n"
+signatures/mutations/labeled_break_v_15_receiver_kept_across.rs	E0716:58
+signatures/mutations/labeled_continue_conflict_v_13_extended_across.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_extended_branch.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_extended_ended.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_receiver_in_statement.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_receiver_inner_across.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_receiver_inner_ended.rs	E0499:8
+signatures/mutations/labeled_continue_conflict_v_13_receiver_kept_across.rs	E0499:8 E0716:58
+signatures/mutations/last_use_ends_borrow_v_5_extended_across.rs	E0502:6
+signatures/mutations/last_use_ends_borrow_v_5_extended_branch.rs	E0502:6
+signatures/mutations/last_use_ends_borrow_v_5_extended_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_5_receiver_in_statement.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/last_use_ends_borrow_v_5_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/last_use_ends_borrow_v_8_extended_across.rs	E0502:9
+signatures/mutations/last_use_ends_borrow_v_8_extended_branch.rs	E0502:9
+signatures/mutations/last_use_ends_borrow_v_8_extended_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_8_receiver_in_statement.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/last_use_ends_borrow_v_8_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+signatures/mutations/last_use_ends_borrow_v_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/loop_borrow_carried_conflict_a_12_extended_across.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_extended_branch.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_extended_ended.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_receiver_in_statement.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_receiver_inner_across.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_receiver_inner_ended.rs	E0499:7
+signatures/mutations/loop_borrow_carried_conflict_a_12_receiver_kept_across.rs	E0499:7 E0716:58
+signatures/mutations/loop_borrow_carried_into_next_a_14_extended_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_extended_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_extended_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_receiver_in_statement.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_receiver_inner_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_receiver_inner_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_a_14_receiver_kept_across.rs	E0716:58
+signatures/mutations/loop_borrow_carried_into_next_b_13_extended_across.rs	E0502:14
+signatures/mutations/loop_borrow_carried_into_next_b_13_extended_branch.rs	E0502:14
+signatures/mutations/loop_borrow_carried_into_next_b_13_extended_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_13_receiver_in_statement.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_13_receiver_inner_across.rs	E0502:14
+signatures/mutations/loop_borrow_carried_into_next_b_13_receiver_inner_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_13_receiver_kept_across.rs	E0502:14 E0716:58
+signatures/mutations/loop_borrow_carried_into_next_b_14_extended_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_extended_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_extended_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_receiver_in_statement.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_receiver_inner_across.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_receiver_inner_ended.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+signatures/mutations/loop_borrow_carried_into_next_b_14_receiver_kept_across.rs	E0716:58
+signatures/mutations/loop_borrow_each_iteration_n_9_extended_across.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_extended_branch.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_extended_ended.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_receiver_in_statement.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_receiver_inner_across.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_receiver_inner_ended.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_n_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/loop_borrow_each_iteration_v_9_extended_across.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_extended_branch.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_extended_ended.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_receiver_in_statement.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_receiver_inner_across.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_receiver_inner_ended.rs	ok	0	"5 [1, 0, 2]\n"
+signatures/mutations/loop_borrow_each_iteration_v_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_extended_across.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_extended_branch.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_extended_ended.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_receiver_in_statement.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_receiver_inner_across.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_receiver_inner_ended.rs	ok	0	"[1, 0, 1, 2]\n"
+signatures/mutations/loop_borrow_outlives_iteration_keep_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/map_get_ended_m_5_extended_across.rs	E0502:6
+signatures/mutations/map_get_ended_m_5_extended_branch.rs	E0502:6
+signatures/mutations/map_get_ended_m_5_extended_ended.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_5_receiver_in_statement.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/map_get_ended_m_5_receiver_inner_ended.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/map_get_ended_m_7_extended_across.rs	E0502:8
+signatures/mutations/map_get_ended_m_7_extended_branch.rs	E0502:8
+signatures/mutations/map_get_ended_m_7_extended_ended.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_7_receiver_in_statement.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/map_get_ended_m_7_receiver_inner_ended.rs	ok	0	"Some(\"one\") 2\n"
+signatures/mutations/map_get_ended_m_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/map_get_then_insert_m_5_extended_across.rs	E0502:6 E0502:9
+signatures/mutations/map_get_then_insert_m_5_extended_branch.rs	E0502:6 E0502:9
+signatures/mutations/map_get_then_insert_m_5_extended_ended.rs	E0502:9
+signatures/mutations/map_get_then_insert_m_5_receiver_in_statement.rs	E0502:8
+signatures/mutations/map_get_then_insert_m_5_receiver_inner_across.rs	E0502:6 E0502:9
+signatures/mutations/map_get_then_insert_m_5_receiver_inner_ended.rs	E0502:9
+signatures/mutations/map_get_then_insert_m_5_receiver_kept_across.rs	E0502:6 E0502:9 E0716:58
+signatures/mutations/map_get_then_insert_m_7_extended_across.rs	E0502:8
+signatures/mutations/map_get_then_insert_m_7_extended_branch.rs	E0502:8
+signatures/mutations/map_get_then_insert_m_7_extended_ended.rs	E0502:9
+signatures/mutations/map_get_then_insert_m_7_receiver_in_statement.rs	E0502:8
+signatures/mutations/map_get_then_insert_m_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/map_get_then_insert_m_7_receiver_inner_ended.rs	E0502:9
+signatures/mutations/map_get_then_insert_m_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/map_insert_ref_then_mutate_a_6_extended_across.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_6_extended_branch.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_6_extended_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_6_receiver_in_statement.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_a_6_receiver_inner_across.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_6_receiver_inner_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_6_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/map_insert_ref_then_mutate_a_7_extended_across.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_a_7_extended_branch.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_a_7_extended_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_7_receiver_in_statement.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_a_7_receiver_inner_across.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_a_7_receiver_inner_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_a_7_receiver_kept_across.rs	E0502:8 E0716:58
+signatures/mutations/map_insert_ref_then_mutate_m_6_extended_across.rs	E0502:7 E0502:9
+signatures/mutations/map_insert_ref_then_mutate_m_6_extended_branch.rs	E0502:7 E0502:9
+signatures/mutations/map_insert_ref_then_mutate_m_6_extended_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_m_6_receiver_in_statement.rs	E0502:8
+signatures/mutations/map_insert_ref_then_mutate_m_6_receiver_inner_across.rs	E0502:7 E0502:9
+signatures/mutations/map_insert_ref_then_mutate_m_6_receiver_inner_ended.rs	E0502:9
+signatures/mutations/map_insert_ref_then_mutate_m_6_receiver_kept_across.rs	E0502:7 E0502:9 E0716:58
+signatures/mutations/map_insert_ref_then_mutate_m_8_extended_across.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_extended_branch.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_extended_ended.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_receiver_in_statement.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_receiver_inner_across.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_receiver_inner_ended.rs	E0502:7
+signatures/mutations/map_insert_ref_then_mutate_m_8_receiver_kept_across.rs	E0502:7 E0716:58
+signatures/mutations/match_arm_conflict_v_10_extended_across.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_extended_branch.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_extended_ended.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_receiver_in_statement.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_receiver_inner_across.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_receiver_inner_ended.rs	E0499:6
+signatures/mutations/match_arm_conflict_v_10_receiver_kept_across.rs	E0499:6 E0716:58
+signatures/mutations/match_arms_v_9_extended_across.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_extended_branch.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_extended_ended.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_receiver_in_statement.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_receiver_inner_across.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_receiver_inner_ended.rs	ok	0	"[1, 2, 2]\n"
+signatures/mutations/match_arms_v_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/method_elided_self_bag_14_extended_across.rs	E0502:15
+signatures/mutations/method_elided_self_bag_14_extended_branch.rs	E0502:15
+signatures/mutations/method_elided_self_bag_14_extended_ended.rs	E0502:16
+signatures/mutations/method_elided_self_bag_14_receiver_in_statement.rs	E0502:15
+signatures/mutations/method_elided_self_bag_14_receiver_inner_across.rs	E0502:15
+signatures/mutations/method_elided_self_bag_14_receiver_inner_ended.rs	E0502:16
+signatures/mutations/method_elided_self_bag_14_receiver_kept_across.rs	E0502:15 E0716:58
+signatures/mutations/method_elided_self_ended_bag_15_extended_across.rs	E0502:16
+signatures/mutations/method_elided_self_ended_bag_15_extended_branch.rs	E0502:16
+signatures/mutations/method_elided_self_ended_bag_15_extended_ended.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_15_receiver_in_statement.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_15_receiver_inner_across.rs	E0502:16
+signatures/mutations/method_elided_self_ended_bag_15_receiver_inner_ended.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_15_receiver_kept_across.rs	E0502:16 E0716:58
+signatures/mutations/method_elided_self_ended_bag_16_extended_across.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_extended_branch.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_extended_ended.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_receiver_in_statement.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_receiver_inner_across.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_receiver_inner_ended.rs	ok	0	"1\n3\n"
+signatures/mutations/method_elided_self_ended_bag_16_receiver_kept_across.rs	E0716:58
+signatures/mutations/method_impl_lifetime_not_self_reader_15_extended_across.rs	E0506:16
+signatures/mutations/method_impl_lifetime_not_self_reader_15_extended_branch.rs	E0506:16
+signatures/mutations/method_impl_lifetime_not_self_reader_15_extended_ended.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_15_receiver_in_statement.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_15_receiver_inner_across.rs	E0506:16
+signatures/mutations/method_impl_lifetime_not_self_reader_15_receiver_inner_ended.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_15_receiver_kept_across.rs	E0506:16 E0716:58
+signatures/mutations/method_impl_lifetime_not_self_reader_16_extended_across.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_extended_branch.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_extended_ended.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_receiver_in_statement.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_receiver_inner_across.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_receiver_inner_ended.rs	ok	0	"abc other\n"
+signatures/mutations/method_impl_lifetime_not_self_reader_16_receiver_kept_across.rs	E0716:58
+signatures/mutations/method_impl_lifetime_source_changed_source_15_extended_across.rs	E0502:16
+signatures/mutations/method_impl_lifetime_source_changed_source_15_extended_branch.rs	E0502:16
+signatures/mutations/method_impl_lifetime_source_changed_source_15_extended_ended.rs	E0502:17
+signatures/mutations/method_impl_lifetime_source_changed_source_15_receiver_in_statement.rs	E0502:16
+signatures/mutations/method_impl_lifetime_source_changed_source_15_receiver_inner_across.rs	E0502:16
+signatures/mutations/method_impl_lifetime_source_changed_source_15_receiver_inner_ended.rs	E0502:17
+signatures/mutations/method_impl_lifetime_source_changed_source_15_receiver_kept_across.rs	E0502:16 E0716:58
+signatures/mutations/method_mut_self_kept_bag_14_extended_across.rs	E0502:14 E0502:15
+signatures/mutations/method_mut_self_kept_bag_14_extended_branch.rs	E0502:14 E0502:14 E0502:15
+signatures/mutations/method_mut_self_kept_bag_14_extended_ended.rs	E0502:14 E0502:16
+signatures/mutations/method_mut_self_kept_bag_14_receiver_in_statement.rs	E0502:14 E0502:15
+signatures/mutations/method_mut_self_kept_bag_14_receiver_inner_across.rs	E0502:14 E0502:15
+signatures/mutations/method_mut_self_kept_bag_14_receiver_inner_ended.rs	E0502:14 E0502:16
+signatures/mutations/method_mut_self_kept_bag_14_receiver_kept_across.rs	E0502:14 E0502:15 E0716:58
+signatures/mutations/method_owned_output_c_14_extended_across.rs	E0506:15
+signatures/mutations/method_owned_output_c_14_extended_branch.rs	E0506:15
+signatures/mutations/method_owned_output_c_14_extended_ended.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_14_receiver_in_statement.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_14_receiver_inner_across.rs	E0506:15
+signatures/mutations/method_owned_output_c_14_receiver_inner_ended.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_14_receiver_kept_across.rs	E0506:15 E0716:58
+signatures/mutations/method_owned_output_c_15_extended_across.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_extended_branch.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_extended_ended.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_receiver_in_statement.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_receiver_inner_across.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_receiver_inner_ended.rs	ok	0	"2\n"
+signatures/mutations/method_owned_output_c_15_receiver_kept_across.rs	E0716:58
+signatures/mutations/method_two_phase_c_14_extended_across.rs	E0502:15
+signatures/mutations/method_two_phase_c_14_extended_branch.rs	E0502:15
+signatures/mutations/method_two_phase_c_14_extended_ended.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_14_receiver_in_statement.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_14_receiver_inner_across.rs	E0502:15
+signatures/mutations/method_two_phase_c_14_receiver_inner_ended.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_14_receiver_kept_across.rs	E0502:15 E0716:58
+signatures/mutations/method_two_phase_c_16_extended_across.rs	E0502:17
+signatures/mutations/method_two_phase_c_16_extended_branch.rs	E0502:17
+signatures/mutations/method_two_phase_c_16_extended_ended.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_16_receiver_in_statement.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_16_receiver_inner_across.rs	E0502:17
+signatures/mutations/method_two_phase_c_16_receiver_inner_ended.rs	ok	0	"[0, 1]\n"
+signatures/mutations/method_two_phase_c_16_receiver_kept_across.rs	E0502:17 E0716:58
+signatures/mutations/method_while_borrowed_c_15_extended_across.rs	E0502:16
+signatures/mutations/method_while_borrowed_c_15_extended_branch.rs	E0502:16
+signatures/mutations/method_while_borrowed_c_15_extended_ended.rs	E0502:17
+signatures/mutations/method_while_borrowed_c_15_receiver_in_statement.rs	E0502:16
+signatures/mutations/method_while_borrowed_c_15_receiver_inner_across.rs	E0502:16
+signatures/mutations/method_while_borrowed_c_15_receiver_inner_ended.rs	E0502:17
+signatures/mutations/method_while_borrowed_c_15_receiver_kept_across.rs	E0502:16 E0716:58
+signatures/mutations/mutable_twice_v_7_extended_across.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_extended_branch.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_extended_ended.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_receiver_in_statement.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_receiver_inner_across.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_receiver_inner_ended.rs	E0499:4
+signatures/mutations/mutable_twice_v_7_receiver_kept_across.rs	E0499:4 E0716:58
+signatures/mutations/option_as_ref_ended_o_5_extended_across.rs	E0502:6
+signatures/mutations/option_as_ref_ended_o_5_extended_branch.rs	E0502:6
+signatures/mutations/option_as_ref_ended_o_5_extended_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_5_receiver_in_statement.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/option_as_ref_ended_o_5_receiver_inner_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/option_as_ref_ended_o_6_extended_across.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_extended_branch.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_extended_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_receiver_in_statement.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_receiver_inner_across.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_receiver_inner_ended.rs	ok	0	"Some(\"x\")\nNone\n"
+signatures/mutations/option_as_ref_ended_o_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/option_as_ref_then_take_o_4_extended_across.rs	E0502:5
+signatures/mutations/option_as_ref_then_take_o_4_extended_branch.rs	E0502:5
+signatures/mutations/option_as_ref_then_take_o_4_extended_ended.rs	E0502:6
+signatures/mutations/option_as_ref_then_take_o_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/option_as_ref_then_take_o_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/option_as_ref_then_take_o_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/option_as_ref_then_take_o_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/option_in_struct_a_8_extended_across.rs	E0506:9
+signatures/mutations/option_in_struct_a_8_extended_branch.rs	E0506:9
+signatures/mutations/option_in_struct_a_8_extended_ended.rs	E0506:10
+signatures/mutations/option_in_struct_a_8_receiver_in_statement.rs	E0506:9
+signatures/mutations/option_in_struct_a_8_receiver_inner_across.rs	E0506:9
+signatures/mutations/option_in_struct_a_8_receiver_inner_ended.rs	E0506:10
+signatures/mutations/option_in_struct_a_8_receiver_kept_across.rs	E0506:9 E0716:58
+signatures/mutations/option_reassigned_a_7_extended_across.rs	E0506:8
+signatures/mutations/option_reassigned_a_7_extended_branch.rs	E0506:8
+signatures/mutations/option_reassigned_a_7_extended_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_7_receiver_in_statement.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_7_receiver_inner_across.rs	E0506:8
+signatures/mutations/option_reassigned_a_7_receiver_inner_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_7_receiver_kept_across.rs	E0506:8 E0716:58
+signatures/mutations/option_reassigned_a_8_extended_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_extended_branch.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_extended_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_receiver_in_statement.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_receiver_inner_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_receiver_inner_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_a_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/option_reassigned_o_5_extended_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_extended_branch.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_extended_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_receiver_in_statement.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_receiver_inner_across.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_receiver_inner_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/option_reassigned_o_6_extended_across.rs	E0506:7 E0506:9
+signatures/mutations/option_reassigned_o_6_extended_branch.rs	E0506:7 E0506:9
+signatures/mutations/option_reassigned_o_6_extended_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_6_receiver_in_statement.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_6_receiver_inner_across.rs	E0506:7 E0506:9
+signatures/mutations/option_reassigned_o_6_receiver_inner_ended.rs	ok	0	"Some(1)\nSome(2) 2\n"
+signatures/mutations/option_reassigned_o_6_receiver_kept_across.rs	E0506:7 E0506:9 E0716:58
+signatures/mutations/option_some_ref_ended_a_5_extended_across.rs	E0506:6
+signatures/mutations/option_some_ref_ended_a_5_extended_branch.rs	E0506:6
+signatures/mutations/option_some_ref_ended_a_5_extended_ended.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_5_receiver_in_statement.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/option_some_ref_ended_a_5_receiver_inner_ended.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/option_some_ref_ended_a_6_extended_across.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_extended_branch.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_extended_ended.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_receiver_in_statement.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_receiver_inner_across.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_receiver_inner_ended.rs	ok	0	"Some(1)\n2\n"
+signatures/mutations/option_some_ref_ended_a_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/option_some_ref_then_mutate_a_4_extended_across.rs	E0506:5
+signatures/mutations/option_some_ref_then_mutate_a_4_extended_branch.rs	E0506:5
+signatures/mutations/option_some_ref_then_mutate_a_4_extended_ended.rs	E0506:6
+signatures/mutations/option_some_ref_then_mutate_a_4_receiver_in_statement.rs	E0506:5
+signatures/mutations/option_some_ref_then_mutate_a_4_receiver_inner_across.rs	E0506:5
+signatures/mutations/option_some_ref_then_mutate_a_4_receiver_inner_ended.rs	E0506:6
+signatures/mutations/option_some_ref_then_mutate_a_4_receiver_kept_across.rs	E0506:5 E0716:58
+signatures/mutations/option_unwrap_keeps_a_5_extended_across.rs	E0506:6
+signatures/mutations/option_unwrap_keeps_a_5_extended_branch.rs	E0506:6
+signatures/mutations/option_unwrap_keeps_a_5_extended_ended.rs	E0506:7
+signatures/mutations/option_unwrap_keeps_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/option_unwrap_keeps_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/option_unwrap_keeps_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/option_unwrap_keeps_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_extended_across.rs	E0506:7
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_extended_branch.rs	E0506:7
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_extended_ended.rs	E0506:8
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_receiver_in_statement.rs	E0506:7
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_receiver_inner_across.rs	E0506:7
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_receiver_inner_ended.rs	E0506:8
+signatures/mutations/option_unwrap_or_keeps_default_fallback_6_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/oracle_branch_arms_v_10_extended_across.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_extended_branch.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_extended_ended.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_receiver_in_statement.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_receiver_inner_across.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_receiver_inner_ended.rs	ok	0	"[1, 1]\n"
+signatures/mutations/oracle_branch_arms_v_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/oracle_loop_back_edge_n_12_extended_across.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_extended_branch.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_extended_ended.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_receiver_in_statement.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_receiver_inner_across.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_receiver_inner_ended.rs	E0502:7
+signatures/mutations/oracle_loop_back_edge_n_12_receiver_kept_across.rs	E0502:7 E0716:58
+signatures/mutations/oracle_stale_shared_v_4_extended_across.rs	E0502:5
+signatures/mutations/oracle_stale_shared_v_4_extended_branch.rs	E0502:5
+signatures/mutations/oracle_stale_shared_v_4_extended_ended.rs	E0502:6
+signatures/mutations/oracle_stale_shared_v_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/oracle_stale_shared_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/oracle_stale_shared_v_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/oracle_stale_shared_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/panic_ends_path_ok_v_10_extended_across.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_extended_branch.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_extended_ended.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_receiver_in_statement.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_receiver_inner_across.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_receiver_inner_ended.rs	ok	0	"[1, 2]\n"
+signatures/mutations/panic_ends_path_ok_v_10_receiver_kept_across.rs	E0716:58
+signatures/mutations/panic_ends_path_v_9_extended_across.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_extended_branch.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_extended_ended.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_receiver_in_statement.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_receiver_inner_across.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_receiver_inner_ended.rs	E0502:4
+signatures/mutations/panic_ends_path_v_9_receiver_kept_across.rs	E0502:4 E0716:58
+signatures/mutations/reborrow_conflict_v_7_extended_across.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_extended_branch.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_extended_ended.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_receiver_in_statement.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_receiver_inner_across.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_receiver_inner_ended.rs	E0499:5
+signatures/mutations/reborrow_conflict_v_7_receiver_kept_across.rs	E0499:5 E0716:58
+signatures/mutations/reborrow_through_holder_v_7_extended_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_extended_branch.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_extended_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_receiver_in_statement.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_receiver_inner_across.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_receiver_inner_ended.rs	ok	0	"[1, 2, 3]\n"
+signatures/mutations/reborrow_through_holder_v_7_receiver_kept_across.rs	E0716:58
+signatures/mutations/str_trim_of_holder_reassigned_s_6_extended_across.rs	E0506:7
+signatures/mutations/str_trim_of_holder_reassigned_s_6_extended_branch.rs	E0506:7
+signatures/mutations/str_trim_of_holder_reassigned_s_6_extended_ended.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_6_receiver_in_statement.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_6_receiver_inner_across.rs	E0506:7
+signatures/mutations/str_trim_of_holder_reassigned_s_6_receiver_inner_ended.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_6_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/str_trim_of_holder_reassigned_s_7_extended_across.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_extended_branch.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_extended_ended.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_receiver_in_statement.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_receiver_inner_across.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_receiver_inner_ended.rs	ok	0	"a b\n"
+signatures/mutations/str_trim_of_holder_reassigned_s_7_receiver_kept_across.rs	E0716:58
+signatures/mutations/string_as_str_then_push_s_4_extended_across.rs	E0502:5
+signatures/mutations/string_as_str_then_push_s_4_extended_branch.rs	E0502:5
+signatures/mutations/string_as_str_then_push_s_4_extended_ended.rs	E0502:6
+signatures/mutations/string_as_str_then_push_s_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/string_as_str_then_push_s_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/string_as_str_then_push_s_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/string_as_str_then_push_s_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/string_push_after_last_use_s_5_extended_across.rs	E0502:6
+signatures/mutations/string_push_after_last_use_s_5_extended_branch.rs	E0502:6
+signatures/mutations/string_push_after_last_use_s_5_extended_ended.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_5_receiver_in_statement.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/string_push_after_last_use_s_5_receiver_inner_ended.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/string_push_after_last_use_s_6_extended_across.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_extended_branch.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_extended_ended.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_receiver_in_statement.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_receiver_inner_across.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_receiver_inner_ended.rs	ok	0	"1 ab\n"
+signatures/mutations/string_push_after_last_use_s_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/string_push_while_borrowed_s_4_extended_across.rs	E0502:5
+signatures/mutations/string_push_while_borrowed_s_4_extended_branch.rs	E0502:5
+signatures/mutations/string_push_while_borrowed_s_4_extended_ended.rs	E0502:6
+signatures/mutations/string_push_while_borrowed_s_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/string_push_while_borrowed_s_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/string_push_while_borrowed_s_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/string_push_while_borrowed_s_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/string_trim_ended_s_5_extended_across.rs	E0502:6
+signatures/mutations/string_trim_ended_s_5_extended_branch.rs	E0502:6
+signatures/mutations/string_trim_ended_s_5_extended_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_5_receiver_in_statement.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/string_trim_ended_s_5_receiver_inner_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/string_trim_ended_s_6_extended_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_extended_branch.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_extended_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_receiver_in_statement.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_receiver_inner_across.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_receiver_inner_ended.rs	ok	0	"[hi]\n[  hi  !]\n"
+signatures/mutations/string_trim_ended_s_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/strings_best_21_extended_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_extended_branch.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_extended_ended.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_receiver_in_statement.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_receiver_inner_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_receiver_inner_ended.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+signatures/mutations/strings_best_21_receiver_kept_across.rs	E0716:58
+signatures/mutations/struct_field_assigned_then_mutated_b_11_extended_across.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_11_extended_branch.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_11_extended_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_11_receiver_in_statement.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_b_11_receiver_inner_across.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_11_receiver_inner_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_11_receiver_kept_across.rs	E0506:14 E0716:58
+signatures/mutations/struct_field_assigned_then_mutated_b_12_extended_across.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_b_12_extended_branch.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_b_12_extended_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_12_receiver_in_statement.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_b_12_receiver_inner_across.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_b_12_receiver_inner_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_b_12_receiver_kept_across.rs	E0506:13 E0716:58
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_extended_across.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_extended_branch.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_extended_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_receiver_in_statement.rs	E0506:13
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_receiver_inner_across.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_receiver_inner_ended.rs	E0506:14
+signatures/mutations/struct_field_assigned_then_mutated_pair_11_receiver_kept_across.rs	E0506:12 E0506:14 E0716:58
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_extended_across.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_extended_branch.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_extended_ended.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_receiver_in_statement.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_receiver_inner_across.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_receiver_inner_ended.rs	E0506:12
+signatures/mutations/struct_field_assigned_then_mutated_pair_13_receiver_kept_across.rs	E0506:12 E0716:58
+signatures/mutations/struct_field_overwritten_still_live_b_12_extended_across.rs	E0506:13
+signatures/mutations/struct_field_overwritten_still_live_b_12_extended_branch.rs	E0506:13
+signatures/mutations/struct_field_overwritten_still_live_b_12_extended_ended.rs	E0506:14
+signatures/mutations/struct_field_overwritten_still_live_b_12_receiver_in_statement.rs	E0506:13
+signatures/mutations/struct_field_overwritten_still_live_b_12_receiver_inner_across.rs	E0506:13
+signatures/mutations/struct_field_overwritten_still_live_b_12_receiver_inner_ended.rs	E0506:14
+signatures/mutations/struct_field_overwritten_still_live_b_12_receiver_kept_across.rs	E0506:13 E0716:58
+signatures/mutations/struct_field_overwritten_still_live_b_13_extended_across.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_extended_branch.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_extended_ended.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_receiver_in_statement.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_receiver_inner_across.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_receiver_inner_ended.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_b_13_receiver_kept_across.rs	E0506:12 E0716:58
+signatures/mutations/struct_field_overwritten_still_live_pair_11_extended_across.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_overwritten_still_live_pair_11_extended_branch.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_overwritten_still_live_pair_11_extended_ended.rs	E0506:14
+signatures/mutations/struct_field_overwritten_still_live_pair_11_receiver_in_statement.rs	E0506:13
+signatures/mutations/struct_field_overwritten_still_live_pair_11_receiver_inner_across.rs	E0506:12 E0506:14
+signatures/mutations/struct_field_overwritten_still_live_pair_11_receiver_inner_ended.rs	E0506:14
+signatures/mutations/struct_field_overwritten_still_live_pair_11_receiver_kept_across.rs	E0506:12 E0506:14 E0716:58
+signatures/mutations/struct_field_overwritten_still_live_pair_13_extended_across.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_extended_branch.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_extended_ended.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_receiver_in_statement.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_receiver_inner_across.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_receiver_inner_ended.rs	E0506:12
+signatures/mutations/struct_field_overwritten_still_live_pair_13_receiver_kept_across.rs	E0506:12 E0716:58
+signatures/mutations/struct_field_read_keeps_a_10_extended_across.rs	E0506:11
+signatures/mutations/struct_field_read_keeps_a_10_extended_branch.rs	E0506:11
+signatures/mutations/struct_field_read_keeps_a_10_extended_ended.rs	E0506:12
+signatures/mutations/struct_field_read_keeps_a_10_receiver_in_statement.rs	E0506:11
+signatures/mutations/struct_field_read_keeps_a_10_receiver_inner_across.rs	E0506:11
+signatures/mutations/struct_field_read_keeps_a_10_receiver_inner_ended.rs	E0506:12
+signatures/mutations/struct_field_read_keeps_a_10_receiver_kept_across.rs	E0506:11 E0716:58
+signatures/mutations/struct_literal_ended_name_8_extended_across.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_extended_branch.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_extended_ended.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_receiver_in_statement.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_receiver_inner_across.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_receiver_inner_ended.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/struct_literal_ended_name_9_extended_across.rs	E0506:10
+signatures/mutations/struct_literal_ended_name_9_extended_branch.rs	E0506:10
+signatures/mutations/struct_literal_ended_name_9_extended_ended.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_9_receiver_in_statement.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_9_receiver_inner_across.rs	E0506:10
+signatures/mutations/struct_literal_ended_name_9_receiver_inner_ended.rs	ok	0	"a\nb\n"
+signatures/mutations/struct_literal_ended_name_9_receiver_kept_across.rs	E0506:10 E0716:58
+signatures/mutations/struct_literal_then_assign_name_8_extended_across.rs	E0506:9
+signatures/mutations/struct_literal_then_assign_name_8_extended_branch.rs	E0506:9
+signatures/mutations/struct_literal_then_assign_name_8_extended_ended.rs	E0506:10
+signatures/mutations/struct_literal_then_assign_name_8_receiver_in_statement.rs	E0506:9
+signatures/mutations/struct_literal_then_assign_name_8_receiver_inner_across.rs	E0506:9
+signatures/mutations/struct_literal_then_assign_name_8_receiver_inner_ended.rs	E0506:10
+signatures/mutations/struct_literal_then_assign_name_8_receiver_kept_across.rs	E0506:9 E0716:58
+signatures/mutations/struct_literal_then_assign_name_9_extended_across.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_extended_branch.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_extended_ended.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_receiver_in_statement.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_receiver_inner_across.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_receiver_inner_ended.rs	E0506:8
+signatures/mutations/struct_literal_then_assign_name_9_receiver_kept_across.rs	E0506:8 E0716:58
+signatures/mutations/struct_moved_into_another_a_9_extended_across.rs	E0506:10
+signatures/mutations/struct_moved_into_another_a_9_extended_branch.rs	E0506:10
+signatures/mutations/struct_moved_into_another_a_9_extended_ended.rs	E0506:11
+signatures/mutations/struct_moved_into_another_a_9_receiver_in_statement.rs	E0506:10
+signatures/mutations/struct_moved_into_another_a_9_receiver_inner_across.rs	E0506:10
+signatures/mutations/struct_moved_into_another_a_9_receiver_inner_ended.rs	E0506:11
+signatures/mutations/struct_moved_into_another_a_9_receiver_kept_across.rs	E0506:10 E0716:58
+signatures/mutations/struct_reassigned_whole_a_11_extended_across.rs	E0506:12
+signatures/mutations/struct_reassigned_whole_a_11_extended_branch.rs	E0506:12
+signatures/mutations/struct_reassigned_whole_a_11_extended_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_11_receiver_in_statement.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_11_receiver_inner_across.rs	E0506:12
+signatures/mutations/struct_reassigned_whole_a_11_receiver_inner_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_11_receiver_kept_across.rs	E0506:12 E0716:58
+signatures/mutations/struct_reassigned_whole_a_12_extended_across.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_extended_branch.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_extended_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_receiver_in_statement.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_receiver_inner_across.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_receiver_inner_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_a_12_receiver_kept_across.rs	E0716:58
+signatures/mutations/struct_reassigned_whole_view_10_extended_across.rs	E0506:11 E0506:13
+signatures/mutations/struct_reassigned_whole_view_10_extended_branch.rs	E0506:11 E0506:13
+signatures/mutations/struct_reassigned_whole_view_10_extended_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_10_receiver_in_statement.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_10_receiver_inner_across.rs	E0506:11 E0506:13
+signatures/mutations/struct_reassigned_whole_view_10_receiver_inner_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_10_receiver_kept_across.rs	E0506:11 E0506:13 E0716:58
+signatures/mutations/struct_reassigned_whole_view_9_extended_across.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_extended_branch.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_extended_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_receiver_in_statement.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_receiver_inner_across.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_receiver_inner_ended.rs	ok	0	"1\n2 2\n"
+signatures/mutations/struct_reassigned_whole_view_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/try_operator_path_v_9_extended_across.rs	E0502:10
+signatures/mutations/try_operator_path_v_9_extended_branch.rs	E0502:10
+signatures/mutations/try_operator_path_v_9_extended_ended.rs	ok	0	"Some(4) [4, 4]\n"
+signatures/mutations/try_operator_path_v_9_receiver_in_statement.rs	ok	0	"Some(4) [4, 4]\n"
+signatures/mutations/try_operator_path_v_9_receiver_inner_across.rs	E0502:10
+signatures/mutations/try_operator_path_v_9_receiver_inner_ended.rs	ok	0	"Some(4) [4, 4]\n"
+signatures/mutations/try_operator_path_v_9_receiver_kept_across.rs	E0502:10 E0716:58
+signatures/mutations/tuple_of_refs_a_5_extended_across.rs	E0506:6
+signatures/mutations/tuple_of_refs_a_5_extended_branch.rs	E0506:6
+signatures/mutations/tuple_of_refs_a_5_extended_ended.rs	E0506:7
+signatures/mutations/tuple_of_refs_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/tuple_of_refs_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/tuple_of_refs_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/tuple_of_refs_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/tuple_of_refs_ended_a_6_extended_across.rs	E0506:7
+signatures/mutations/tuple_of_refs_ended_a_6_extended_branch.rs	E0506:7
+signatures/mutations/tuple_of_refs_ended_a_6_extended_ended.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_6_receiver_in_statement.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_6_receiver_inner_across.rs	E0506:7
+signatures/mutations/tuple_of_refs_ended_a_6_receiver_inner_ended.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_6_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/tuple_of_refs_ended_a_7_extended_across.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_extended_branch.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_extended_ended.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_receiver_in_statement.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_receiver_inner_across.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_receiver_inner_ended.rs	ok	0	"1 2\n2\n"
+signatures/mutations/tuple_of_refs_ended_a_7_receiver_kept_across.rs	E0716:58
+signatures/mutations/two_phase_holder_arg_v_4_extended_across.rs	E0502:4 E0502:5
+signatures/mutations/two_phase_holder_arg_v_4_extended_branch.rs	E0502:4 E0502:4 E0502:5
+signatures/mutations/two_phase_holder_arg_v_4_extended_ended.rs	E0502:4 E0502:6
+signatures/mutations/two_phase_holder_arg_v_4_receiver_in_statement.rs	E0502:4 E0502:5
+signatures/mutations/two_phase_holder_arg_v_4_receiver_inner_across.rs	E0502:4 E0502:5
+signatures/mutations/two_phase_holder_arg_v_4_receiver_inner_ended.rs	E0502:4 E0502:6
+signatures/mutations/two_phase_holder_arg_v_4_receiver_kept_across.rs	E0502:4 E0502:5 E0716:58
+signatures/mutations/two_phase_holder_arg_v_5_extended_across.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_extended_branch.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_extended_ended.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_receiver_in_statement.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_receiver_inner_across.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_receiver_inner_ended.rs	E0502:4
+signatures/mutations/two_phase_holder_arg_v_5_receiver_kept_across.rs	E0502:4 E0716:58
+signatures/mutations/two_phase_len_v_3_extended_across.rs	E0502:4
+signatures/mutations/two_phase_len_v_3_extended_branch.rs	E0502:4
+signatures/mutations/two_phase_len_v_3_extended_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_3_receiver_in_statement.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_3_receiver_inner_across.rs	E0502:4
+signatures/mutations/two_phase_len_v_3_receiver_inner_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_3_receiver_kept_across.rs	E0502:4 E0716:58
+signatures/mutations/two_phase_len_v_5_extended_across.rs	E0502:6
+signatures/mutations/two_phase_len_v_5_extended_branch.rs	E0502:6
+signatures/mutations/two_phase_len_v_5_extended_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_5_receiver_in_statement.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/two_phase_len_v_5_receiver_inner_ended.rs	ok	0	"[1, 2, 2, 3]\n"
+signatures/mutations/two_phase_len_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/two_phase_mutable_arg_v_7_extended_across.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_extended_branch.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_extended_ended.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_receiver_in_statement.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_receiver_inner_across.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_receiver_inner_ended.rs	E0499:4
+signatures/mutations/two_phase_mutable_arg_v_7_receiver_kept_across.rs	E0499:4 E0716:58
+signatures/mutations/use_while_mutably_borrowed_x_6_extended_across.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_extended_branch.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_extended_ended.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_receiver_in_statement.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_receiver_inner_across.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_receiver_inner_ended.rs	E0503:4
+signatures/mutations/use_while_mutably_borrowed_x_6_receiver_kept_across.rs	E0503:4 E0716:58
+signatures/mutations/vec_first_ended_before_push_v_5_extended_across.rs	E0502:6
+signatures/mutations/vec_first_ended_before_push_v_5_extended_branch.rs	E0502:6
+signatures/mutations/vec_first_ended_before_push_v_5_extended_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_5_receiver_in_statement.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_5_receiver_inner_across.rs	E0502:6
+signatures/mutations/vec_first_ended_before_push_v_5_receiver_inner_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_5_receiver_kept_across.rs	E0502:6 E0716:58
+signatures/mutations/vec_first_ended_before_push_v_6_extended_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_extended_branch.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_extended_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_receiver_in_statement.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_receiver_inner_across.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_receiver_inner_ended.rs	ok	0	"Some(1)\n[1, 2, 3, 4]\n"
+signatures/mutations/vec_first_ended_before_push_v_6_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_first_then_push_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_first_then_push_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_first_then_push_v_4_extended_ended.rs	E0502:6
+signatures/mutations/vec_first_then_push_v_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/vec_first_then_push_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_first_then_push_v_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/vec_first_then_push_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_get_unwrap_then_clear_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_get_unwrap_then_clear_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_get_unwrap_then_clear_v_4_extended_ended.rs	E0502:6
+signatures/mutations/vec_get_unwrap_then_clear_v_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/vec_get_unwrap_then_clear_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_get_unwrap_then_clear_v_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/vec_get_unwrap_then_clear_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_iter_counted_first_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_iter_counted_first_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_iter_counted_first_v_4_extended_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_4_receiver_in_statement.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_iter_counted_first_v_4_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_iter_counted_first_v_5_extended_across.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_extended_branch.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_extended_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_receiver_in_statement.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_receiver_inner_across.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_iter_counted_first_v_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_iter_then_push_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_iter_then_push_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_iter_then_push_v_4_extended_ended.rs	E0502:6
+signatures/mutations/vec_iter_then_push_v_4_receiver_in_statement.rs	E0502:5
+signatures/mutations/vec_iter_then_push_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_iter_then_push_v_4_receiver_inner_ended.rs	E0502:6
+signatures/mutations/vec_iter_then_push_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_last_mut_ended_v_5_extended_across.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_extended_branch.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_extended_ended.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_receiver_in_statement.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_receiver_inner_across.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_receiver_inner_ended.rs	ok	0	"3 [1, 2, 9]\n"
+signatures/mutations/vec_last_mut_ended_v_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_last_mut_then_read_v_4_extended_across.rs	E0502:4 E0502:5
+signatures/mutations/vec_last_mut_then_read_v_4_extended_branch.rs	E0502:4 E0502:4 E0502:5
+signatures/mutations/vec_last_mut_then_read_v_4_extended_ended.rs	E0502:4 E0502:6
+signatures/mutations/vec_last_mut_then_read_v_4_receiver_in_statement.rs	E0502:4 E0502:5
+signatures/mutations/vec_last_mut_then_read_v_4_receiver_inner_across.rs	E0502:4 E0502:5
+signatures/mutations/vec_last_mut_then_read_v_4_receiver_inner_ended.rs	E0502:4 E0502:6
+signatures/mutations/vec_last_mut_then_read_v_4_receiver_kept_across.rs	E0502:4 E0502:5 E0716:58
+signatures/mutations/vec_len_owned_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_len_owned_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_len_owned_v_4_extended_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_4_receiver_in_statement.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_len_owned_v_4_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_len_owned_v_5_extended_across.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_extended_branch.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_extended_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_receiver_in_statement.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_receiver_inner_across.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_receiver_inner_ended.rs	ok	0	"2 [1, 2, 3]\n"
+signatures/mutations/vec_len_owned_v_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_literal_of_refs_a_5_extended_across.rs	E0506:6
+signatures/mutations/vec_literal_of_refs_a_5_extended_branch.rs	E0506:6
+signatures/mutations/vec_literal_of_refs_a_5_extended_ended.rs	E0506:7
+signatures/mutations/vec_literal_of_refs_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_literal_of_refs_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/vec_literal_of_refs_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_literal_of_refs_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/vec_literal_of_refs_ended_a_6_extended_across.rs	E0506:7
+signatures/mutations/vec_literal_of_refs_ended_a_6_extended_branch.rs	E0506:7
+signatures/mutations/vec_literal_of_refs_ended_a_6_extended_ended.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_6_receiver_in_statement.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_6_receiver_inner_across.rs	E0506:7
+signatures/mutations/vec_literal_of_refs_ended_a_6_receiver_inner_ended.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_6_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/vec_literal_of_refs_ended_a_7_extended_across.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_extended_branch.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_extended_ended.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_receiver_in_statement.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_receiver_inner_across.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_receiver_inner_ended.rs	ok	0	"[1, 2]\n5\n"
+signatures/mutations/vec_literal_of_refs_ended_a_7_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_of_refs_element_read_a_5_extended_across.rs	E0506:6
+signatures/mutations/vec_of_refs_element_read_a_5_extended_branch.rs	E0506:6
+signatures/mutations/vec_of_refs_element_read_a_5_extended_ended.rs	E0506:7
+signatures/mutations/vec_of_refs_element_read_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_of_refs_element_read_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/vec_of_refs_element_read_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_of_refs_element_read_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/vec_push_ref_ended_a_4_extended_across.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_extended_branch.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_extended_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_receiver_in_statement.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_receiver_inner_across.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_receiver_inner_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_4_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_push_ref_ended_a_6_extended_across.rs	E0506:7
+signatures/mutations/vec_push_ref_ended_a_6_extended_branch.rs	E0506:7
+signatures/mutations/vec_push_ref_ended_a_6_extended_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_6_receiver_in_statement.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_6_receiver_inner_across.rs	E0506:7
+signatures/mutations/vec_push_ref_ended_a_6_receiver_inner_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_a_6_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/vec_push_ref_ended_refs_4_extended_across.rs	E0502:5
+signatures/mutations/vec_push_ref_ended_refs_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_push_ref_ended_refs_4_extended_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_4_receiver_in_statement.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_push_ref_ended_refs_4_receiver_inner_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_push_ref_ended_refs_5_extended_across.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_extended_branch.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_extended_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_receiver_in_statement.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_receiver_inner_across.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_receiver_inner_ended.rs	ok	0	"[1]\n2\n"
+signatures/mutations/vec_push_ref_ended_refs_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/vec_push_ref_then_mutate_a_4_extended_across.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_4_extended_branch.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_4_extended_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_4_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_a_4_receiver_inner_across.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_4_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_4_receiver_kept_across.rs	E0506:7 E0716:58
+signatures/mutations/vec_push_ref_then_mutate_a_5_extended_across.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_a_5_extended_branch.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_a_5_extended_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/vec_push_ref_then_mutate_refs_4_extended_across.rs	E0502:5 E0506:7
+signatures/mutations/vec_push_ref_then_mutate_refs_4_extended_branch.rs	E0502:5 E0506:7
+signatures/mutations/vec_push_ref_then_mutate_refs_4_extended_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_refs_4_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_push_ref_then_mutate_refs_4_receiver_inner_across.rs	E0502:5 E0506:7
+signatures/mutations/vec_push_ref_then_mutate_refs_4_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_push_ref_then_mutate_refs_4_receiver_kept_across.rs	E0502:5 E0506:7 E0716:58
+signatures/mutations/vec_push_ref_then_mutate_refs_6_extended_across.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_extended_branch.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_extended_ended.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_receiver_in_statement.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_receiver_inner_across.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_receiver_inner_ended.rs	E0506:5
+signatures/mutations/vec_push_ref_then_mutate_refs_6_receiver_kept_across.rs	E0506:5 E0716:58
+signatures/mutations/vec_ref_first_through_two_a_5_extended_across.rs	E0506:6
+signatures/mutations/vec_ref_first_through_two_a_5_extended_branch.rs	E0506:6
+signatures/mutations/vec_ref_first_through_two_a_5_extended_ended.rs	E0506:7
+signatures/mutations/vec_ref_first_through_two_a_5_receiver_in_statement.rs	E0506:6
+signatures/mutations/vec_ref_first_through_two_a_5_receiver_inner_across.rs	E0506:6
+signatures/mutations/vec_ref_first_through_two_a_5_receiver_inner_ended.rs	E0506:7
+signatures/mutations/vec_ref_first_through_two_a_5_receiver_kept_across.rs	E0506:6 E0716:58
+signatures/mutations/vec_to_vec_owns_v_4_extended_across.rs	E0502:5
+signatures/mutations/vec_to_vec_owns_v_4_extended_branch.rs	E0502:5
+signatures/mutations/vec_to_vec_owns_v_4_extended_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_4_receiver_in_statement.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_4_receiver_inner_across.rs	E0502:5
+signatures/mutations/vec_to_vec_owns_v_4_receiver_inner_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_4_receiver_kept_across.rs	E0502:5 E0716:58
+signatures/mutations/vec_to_vec_owns_v_5_extended_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_extended_branch.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_extended_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_receiver_in_statement.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_receiver_inner_across.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_receiver_inner_ended.rs	ok	0	"[1, 2] [1, 2, 3]\n"
+signatures/mutations/vec_to_vec_owns_v_5_receiver_kept_across.rs	E0716:58
+signatures/mutations/while_let_borrow_stack_8_extended_across.rs	E0502:9
+signatures/mutations/while_let_borrow_stack_8_extended_branch.rs	E0502:9
+signatures/mutations/while_let_borrow_stack_8_extended_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_8_receiver_in_statement.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_8_receiver_inner_across.rs	E0502:9
+signatures/mutations/while_let_borrow_stack_8_receiver_inner_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_8_receiver_kept_across.rs	E0502:9 E0716:58
+signatures/mutations/while_let_borrow_stack_9_extended_across.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_extended_branch.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_extended_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_receiver_in_statement.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_receiver_inner_across.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_receiver_inner_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_stack_9_receiver_kept_across.rs	E0716:58
+signatures/mutations/while_let_borrow_total_8_extended_across.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_extended_branch.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_extended_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_receiver_in_statement.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_receiver_inner_across.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_receiver_inner_ended.rs	ok	0	"[6]\n"
+signatures/mutations/while_let_borrow_total_8_receiver_kept_across.rs	E0716:58
+signatures/mutations/while_let_conflict_total_11_extended_across.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_extended_branch.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_extended_ended.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_receiver_in_statement.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_receiver_inner_across.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_receiver_inner_ended.rs	E0499:8
+signatures/mutations/while_let_conflict_total_11_receiver_kept_across.rs	E0499:8 E0716:58
+signatures/mutations/word_count_top_12_extended_across.rs	E0502:13
+signatures/mutations/word_count_top_12_extended_branch.rs	E0502:13
+signatures/mutations/word_count_top_12_extended_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_12_receiver_in_statement.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_12_receiver_inner_across.rs	E0502:13
+signatures/mutations/word_count_top_12_receiver_inner_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_12_receiver_kept_across.rs	E0502:13 E0716:58
+signatures/mutations/word_count_top_16_extended_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_extended_branch.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_extended_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_receiver_in_statement.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_receiver_inner_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_receiver_inner_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+signatures/mutations/word_count_top_16_receiver_kept_across.rs	E0716:58

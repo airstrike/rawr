@@ -1,0 +1,23 @@
+struct View<'a> {
+    value: &'a i32,
+}
+
+fn main() {
+    let mut a = 1;
+    let b = 2;
+    let mut view = View { value: &a };
+    let __t = &__id(&view);
+    println!("{}", view.value);
+    __see(__t);
+    view = View { value: &b };
+    a += 1;
+    println!("{} {a}", view.value);
+}
+
+fn __id<T>(x: &T) -> &T {
+    x
+}
+fn __see<T>(_: &T) {}
+fn __c() -> bool {
+    false
+}

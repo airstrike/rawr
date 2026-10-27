@@ -109,9 +109,30 @@ fn known_move_gap(path: &str, errors: &[(String, usize)]) -> bool {
 /// The borrow errors this checker reports, and the lowering's use after
 /// move (E0382), with rustc's codes.
 pub(super) const BORROW_CODES: &[&str] = &[
-    "E0373", "E0382", "E0499", "E0500", "E0501", "E0502", "E0503", "E0505", "E0506", "E0524",
+    "E0106",
+    "E0373",
+    "E0382",
+    "E0499",
+    "E0500",
+    "E0501",
+    "E0502",
+    "E0503",
+    "E0505",
+    "E0506",
+    "E0515",
+    "E0524",
     "E0597",
+    "E0621",
+    "E0716",
+    super::LIFETIME,
 ];
+
+/// Whether rawr's `code` is rustc's `recorded` one. rustc's "lifetime may
+/// not live long enough" has no code: `record.py` writes `lifetime` for it,
+/// and wrote `error` before it did.
+fn same_code(code: &str, recorded: &str) -> bool {
+    code == recorded || code == super::LIFETIME && recorded == "error"
+}
 
 fn load(path: &Path) -> Result<crate::package::Graph, Verdict> {
     let target = crate::project::Target::discover(path).map_err(|error| Verdict::Other {
@@ -124,6 +145,14 @@ fn load(path: &Path) -> Result<crate::package::Graph, Verdict> {
 
 fn verdict(error: &crate::package::Error) -> Verdict {
     let (code, line) = match error.report() {
+        Ok(report) if report.code() == crate::diagnostic::code::BORROW_OUTLIVES => (
+            super::LIFETIME.to_string(),
+            report
+                .labels()
+                .first()
+                .and_then(|label| label.span().start().line())
+                .unwrap_or(0),
+        ),
         Ok(report) => (
             report.code().as_str().to_string(),
             report
@@ -258,9 +287,9 @@ fn borrowck_differential() {
         let outcome = match (&rawr, &rustc) {
             (Verdict::Other { .. }, _) => "not lowered by rawr",
             (Verdict::Borrow { code, line }, Recorded::Rejected(errors)) => {
-                if errors.iter().any(|(c, l)| c == code && l == line) {
+                if errors.iter().any(|(c, l)| same_code(code, c) && l == line) {
                     "both reject: same code and line"
-                } else if errors.iter().any(|(c, _)| c == code) {
+                } else if errors.iter().any(|(c, _)| same_code(code, c)) {
                     "both reject: same code, rustc's on another line"
                 } else if known_move_gap(&path, errors) {
                     "rustc's use after move that the move check does not follow yet (known)"

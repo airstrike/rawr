@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | moves | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -13,8 +13,12 @@ keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
 `kept-mutations`. With `closures`, the borrow is a closure's capture, or one
 a closure's call returns, and the variants go to `closures/mutations`.
 With `moves`, a closure moves `x` in, or is moved or copied while it
-captures `x`, and the variants go to `closure-moves/mutations`.
-rustc decides which are errors: run `record.py` on the folder afterwards.
+captures `x`, and the variants go to `closure-moves/mutations`. With
+`temporaries`, the borrow is held through a temporary: one a `let` extends
+(`&__id(&x)`), a method's receiver whose value keeps it
+(`vec![&x].first()`), or one whose value keeps only what it holds
+(`vec![&x].to_vec()`), and the variants go to `signatures/mutations`. rustc
+decides which are errors: run `record.py` on the folder afterwards.
 """
 
 import glob
@@ -28,6 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 KEPT = sys.argv[1:] == ["kept"]
 CLOSURES = sys.argv[1:] == ["closures"]
 MOVES = sys.argv[1:] == ["moves"]
+TEMPORARIES = sys.argv[1:] == ["temporaries"]
 OUT = os.path.join(
     HERE,
     "kept-mutations"
@@ -36,13 +41,15 @@ OUT = os.path.join(
     if CLOSURES
     else "closure-moves/mutations"
     if MOVES
+    else "signatures/mutations"
+    if TEMPORARIES
     else "mutations",
 )
 SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
-    + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT else [])
+    + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT or TEMPORARIES else [])
     + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES or MOVES else [])
     + (glob.glob(os.path.join(HERE, "closure-moves/*.rs")) if MOVES else [])
 )
@@ -56,6 +63,11 @@ fn __keep<T>(x: &T) -> &T { x }
 fn __see<T>(_: &T) {}
 fn __c() -> bool { false }
 struct __Hold<'a, T>(&'a T);
+"""
+TEMPORARY_HELPERS = """
+fn __id<T>(x: &T) -> &T { x }
+fn __see<T>(_: &T) {}
+fn __c() -> bool { false }
 """
 DECLARATION = re.compile(r"^(\s*)let mut (\w+)\b[^=]*=.*;\s*$")
 PER_LOCAL = 2
@@ -137,6 +149,36 @@ def kept_variants(indent, name, statement):
             f"{i}__o = None;",
             statement,
             f"{i}__see(&__o);",
+        ],
+    }
+
+
+def temporary_variants(indent, name, statement):
+    """A borrow held through a temporary, used past `statement`."""
+    i = indent
+    return {
+        "extended_across": [f"{i}let __t = &__id(&{name});", statement, f"{i}__see(__t);"],
+        "extended_ended": [f"{i}let __t = &__id(&{name});", f"{i}__see(__t);", statement],
+        "extended_branch": [
+            f"{i}let __t = if __c() {{ &__id(&{name}) }} else {{ &__id(&{name}) }};",
+            statement,
+            f"{i}__see(__t);",
+        ],
+        "receiver_kept_across": [
+            f"{i}let __t = vec![&{name}].first();",
+            statement,
+            f"{i}__see(&__t);",
+        ],
+        "receiver_in_statement": [f"{i}__see(&vec![&{name}].first());", statement],
+        "receiver_inner_across": [
+            f"{i}let __t = vec![&{name}].to_vec();",
+            statement,
+            f"{i}__see(&__t);",
+        ],
+        "receiver_inner_ended": [
+            f"{i}let __t = vec![&{name}].to_vec();",
+            f"{i}__see(&__t);",
+            statement,
         ],
     }
 
@@ -229,6 +271,8 @@ def main():
                     if CLOSURES
                     else move_variants
                     if MOVES
+                    else temporary_variants
+                    if TEMPORARIES
                     else variants
                 )
                 written = mutate(indent, name, lines[target])
@@ -236,7 +280,10 @@ def main():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
                     with open(path, "w", encoding="utf-8") as file:
-                        file.write("\n".join(mutated) + "\n" + (KEPT_HELPERS if KEPT else HELPERS))
+                        helpers = (
+                            KEPT_HELPERS if KEPT else TEMPORARY_HELPERS if TEMPORARIES else HELPERS
+                        )
+                        file.write("\n".join(mutated) + "\n" + helpers)
                     count += 1
     # As the repository's other Rust files are.
     written = sorted(glob.glob(os.path.join(out, "*.rs")))
