@@ -26,7 +26,12 @@ own signature and for temporaries (E0515, E0716, E0106), with
 `signatures/mutations/` what `mutate.py temporaries` writes, and
 `closure-places/` the cases written for closures that use a `&mut` local,
 a function's `&mut` parameter, a `&mut` pattern binding or a mutable
-loop's element (E0500, E0501, E0524). The harness
+loop's element (E0500, E0501, E0524), and `moves/` the cases written for
+what moves: partial moves of members and nested fields, patterns'
+by-value bindings, methods that take their value, block tails, closures'
+moves out of a capture, moves across branches and loops, and moves out of
+what can't be moved out of (E0382, E0505, E0507, E0508, E0509), with
+`moves/mutations` what `mutate.py moved` writes. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 

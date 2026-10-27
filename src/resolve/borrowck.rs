@@ -3,6 +3,8 @@
 //! moves and borrows, the loans those borrows make, where each loan flows,
 //! and the body's control flow. [`check`] solves it after the body, with a
 //! [`Rule`] that says where each loan is live; NLL's is [`nll::Nll`].
+//! [`moves::check`] follows what the body moves over the same facts: a use
+//! of a place that may be moved is rustc's E0382.
 //!
 //! The facts are the rule's input and nothing else, so another rule, such
 //! as the Polonius alpha stable rustc is expected to adopt, takes the same
@@ -12,6 +14,7 @@
 //! and the background `cargo check` decides (D572.5). A loan this module
 //! does model is never left to rustc.
 
+pub(crate) mod moves;
 pub(crate) mod nll;
 pub(crate) mod record;
 pub(crate) mod region;
@@ -219,6 +222,9 @@ pub(crate) struct Body {
     /// The function's own signature, which what it returns is checked
     /// against.
     pub(crate) own: Option<OwnSignature>,
+    /// Each closure body's first block, with a hidden local its body reads
+    /// a capture by, which has its value again each time the body starts.
+    pub(crate) closure_entries: Vec<(Block, Local)>,
 }
 
 /// A function's own signature, as its body is checked against it.
@@ -782,4 +788,10 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn note_body(body: &Body) {
     UNMODELED.with(|notes| notes.borrow_mut().extend(body.unmodeled.iter().copied()));
+}
+
+/// Code the lowering never reads, whose borrows and moves are left to rustc.
+#[cfg(test)]
+pub(crate) fn note_unlowered(what: &'static str, span: Span) {
+    UNMODELED.with(|notes| notes.borrow_mut().push((what, span)));
 }

@@ -566,13 +566,16 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// A tail, `return` or `break` value that names a local, or a field of
-    /// one, moves it out when its type has drop glue.
+    /// A tail, `return`, `break` or `?` value that names a local, or a part
+    /// of one, moves it out. With drop glue its value moves out at run time,
+    /// to drop with its new owner; otherwise it reads as it did, and the
+    /// move check follows the move.
     pub(super) fn move_out_value(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
         if self.needs_drop(&value.ty, value.span)? {
-            self.move_local(value)?;
+            self.move_local(value)
+        } else {
+            self.move_local(&mut value.clone())
         }
-        Ok(())
     }
 
     /// An expression statement's value, which nothing keeps, drops at the
@@ -1100,14 +1103,12 @@ impl Parser<'_> {
             return Ok(());
         }
         let name = self.models.definition(owner).name();
-        Err(Error::Syntax {
-            message: format!(
-                "cannot move out of type `{name}`, which implements the `Drop` trait (E0509)"
-            )
-            .into(),
-            label: "cannot move out of here".into(),
-            help: Some("consider borrowing here".into()),
-            at,
+        Err(Error::BorrowConflict {
+            code: "E0509",
+            message: format!("cannot move out of type `{name}`, which implements the `Drop` trait")
+                .into(),
+            access: at,
+            borrow: at,
         })
     }
 
@@ -1197,7 +1198,6 @@ impl Parser<'_> {
                 ty: value.ty.clone(),
                 mutable: false,
                 available: true,
-                moved_fields: BTreeMap::new(),
                 declaration: value.span,
                 kind: BindingKind::Local,
             },
@@ -1218,9 +1218,6 @@ impl Parser<'_> {
         arguments: &[ParsedExpr],
         at: Span,
     ) -> Result<(), Error> {
-        if !self.drops() || matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) {
-            return Ok(());
-        }
         let by_reference = matches!(
             member,
             "is_some"
@@ -1236,13 +1233,48 @@ impl Parser<'_> {
                 | "take"
                 | "take_if"
                 | "replace"
+                | "insert"
+                | "get_or_insert"
+                | "get_or_insert_default"
                 | "get_or_insert_with"
                 | "clone"
                 | "eq"
                 | "ne"
                 | "as_slice"
                 | "to_owned"
+                | "cmp"
+                | "partial_cmp"
+                | "lt"
+                | "le"
+                | "gt"
+                | "ge"
+                | "hash"
         );
+        // `r.unwrap()` of an `&Option<String>`: a method that takes the
+        // value moves it out from behind the reference, rustc's E0507.
+        if let Ty::Reference { mutable, target } = self.inference.resolve(&value.ty) {
+            if !by_reference && self.moves_by_value(&target) {
+                let behind = if mutable { "mutable" } else { "shared" };
+                return Err(Error::BorrowConflict {
+                    code: "E0507",
+                    message: format!(
+                        "cannot move out of a value behind a {behind} reference by `{member}`"
+                    )
+                    .into(),
+                    access: at,
+                    borrow: at,
+                });
+            }
+            return Ok(());
+        }
+        // Without drops, a method that takes the value only moves it out of
+        // its place, as `o.unwrap()` does (T153).
+        if !self.drops() {
+            if !by_reference {
+                self.move_local(&mut value.clone())?;
+            }
+            return Ok(());
+        }
         // The part a method drops: the other variant's value, or an
         // argument, or the receiver itself.
         let discarded = match (member, result) {

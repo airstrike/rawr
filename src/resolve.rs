@@ -2477,6 +2477,9 @@ fn resolve_methods(
         })
         .collect::<BTreeMap<_, _>>();
 
+    // The default bodies an impl receives, which are lowered with it.
+    #[cfg(test)]
+    let mut received = std::collections::BTreeSet::<(ImmutableString, ImmutableString)>::new();
     for shell in items {
         let item::Kind::Impl(item) = &mut shell.kind else {
             continue;
@@ -2617,6 +2620,10 @@ fn resolve_methods(
                 }
             }
             for (function, from_trait) in implemented {
+                #[cfg(test)]
+                if from_trait {
+                    received.insert((name.text.clone(), function.name.text.clone()));
+                }
                 let source = if from_trait {
                     *trait_source
                 } else {
@@ -2729,6 +2736,19 @@ fn resolve_methods(
                 .in_generic_impl(&item.generics, owner_arguments(&item.owner));
             function.body.lowering = item::Lowering::NominalMethod(id);
             methods.push(definition);
+        }
+    }
+    // A default body no impl receives is not lowered: what it borrows and
+    // moves is left to `cargo check`.
+    #[cfg(test)]
+    for (name, (_, declared)) in &traits {
+        for (function, provided) in declared.functions.iter().zip(declared.provided.iter()) {
+            if *provided && !received.contains(&(name.clone(), function.name.text.clone())) {
+                crate::resolve::borrowck::note_unlowered(
+                    "a trait's default body that no impl receives",
+                    function.name.span,
+                );
+            }
         }
     }
 

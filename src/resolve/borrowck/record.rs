@@ -1020,6 +1020,11 @@ impl Recorder {
         });
     }
 
+    /// The place the use starting at `start` accesses.
+    pub(crate) fn place_at(&self, start: Position) -> Option<Place> {
+        self.mention_place(start).map(|(_, place)| place)
+    }
+
     /// The local whose use starts at `start`: its name and declaration.
     pub(crate) fn mentioned_local(&self, start: Position) -> Option<(ImmutableString, Span)> {
         let (_, place) = self.mention_place(start)?;
@@ -1292,6 +1297,11 @@ impl Recorder {
                 let upvar = self.hidden(&name, capture.declaration);
                 upvars.insert(local, (upvar, *capture));
             }
+        }
+        for (upvar, _) in upvars.values() {
+            self.body
+                .closure_entries
+                .push((Block(body.blocks.start), *upvar));
         }
         let inside = |point: Point| body.blocks.contains(&point.block.0);
         let mut places = Vec::<CapturePlace>::new();
@@ -1619,7 +1629,7 @@ impl Recorder {
     }
 
     /// Whether the value spanning `span` is a call's.
-    fn is_call(&self, span: Span) -> bool {
+    pub(crate) fn is_call(&self, span: Span) -> bool {
         let end = span.end();
         (self.arguments.contains_key(&end) || self.calls.contains(&end))
             && !self.constructors.contains(&end)

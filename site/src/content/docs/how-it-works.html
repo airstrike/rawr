@@ -12,7 +12,7 @@
 <p>In RawrGallery, an edit to a marked file was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
 
 <h2 id="borrowing">How does rawr handle borrow checking?</h2>
-<p>rawr checks the borrows of a function&rsquo;s locals as rustc does. A borrow ends at its last use along the function&rsquo;s control flow, through branches, loops, <code>break</code>, <code>continue</code>, <code>return</code> and <code>?</code>. rustc calls this rule non-lexical lifetimes (NLL). A conflict is reported with rustc&rsquo;s code: E0499, E0502, E0503, E0505, E0506, E0597 or E0716, and for a closure&rsquo;s capture E0373, E0500, E0501 or E0524. rawr also rejects a use after a move, as rustc&rsquo;s E0382 does.</p>
+<p>rawr checks the borrows of a function&rsquo;s locals as rustc does. A borrow ends at its last use along the function&rsquo;s control flow, through branches, loops, <code>break</code>, <code>continue</code>, <code>return</code> and <code>?</code>. rustc calls this rule non-lexical lifetimes (NLL). A conflict is reported with rustc&rsquo;s code: E0499, E0502, E0503, E0505, E0506, E0597 or E0716, and for a closure&rsquo;s capture E0373, E0500, E0501 or E0524. rawr also rejects a use after a move along the same control flow, as rustc&rsquo;s E0382 does, and a move out of what can&rsquo;t be moved out of, with rustc&rsquo;s E0507, E0508 or E0509.</p>
 <div class="block">
   <div class="file"><b>borrow.rs</b></div>
   <pre><code data-lang="rust">fn main() {

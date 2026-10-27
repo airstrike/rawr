@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | temporaries | regions | moved | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -20,8 +20,11 @@ captures `x`, and the variants go to `closure-moves/mutations`. With
 (`vec![&x].to_vec()`), and the variants go to `signatures/mutations`. With
 `regions`, the borrow is held at one region position of a value: an item a
 container gives, one lifetime of a type with two, or what an `Option`'s
-`map` returns, and the variants go to `regions/mutations`. rustc
-decides which are errors: run `record.py` on the folder afterwards.
+`map` returns, and the variants go to `regions/mutations`. With
+`moved`, `x` is moved before the statement, on a branch, in a loop, by a
+block's tail or a `match`, moved and given its value back, or bound by
+`ref` only, and the variants go to `moves/mutations`. rustc decides which
+are errors: run `record.py` on the folder afterwards.
 """
 
 import glob
@@ -37,6 +40,7 @@ CLOSURES = sys.argv[1:] == ["closures"]
 MOVES = sys.argv[1:] == ["moves"]
 TEMPORARIES = sys.argv[1:] == ["temporaries"]
 REGIONS = sys.argv[1:] == ["regions"]
+MOVED = sys.argv[1:] == ["moved"]
 OUT = os.path.join(
     HERE,
     "kept-mutations"
@@ -49,6 +53,8 @@ OUT = os.path.join(
     if TEMPORARIES
     else "regions/mutations"
     if REGIONS
+    else "moves/mutations"
+    if MOVED
     else "mutations",
 )
 SOURCES = sorted(
@@ -59,6 +65,7 @@ SOURCES = sorted(
     + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES or MOVES else [])
     + (glob.glob(os.path.join(HERE, "closure-moves/*.rs")) if MOVES else [])
     + (glob.glob(os.path.join(HERE, "regions/*.rs")) if REGIONS else [])
+    + (glob.glob(os.path.join(HERE, "moves/*.rs")) if MOVED else [])
 )
 HELPERS = """
 fn __touch<T>(_: &mut T) {}
@@ -74,6 +81,10 @@ struct __Hold<'a, T>(&'a T);
 TEMPORARY_HELPERS = """
 fn __id<T>(x: &T) -> &T { x }
 fn __see<T>(_: &T) {}
+fn __c() -> bool { false }
+"""
+MOVED_HELPERS = """
+fn __take<T>(_: T) {}
 fn __c() -> bool { false }
 """
 REGION_HELPERS = """
@@ -290,6 +301,35 @@ def region_variants(indent, name, statement):
     }
 
 
+def moved_variants(indent, name, statement):
+    """`name` moved, on some path or all, before `statement`, or moved and given back."""
+    i = indent
+    return {
+        "moved_before": [f"{i}__take({name});", statement],
+        "moved_after": [statement, f"{i}__take({name});"],
+        "moved_on_branch": [f"{i}if __c() {{ __take({name}); }}", statement],
+        "moved_on_diverging_branch": [
+            f"{i}if __c() {{",
+            f"{i}    __take({name});",
+            f"{i}    panic!();",
+            f"{i}}}",
+            statement,
+        ],
+        "moved_in_loop": [f"{i}for __i in 0..2 {{ if __c() {{ __take({name}); }} }}", statement],
+        "moved_and_given_back": [f"{i}let __m = {name};", f"{i}{name} = __m;", statement],
+        "moved_and_given_back_in_loop": [
+            f"{i}for __i in 0..2 {{",
+            f"{i}    let __m = {name};",
+            f"{i}    {name} = __m;",
+            f"{i}}}",
+            statement,
+        ],
+        "moved_by_block_tail": [f"{i}let __m = {{ {name} }};", statement],
+        "moved_by_match": [f"{i}match {name} {{ __v => __take(__v) }}", statement],
+        "bound_by_ref": [f"{i}let ref __v = {name};", statement],
+    }
+
+
 def main():
     out, sources = OUT, SOURCES
     if len(sys.argv) > 2:
@@ -318,6 +358,8 @@ def main():
                     if TEMPORARIES
                     else region_variants
                     if REGIONS
+                    else moved_variants
+                    if MOVED
                     else variants
                 )
                 written = mutate(indent, name, lines[target])
@@ -332,6 +374,8 @@ def main():
                             if TEMPORARIES
                             else REGION_HELPERS
                             if REGIONS
+                            else MOVED_HELPERS
+                            if MOVED
                             else HELPERS
                         )
                         file.write("\n".join(mutated) + "\n" + helpers)

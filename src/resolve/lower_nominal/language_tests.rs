@@ -1340,17 +1340,20 @@ fn language_result_methods() {
             let a: Result<i64, String> = Ok(4);
             let e: Result<i64, String> = Err(String::from("bad"));
             let none: Option<i64> = None;
-            let checks = a.is_ok() && e.is_err() && a.is_ok_and(|x| x == 4)
-                && e.is_err_and(|m| m.len() == 3) && !e.is_ok_and(|x| x == 4)
-                && a.ok() == Some(4) && e.ok().is_none() && a.err().is_none()
-                && e.err().unwrap() == "bad" && a.clone() == Ok(4) && a != e
-                && e == Err(String::from("bad"));
-            a.unwrap() + e.unwrap_or(10) + e.unwrap_or_else(|m| m.len() as i64 * 10)
-                + e.unwrap_or_default() + a.map(|x| x * 3).unwrap() * 10
-                + a.and_then(big).unwrap_or(0) * 100
-                + e.and_then(big).unwrap_or(5) * 1000
-                + e.map_err(|m| m.len() as i64).unwrap_err() * 10000
-                + e.or_else(|_m| -> Result<i64, i64> { Ok(6) }).unwrap() * 100000
+            // Each method that takes the value is given a clone, as rustc
+            // requires of a value used again.
+            let checks = a.is_ok() && e.is_err() && a.clone().is_ok_and(|x| x == 4)
+                && e.clone().is_err_and(|m| m.len() == 3) && !e.clone().is_ok_and(|x| x == 4)
+                && a.clone().ok() == Some(4) && e.clone().ok().is_none()
+                && a.clone().err().is_none() && e.clone().err().unwrap() == "bad"
+                && a.clone() == Ok(4) && a != e && e == Err(String::from("bad"));
+            a.clone().unwrap() + e.clone().unwrap_or(10)
+                + e.clone().unwrap_or_else(|m| m.len() as i64 * 10)
+                + e.clone().unwrap_or_default() + a.clone().map(|x| x * 3).unwrap() * 10
+                + a.clone().and_then(big).unwrap_or(0) * 100
+                + e.clone().and_then(big).unwrap_or(5) * 1000
+                + e.clone().map_err(|m| m.len() as i64).unwrap_err() * 10000
+                + e.clone().or_else(|_m| -> Result<i64, i64> { Ok(6) }).unwrap() * 100000
                 + if a.as_ref().is_ok() { 1 } else { 0 } + a.expect("present")
                 + e.unwrap_err().len() as i64
                 + Some(9).ok_or(String::from("none")).unwrap()

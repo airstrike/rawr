@@ -3,7 +3,7 @@
 <h1>Moves</h1>
 <p class="lede">A value that is not <code>Copy</code> moves when it is passed, assigned or stored by value, as in Rust. It drops with its last owner.</p>
 <h2 id="use-after-move">Use after a move</h2>
-<p>A use after a move fails the check, as rustc&rsquo;s E0382 does. <code>for x in v</code> moves <code>v</code>. <code>a + &amp;b</code> moves the <code>String</code> <code>a</code>.</p>
+<p>A use after a move fails the check, as rustc&rsquo;s E0382 does. <code>for x in v</code> moves <code>v</code>. <code>a + &amp;b</code> moves the <code>String</code> <code>a</code>. A method that takes its value, as <code>o.unwrap()</code> does, moves it. A value moved on one branch, or in a loop&rsquo;s earlier iteration, is moved where the paths meet.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="use-after-move.rs" id="src-use-after-move">let a = String::from("ra");
 let b = a + "wr";
@@ -12,7 +12,7 @@ println!("{a}"); // error: `a` was moved</code></pre>
 </div>
 <p>Run shows the check&rsquo;s error. Write <code>a.clone() + "wr"</code> and the program prints <code>ra</code>.</p>
 <h2 id="partial">Partial moves</h2>
-<p>Moving one field out of a struct leaves its other fields usable. Assigning the field again makes it usable. A <code>let</code> or <code>match</code> pattern moves each part it binds by value.</p>
+<p>Moving one field out of a struct leaves its other fields usable. So does moving a tuple&rsquo;s member, as <code>let b = t.1;</code> does, or a field below a field, as <code>let b = s.inner.b;</code> does. Assigning the part again makes it usable. A <code>let</code>, <code>if let</code> or <code>match</code> pattern moves each part it binds by value, and a closure moves the parts its body moves out.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="partial-move.rs" id="src-partial-move">struct Person {
     name: String,
@@ -62,7 +62,7 @@ drop a</span></div>
 </div>
 <p>Some places cannot drop such a value where Rust does yet, and the check says so. They are an <code>Rc</code>, an <code>Arc</code>, a <code>RefCell</code>, a map or a set holding it, a <code>move</code> closure or <code>async</code> block that takes it, an <code>async fn</code> parameter, and an iterator over it. <code>Vec</code> methods that drop elements other than <code>truncate</code> and <code>clear</code> are refused too. A panic does not run <code>drop</code>.</p>
 <h2 id="out-of">Moving out of an index or a reference</h2>
-<p>Moving a value out of an index, or out of a field behind a reference, fails the check as rustc&rsquo;s E0507 does. Borrow it or clone it instead.</p>
+<p>Moving a value out of an index, or out of a field behind a reference or an <code>Rc</code>, fails the check as rustc&rsquo;s E0507 does. Moving an element out of an array is E0508. Moving a field out of a type with <code>impl Drop</code> is E0509. Borrow it or clone it instead.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="clone-out.rs" id="src-clone-out">let v = vec![String::from("x")];
 let s = v[0].clone(); // `let s = v[0];` is E0507

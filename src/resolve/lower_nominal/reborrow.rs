@@ -199,7 +199,6 @@ impl Parser<'_> {
                 // borrow is `mutable`.
                 mutable: true,
                 available: true,
-                moved_fields: Default::default(),
                 declaration,
                 kind: BindingKind::Local,
             },
