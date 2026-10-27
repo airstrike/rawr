@@ -353,6 +353,9 @@ pub struct Signature {
     /// (`representability::signature::Scope`, D558 tier 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<representability::signature::Scope>,
+    /// Its callable parameters take a script function as a slot (D594).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    crossing: bool,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -2147,6 +2150,13 @@ impl Signature {
     pub const fn guard(&self) -> Option<representability::signature::Guard> {
         self.guard
     }
+
+    /// Whether a script function fills each callable parameter as a slot
+    /// (D594).
+    #[must_use]
+    pub const fn crossing(&self) -> bool {
+        self.crossing
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -2299,6 +2309,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 relations: Box::default(),
                 guard: None,
                 scope: None,
+                crossing: false,
             },
         ),
         Representability::Value(_)
@@ -2336,9 +2347,17 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Method { .. } => return Ok(None),
                 _ => return Err(super::Error::ForeignIdentity),
             },
-            match plan.call() {
-                Some(call) => callable_signature(plan.signature(), call)?,
-                None => signature(plan.signature())?,
+            if plan.crossings().is_empty() {
+                match plan.call() {
+                    Some(call) => callable_signature(plan.signature(), &[call])?,
+                    None => signature(plan.signature())?,
+                }
+            } else {
+                // A script function fills each callable as a slot (D594).
+                let calls = plan.crossings().iter().collect::<Vec<_>>();
+                let mut signature = callable_signature(plan.signature(), &calls)?;
+                signature.crossing = true;
+                signature
             },
         ),
         Representability::Invocation(plan) => (
@@ -2355,7 +2374,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             // A closure the item takes, as `PaneGrid::new(&state, view)`'s,
             // is the closure's type, as a function item's is.
             match plan.call() {
-                Some(call) => callable_signature(plan.signature(), call)?,
+                Some(call) => callable_signature(plan.signature(), &[call])?,
                 None => signature(plan.signature())?,
             },
         ),
@@ -2394,6 +2413,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        crossing: false,
     })
 }
 
@@ -2477,18 +2497,22 @@ fn relations(
 /// closure: the parameter is the closure's type, and is no type parameter.
 fn callable_signature(
     source: &representability::signature::Signature,
-    call: &representability::callable::Call,
+    calls: &[&representability::callable::Call],
 ) -> Result<Signature, super::Error> {
     let kept = source
         .parameters()
         .iter()
-        .filter(|parameter| parameter.index() != call.parameter())
+        .filter(|parameter| {
+            calls
+                .iter()
+                .all(|call| parameter.index() != call.parameter())
+        })
         .cloned()
         .collect::<Vec<_>>();
     let parameters = parameters(&kept)?;
     let bounds = bounds(&kept)?;
     let all = source.parameters();
-    let closure = || -> Result<Type, super::Error> {
+    let closure = |call: &representability::callable::Call| -> Result<Type, super::Error> {
         let input = match call.inputs() {
             [] => Type::Unit,
             [single] => ty(single, all)?,
@@ -2509,10 +2533,12 @@ fn callable_signature(
         .map_err(|_| super::Error::Allocation)?;
     for input in source.inputs() {
         inputs.push(
-            if *input == representability::convert::Type::Parameter(call.parameter()) {
-                closure()?
-            } else {
-                ty(input, all)?
+            match calls
+                .iter()
+                .find(|call| *input == representability::convert::Type::Parameter(call.parameter()))
+            {
+                Some(call) => closure(call)?,
+                None => ty(input, all)?,
             },
         );
     }
@@ -2526,6 +2552,7 @@ fn callable_signature(
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        crossing: false,
     })
 }
 

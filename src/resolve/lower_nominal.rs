@@ -856,10 +856,14 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
         },
-        _ => {
+        other => {
             return Err(Error::InvalidHostOperation {
                 item: "<imported generic instance>".into(),
-                reason: "imported generic argument is not one exact concrete surface type".into(),
+                reason: format!(
+                    "imported generic argument `{}` is not one exact concrete surface type",
+                    other.name(models)
+                )
+                .into(),
                 operation,
             });
         }

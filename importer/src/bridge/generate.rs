@@ -5509,6 +5509,19 @@ fn render_adapter_body(
                 });
             }
             let crossed = Crossed { slots, crossings };
+            if signature.scope().is_some() && replay.is_none() {
+                render_anchored_opening(
+                    plan,
+                    signature,
+                    substitutions,
+                    constants,
+                    functions,
+                    mappers,
+                    *container_parameters,
+                    *associated,
+                    output,
+                )?;
+            }
             if replay.is_some() {
                 render_function_arguments(
                     signature,
@@ -6040,6 +6053,104 @@ fn render_opening(
         result
     }}){with};
     Ok(Dynamic::from(output))"
+    )
+    .map_err(encoding)
+}
+
+/// A call whose output borrows its `&str` inputs, made while a slot's
+/// region is open (D594): `view(&state)`'s `text(&state.label)`. The output
+/// goes in that region, whose lifetime is the lent value's, and each string
+/// it borrows is pinned in the lent value, so the slot gives native code
+/// the output at that lifetime. Pinning holds the string's shared handle,
+/// so no text is copied. Elsewhere the call opens a frame of its own
+/// (`render_opening`).
+#[allow(clippy::too_many_arguments)]
+fn render_anchored_opening(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    functions: &[crate::surface::adapter::FunctionItem],
+    mappers: &[crate::surface::adapter::EventMapper],
+    container_parameters: usize,
+    associated: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    if !functions.is_empty() || !mappers.is_empty() {
+        return Ok(());
+    }
+    let mut call = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        associated,
+        &mut call,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(encoding)?;
+    function_argument_list(
+        signature,
+        substitutions,
+        functions,
+        mappers,
+        None,
+        Crossed::default(),
+        &mut call,
+    )?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let mut taken = Vec::new();
+    let mut pinned = String::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if matches!(input, convert::Type::Builtin(convert::Builtin::Str)) {
+            writeln!(
+                taken,
+                "        let argument_{position}_text = (**arguments.values.get_mut({position}).ok_or(Error::MissingArgument)?).take().into_immutable_string().map_err(|_| Error::TypeMismatch)?;"
+            )
+            .map_err(encoding)?;
+            pinned.push_str(&format!(
+                "\n            let argument_{position} = pins.pin(argument_{position}_text);"
+            ));
+        } else {
+            render_take_input(
+                position,
+                position,
+                input,
+                signature,
+                substitutions,
+                None,
+                &mut taken,
+            )?;
+        }
+    }
+    let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;{pinned}
+            let made = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(\"a slot's region\", error))?;
+    }}"
     )
     .map_err(encoding)
 }
