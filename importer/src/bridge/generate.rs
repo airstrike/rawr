@@ -1134,6 +1134,17 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
 }
 
+/// The first value of a scope frame's region in the array at `index`, as
+/// `column![..]`'s elements are.
+#[allow(dead_code)]
+fn scoped_item(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
+    let value = arguments.values.get(index)?;
+    let items = value.read_lock::<__rawr_internal::Array>()?;
+    items
+        .iter()
+        .find_map(|item| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
+}
+
 /// A value native code lent the call (D558.3) that an argument reaches,
 /// erased: its type is `'static`, as ratatui's `ListState` is.
 #[allow(dead_code)]
@@ -4144,7 +4155,7 @@ fn render<B: crate::surface::Runner>(
     profile: &crate::profile::Proof,
 ) -> Result<Product, request::Error> {
     let harness = native.runner_harness(request.allocation.limits().1)?;
-    let lock = runner_lock(harness.lock())?;
+    let mut hidden = Vec::new();
     let mut sources = Vec::new();
     let mut spans = Vec::new();
     spans
@@ -4158,10 +4169,12 @@ fn render<B: crate::surface::Runner>(
         profile,
         request.compile_snapshot(),
         request.facade_plan(),
+        (harness.lock(), &mut hidden),
         &mut sources,
         &mut spans,
     )?;
-    let manifest = runner_manifest(harness.manifest(), named.as_deref())?;
+    let lock = runner_lock(harness.lock(), &hidden)?;
+    let manifest = runner_manifest(harness.manifest(), named.as_deref(), &hidden)?;
     let source = encode_sources(&sources)?;
     let mut source_map = Vec::new();
     super::source_map::write(request, &spans, &mut source_map)?;
@@ -4239,7 +4252,86 @@ fn expected_parts<B>(
     })
 }
 
-fn runner_manifest(bytes: &[u8], binary: Option<&str>) -> Result<Vec<u8>, request::Error> {
+/// A crate a macro's `$crate` names (`__rawr_crate_<name>_<id>`), which the
+/// runner depends on directly under that segment, as Rust's `$crate`
+/// reaches it whether or not the root re-exports it: the segment, the
+/// package's name and version, and its source as the lock writes it.
+struct HiddenCrate {
+    segment: String,
+    package: String,
+    version: String,
+    source: String,
+}
+
+/// The crate `segment` names, when the lock holds exactly one package of
+/// its name from a source a manifest can name.
+fn hidden_crate(lock: &[u8], segment: &str) -> Option<HiddenCrate> {
+    let name = segment
+        .strip_prefix(crate::api::ledger::CRATE_SEGMENT)?
+        .rsplit_once('_')?
+        .0;
+    let document = std::str::from_utf8(lock)
+        .ok()?
+        .parse::<DocumentMut>()
+        .ok()?;
+    let packages = document.get("package")?.as_array_of_tables()?;
+    let mut found = packages.iter().filter(|package| {
+        package
+            .get("name")
+            .and_then(Item::as_str)
+            .is_some_and(|package| package.replace('-', "_") == name)
+    });
+    let package = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    let source = package.get("source").and_then(Item::as_str)?;
+    (source.starts_with("git+")
+        || source == "registry+https://github.com/rust-lang/crates.io-index")
+        .then(|| HiddenCrate {
+            segment: segment.to_owned(),
+            package: package
+                .get("name")
+                .and_then(Item::as_str)
+                .unwrap_or(name)
+                .to_owned(),
+            version: package
+                .get("version")
+                .and_then(Item::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            source: source.to_owned(),
+        })
+}
+
+/// `hidden`'s dependency table: the package at its locked source, with no
+/// features of its own, so its unit is the one the root's crates build.
+fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
+    let mut table = toml_edit::InlineTable::new();
+    table.insert("package", hidden.package.as_str().into());
+    if let Some(git) = hidden.source.strip_prefix("git+") {
+        let (url, _) = git.split_once('#').unwrap_or((git, ""));
+        let (url, query) = url.split_once('?').unwrap_or((url, ""));
+        table.insert("git", url.into());
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=')
+                && matches!(key, "rev" | "branch" | "tag")
+            {
+                table.insert(key, value.into());
+            }
+        }
+    } else {
+        table.insert("version", format!("={}", hidden.version).into());
+    }
+    table.insert("default-features", false.into());
+    table
+}
+
+fn runner_manifest(
+    bytes: &[u8],
+    binary: Option<&str>,
+    hidden: &[HiddenCrate],
+) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
         reason: error.to_string().into_boxed_str(),
     })?;
@@ -4266,6 +4358,21 @@ fn runner_manifest(bytes: &[u8], binary: Option<&str>) -> Result<Vec<u8>, reques
     package.insert("edition", value("2024"));
     package.insert("build", value(BUILD_PATH));
     document.remove("lib");
+    // Each crate a macro's `$crate` names, as Rust reaches it.
+    if !hidden.is_empty() {
+        let dependencies = document
+            .get_mut("dependencies")
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| request::Error::Manifest {
+                reason: "final-form harness has no dependencies table".into(),
+            })?;
+        for hidden in hidden {
+            dependencies.insert(
+                &hidden.segment,
+                Item::Value(toml_edit::Value::InlineTable(hidden_dependency(hidden))),
+            );
+        }
+    }
     // The binary is the script crate's name; the build gives it the name
     // `rawr-generated-runner` as well (`runner::build::name_binary`).
     if let Some(binary) = binary.filter(|binary| *binary != RUNNER_BINARY) {
@@ -4299,7 +4406,7 @@ fn share_harness_units(document: &mut DocumentMut) -> Result<(), request::Error>
     Ok(())
 }
 
-fn runner_lock(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
+fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
         reason: error.to_string().into_boxed_str(),
     })?;
@@ -4323,6 +4430,34 @@ fn runner_lock(bytes: &[u8]) -> Result<Vec<u8>, request::Error> {
             && !package.contains_key("source")
         {
             package.insert("name", value("rawr-generated-runner"));
+            // The runner depends on each crate a macro's `$crate` names.
+            if !hidden.is_empty() {
+                let dependencies = package
+                    .entry("dependencies")
+                    .or_insert(toml_edit::value(toml_edit::Array::new()))
+                    .as_array_mut()
+                    .ok_or_else(|| request::Error::Manifest {
+                        reason: "final-form harness lock root dependencies are not a list".into(),
+                    })?;
+                for hidden in hidden {
+                    if !dependencies
+                        .iter()
+                        .any(|dependency| dependency.as_str() == Some(hidden.package.as_str()))
+                    {
+                        dependencies.push(hidden.package.as_str());
+                    }
+                }
+                let mut sorted = dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                sorted.sort();
+                let mut array = toml_edit::Array::new();
+                for dependency in sorted {
+                    array.push(dependency);
+                }
+                *dependencies = array;
+            }
             roots += 1;
         }
     }
@@ -4360,12 +4495,14 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
     output
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_source(
     plans: &[Plan],
     surface: crate::surface::Fingerprint,
     profile: &crate::profile::Proof,
     compile_snapshot: bool,
     facade_plan: Option<&[u8]>,
+    (lock, hidden): (&[u8], &mut Vec<HiddenCrate>),
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
 ) -> Result<Option<String>, request::Error> {
@@ -4412,12 +4549,37 @@ fn render_source(
     let _type_paths = TypePaths::install(facade.as_ref(), profile.has_generated_projections());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
-            // A macro's `$crate` path to a trait is no Rust path; the
-            // trait's spelling through the root brings it into scope.
-            for path in facade
-                .traits()
-                .filter(|path| !path.contains(crate::api::ledger::CRATE_SEGMENT))
-            {
+            // A macro's `$crate` path to a trait names the crate that
+            // defines it, which the runner depends on as Rust's `$crate`
+            // reaches it (`HiddenCrate`).
+            for path in facade.traits() {
+                if path.contains(crate::api::ledger::CRATE_SEGMENT) {
+                    let Some((segment, rest)) = path
+                        .split("::")
+                        .position(|segment| segment.starts_with(crate::api::ledger::CRATE_SEGMENT))
+                        .map(|at| {
+                            let segments = path.split("::").collect::<Vec<_>>();
+                            (segments[at].to_owned(), segments[at + 1..].join("::"))
+                        })
+                    else {
+                        continue;
+                    };
+                    if rest.is_empty() {
+                        continue;
+                    }
+                    if !hidden.iter().any(|known| known.segment == segment) {
+                        let Some(found) = hidden_crate(lock, &segment) else {
+                            continue;
+                        };
+                        hidden.push(found);
+                    }
+                    writeln!(
+                        stamps,
+                        "#[allow(unused_imports, deprecated)]\npub(super) use ::{segment}::{rest} as _;"
+                    )
+                    .map_err(|_| request::Error::Encoding)?;
+                    continue;
+                }
                 writeln!(
                     stamps,
                     "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
@@ -5314,7 +5476,7 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
             .join(", ");
         writeln!(
             output,
-            "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index)) {{
+            "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
@@ -5384,7 +5546,16 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             continue;
         }
         let ty = substituted(input, signature, substitutions)?;
-        if family_of(&ty).is_some() {
+        // A value of a region, or an array of them, as `Column::
+        // with_children` takes `column![..]`'s elements.
+        let element = match &ty {
+            convert::Type::Sequence {
+                element,
+                owned: true,
+            } => element,
+            ty => ty,
+        };
+        if family_of(element).is_some() {
             region.push(index);
         }
     }
@@ -5540,7 +5711,8 @@ fn render_adapter_body(
                 });
             }
             let crossed = Crossed { slots, crossings };
-            if signature.scope().is_some() && replay.is_none() {
+            let opens = instance_opens(signature, substitutions);
+            if opens && replay.is_none() {
                 render_anchored_opening(
                     plan,
                     signature,
@@ -5578,7 +5750,7 @@ fn render_adapter_body(
                     output,
                 )?;
             }
-            if signature.scope().is_some() {
+            if opens {
                 render_opening(
                     plan,
                     signature,
@@ -6023,6 +6195,40 @@ fn render_adapter_body(
     Ok(())
 }
 
+/// Whether `input` is a `&str` the call borrows: written so, or a type
+/// parameter the instance fills with `&str`, as a string literal fills
+/// `button(content: W)` (Rust's `&'static str`).
+fn lends_str(
+    input: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> bool {
+    match input {
+        convert::Type::Builtin(convert::Builtin::Str) => true,
+        convert::Type::Parameter(_) => matches!(
+            substituted(input, signature, substitutions),
+            Ok(convert::Type::Borrowed { mutable: false, ty })
+                if matches!(*ty, convert::Type::Builtin(convert::Builtin::Str))
+        ),
+        _ => false,
+    }
+}
+
+/// Whether the call's output borrows what it takes, so it opens a scope
+/// frame (D558 tier 1): as its signature says, or because the instance
+/// fills a type parameter the output names with a `&str`.
+fn instance_opens(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> bool {
+    signature.scope().is_some()
+        || signature.inputs().iter().any(|input| {
+            matches!(input, convert::Type::Parameter(index)
+                if output_names(signature.output(), *index)
+                    && lends_str(input, signature, substitutions))
+        })
+}
+
 /// A call whose output borrows its `&str` inputs (D558 tier 1), as
 /// `Parser::new(&text)`: it gives a scope frame the `let` that binds it
 /// opens. The frame owns the inputs the adapter took, makes the output,
@@ -6085,7 +6291,7 @@ fn render_opening(
         before,
         back,
         with,
-    } = frame_copies(signature)?;
+    } = frame_copies(signature, substitutions)?;
     writeln!(
         output,
         "    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
@@ -6168,7 +6374,7 @@ fn render_anchored_opening(
     let mut taken = Vec::new();
     let mut pinned = String::new();
     for (position, input) in signature.inputs().iter().enumerate() {
-        if matches!(input, convert::Type::Builtin(convert::Builtin::Str)) {
+        if lends_str(input, signature, substitutions) {
             writeln!(
                 taken,
                 "        let argument_{position}_text = (**arguments.values.get_mut({position}).ok_or(Error::MissingArgument)?).take().into_immutable_string().map_err(|_| Error::TypeMismatch)?;"
@@ -6219,11 +6425,12 @@ struct FrameCopies {
 
 fn frame_copies(
     signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
 ) -> Result<FrameCopies, request::Error> {
     let copies = copied_inputs(signature);
     let mut rebound = String::new();
     for (position, input) in signature.inputs().iter().enumerate() {
-        if matches!(input, convert::Type::Builtin(convert::Builtin::Str)) {
+        if lends_str(input, signature, substitutions) {
             rebound.push_str(&format!(
                 "\n        let argument_{position} = argument_{position}_owned.as_str();"
             ));
@@ -6337,7 +6544,7 @@ fn render_method_opening(
         before,
         back,
         with,
-    } = frame_copies(signature)?;
+    } = frame_copies(signature, &[])?;
     let name = format!("{}::{}", rust_path(plan), plan.name());
     // The frame itself, once the call has made its output.
     let frame = format!(
@@ -8721,6 +8928,27 @@ fn render_take_input(
             output,
         );
     }
+    // An array of a scope frame's region's values, each moved out of it
+    // into the call, as `Column::with_children` takes `column![..]`'s
+    // elements.
+    if REGION_ARGUMENTS.get()
+        && let convert::Type::Sequence {
+            element,
+            owned: true,
+        } = substituted(ty, signature, substitutions)?
+        && let Some(family) = family_of(&element)
+    {
+        // An element made outside any region is in the arena, at
+        // `'static`, which the region's lifetime shortens.
+        let rust = concrete_type(&element).ok_or(request::Error::Drift {
+            field: "a region array's element",
+        })?;
+        return writeln!(
+            output,
+            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle)) }} }}).collect::<Result<Vec<_>, Error>>())?;"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     // A value of a scope frame's region, moved out of it into the call
     // (D558 tier 1), as `push_html` takes a `Parser`.
     if REGION_ARGUMENTS.get()
@@ -8731,6 +8959,16 @@ fn render_take_input(
             "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? }};"
         )
         .map_err(|_| request::Error::Encoding);
+    }
+    // A type parameter a `&str` fills, as a string literal fills iced's
+    // `button(content: W)`: a `&str` input.
+    if matches!(ty, convert::Type::Parameter(_)) && lends_str(ty, signature, substitutions) {
+        return render_take(
+            local,
+            index,
+            &convert::Type::Builtin(convert::Builtin::Str),
+            output,
+        );
     }
     let generic = matches!(ty, convert::Type::Parameter(_));
     let ty = substitute(ty, signature, substitutions)?;
@@ -10181,7 +10419,10 @@ fn container_family(path: &str, container: &str) -> Option<String> {
     let path = canonical.as_deref().unwrap_or(path);
     // A borrowed type argument, as `Reader<&[u8]>`'s, borrows at `'x`.
     let borrowed = rest.contains('&');
-    if lifetimes.count == 0 && !borrowed {
+    // So does a type argument that is a scoped type, as `Column<Element<'x,
+    // ..>>`'s.
+    let (rest, inner) = mark_scoped_arguments(rest);
+    if lifetimes.count == 0 && !borrowed && !inner {
         return None;
     }
     let rest = rest.replace("&[", "&'x [").replace("&str", "&'x str");
@@ -10193,6 +10434,43 @@ fn container_family(path: &str, container: &str) -> Option<String> {
         None => return None,
     };
     Some(family(text, lifetimes))
+}
+
+/// `rest`, a container's type arguments as Rust spells them, with each
+/// scoped type in it given its lifetimes at `'x`, and whether there was one.
+fn mark_scoped_arguments(rest: &str) -> (String, bool) {
+    let scoped = SCOPED_TYPES.with_borrow(|types| {
+        TYPE_PATHS.with_borrow(|paths| {
+            types
+                .iter()
+                .filter(|(_, lifetimes)| lifetimes.count != 0)
+                .filter_map(|(identity, lifetimes)| {
+                    Some((paths.get(identity)?.clone(), lifetimes.count))
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+    let mut text = rest.to_owned();
+    let mut marked = false;
+    for (path, count) in scoped {
+        let open = format!("{path}<");
+        let mut at = 0;
+        while let Some(found) = text[at..].find(&open) {
+            let start = at + found;
+            let boundary = text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|before| matches!(before, '<' | ' ' | ',' | '&' | '('));
+            let end = start + open.len();
+            if boundary && !text[end..].starts_with('\'') {
+                let marks = vec!["'x"; count as usize].join(", ");
+                text.insert_str(end, &format!("{marks}, "));
+                marked = true;
+            }
+            at = end;
+        }
+    }
+    (text, marked)
 }
 
 /// The proxies of the script types the adapters named (D594), each at its
@@ -10332,6 +10610,23 @@ use super::*;
     Ok(())
 }
 
+/// The type `alias` names when it passes its own parameters on, all and
+/// in order, as `type Text<'a, Theme = ..> = core::Text<'a, Theme>` does.
+fn passed_on(alias: &crate::surface::facade::TypeAlias) -> Option<[u8; 32]> {
+    let crate::surface::facade::Type::Nominal {
+        identity,
+        arguments,
+    } = alias.target()
+    else {
+        return None;
+    };
+    (arguments.len() == alias.parameters().len()
+        && arguments.iter().zip(alias.parameters()).all(|(argument, parameter)| {
+            matches!(argument, crate::surface::facade::Type::Parameter(name) if **name == *parameter)
+        }))
+    .then_some(*identity)
+}
+
 /// Fills `TYPE_PATHS` for one generation and empties it when dropped.
 struct TypePaths;
 
@@ -10354,10 +10649,36 @@ impl TypePaths {
                     .flat_map(|owner| owner.types().map(move |ty| (owner, ty)));
                 let (plain, through): (Vec<_>, Vec<_>) =
                     types.partition(|(_, ty)| !through_crate(ty.path()));
-                for (owner, ty) in plain.into_iter().chain(through) {
+                for (owner, ty) in &plain {
                     let path = format!("{}::{}", owner.root(), ty.path());
                     // The facade's own value at this path, as a view's
                     // builder takes `iced::Length` (D558 tier 2).
+                    let facade = *crate::surface::identity::Definition::facade(&path).as_bytes();
+                    values.insert(facade);
+                    paths.entry(facade).or_insert_with(|| path.clone());
+                    paths.entry(*ty.identity()).or_insert(path);
+                }
+                // A type the root reaches only through a crate's alias that
+                // passes its parameters on in order, as iced's `widget::Text<
+                // 'a, Theme> = core::widget::Text<'a, Theme>`: the alias
+                // spells it.
+                for owner in facade
+                    .into_iter()
+                    .flat_map(crate::surface::facade::Plan::facades)
+                {
+                    for alias in owner
+                        .type_aliases()
+                        .filter(|alias| !through_crate(alias.path()))
+                    {
+                        if let Some(identity) = passed_on(alias) {
+                            paths
+                                .entry(identity)
+                                .or_insert_with(|| format!("{}::{}", owner.root(), alias.path()));
+                        }
+                    }
+                }
+                for (owner, ty) in through {
+                    let path = format!("{}::{}", owner.root(), ty.path());
                     let facade = *crate::surface::identity::Definition::facade(&path).as_bytes();
                     values.insert(facade);
                     paths.entry(facade).or_insert_with(|| path.clone());
@@ -11383,7 +11704,7 @@ mod tests {
     #[test]
     fn runner_manifest_makes_only_the_runner_unit_incremental() {
         let harness = b"[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n[dependencies]\niced = \"0.14\"\n";
-        let manifest = super::runner_manifest(harness, None).unwrap();
+        let manifest = super::runner_manifest(harness, None, &[]).unwrap();
         let document = std::str::from_utf8(&manifest)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
@@ -11404,7 +11725,8 @@ mod tests {
         assert!(document.get("lib").is_none());
         assert!(super::runner_manifest(
             b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n",
-            None
+            None,
+            &[]
         )
         .is_err());
     }

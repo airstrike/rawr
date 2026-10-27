@@ -154,6 +154,10 @@ pub struct Registry {
     aliases: Vec<(path::Path, path::Path)>,
     /// Crate type aliases, sorted by path (`iced::Result`).
     type_aliases: Vec<facade::TypeAlias>,
+    /// The traits Rawr code names, sorted by path, and the crates' trait
+    /// impls (D604).
+    trait_headers: Vec<facade::TraitHeader>,
+    impl_headers: Vec<facade::ImplHeader>,
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
@@ -218,6 +222,8 @@ impl Registry {
             facades: Vec::new(),
             aliases: Vec::new(),
             type_aliases: Vec::new(),
+            trait_headers: Vec::new(),
+            impl_headers: Vec::new(),
             exported: Vec::new(),
         }
     }
@@ -373,6 +379,20 @@ impl Registry {
         for alias in &self.type_aliases {
             clone.type_aliases.push(alias.try_clone()?);
         }
+        clone
+            .trait_headers
+            .try_reserve_exact(self.trait_headers.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for header in &self.trait_headers {
+            clone.trait_headers.push(header.try_clone()?);
+        }
+        clone
+            .impl_headers
+            .try_reserve_exact(self.impl_headers.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for header in &self.impl_headers {
+            clone.impl_headers.push(header.try_clone()?);
+        }
         clone.exported.clone_from(&self.exported);
         Ok(clone)
     }
@@ -518,6 +538,16 @@ impl Registry {
         self.type_aliases.extend(parts.type_aliases);
         self.type_aliases
             .sort_by(|left, right| left.path().cmp(right.path()));
+        self.trait_headers
+            .try_reserve(parts.trait_headers.len())
+            .map_err(|_| Error::Allocation)?;
+        self.trait_headers.extend(parts.trait_headers);
+        self.trait_headers
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        self.impl_headers
+            .try_reserve(parts.impl_headers.len())
+            .map_err(|_| Error::Allocation)?;
+        self.impl_headers.extend(parts.impl_headers);
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
@@ -1082,6 +1112,30 @@ impl Registry {
                 .map(|index| &self.type_aliases[index])
         };
         found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
+    #[cfg(feature = "rust-import")]
+    /// The header of the crate trait at `path`, or at the path a facade
+    /// re-export of it names (D604).
+    pub(crate) fn trait_header(&self, path: &path::Path) -> Option<&facade::TraitHeader> {
+        let found = |path: &path::Path| {
+            self.trait_headers
+                .binary_search_by(|header| header.path.cmp(path))
+                .ok()
+                .map(|index| &self.trait_headers[index])
+        };
+        found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
+    /// The crates' impls of the trait whose identity is `identity` (D604).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn impl_headers(
+        &self,
+        identity: [u8; 32],
+    ) -> impl Iterator<Item = &facade::ImplHeader> {
+        self.impl_headers
+            .iter()
+            .filter(move |header| header.trait_identity == identity)
     }
 
     /// The builtin a facade names at `path` (`Entry::Builtin`).

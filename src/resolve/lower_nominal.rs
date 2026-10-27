@@ -394,6 +394,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                         parser.return_ty = Some(expected.clone());
                         parser.revealing = Some(expected.clone());
                         parser.parse_function_body(definition)?;
+                        parser.fix_opaque(output, &expected)?;
                         let hidden = parser.inference.resolve(&expected);
                         named_output(output, &hidden, &parser.models)
                     });
@@ -431,6 +432,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                         parser.return_ty = Some(expected.clone());
                         parser.revealing = Some(expected.clone());
                         parser.parse_method_body(definition)?;
+                        parser.fix_opaque(output, &expected)?;
                         let hidden = parser.inference.resolve(&expected);
                         named_output(output, &hidden, &parser.models)
                     });
@@ -756,7 +758,16 @@ fn imported_surface_type(
                 inference, models, element, operation, imported,
             )?))
         }
-        Ty::String | Ty::Str => Type::Builtin(Builtin::String),
+        Ty::String => Type::Builtin(Builtin::String),
+        // A `&str`, as a string literal is: a crate's type parameter it
+        // fills is `&'static str` in Rust, not `String`.
+        Ty::Str => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Borrowed {
+                mutable: false,
+                ty: Box::new(Type::Builtin(Builtin::Str)),
+            }
+        }
         Ty::ProfileMessage { payload, seal, .. } => {
             // The mapper is inline in the outer Type; its payload owns one
             // complete boxed Type in addition to any nested allocations.
@@ -952,7 +963,11 @@ fn instance_surface_type(
         Ty::Range(element) => {
             Type::Range(Box::new(instance_surface_type(inference, models, element)?))
         }
-        Ty::String | Ty::Str => Type::Builtin(Builtin::String),
+        Ty::String => Type::Builtin(Builtin::String),
+        Ty::Str => Type::Borrowed {
+            mutable: false,
+            ty: Box::new(Type::Builtin(Builtin::Str)),
+        },
         Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
             mapper: *seal,
             payload: Box::new(instance_surface_type(inference, models, payload)?),
@@ -10769,6 +10784,220 @@ impl<'a> Parser<'a> {
             return revealing.clone();
         }
         output.map_or(Ty::Unit, Ty::from_resolved)
+    }
+
+    /// D604: the type parameters of `hidden`, the body's type for a return
+    /// type's `impl Trait<..>`, that only the trait's defaults and the
+    /// crate's impls decide, as `fn view(&self) -> impl Widget<Message>`
+    /// leaves the `Renderer` of `Column<Element<Message, Theme, _>>`. The
+    /// trait's written arguments and its defaults are the goal, and the one
+    /// impl whose self type and arguments fit it fixes them, then each of
+    /// its where-clause bounds the same way. Nothing else is selected:
+    /// method lookup and other inference are as before.
+    #[cfg(feature = "rust-import")]
+    fn fix_opaque(&mut self, written: &type_ref::Type, hidden: &Ty) -> Result<(), Error> {
+        let Some(trait_name) = written.opaque_trait() else {
+            return Ok(());
+        };
+        let resolved = self.inference.resolve(hidden);
+        if !contains_inference(&resolved) || matches!(resolved, Ty::Infer(_)) {
+            return Ok(());
+        }
+        let Ok(path) = crate::host::path::Path::parse(trait_name) else {
+            return Ok(());
+        };
+        let Some(header) = self.models.host.trait_header(&path).cloned() else {
+            return Ok(());
+        };
+        // The facade that declares the trait, whose types its headers name.
+        let owner = self.models.host.type_owner(trait_name).cloned();
+        let type_ref::Type::Path(opaque) = written else {
+            return Ok(());
+        };
+        let written_arguments = opaque
+            .arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                type_ref::Argument::Type(ty) => Some(Ty::from_resolved(ty)),
+                type_ref::Argument::Lifetime(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut parameters = BTreeMap::new();
+        let mut arguments = Vec::with_capacity(header.parameters.len());
+        for (index, name) in header.parameters.iter().enumerate() {
+            let ty = match written_arguments.get(index) {
+                Some(ty) => ty.clone(),
+                None => match header.defaults.get(index).and_then(Option::as_ref) {
+                    Some(default) => self.instantiate_host_type(
+                        default,
+                        &mut parameters,
+                        trait_name,
+                        owner.as_ref(),
+                        None,
+                    )?,
+                    None => self.inference.fresh(),
+                },
+            };
+            parameters.insert(name.clone(), ty.clone());
+            arguments.push(ty);
+        }
+        let span = match written {
+            type_ref::Type::Unit(span)
+            | type_ref::Type::Tuple { span, .. }
+            | type_ref::Type::Reference { span, .. } => *span,
+            type_ref::Type::Path(path) => path.span,
+        };
+        let unfixed = |this: &Self, reason: &str| Error::UnsupportedNominalSyntax {
+            construct: format!(
+                "`impl {trait_name}` whose body returns `{}`: {reason}",
+                this.inference.resolve(hidden).name(&this.models)
+            )
+            .into(),
+            source: span,
+        };
+        match self.select_impl(&resolved, header.identity, &arguments, owner.as_ref(), 0) {
+            Ok(()) => {}
+            Err(Selection::None(ty)) => {
+                return Err(unfixed(
+                    self,
+                    &format!(
+                        "no impl of the crate's fits `{ty}` to fix the type parameter left \
+                         open in it"
+                    ),
+                ));
+            }
+            Err(Selection::Many(ty)) => {
+                return Err(unfixed(
+                    self,
+                    &format!(
+                        "more than one impl of the crate's fits `{ty}`, so the type \
+                         parameter left open in it isn't fixed"
+                    ),
+                ));
+            }
+        }
+        if contains_inference(&self.inference.resolve(hidden)) {
+            return Err(unfixed(
+                self,
+                "a type parameter in it is fixed by neither the trait's defaults nor the \
+                 crate's impls",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fixes the open type parameters of `ty` by the one impl of the trait
+    /// `identity` at `arguments` that fits it, then by that impl's
+    /// where-clause bounds (D604). An impl for any type (`impl<T> Trait for
+    /// T`) fits only when no impl for a named type does.
+    #[cfg(feature = "rust-import")]
+    fn select_impl(
+        &mut self,
+        ty: &Ty,
+        identity: [u8; 32],
+        arguments: &[Ty],
+        owner: Option<&crate::host::facade::Dependency>,
+        depth: usize,
+    ) -> Result<(), Selection> {
+        let ty = self.inference.resolve(ty);
+        let open = contains_inference(&ty)
+            || arguments
+                .iter()
+                .any(|argument| contains_inference(&self.inference.resolve(argument)));
+        // A bare variable has nothing to select by; the caller's check
+        // reports it if it stays open.
+        if !open || matches!(ty, Ty::Infer(_)) || depth > 32 {
+            return Ok(());
+        }
+        let headers = self
+            .models
+            .host
+            .impl_headers(identity)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut named = Vec::new();
+        let mut blanket = Vec::new();
+        for (index, header) in headers.iter().enumerate() {
+            let checkpoint = self.inference.checkpoint();
+            let fits = self.apply_impl(header, &ty, arguments, owner).is_some();
+            self.inference.rollback(checkpoint);
+            if fits {
+                if matches!(
+                    header.self_type.shape(),
+                    crate::host::type_ref::Shape::Parameter(_)
+                ) {
+                    blanket.push(index);
+                } else {
+                    named.push(index);
+                }
+            }
+        }
+        let chosen = match (named.as_slice(), blanket.as_slice()) {
+            ([index], _) | ([], [index]) => *index,
+            ([], []) => return Err(Selection::None(ty.name(&self.models).to_string())),
+            _ => return Err(Selection::Many(ty.name(&self.models).to_string())),
+        };
+        let checkpoint = self.inference.checkpoint();
+        let Some(bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
+            self.inference.rollback(checkpoint);
+            return Err(Selection::None(ty.name(&self.models).to_string()));
+        };
+        self.inference.commit(checkpoint);
+        // A bound on a bare variable waits for one that fixes it.
+        for _ in 0..2 {
+            for (bounded, trait_identity, bound_arguments) in &bounds {
+                self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `header` at fresh variables, unified with `ty` and `arguments`: its
+    /// where-clause bounds at those variables, or `None` when it doesn't fit.
+    #[cfg(feature = "rust-import")]
+    fn apply_impl(
+        &mut self,
+        header: &crate::host::facade::ImplHeader,
+        ty: &Ty,
+        arguments: &[Ty],
+        owner: Option<&crate::host::facade::Dependency>,
+    ) -> Option<ImplBounds> {
+        if header.arguments.len() != arguments.len() {
+            return None;
+        }
+        let mut parameters = BTreeMap::new();
+        let pattern = self
+            .instantiate_host_type(&header.self_type, &mut parameters, "impl", owner, None)
+            .ok()?;
+        if !self.unify_type(&pattern, ty) {
+            return None;
+        }
+        for (written, argument) in header.arguments.iter().zip(arguments) {
+            let written = self
+                .instantiate_host_type(written, &mut parameters, "impl", owner, None)
+                .ok()?;
+            if !self.unify_type(&written, argument) {
+                return None;
+            }
+        }
+        header
+            .bounds
+            .iter()
+            .map(|bound| {
+                let bounded = self
+                    .instantiate_host_type(&bound.ty, &mut parameters, "impl", owner, None)
+                    .ok()?;
+                let arguments = bound
+                    .arguments
+                    .iter()
+                    .map(|argument| {
+                        self.instantiate_host_type(argument, &mut parameters, "impl", owner, None)
+                            .ok()
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some((bounded, bound.trait_identity, arguments))
+            })
+            .collect()
     }
 
     /// `output` with a fresh inference variable for each opaque `impl
@@ -47219,6 +47448,19 @@ struct ClosureScope {
     /// body uses, each reached through a shared handle made where the
     /// closure is (`places::held`).
     held: Vec<places::Held>,
+}
+
+/// An impl's where-clause bounds at an instance (D604): each bounded
+/// type, the bound's trait identity and the trait's arguments.
+#[cfg(feature = "rust-import")]
+type ImplBounds = Vec<(Ty, [u8; 32], Vec<Ty>)>;
+
+/// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the
+/// type named, or more than one does.
+#[cfg(feature = "rust-import")]
+enum Selection {
+    None(String),
+    Many(String),
 }
 
 /// Whether a type still has an inference variable in it.

@@ -1104,7 +1104,7 @@ fn resolve_impl(
         // written from the crate's root once `use`s are followed
         // (`package::qualify_opaque_bounds`). No other module is a bound.
         #[cfg(feature = "rust-import")]
-        if let Some(qualified) =
+        if let Some((qualified, bound)) =
             parsed.segments[0]
                 .arguments
                 .iter()
@@ -1119,15 +1119,30 @@ fn resolve_impl(
                             .collect::<Vec<_>>()
                             .join("::");
                         matches!(host.entry(&qualified), Some(host::Entry::Module))
-                            .then_some(qualified)
+                            .then_some((qualified, bound))
                     }
                     _ => None,
                 })
         {
+            // The trait's written type arguments (`Message` of `impl
+            // Widget<Message>`), which with its defaults fix what the
+            // crate's impls decide of the hidden type (D604).
+            let arguments = bound
+                .segments
+                .last()
+                .into_iter()
+                .flat_map(|segment| segment.arguments.iter())
+                .filter_map(|argument| match argument {
+                    item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                    item::type_ref::Argument::Lifetime(_) => None,
+                })
+                .map(|ty| resolve(ty, types, host, native).map(Argument::Type))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_or_default();
             return Ok(Path {
                 target: Target::Builtin,
                 name: format!("{OPAQUE_PREFIX}{qualified}").into(),
-                arguments: Box::default(),
+                arguments: arguments.into_boxed_slice(),
                 span,
             });
         }

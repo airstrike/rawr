@@ -15,6 +15,7 @@ pub mod builder;
 pub mod callable;
 #[doc(hidden)]
 pub mod facade;
+pub mod headers;
 pub mod identity;
 pub mod instance;
 mod runner;
