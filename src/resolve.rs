@@ -6,6 +6,7 @@ mod error;
 mod intrinsic;
 pub(crate) mod item;
 pub(crate) mod lower_nominal;
+pub(crate) mod macro_rules;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
 pub(crate) mod package;

@@ -165,6 +165,14 @@ pub enum Kind {
         /// rustc's exact normal type classification.
         compiler_kind: Box<str>,
     },
+    /// A `macro_rules!` macro, which Rawr expands from its source.
+    MacroRules {
+        /// The definition as its crate's source writes it, from
+        /// `macro_rules!` through the close of its body.
+        source: Box<str>,
+        /// The path segment `$crate` reads as after the dependency's root.
+        krate: Box<str>,
+    },
 }
 
 /// Closed operation class retained for a rejected declaration.
@@ -758,6 +766,10 @@ impl Kind {
                     generics.retain(retained)
                 }
                 Self::Sysroot { compiler_kind } => retained.string(compiler_kind),
+                Self::MacroRules { source, krate } => {
+                    retained.string(source)?;
+                    retained.string(krate)
+                }
             }
         })
     }
@@ -1379,7 +1391,7 @@ impl Kind {
                 }
                 generics.collect_references(references);
             }
-            Self::Sysroot { .. } => {}
+            Self::Sysroot { .. } | Self::MacroRules { .. } => {}
         }
     }
 }

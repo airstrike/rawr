@@ -143,6 +143,9 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// `Type::member` paths Rawr demanded: a member the type may have
     /// through a trait it implements.
     member_demands: Vec<(DefId, String)>,
+    /// The roots of crates a macro's `$crate` demanded (`crate_segment`),
+    /// named under their segment after extraction drains.
+    crate_roots: Vec<(DefId, String)>,
     /// A blanket trait implementation applied to one concrete type, as if
     /// the crate wrote `impl Trait for Type`.
     applications: BTreeMap<String, Implementation>,
@@ -732,6 +735,12 @@ enum Shape {
     Sysroot {
         compiler_kind: String,
     },
+    /// A `macro_rules!` definition, as its crate's source writes it, and the
+    /// path segment naming its crate's root for `$crate`.
+    MacroRules {
+        source: String,
+        krate: String,
+    },
     Unknown {
         compiler_kind: String,
     },
@@ -1319,6 +1328,7 @@ fn extract<'tcx>(
         scalar_predicate_proofs: BTreeMap::new(),
         active_demand: Demand::ShapeOnly,
         member_demands: Vec::new(),
+        crate_roots: Vec::new(),
         applications: BTreeMap::new(),
         budget,
         diagnostic,
@@ -1349,6 +1359,10 @@ fn extract<'tcx>(
         builder.resolve_member_demands()?;
         builder.drain_scheduler()?;
         builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, true)?;
+        // A macro's `$crate` paths, under the segment naming its crate.
+        for (root, segment) in std::mem::take(&mut builder.crate_roots) {
+            builder.collect_external_exports(root, vec![segment], &[], 1, true)?;
+        }
     }
     let mut definitions = Vec::new();
     builder.budget.items(builder.definitions.len())?;
@@ -2262,6 +2276,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             return Ok(());
         };
         let tcx = self.tcx;
+        // A macro's `$crate` (`crate_segment`): the root of the crate that
+        // defines it, as the macro's own paths are written.
+        if depth == 0 && name.starts_with(CRATE_SEGMENT) {
+            if let Some(krate) = tcx
+                .crates(())
+                .iter()
+                .copied()
+                .find(|krate| crate_segment(tcx, *krate) == *name)
+            {
+                let root = krate.as_def_id();
+                if !self.crate_roots.iter().any(|(known, _)| *known == root) {
+                    self.crate_roots
+                        .try_reserve(1)
+                        .map_err(|error| format!("crate root allocation failed: {error}"))?;
+                    self.crate_roots.push((root, name.clone()));
+                }
+                return self.select_path(root, rest, depth.saturating_add(1));
+            }
+            return Ok(());
+        }
         for child in tcx.module_children(module) {
             if !child.vis.is_public() || (name != "*" && child.ident.name.as_str() != name) {
                 continue;
@@ -4074,6 +4108,32 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         Ok(())
     }
 
+    /// A `macro_rules!` macro's definition, read from its crate's source
+    /// from its definition span to the close of its body: rawr expands it
+    /// as rustc does. `None` for a procedural or `macro` 2.0 macro, or when
+    /// the source is not on disk.
+    fn macro_rules_shape(&mut self, def_id: DefId) -> Result<Option<Shape>, String> {
+        let source_map = self.tcx.sess.source_map();
+        let span = self.tcx.def_span(def_id);
+        let file = source_map.lookup_source_file(span.lo());
+        if !source_map.ensure_source_file_source_present(&file) {
+            return Ok(None);
+        }
+        let text = match (file.src.as_deref(), file.external_src.read().get_source()) {
+            (Some(text), _) => text.to_owned(),
+            (None, Some(text)) => text.to_owned(),
+            (None, None) => return Ok(None),
+        };
+        let start = file.original_relative_byte_pos(span.lo()).0 as usize;
+        let Some(source) = text.get(start..).and_then(macro_rules_source) else {
+            return Ok(None);
+        };
+        Ok(Some(Shape::MacroRules {
+            source: self.budget.owned(source)?,
+            krate: self.budget.owned(&crate_segment(self.tcx, def_id.krate))?,
+        }))
+    }
+
     fn compiler_definition_owner(&mut self, def_id: DefId) -> Result<Owner, String> {
         if !is_associated_definition_kind(self.tcx.def_kind(def_id)) {
             return Ok(Owner::Free);
@@ -4231,6 +4291,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             },
             DefKind::Trait => self.trait_shape(def_id)?,
             DefKind::AssocTy => self.associated_type_shape(def_id)?,
+            DefKind::Macro(..) if let Some(shape) = self.macro_rules_shape(def_id)? => shape,
             kind => Shape::Unknown {
                 compiler_kind: self.budget.owned(def_kind_text(kind))?,
             },
@@ -5696,6 +5757,120 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     fn string(&mut self, value: &str) -> Result<(), String> {
         self.budget.string(value)
     }
+}
+
+/// The path segment a `$crate` of a macro defined in `krate` reads as,
+/// after the root of the dependency the macro was imported through:
+/// `__rawr_crate_<name>_<stable crate id>`, which `select_path` resolves to
+/// that crate's root whether or not the dependency re-exports it.
+fn crate_segment(tcx: TyCtxt<'_>, krate: CrateNum) -> String {
+    format!(
+        "{CRATE_SEGMENT}{}_{:016x}",
+        tcx.crate_name(krate),
+        tcx.stable_crate_id(krate).as_u64()
+    )
+}
+
+const CRATE_SEGMENT: &str = "__rawr_crate_";
+
+/// `macro_rules! name { .. }` at the start of `text`, through the close of
+/// its body (and the `;` after a `(..)` or `[..]` body). Strings, chars and
+/// comments do not count toward the delimiters. `None` for anything else.
+fn macro_rules_source(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("macro_rules")?.trim_start();
+    let rest = rest.strip_prefix('!')?;
+    let bytes = text.as_bytes();
+    let mut index = text.len() - rest.len();
+    // The name, then the body's opening delimiter.
+    while index < bytes.len() && !matches!(bytes[index], b'{' | b'(' | b'[') {
+        index += 1;
+    }
+    let open = *bytes.get(index)?;
+    let mut depth = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    let mut end = index + 1;
+                    if open != b'{' {
+                        let after = text[end..].trim_start();
+                        if after.starts_with(';') {
+                            end = text.len() - after.len() + 1;
+                        }
+                    }
+                    return text.get(..end);
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                let mut nested = 0_usize;
+                while index + 1 < bytes.len() {
+                    if bytes[index] == b'/' && bytes[index + 1] == b'*' {
+                        nested += 1;
+                        index += 2;
+                    } else if bytes[index] == b'*' && bytes[index + 1] == b'/' {
+                        nested -= 1;
+                        index += 2;
+                        if nested == 0 {
+                            break;
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
+                continue;
+            }
+            b'"' => {
+                // A raw string ends at a quote followed by its hashes, as
+                // `r#".."#` does; any other string at an unescaped quote.
+                let hashes = text[..index]
+                    .bytes()
+                    .rev()
+                    .take_while(|byte| *byte == b'#')
+                    .count();
+                let raw = text[..index - hashes].ends_with('r');
+                index += 1;
+                while index < bytes.len() {
+                    if !raw && bytes[index] == b'\\' {
+                        index += 2;
+                        continue;
+                    }
+                    if bytes[index] == b'"'
+                        && bytes.len() > index + hashes
+                        && bytes[index + 1..=index + hashes]
+                            .iter()
+                            .all(|byte| *byte == b'#')
+                    {
+                        index += hashes;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            // A char literal; a lifetime's `'` has no closing quote.
+            b'\'' => {
+                if bytes.get(index + 1) == Some(&b'\\') {
+                    index += 2;
+                    while index < bytes.len() && bytes[index] != b'\'' {
+                        index += 1;
+                    }
+                } else if let Some(width) = text[index + 1..].chars().next().map(char::len_utf8)
+                    && bytes.get(index + 1 + width) == Some(&b'\'')
+                {
+                    index += 1 + width;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
 }
 
 fn def_hash(tcx: TyCtxt<'_>, def_id: DefId) -> Result<String, String> {

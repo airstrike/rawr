@@ -3787,6 +3787,7 @@ impl<P: api::Phase> Context<'_, P> {
             }
             model::Kind::TypeConst { .. } => Err(Failure::Reject(reject::Kind::TypeConstant)),
             model::Kind::Sysroot { .. } => Err(Failure::Reject(reject::Kind::SysrootDefinition)),
+            model::Kind::MacroRules { .. } => Err(Failure::Reject(reject::Kind::MacroRules)),
         };
         match result {
             Ok(representability) => Ok(representability),
@@ -6235,7 +6236,8 @@ fn selector(definition: &model::Definition) -> Result<crate::surface::identity::
         | Kind::TypeAlias { .. }
         | Kind::Trait { .. }
         | Kind::AssociatedType { .. }
-        | Kind::Sysroot { .. } => Selector::Unavailable,
+        | Kind::Sysroot { .. }
+        | Kind::MacroRules { .. } => Selector::Unavailable,
     })
 }
 

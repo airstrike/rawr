@@ -835,6 +835,63 @@ impl Parser<'_> {
         self.optional_element(value, &element, &slot, locate, expression)
     }
 
+    /// `.for_each(path)` after `iter_mut()`, a function named by a path as
+    /// Rust accepts one (`Counter::add`, `bump`), reads as
+    /// `.for_each(|x| path(x))`.
+    fn function_path_for_each(&mut self) {
+        let mut ahead = self.input.clone();
+        let head: Vec<Token> = (0..4)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        if !(head[0] == Token::Unit
+            && head[1] == Token::Period
+            && matches!(&head[2], Token::Identifier(name) if name.as_str() == "for_each")
+            && head[3] == Token::LeftParen)
+        {
+            return;
+        }
+        let mut path = Vec::new();
+        let mut angle = 0_usize;
+        loop {
+            let Some((token, position)) = ahead.next() else {
+                return;
+            };
+            match token {
+                Token::RightParen if angle == 0 => break,
+                Token::Identifier(_) | Token::DoubleColon | Token::Comma => {}
+                Token::LessThan => angle += 1,
+                Token::GreaterThan if angle > 0 => angle -= 1,
+                _ => return,
+            }
+            path.push((token, position));
+        }
+        if !matches!(path.first(), Some((Token::Identifier(_), _))) {
+            return;
+        }
+        let at = path[0].1;
+        let mut tokens = Vec::new();
+        for _ in 0..4 {
+            tokens.push(self.next());
+        }
+        for _ in 0..=path.len() {
+            self.next();
+        }
+        let parameter = Token::Identifier(Box::new("__rawr_each".into()));
+        tokens.extend([
+            (Token::Pipe, at),
+            (parameter.clone(), at),
+            (Token::Pipe, at),
+        ]);
+        tokens.extend(path);
+        tokens.extend([
+            (Token::LeftParen, at),
+            (parameter, at),
+            (Token::RightParen, at),
+            (Token::RightParen, at),
+        ]);
+        self.splice_tokens(tokens);
+    }
+
     /// `v.iter_mut()`: followed by `.for_each(|x| body)`, the body run on
     /// each element's place; a mutable loop is `for x in v.iter_mut()`.
     pub(super) fn parse_iter_mut(
@@ -889,6 +946,7 @@ impl Parser<'_> {
                 return Err(self.unsupported("`iter_mut` on a value that is not a place"));
             }
         };
+        self.function_path_for_each();
         let mut ahead = self.input.clone();
         let tokens: Vec<Token> = (0..5)
             .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))

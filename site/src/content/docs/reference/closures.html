@@ -67,6 +67,24 @@ let sums: Vec&lt;i64&gt; = vec![(1, 2), (3, 4)].into_iter().map(also_add).collec
 println!("{sums:?} {}", add((5, 6)));</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-copy-closure" data-out="out-copy-closure" aria-label="Run copy-closure.rs" hidden></button><b>rawr run copy-closure.rs</b><span id="out-copy-closure" aria-live="polite">[3, 7] 11</span></div>
 </div>
+<p>A path to a function is a value wherever Rust takes one, as an argument, a variable or a <code>fn</code> pointer. That includes a method, as in <code>Counter::update</code>, a <code>&amp;mut self</code> method and a function with a <code>&amp;mut</code> parameter among them. It also includes a trait&rsquo;s method, as in <code>Shape::area</code> or <code>&lt;Square as Shape&gt;::grow</code>, and a generic method with its turbofish. A call through the path, as in <code>Counter::update(&amp;mut counter, message)</code>, changes <code>counter</code> as <code>counter.update(message)</code> does.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="method-path.rs" id="src-method-path">#[derive(Default, Debug)]
+struct Counter { value: i64 }
+impl Counter {
+    fn update(&amp;mut self, by: i64) { self.value += by; }
+    fn view(&amp;self) -&gt; String { format!("value {}", self.value) }
+}
+fn run(update: impl Fn(&amp;mut Counter, i64), view: impl Fn(&amp;Counter) -&gt; String) {
+    let mut counter = Counter::default();
+    update(&amp;mut counter, 2);
+    println!("{}", view(&amp;counter));
+}
+fn main() {
+    run(Counter::update, Counter::view);
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-method-path" data-out="out-method-path" aria-label="Run method-path.rs" hidden></button><b>rawr run method-path.rs</b><span id="out-method-path" aria-live="polite">value 2</span></div>
+</div>
 <h2 id="inference">Parameter types</h2>
 <p>A closure&rsquo;s parameters take their types from where it is passed.</p>
 <div class="block">

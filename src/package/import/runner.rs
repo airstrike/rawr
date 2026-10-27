@@ -1082,6 +1082,27 @@ fn build(
             }
         }
     }
+    // A dependency's `macro_rules!` macros, which Rawr expands, each in its
+    // module: `$crate` reads as the defining crate's root through this root.
+    for rules in facade.macros() {
+        let path = rules.path();
+        let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
+        for module in prefixes {
+            match builder.imported_module(module, allocation) {
+                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let item = host::item::Definition::macro_rules(
+            path,
+            rules.source(),
+            format!("{}::{}", facade.root(), rules.krate()),
+        )?;
+        match builder.item(item) {
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(error) => return Err(entry_error(facade.root(), path, error.into())),
+        }
+    }
     builder.finish_imported(allocation).map_err(Error::from)
 }
 
