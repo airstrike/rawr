@@ -3,29 +3,15 @@
 //! written in it and the outlives bounds on them, `'static`, and its type
 //! parameters.
 //!
-//! A value's borrows are one set in these facts, so an input whose regions
-//! the output keeps only some of can't be followed: that input is
-//! [`Keeps::Unknown`], and the call is left to rustc (D572.5).
+//! A call's value keeps its inputs' borrows region by region (T127): each
+//! region position of the output takes the positions of the inputs whose
+//! regions outlive it. A relation the signature does not say leaves the
+//! call to rustc (D572.5).
 
+use super::region::{Path, Step};
 use crate::resolve::item::Lifetimes;
 use crate::resolve::type_ref::{Argument, Target, Type};
 use crate::{ImmutableString, Span};
-
-/// What a call's value, or a place the call stores into, keeps of one of the
-/// call's inputs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Keeps {
-    /// None of its borrows.
-    Nothing,
-    /// All of them: a reference's own loan and what it refers to.
-    All,
-    /// What a reference refers to, without its own loan: `T` of `&'a T`
-    /// for an output `T`. For an input that is not a reference, all of it.
-    Inner,
-    /// Some of its regions and not others, which these facts can't tell
-    /// apart, or regions the signature does not say.
-    Unknown,
-}
 
 /// How a method takes its receiver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,28 +21,44 @@ pub(crate) enum Receiver {
     Owned,
 }
 
-/// A callee's signature, as the borrow checker reads it.
-pub(crate) struct Signature<'a> {
-    pub(crate) receiver: Option<Receiver>,
-    pub(crate) parameters: Vec<&'a Type>,
-    pub(crate) output: &'a Type,
-    pub(crate) lifetimes: &'a Lifetimes,
+/// One input of a call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Input {
+    /// The receiver, as its method takes it: for `&self` the reference,
+    /// with `Self` below `Arg(0)`; for `self` the value.
+    Receiver,
+    Argument(usize),
 }
 
-/// What a call keeps of each of its inputs.
+/// Where borrows a call keeps come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    /// What an input holds at a position.
+    Input(Input, Path),
+    /// What a call of the argument, a closure, returns.
+    Call(usize),
+}
+
+/// A call keeps what `from` holds at `into`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tap {
+    pub(crate) into: Path,
+    pub(crate) from: Source,
+}
+
+/// What a call keeps of its inputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Summary {
     /// How the method takes its receiver.
     pub(crate) mode: Option<Receiver>,
-    /// Of the receiver, in the call's value.
-    pub(crate) receiver: Keeps,
-    /// Of each argument, in the call's value.
-    pub(crate) parameters: Vec<Keeps>,
-    /// Of each argument, in what a `&mut self` receiver holds afterwards
-    /// (`v.push(&x)`).
-    pub(crate) stores: Vec<Keeps>,
-    /// Of each argument, borrowed for `'static`.
-    pub(crate) statics: Vec<Keeps>,
+    /// What the call's value holds, or `None` where the signature does not
+    /// say.
+    pub(crate) output: Option<Vec<Tap>>,
+    /// What a `&mut self` call stores in what its receiver refers to
+    /// (`v.push(&x)`), at positions of `Self`, or `None`.
+    pub(crate) stores: Option<Vec<Tap>>,
+    /// The inputs' positions borrowed for `'static`, or `None`.
+    pub(crate) statics: Option<Vec<(Input, Path)>>,
     /// A `&mut` parameter other than the receiver may take another input's
     /// borrows, which these facts do not follow yet.
     pub(crate) unknown_stores: bool,
@@ -64,51 +66,29 @@ pub(crate) struct Summary {
 
 impl Summary {
     /// A call whose value keeps nothing it takes.
-    pub(crate) fn nothing(mode: Option<Receiver>, arguments: usize) -> Self {
-        Self {
-            mode,
-            receiver: Keeps::Nothing,
-            parameters: vec![Keeps::Nothing; arguments],
-            stores: vec![Keeps::Nothing; arguments],
-            statics: vec![Keeps::Nothing; arguments],
-            unknown_stores: false,
-        }
+    pub(crate) fn nothing(mode: Option<Receiver>) -> Self {
+        Self::taps(mode, Vec::new(), Vec::new())
     }
 
     /// A call whose value may keep any of what it takes.
-    pub(crate) fn unknown(arguments: usize) -> Self {
+    pub(crate) fn unknown() -> Self {
         Self {
             mode: None,
-            receiver: Keeps::Unknown,
-            parameters: vec![Keeps::Unknown; arguments],
-            stores: vec![Keeps::Nothing; arguments],
-            statics: vec![Keeps::Nothing; arguments],
+            output: None,
+            stores: Some(Vec::new()),
+            statics: Some(Vec::new()),
             unknown_stores: true,
         }
     }
 
-    /// A builtin method taking its receiver as `mode`, whose value keeps
-    /// `receiver` of it and `parameters` of its arguments, and which stores
-    /// `stores` of them in its receiver. Arguments past those listed keep
-    /// nothing.
-    pub(crate) fn builtin(
-        mode: Receiver,
-        receiver: Keeps,
-        parameters: &[Keeps],
-        stores: &[Keeps],
-        arguments: usize,
-    ) -> Self {
-        let padded = |listed: &[Keeps]| {
-            (0..arguments)
-                .map(|index| listed.get(index).copied().unwrap_or(Keeps::Nothing))
-                .collect()
-        };
+    /// A call taking its receiver as `mode` whose value keeps `output`, and
+    /// which stores `stores` in its receiver.
+    pub(crate) fn taps(mode: Option<Receiver>, output: Vec<Tap>, stores: Vec<Tap>) -> Self {
         Self {
-            mode: Some(mode),
-            receiver,
-            parameters: padded(parameters),
-            stores: padded(stores),
-            statics: vec![Keeps::Nothing; arguments],
+            mode,
+            output: Some(output),
+            stores: Some(stores),
+            statics: Some(Vec::new()),
             unknown_stores: false,
         }
     }
@@ -121,7 +101,8 @@ enum Region {
     /// An elided lifetime, numbered in the signature.
     Elided(usize),
     Static,
-    /// A type parameter: whatever regions its argument has.
+    /// A type parameter: whatever regions its argument has, at the
+    /// positions below its own.
     Parameter(ImmutableString),
     /// An `impl Trait` output, which captures every input's regions
     /// (edition 2024).
@@ -131,22 +112,13 @@ enum Region {
     Unknown,
 }
 
-/// A type's regions: its own reference's, and those below it.
-#[derive(Default)]
-struct Shape {
-    outer: Option<Region>,
-    inner: Vec<Region>,
-}
-
-impl Shape {
-    fn all(&self) -> impl Iterator<Item = &Region> {
-        self.outer.iter().chain(&self.inner)
-    }
-}
+/// A type's regions, each at its position.
+type Positions = Vec<(Path, Region)>;
 
 struct Reader<'a> {
     lifetimes: &'a Lifetimes,
-    /// How many lifetime parameters a crate type declares.
+    /// How many lifetime parameters a crate type declares, or `None` for one
+    /// whose regions these facts can't place.
     declared: &'a dyn Fn(&Target) -> Option<usize>,
     /// Where each elided lifetime is, by its number less one.
     elided: Vec<Span>,
@@ -168,25 +140,27 @@ impl Reader<'_> {
         Region::Elided(self.elided.len())
     }
 
-    fn shape(&mut self, ty: &Type) -> Shape {
+    /// The regions of `ty`, at `at` and below. `output` when it is the
+    /// call's value, whose structure the facts read back.
+    fn positions(&mut self, ty: &Type, at: Path, output: bool, out: &mut Positions) {
+        let own = at.push(Step::Own);
         match ty {
-            Type::Unit(_) => Shape::default(),
-            Type::Tuple { members, .. } => Shape {
-                outer: None,
-                inner: members
-                    .iter()
-                    .flat_map(|member| self.regions(member))
-                    .collect(),
-            },
+            Type::Unit(_) => {}
+            Type::Tuple { members, .. } => {
+                for (index, member) in members.iter().enumerate() {
+                    self.positions(member, at.push(Step::Arg(index as u8)), output, out);
+                }
+            }
             Type::Reference {
                 lifetime,
                 target,
                 span,
                 ..
-            } => Shape {
-                outer: Some(self.lifetime(*lifetime, *span)),
-                inner: self.regions(target),
-            },
+            } => {
+                let region = self.lifetime(*lifetime, *span);
+                out.push((own, region));
+                self.positions(target, at.push(Step::Arg(0)), output, out);
+            }
             // `&str`, which a resolved type reads as `String` with the
             // reference's lifetime.
             Type::Path(path) if ty.is_str() => {
@@ -194,15 +168,17 @@ impl Reader<'_> {
                     [Argument::Lifetime(span)] => Some(*span),
                     _ => None,
                 };
-                Shape {
-                    outer: Some(self.lifetime(span, path.span)),
-                    inner: Vec::new(),
+                let region = self.lifetime(span, path.span);
+                out.push((own, region));
+            }
+            // An iterator's value captures what it was made of; as an
+            // output, its items are below it.
+            Type::Path(_) if ty.iterator_item().is_some() => {
+                out.push((own, Region::Captures));
+                if output && let Some((item, _)) = ty.iterator_item() {
+                    self.positions(item, at.push(Step::Arg(0)), output, out);
                 }
             }
-            Type::Path(_) if ty.iterator_item().is_some() => Shape {
-                outer: None,
-                inner: vec![Region::Captures],
-            },
             // A function value holds what it captures: within the
             // lifetimes its type is bounded by (`impl Fn() + 'a`), or any.
             Type::Path(path) if ty.fn_signature().is_some() => {
@@ -214,68 +190,60 @@ impl Reader<'_> {
                         Argument::Type(_) => None,
                     })
                     .collect();
-                Shape {
-                    outer: None,
-                    inner: if bounded.is_empty() {
-                        vec![Region::Unknown]
-                    } else {
-                        bounded
-                    },
+                if bounded.is_empty() {
+                    out.push((own, Region::Unknown));
                 }
+                out.extend(bounded.into_iter().map(|region| (own, region)));
             }
-            Type::Path(_) if ty.dyn_trait().is_some() => Shape {
-                outer: None,
-                inner: vec![Region::Unknown],
-            },
+            Type::Path(_) if ty.dyn_trait().is_some() => out.push((own, Region::Unknown)),
             Type::Path(path) => {
-                let mut inner = Vec::new();
                 match &path.target {
                     Target::Parameter if path.name == "Self" => match &self.lifetimes.owner {
                         Some(owner) => {
                             let owner = owner.clone();
-                            inner.extend(self.regions(&owner));
+                            self.positions(&owner, at, output, out);
                         }
-                        None => inner.push(Region::Unknown),
+                        None => out.push((own, Region::Unknown)),
                     },
-                    Target::Parameter => inner.push(Region::Parameter(path.name.clone())),
+                    Target::Parameter => out.push((at, Region::Parameter(path.name.clone()))),
                     Target::Projection(..) | Target::Alias(_) | Target::Host { .. } => {
-                        inner.push(Region::Unknown);
+                        out.push((own, Region::Unknown));
                     }
-                    Target::Builtin if opaque(&path.name) => {
-                        inner.push(Region::Captures);
-                    }
+                    Target::Builtin if opaque(&path.name) => out.push((own, Region::Captures)),
                     Target::Builtin | Target::Script { .. } => {}
                 }
+                let script = matches!(path.target, Target::Script { .. });
                 let mut written = 0;
+                let mut types = 0;
                 for argument in &path.arguments {
                     match argument {
-                        Argument::Type(ty) => inner.extend(self.regions(ty)),
+                        Argument::Type(ty) => {
+                            self.positions(ty, at.push(Step::Arg(types)), output, out);
+                            types += 1;
+                        }
+                        // A builtin's lifetime has no place in its value.
+                        Argument::Lifetime(_) if !script => out.push((own, Region::Unknown)),
                         Argument::Lifetime(span) => {
+                            let region = self.lifetime(Some(*span), *span);
+                            out.push((at.push(Step::Lifetime(written)), region));
                             written += 1;
-                            inner.push(self.lifetime(Some(*span), *span));
                         }
                     }
                 }
                 // `Wrapper` of `struct Wrapper<'a>`: its lifetimes elided.
-                if matches!(path.target, Target::Script { .. }) {
+                if script {
                     match (self.declared)(&path.target) {
                         Some(declared) => {
-                            for _ in written..declared {
+                            for index in usize::from(written)..declared {
                                 let fresh = self.fresh(path.span);
-                                inner.push(fresh);
+                                out.push((at.push(Step::Lifetime(index as u8)), fresh));
                             }
                         }
-                        None => inner.push(Region::Unknown),
+                        None => out.push((own, Region::Unknown)),
                     }
                 }
-                Shape { outer: None, inner }
             }
         }
-    }
-
-    fn regions(&mut self, ty: &Type) -> Vec<Region> {
-        let shape = self.shape(ty);
-        shape.outer.into_iter().chain(shape.inner).collect()
     }
 }
 
@@ -309,76 +277,75 @@ fn outlives(bounds: &[(ImmutableString, ImmutableString)], longer: &str, shorter
     false
 }
 
-/// Whether a region of an input must outlive one of `into`: whether what
-/// it borrows is kept there. `None` when the signature does not say.
+/// Whether a region of an input must outlive `into`: whether what it
+/// borrows is kept there. `None` when the signature does not say.
 fn relates(
     region: &Region,
-    into: &[Region],
+    into: &Region,
     bounds: &[(ImmutableString, ImmutableString)],
 ) -> Option<bool> {
-    let into: Vec<&Region> = into.iter().filter(|r| **r != Region::Static).collect();
-    if into.is_empty() || *region == Region::Static {
-        return Some(false);
-    }
-    if into.contains(&&Region::Captures) {
-        return Some(true);
-    }
-    if into.contains(&&Region::Unknown) || *region == Region::Unknown {
-        return None;
-    }
-    Some(into.iter().any(|kept| {
-        match (region, kept) {
-            (Region::Named(longer), Region::Named(shorter)) => outlives(bounds, longer, shorter),
-            (Region::Elided(a), Region::Elided(b)) => a == b,
-            (Region::Parameter(a), Region::Parameter(b)) => a == b,
-            // `T: 'a` keeps `T`'s borrows in `'a`.
-            (Region::Parameter(parameter), Region::Named(shorter)) => bounds
+    match (region, into) {
+        (_, Region::Static) | (Region::Static, _) => Some(false),
+        (_, Region::Captures) => Some(true),
+        (_, Region::Unknown) | (Region::Unknown, _) => None,
+        (Region::Named(longer), Region::Named(shorter)) => Some(outlives(bounds, longer, shorter)),
+        (Region::Elided(a), Region::Elided(b)) => Some(a == b),
+        (Region::Parameter(a), Region::Parameter(b)) => Some(a == b),
+        // `T: 'a` keeps `T`'s borrows in `'a`.
+        (Region::Parameter(parameter), Region::Named(shorter)) => Some(
+            bounds
                 .iter()
                 .any(|(from, to)| from == parameter && outlives(bounds, to, shorter)),
-            _ => false,
-        }
-    }))
+        ),
+        _ => Some(false),
+    }
 }
 
-/// What of an input of shape `shape` the regions `into` keep.
-fn keeps(shape: &Shape, into: &[Region], bounds: &[(ImmutableString, ImmutableString)]) -> Keeps {
-    let outer = shape
-        .outer
-        .as_ref()
-        .map(|outer| relates(outer, into, bounds));
-    let inner: Vec<Option<bool>> = shape
-        .inner
-        .iter()
-        .map(|region| relates(region, into, bounds))
-        .collect();
-    if outer == Some(None) || inner.contains(&None) {
-        return Keeps::Unknown;
+/// The taps that keep at `into` (of region `region`) what `inputs` hold of
+/// the regions that outlive it, or `None` when the signature does not say.
+fn kept(
+    into: Path,
+    region: &Region,
+    inputs: &[(Input, Positions)],
+    bounds: &[(ImmutableString, ImmutableString)],
+    taps: &mut Vec<Tap>,
+) -> Option<()> {
+    match region {
+        Region::Static => return Some(()),
+        Region::Unknown => return None,
+        _ => {}
     }
-    // A reference kept keeps what it refers to (`&'a T<'b>` has `'b: 'a`).
-    if outer == Some(Some(true)) {
-        return Keeps::All;
+    for (input, positions) in inputs {
+        for (from, input_region) in positions {
+            if !relates(input_region, region, bounds)? {
+                continue;
+            }
+            // A type parameter's value kept in a region of another kind is
+            // all of it there.
+            let from = match (input_region, region) {
+                (Region::Parameter(_), Region::Parameter(_)) => *from,
+                (Region::Parameter(_), _) => from.push(Step::Own),
+                _ => *from,
+            };
+            taps.push(Tap {
+                into,
+                from: Source::Input(*input, from),
+            });
+        }
     }
-    if inner.iter().all(|kept| *kept == Some(false)) {
-        return Keeps::Nothing;
-    }
-    if inner.iter().all(|kept| *kept == Some(true)) {
-        return if shape.outer.is_some() {
-            Keeps::Inner
-        } else {
-            Keeps::All
-        };
-    }
-    Keeps::Unknown
+    Some(())
 }
 
 /// A signature's regions, as elision gives them.
 struct Read {
     /// The impl's owner's, which `self` is.
-    owner: Vec<Region>,
-    receiver: Option<Shape>,
-    parameters: Vec<Shape>,
+    owner: Positions,
+    /// The receiver's and each parameter's.
+    inputs: Vec<(Input, Positions)>,
+    /// Each input's own reference's region, for one that is a reference.
+    outer: Vec<Option<Region>>,
     /// The output's, elided ones not yet given an input's.
-    output: Vec<Region>,
+    output: Positions,
     /// What elision gives the output's elided lifetimes: `&self`'s, or the
     /// one input lifetime. `None` when it gives none, or when the inputs
     /// have regions the signature does not say.
@@ -395,38 +362,55 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
         declared,
         elided: Vec::new(),
     };
-    let owner = match &signature.lifetimes.owner {
-        Some(owner) => reader.regions(owner),
-        None if signature.receiver.is_some() => vec![Region::Unknown],
-        None => Vec::new(),
-    };
-    let receiver = signature.receiver.map(|mode| match mode {
-        Receiver::Owned => Shape {
-            outer: None,
-            inner: owner.clone(),
-        },
-        Receiver::Shared | Receiver::Mutable => {
-            let outer = match &signature.lifetimes.receiver {
-                Some(name) if name == "static" => Region::Static,
-                Some(name) if name != "_" => Region::Named(name.clone()),
-                _ => reader.fresh(Span::NONE),
+    let mut owner = Positions::new();
+    match &signature.lifetimes.owner {
+        Some(ty) => reader.positions(ty, Path::ROOT, false, &mut owner),
+        None if signature.receiver.is_some() => owner.push((Path::OWN, Region::Unknown)),
+        None => {}
+    }
+    let mut inputs: Vec<(Input, Positions)> = Vec::new();
+    let mut outer = Vec::new();
+    // The receiver's own region, which elided output lifetimes take.
+    let mut receiver_region = None;
+    if let Some(mode) = signature.receiver {
+        let positions =
+            match mode {
+                Receiver::Owned => owner.clone(),
+                Receiver::Shared | Receiver::Mutable => {
+                    let region = match &signature.lifetimes.receiver {
+                        Some(name) if name == "static" => Region::Static,
+                        Some(name) if name != "_" => Region::Named(name.clone()),
+                        _ => reader.fresh(Span::NONE),
+                    };
+                    receiver_region = Some(region.clone());
+                    let mut positions = vec![(Path::OWN, region)];
+                    positions.extend(owner.iter().map(|(path, region)| {
+                        (Path::of(&[Step::Arg(0)]).join(*path), region.clone())
+                    }));
+                    positions
+                }
             };
-            Shape {
-                outer: Some(outer),
-                inner: owner.clone(),
-            }
-        }
-    });
-    let parameters: Vec<Shape> = signature
-        .parameters
-        .iter()
-        .map(|ty| reader.shape(ty))
-        .collect();
-    let output = reader.regions(signature.output);
+        inputs.push((Input::Receiver, positions));
+        outer.push(receiver_region.clone());
+    }
+    for (index, ty) in signature.parameters.iter().enumerate() {
+        let mut positions = Positions::new();
+        reader.positions(ty, Path::ROOT, false, &mut positions);
+        let reference = matches!(ty, Type::Reference { .. }) || ty.is_str();
+        outer.push(
+            positions
+                .iter()
+                .find(|(path, _)| reference && *path == Path::OWN)
+                .map(|(_, region)| region.clone()),
+        );
+        inputs.push((Input::Argument(index), positions));
+    }
+    let mut output = Positions::new();
+    reader.positions(signature.output, Path::ROOT, true, &mut output);
 
     let mut distinct: Vec<&Region> = Vec::new();
     let mut unknown = false;
-    for region in receiver.iter().chain(&parameters).flat_map(Shape::all) {
+    for (_, region) in inputs.iter().flat_map(|(_, positions)| positions) {
         match region {
             Region::Named(_) | Region::Elided(_) | Region::Static => {
                 if !distinct.contains(&region) {
@@ -437,19 +421,15 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
             Region::Parameter(_) | Region::Captures => {}
         }
     }
-    let elided_to = match &receiver {
-        Some(Shape {
-            outer: Some(outer), ..
-        }) => Some(outer.clone()),
-        _ => match distinct[..] {
-            [only] if !unknown => Some(only.clone()),
-            _ => None,
-        },
-    };
+    // Elided output lifetimes are `&self`'s, or the one input lifetime.
+    let elided_to = receiver_region.or_else(|| match distinct[..] {
+        [only] if !unknown => Some(only.clone()),
+        _ => None,
+    });
     Read {
         owner,
-        receiver,
-        parameters,
+        inputs,
+        outer,
         output,
         elided_to,
         unknown,
@@ -468,7 +448,7 @@ pub(crate) fn missing_lifetime(
     if read.elided_to.is_some() || read.unknown {
         return None;
     }
-    read.output.iter().find_map(|region| match region {
+    read.output.iter().find_map(|(_, region)| match region {
         Region::Elided(number) => read.elided.get(number - 1).copied(),
         _ => None,
     })
@@ -538,7 +518,7 @@ pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Optio
     let output: Vec<Region> = read
         .output
         .iter()
-        .map(|region| match region {
+        .map(|(_, region)| match region {
             Region::Elided(_) => read.elided_to.clone().unwrap_or(Region::Unknown),
             region => region.clone(),
         })
@@ -549,9 +529,12 @@ pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Optio
         .iter()
         .filter(|region| matches!(region, Region::Parameter(_)))
         .collect();
-    let input = |shape: &Shape| {
-        let regions = shape.all().filter(|region| !generic.contains(region));
-        match (one(regions), &shape.outer) {
+    let borrows_of = |positions: &Positions, outer: &Option<Region>| {
+        let regions = positions
+            .iter()
+            .map(|(_, region)| region)
+            .filter(|region| !generic.contains(region));
+        match (one(regions), outer) {
             (Borrows::Several, Some(outer)) => match one(std::iter::once(outer)) {
                 Borrows::One(outer) => Borrows::AtLeast(outer),
                 _ => Borrows::Several,
@@ -559,9 +542,18 @@ pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Optio
             (borrows, _) => borrows,
         }
     };
+    let mut receiver = Borrows::None;
+    let mut parameters = Vec::new();
+    for ((input, positions), outer) in read.inputs.iter().zip(&read.outer) {
+        let borrows = borrows_of(positions, outer);
+        match input {
+            Input::Receiver => receiver = borrows,
+            Input::Argument(_) => parameters.push(borrows),
+        }
+    }
     Own {
-        receiver: read.receiver.as_ref().map_or(Borrows::None, input),
-        parameters: read.parameters.iter().map(input).collect(),
+        receiver,
+        parameters,
         output: one(output
             .iter()
             .filter(|region| !matches!(region, Region::Parameter(_)))),
@@ -610,86 +602,128 @@ pub(crate) fn summary(
 ) -> Summary {
     let Read {
         owner,
-        receiver,
-        parameters,
+        inputs,
         output,
         elided_to,
         ..
     } = read(signature, declared);
     let bounds = &signature.lifetimes.bounds;
-    let output: Vec<Region> = output
-        .into_iter()
-        .map(|region| match region {
+    let mut taps = Vec::new();
+    let known = output.into_iter().all(|(into, region)| {
+        let region = match region {
             Region::Elided(_) => elided_to.clone().unwrap_or(Region::Unknown),
             region => region,
-        })
-        .collect();
-
-    let receiver_keeps = receiver
-        .as_ref()
-        .map_or(Keeps::Nothing, |shape| keeps(shape, &output, bounds));
-    let parameter_keeps = parameters
+        };
+        kept(into, &region, &inputs, bounds, &mut taps).is_some()
+    });
+    let arguments: Vec<(Input, Positions)> = inputs
         .iter()
-        .map(|shape| keeps(shape, &output, bounds))
+        .filter(|(input, _)| *input != Input::Receiver)
+        .cloned()
         .collect();
     // A `&mut self` call can store its arguments' borrows in what `self`
     // holds.
-    let stores = parameters
+    let stores = match signature.receiver {
+        Some(Receiver::Mutable) => {
+            let mut stores = Vec::new();
+            owner
+                .iter()
+                .all(|(into, region)| {
+                    kept(*into, region, &arguments, bounds, &mut stores).is_some()
+                })
+                .then_some(stores)
+        }
+        _ => Some(Vec::new()),
+    };
+    let statics = arguments
         .iter()
-        .map(|shape| match signature.receiver {
-            Some(Receiver::Mutable) => keeps(shape, &owner, bounds),
-            _ => Keeps::Nothing,
-        })
-        .collect();
-    let statics = parameters
-        .iter()
-        .map(|shape| {
-            if shape.outer == Some(Region::Static) {
-                return Keeps::All;
-            }
-            let bounded = |region: &Region| match region {
-                Region::Static => true,
-                Region::Parameter(parameter) => bounds
-                    .iter()
-                    .any(|(from, to)| from == parameter && to == "static"),
-                _ => false,
-            };
-            if shape.inner.iter().any(bounded) {
-                return if shape.outer.is_none() && shape.inner.iter().all(bounded) {
-                    Keeps::All
-                } else {
-                    Keeps::Unknown
+        .flat_map(|(input, positions)| {
+            positions.iter().filter_map(move |(path, region)| {
+                let forever = match region {
+                    Region::Static => true,
+                    Region::Parameter(parameter) => bounds
+                        .iter()
+                        .any(|(from, to)| from == parameter && to == "static"),
+                    _ => false,
                 };
-            }
-            Keeps::Nothing
+                forever.then_some((*input, *path))
+            })
         })
         .collect();
     // Another `&mut` input that can take a third's borrows.
-    let unknown_stores = signature
-        .parameters
-        .iter()
-        .zip(&parameters)
-        .enumerate()
-        .any(|(index, (ty, shape))| {
-            matches!(ty, Type::Reference { mutable: true, .. })
-                && !shape.inner.is_empty()
-                && receiver
+    let unknown_stores = signature.parameters.iter().enumerate().any(|(index, ty)| {
+        if !matches!(ty, Type::Reference { mutable: true, .. }) {
+            return false;
+        }
+        let below = Path::of(&[Step::Arg(0)]);
+        let inner: Vec<&Region> = inputs
+            .iter()
+            .filter(|(input, _)| *input == Input::Argument(index))
+            .flat_map(|(_, positions)| positions)
+            .filter(|(path, _)| path.starts_with(below))
+            .map(|(_, region)| region)
+            .collect();
+        inputs
+            .iter()
+            .filter(|(input, _)| *input != Input::Argument(index))
+            .flat_map(|(_, positions)| positions)
+            .any(|(_, region)| {
+                inner
                     .iter()
-                    .chain(
-                        parameters
-                            .iter()
-                            .enumerate()
-                            .filter(|(other, _)| *other != index)
-                            .map(|(_, shape)| shape),
-                    )
-                    .any(|other| keeps(other, &shape.inner, bounds) != Keeps::Nothing)
-        });
+                    .any(|into| relates(region, into, bounds) != Some(false))
+            })
+    });
     Summary {
         mode: signature.receiver,
-        receiver: receiver_keeps,
-        parameters: parameter_keeps,
+        output: known.then_some(taps),
         stores,
-        statics,
+        statics: Some(statics),
         unknown_stores,
     }
+}
+
+/// Where each region position of a field's type `ty` sits in the crate type
+/// that declares it (T127): the field's position and the type's, or `None`
+/// for a `'static` position. The type's lifetime parameters are `regions`'
+/// and its type parameters `parameters`. `None` when a position is neither,
+/// or the type bounds its lifetimes, which these facts don't read.
+pub(crate) fn field_positions(
+    ty: &Type,
+    regions: &crate::resolve::item::TypeRegions,
+    parameters: &[ImmutableString],
+    declared: &dyn Fn(&Target) -> Option<usize>,
+) -> Option<Vec<(Path, Option<Path>)>> {
+    if regions.bounded {
+        return None;
+    }
+    let mut reader = Reader {
+        lifetimes: &regions.written,
+        declared,
+        elided: Vec::new(),
+    };
+    let mut positions = Positions::new();
+    reader.positions(ty, Path::ROOT, true, &mut positions);
+    positions
+        .into_iter()
+        .map(|(path, region)| match region {
+            Region::Static => Some((path, None)),
+            Region::Named(name) => {
+                let index = regions.params.iter().position(|param| *param == name)?;
+                Some((path, Some(Path::of(&[Step::Lifetime(index as u8)]))))
+            }
+            Region::Parameter(name) => {
+                let index = parameters.iter().position(|param| *param == name)?;
+                Some((path, Some(Path::of(&[Step::Arg(index as u8)]))))
+            }
+            Region::Elided(_) | Region::Captures | Region::Unknown => None,
+        })
+        .collect()
+}
+
+/// A callee's signature, as the borrow checker reads it.
+pub(crate) struct Signature<'a> {
+    pub(crate) receiver: Option<Receiver>,
+    pub(crate) parameters: Vec<&'a Type>,
+    pub(crate) output: &'a Type,
+    pub(crate) lifetimes: &'a Lifetimes,
 }

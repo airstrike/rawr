@@ -9,9 +9,42 @@ use super::*;
 use crate::resolve::borrowck::{
     self,
     record::{self, Matched, Recorder, ValueStart},
-    signature::{self, Keeps, Summary},
-    Access, Origin, Place, Projection,
+    region::{self, Held},
+    signature::{self, Input, Source, Summary, Tap},
+    Access, Origin, Path, Place, Projection, Step,
 };
+
+/// Where a part is in the value it is read from (T127).
+#[derive(Clone)]
+pub(super) enum PartOf {
+    /// An element of a `Vec`, an array or a slice, or a map's value
+    /// (`m[&k]`).
+    Element,
+    /// A tuple's member.
+    Member(usize),
+    /// A crate struct's field, by its slot.
+    Field(type_def::Id, usize),
+    /// What a reference or a box holds (`*r`).
+    Deref,
+}
+
+/// Where a part goes in a value made of parts (T127).
+#[derive(Clone)]
+pub(super) enum Slot<'a> {
+    /// At a position: a tuple's member, an array's elements, `Some`'s
+    /// payload.
+    At(Path),
+    /// A crate type's field by its slot, or a variant's payload by its
+    /// position.
+    Field(type_def::Id, Option<&'a str>, usize),
+    /// The whole value, of the same type (`..base`).
+    Whole,
+}
+
+/// The path of `steps`.
+fn path(steps: &[Step]) -> Path {
+    Path::of(steps)
+}
 
 /// A method call's receiver, as the call's value may keep it.
 #[derive(Clone)]
@@ -34,6 +67,8 @@ pub(super) fn is_reference(ty: &Ty) -> bool {
 #[derive(Default)]
 pub(super) struct PatternTrace {
     path: Vec<Projection>,
+    /// For each step of `path`, where it goes in what the value holds.
+    regions: Vec<TraceRegion>,
     parts: Vec<Part>,
     /// The `ref` or `ref mut` binding being resolved: its mutability.
     explicit: Option<bool>,
@@ -42,7 +77,20 @@ pub(super) struct PatternTrace {
 
 struct Part {
     path: Vec<Projection>,
+    regions: Vec<TraceRegion>,
     kind: PartKind,
+}
+
+/// Where a pattern's step goes in what the value it steps into holds
+/// (T127).
+#[derive(Clone)]
+pub(super) enum TraceRegion {
+    /// To a position: a tuple's member, a reference's target, a payload.
+    At(Path),
+    /// To a crate type's field by its slot, of a variant for an enum.
+    Field(type_def::Id, Option<ImmutableString>, usize),
+    /// Somewhere these facts don't place: all of the value.
+    Unknown,
 }
 
 enum PartKind {
@@ -106,11 +154,24 @@ impl Parser<'_> {
     /// The pattern being resolved steps below its part: the path's length
     /// before, for [`Parser::trace_leave`].
     pub(super) fn trace_enter(&self, step: Projection) -> usize {
+        let region = match step {
+            Projection::Deref | Projection::Index | Projection::ConstantIndex { .. } => {
+                TraceRegion::At(path(&[Step::Arg(0)]))
+            }
+            Projection::Field(_) | Projection::Downcast(_) => TraceRegion::Unknown,
+        };
+        self.trace_enter_at(step, region)
+    }
+
+    /// [`Parser::trace_enter`], with where the step goes in what the value
+    /// holds.
+    pub(super) fn trace_enter_at(&self, step: Projection, region: TraceRegion) -> usize {
         let mut trace = self.pattern_trace.borrow_mut();
         let Some(trace) = trace.as_mut() else {
             return 0;
         };
         trace.path.push(step);
+        trace.regions.push(region);
         trace.path.len() - 1
     }
 
@@ -126,6 +187,7 @@ impl Parser<'_> {
     pub(super) fn trace_leave(&self, length: usize) {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             trace.path.truncate(length);
+            trace.regions.truncate(length);
         }
     }
 
@@ -134,8 +196,10 @@ impl Parser<'_> {
     pub(super) fn trace_test(&self, access: Access, at: Option<Span>) {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             let path = trace.path.clone();
+            let regions = trace.regions.clone();
             trace.parts.push(Part {
                 path,
+                regions,
                 kind: PartKind::Test(access, at),
             });
         }
@@ -147,8 +211,10 @@ impl Parser<'_> {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             let by_ref = trace.explicit.take().or(self.binding_mode.get());
             let path = trace.path.clone();
+            let regions = trace.regions.clone();
             trace.parts.push(Part {
                 path,
+                regions,
                 kind: PartKind::Bind {
                     name: name.clone(),
                     span,
@@ -244,7 +310,7 @@ impl Parser<'_> {
                     };
                     let holds = self.may_hold_borrow(&value);
                     let moves = self.moves_by_value(&ty);
-                    Some((part.path, name, span, by_ref, holds, moves))
+                    Some((part.path, part.regions, name, span, by_ref, holds, moves))
                 }
                 PartKind::Test(..) => None,
             })
@@ -256,7 +322,7 @@ impl Parser<'_> {
         // An or-pattern's alternatives bind one local: it is given its
         // value once, and takes each alternative's loans.
         let mut defined = std::collections::BTreeSet::new();
-        for (path, name, span, by_ref, holds, moves) in binds {
+        for (path, regions, name, span, by_ref, holds, moves) in binds {
             let declaration = declarations
                 .iter()
                 .find(|binding| binding.name == name)
@@ -265,30 +331,37 @@ impl Parser<'_> {
             let define = defined.insert(into);
             match (matched, by_ref) {
                 (Matched::Place(base), Some(mutable)) => {
-                    flow.part_borrow(below(base, &path), mutable, span, into, define);
+                    flow.part_borrow(below(base, &path), mutable, holds, span, into, define);
                 }
                 (Matched::Place(base), None) => {
                     let access = if moves { Access::Move } else { Access::Read };
                     flow.part(below(base, &path), access, span);
-                    // The whole of a local that holds borrows: its loans.
-                    if holds && path.is_empty() && base.projection.is_empty() {
-                        flow.take(into, &[Origin::Local(base.local)], define);
+                    // A part that holds borrows: what the place holds there.
+                    if holds {
+                        let held = vec![(Path::ROOT, record::place_origin(base))];
+                        flow.take(into, &self.walk(held, &regions), define);
                     }
                 }
                 // Below a reference made for the match, a binding by
-                // reference reborrows through it; the reference itself,
-                // bound whole, is its loans.
-                (Matched::Origins(origins), Some(_)) => flow.take(into, origins, define),
-                (Matched::Origins(origins), None) if holds && path.is_empty() => {
-                    flow.take(into, origins, define);
+                // reference reborrows through it, and holds all of it.
+                (Matched::Origins(origins), Some(_)) => {
+                    flow.take(into, &region::collapse(origins), define);
+                }
+                // `&(x, _)`: a part copied out from below it.
+                (Matched::Origins(origins), None) if holds => {
+                    flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
                 (Matched::Origins(_), None) => {}
                 // `Some(v)` of `v.first()`: a part of a value holding
                 // borrows holds them, bound by value or by reference.
-                (Matched::Held(origins), by_ref) if holds || by_ref.is_some() => {
-                    flow.take(into, origins, define);
+                (Matched::Held(origins), None) if holds => {
+                    flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
-                (Matched::Held(_), _) => {}
+                (Matched::Held(origins), Some(_)) => {
+                    let part = self.walk(origins.clone(), &regions);
+                    flow.take(into, &region::collapse(&part), define);
+                }
+                (Matched::Held(_), None) => {}
                 (Matched::Value { made }, by_ref) => {
                     if *made && (by_ref.is_some() || holds) {
                         flow.unmodeled("a pattern binding a borrow its subject made", span);
@@ -296,6 +369,20 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    /// What a part `regions` below a value holding `held` holds.
+    fn walk(&self, mut held: Held, regions: &[TraceRegion]) -> Held {
+        for step in regions {
+            held = match step {
+                TraceRegion::At(at) => region::sub(&held, *at),
+                TraceRegion::Field(definition, variant, slot) => {
+                    self.field_held(&held, *definition, variant.as_deref(), *slot)
+                }
+                TraceRegion::Unknown => region::collapse(&held),
+            };
+        }
+        held
     }
 
     /// A match arm `name =>`, `name` declared at `declaration`, binds the
@@ -309,6 +396,7 @@ impl Parser<'_> {
         let mut trace = PatternTrace::default();
         trace.parts.push(Part {
             path: Vec::new(),
+            regions: Vec::new(),
             kind: PartKind::Bind {
                 name: name.clone(),
                 span: declaration,
@@ -333,6 +421,7 @@ impl Parser<'_> {
         if tests {
             trace.parts.push(Part {
                 path: derefs.clone(),
+                regions: Vec::new(),
                 kind: PartKind::Test(Access::Read, None),
             });
         }
@@ -344,6 +433,7 @@ impl Parser<'_> {
             }
             Some((name, span)) => trace.parts.push(Part {
                 path: Vec::new(),
+                regions: Vec::new(),
                 kind: PartKind::Bind {
                     name: name.clone(),
                     span,
@@ -369,6 +459,7 @@ impl Parser<'_> {
         if !compiled.tests.is_empty() {
             trace.parts.push(Part {
                 path: self.derefs(written),
+                regions: Vec::new(),
                 kind: PartKind::Test(Access::Read, None),
             });
         }
@@ -416,10 +507,16 @@ impl Parser<'_> {
     /// What the borrow facts need of a call's argument.
     pub(super) fn argument_fact(&self, argument: &ParsedExpr) -> record::Argument {
         let ty = self.inference.resolve(&argument.ty);
+        let returns = match &ty {
+            Ty::Fn { output, .. } | Ty::FnItem { output, .. } | Ty::FnChoice { output, .. } => {
+                self.may_hold_borrow(output)
+            }
+            _ => true,
+        };
         record::Argument {
             span: argument.span,
             holds: self.may_hold_borrow(&ty),
-            reference: is_reference(&ty),
+            returns,
         }
     }
 
@@ -592,29 +689,34 @@ impl Parser<'_> {
             receiver::Mode::Owned => signature::Receiver::Owned,
         });
         if item.imported_identity().is_none() {
-            return Summary::unknown(arguments);
+            return Summary::unknown();
         }
+        // All of an input, at every position of the value.
+        let all = |input| Tap {
+            into: Path::ROOT,
+            from: Source::Input(input, Path::OWN),
+        };
         // `Parser::new(&text)`'s value borrows its `&str` inputs; a method
         // whose frame holds what it takes may borrow its receiver or them.
         if item.opens() {
             return match mode {
-                None => Summary::builtin(
-                    signature::Receiver::Owned,
-                    Keeps::Nothing,
-                    &vec![Keeps::All; arguments],
-                    &[],
-                    arguments,
+                None => Summary::taps(
+                    Some(signature::Receiver::Owned),
+                    (0..arguments)
+                        .map(|index| all(Input::Argument(index)))
+                        .collect(),
+                    Vec::new(),
                 ),
-                Some(_) => Summary::unknown(arguments),
+                Some(_) => Summary::unknown(),
             };
         }
         let lends = item.guard().is_some() || *output == Ty::Str;
         match (mode, lends) {
             (Some(mode @ (signature::Receiver::Shared | signature::Receiver::Mutable)), true) => {
-                Summary::builtin(mode, Keeps::All, &[], &[], arguments)
+                Summary::taps(Some(mode), vec![all(Input::Receiver)], Vec::new())
             }
-            (_, true) => Summary::unknown(arguments),
-            (mode, false) => Summary::nothing(mode, arguments),
+            (_, true) => Summary::unknown(),
+            (mode, false) => Summary::nothing(mode),
         }
     }
 
@@ -625,7 +727,7 @@ impl Parser<'_> {
         if !self.may_hold_borrow(ty) {
             return;
         }
-        let origins = self.flow().origins(value).map(<[Origin]>::to_vec);
+        let origins = self.flow().origins(value).map(<[(Path, Origin)]>::to_vec);
         if !self.closures.is_empty() {
             self.flow().closure_return(origins);
             return;
@@ -639,6 +741,130 @@ impl Parser<'_> {
         }
     }
 
+    /// The value spanning `whole`, of type `ty`, is the `part` of the one
+    /// spanning `base` (a field, a member, an element): it holds what that
+    /// value holds at the part's positions, through any reference it is
+    /// read through.
+    pub(super) fn part_of(&self, base: (Span, &Ty), whole: Span, ty: &Ty, part: PartOf) {
+        if !matches!(part, PartOf::Deref) {
+            let base_ty = self.inference.resolve(base.1);
+            let reference = is_reference(&base_ty);
+            let made = self.made_here(base.0, &base_ty);
+            self.flow().projected(whole, base.0, reference, made);
+        }
+        if !self.may_hold_borrow(ty) {
+            return;
+        }
+        let Some(held) = self.flow().origins(base.0).map(<[(Path, Origin)]>::to_vec) else {
+            return;
+        };
+        if let PartOf::Deref = part {
+            let value = region::sub(&held, path(&[Step::Arg(0)]));
+            self.flow().set_origins(whole, value);
+            return;
+        }
+        let mut at = Path::ROOT;
+        let mut base_ty = self.inference.resolve(base.1);
+        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = base_ty {
+            at = at.push(Step::Arg(0));
+            base_ty = self.inference.resolve(&target);
+        }
+        let value = region::sub(&held, at);
+        let part = match (part, &base_ty) {
+            (PartOf::Element, Ty::Array { .. }) => region::sub(&value, path(&[Step::Arg(0)])),
+            (PartOf::Element, Ty::Keyed(_, arguments)) if arguments.len() == 2 => {
+                region::sub(&value, path(&[Step::Arg(1)]))
+            }
+            (PartOf::Member(index), Ty::Tuple(_)) => {
+                region::sub(&value, path(&[Step::Arg(index as u8)]))
+            }
+            (PartOf::Field(definition, slot), Ty::Script(..)) => {
+                self.field_held(&value, definition, None, slot)
+            }
+            _ => region::collapse(&value),
+        };
+        self.flow().set_origins(whole, part);
+    }
+
+    /// What the field `slot` (of `variant`, for an enum) of a value of the
+    /// crate type `definition` holding `value` holds.
+    fn field_held(
+        &self,
+        value: &[(Path, Origin)],
+        definition: type_def::Id,
+        variant: Option<&str>,
+        slot: usize,
+    ) -> Held {
+        match self.field_positions(definition, variant, slot) {
+            Some(positions) => positions
+                .into_iter()
+                .filter_map(|(field, at)| Some(region::place(&region::sub(value, at?), field)))
+                .flatten()
+                .collect(),
+            None => region::collapse(value),
+        }
+    }
+
+    /// Where each region position of the field `slot` (of `variant`, for an
+    /// enum) of the crate type `definition` sits in the type, or `None` for
+    /// one these facts can't place.
+    fn field_positions(
+        &self,
+        definition: type_def::Id,
+        variant: Option<&str>,
+        slot: usize,
+    ) -> Option<Vec<(Path, Option<Path>)>> {
+        let (regions, generics, ty) = match self.models.definition(definition) {
+            Nominal::Struct { item, .. } => {
+                (&item.regions, &item.generics, &item.fields.get(slot)?.ty)
+            }
+            Nominal::Enum { item, .. } => {
+                let variant = item
+                    .variants
+                    .iter()
+                    .find(|declared| Some(declared.name.text.as_str()) == variant)?;
+                (&item.regions, &item.generics, variant.payload.get(slot)?)
+            }
+        };
+        let parameters: Vec<ImmutableString> = generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect();
+        signature::field_positions(ty, regions, &parameters, &|target| {
+            self.declared_lifetimes(target)
+        })
+    }
+
+    /// Where a `for` loop's element sits in the value it iterates, of type
+    /// `ty`: pairs of the element's position and the iterated value's.
+    pub(super) fn element_positions(&self, ty: &Ty) -> Vec<(Path, Path)> {
+        let a0 = path(&[Step::Arg(0)]);
+        let element = path(&[Step::Arg(0), Step::Arg(0)]);
+        match self.inference.resolve(ty) {
+            Ty::Iter(_) | Ty::Array { .. } | Ty::Option(_) | Ty::Range(_) => {
+                vec![(Path::ROOT, a0)]
+            }
+            // A map's `(K, V)` items are where its arguments are.
+            Ty::Keyed(_, arguments) if arguments.len() == 2 => vec![(Path::ROOT, Path::ROOT)],
+            Ty::Keyed(..) => vec![(Path::ROOT, a0)],
+            Ty::Reference { target, .. } => match self.inference.resolve(&target) {
+                Ty::Array { .. } | Ty::Option(_) => vec![(Path::OWN, Path::OWN), (a0, element)],
+                Ty::Keyed(_, arguments) if arguments.len() == 2 => vec![
+                    (path(&[Step::Arg(0), Step::Own]), Path::OWN),
+                    (element, element),
+                    (path(&[Step::Arg(1), Step::Own]), Path::OWN),
+                    (
+                        path(&[Step::Arg(1), Step::Arg(0)]),
+                        path(&[Step::Arg(0), Step::Arg(1)]),
+                    ),
+                ],
+                Ty::Keyed(..) => vec![(Path::OWN, Path::OWN), (a0, element)],
+                _ => vec![(Path::ROOT, Path::OWN)],
+            },
+            _ => vec![(Path::ROOT, Path::OWN)],
+        }
+    }
+
     /// `&value` (spanning `whole`) of a value that is no place: a borrow of
     /// a temporary its temporary scope holds, which a `let` may extend, or
     /// of a constant promoted to `'static` (`&1`, `&[1, 2]`), which borrows
@@ -648,7 +874,9 @@ impl Parser<'_> {
         let ty = self.inference.resolve(&value.ty);
         let holds = self.may_hold_borrow(&ty);
         let held = if holds {
-            self.flow().origins(value.span).map(<[Origin]>::to_vec)
+            self.flow()
+                .origins(value.span)
+                .map(<[(Path, Origin)]>::to_vec)
         } else {
             Some(Vec::new())
         };
@@ -657,12 +885,16 @@ impl Parser<'_> {
         let place = self.flow().in_place(value.span);
         match held {
             Some(held) if !place && self.made_here(value.span, &ty) => {
-                let loan = self.flow().borrow_temporary(value.span, false, &held, true);
-                self.flow().set_origins(whole, vec![Origin::Loan(loan)]);
+                let reference = self.flow().borrow_temporary(value.span, false, &held, true);
+                self.flow().set_origins(whole, reference);
             }
             // `&v.first()` of a value these facts do not follow: what the
-            // value holds.
-            _ if holds => self.flow().same_origins(whole, value.span),
+            // value holds, below its own region.
+            Some(held) if holds => {
+                let below = region::place(&held, path(&[Step::Arg(0)]));
+                self.flow().set_origins(whole, below);
+            }
+            _ if holds => {}
             _ => self.flow().set_origins(whole, Vec::new()),
         }
     }
@@ -719,43 +951,51 @@ impl Parser<'_> {
         Some(!self.moves_by_value(&ty))
     }
 
-    /// The value spanning `whole`, of type `ty`, is a part of the one
-    /// spanning `base` (a field, a member, an element): below no reference,
-    /// it holds what that value holds. A part read through a reference
-    /// holds that reference's inner borrows, which these facts can't tell
-    /// apart from its own loan yet.
-    pub(super) fn part_of(&self, base: (Span, &Ty), whole: Span, ty: &Ty) {
-        let base_ty = self.inference.resolve(base.1);
-        let reference = is_reference(&base_ty);
-        let made = self.made_here(base.0, &base_ty);
-        self.flow().projected(whole, base.0, reference, made);
-        if self.may_hold_borrow(ty) && !reference {
-            self.flow().same_origins(whole, base.0);
-        }
-    }
-
     /// A value of type `ty` spanning `whole` is made of `parts` (a struct's
-    /// fields, `Some(x)`, a tuple's or an array's members): it holds what
-    /// they hold. A type that can hold no borrow of the body holds only
-    /// `'static` ones (`Foo { x: &a }` of `x: &'static u32`).
-    pub(super) fn compose(&self, whole: Span, ty: &Ty, parts: &[&ParsedExpr]) {
+    /// fields, `Some(x)`, a tuple's or an array's members), each in its
+    /// slot: it holds what they hold, at their positions. A type that can
+    /// hold no borrow of the body holds only `'static` ones (`Foo { x: &a }`
+    /// of `x: &'static u32`).
+    pub(super) fn compose(&self, whole: Span, ty: &Ty, parts: &[(&ParsedExpr, Slot)]) {
         self.flow().constructed(whole.end());
-        let mut origins = Vec::new();
-        for part in parts {
+        let mut origins = Held::new();
+        let mut statics = Held::new();
+        for (part, slot) in parts {
             if !self.may_hold_borrow(&part.ty) {
                 continue;
             }
-            let held = self.flow().origins(part.span).map(<[Origin]>::to_vec);
-            match held {
-                Some(held) => origins.extend(held),
-                None => {
-                    self.flow().unmodeled(
-                        "a borrow stored in a value these facts do not follow",
-                        part.span,
-                    );
-                    return;
+            let held = self
+                .flow()
+                .origins(part.span)
+                .map(<[(Path, Origin)]>::to_vec);
+            let Some(held) = held else {
+                self.flow().unmodeled(
+                    "a borrow stored in a value these facts do not follow",
+                    part.span,
+                );
+                return;
+            };
+            match *slot {
+                Slot::At(at) => origins.extend(region::place(&held, at)),
+                Slot::Whole => origins.extend(held),
+                Slot::Field(definition, variant, index) => {
+                    match self.field_positions(definition, variant, index) {
+                        Some(positions) => {
+                            for (field, at) in positions {
+                                let part = region::sub(&held, field);
+                                match at {
+                                    Some(at) => origins.extend(region::place(&part, at)),
+                                    None => statics.extend(part),
+                                }
+                            }
+                        }
+                        None => origins.extend(region::collapse(&held)),
+                    }
                 }
             }
+        }
+        if !statics.is_empty() {
+            self.flow().forever(&statics);
         }
         if self.may_hold_borrow(ty) {
             // `impl Copy for Foo<'static>` asks a copied `Foo` for `'static`
@@ -794,11 +1034,10 @@ impl Parser<'_> {
         value: &ParsedExpr,
     ) {
         let end = value.span.end();
-        let arguments = self.flow().arguments(end).map_or(0, |found| found.len());
+        let output = self.inference.resolve(&value.ty);
         let summary = match self.call_summaries.remove(&end) {
             Some(summary) => summary,
-            None => builtin_summary(&receiver.ty, member, arguments)
-                .unwrap_or_else(|| Summary::unknown(arguments)),
+            None => builtin_summary(&receiver.ty, &output, member).unwrap_or_else(Summary::unknown),
         };
         // A `&mut self` call whose lowering recorded no borrow of its place
         // (`o.take()`): its two-phase borrow, reserved where the receiver
@@ -828,7 +1067,8 @@ impl Parser<'_> {
     /// The call spanning `call`, whose value has type `ty`, keeps what
     /// `summary` says of `receiver` and of its arguments: the value's
     /// borrows, a `&mut self` receiver's stored ones, and those borrowed for
-    /// `'static`. What the facts can't follow is left to rustc (D572.5).
+    /// `'static`, each at its position. What the facts can't follow is left
+    /// to rustc (D572.5).
     pub(super) fn kept_by_call(
         &self,
         call: Span,
@@ -843,9 +1083,9 @@ impl Parser<'_> {
             .map(|argument| argument.span)
             .chain(receiver.map(|receiver| receiver.span))
         {
-            let origins = self.flow().origins(span).map(<[Origin]>::to_vec);
-            if let Some(origins) = origins {
-                self.flow().pin(&origins);
+            let held = self.flow().origins(span).map(<[(Path, Origin)]>::to_vec);
+            if let Some(held) = held {
+                self.flow().pin(&held);
             }
         }
         let holds = self.may_hold_borrow(ty);
@@ -859,68 +1099,63 @@ impl Parser<'_> {
         if holds && self.needs_drop(ty, call).unwrap_or(true) {
             known = false;
         }
-        // An argument's borrows that `keeps` says are kept, or `None`.
-        let argument = |argument: &record::Argument, keeps: Keeps| -> Option<Vec<Origin>> {
-            let flow = self.flow();
-            let origins = flow.origins(argument.span).map(<[Origin]>::to_vec);
-            match keeps {
-                Keeps::Nothing => Some(Vec::new()),
-                _ if !argument.holds => Some(Vec::new()),
-                Keeps::All => origins,
-                Keeps::Inner if !argument.reference => origins,
-                Keeps::Inner => flow.inner_origins(argument.span),
-                Keeps::Unknown => None,
-            }
+        let mut inputs = CallInputs {
+            call,
+            receiver,
+            mode: summary.mode,
+            arguments: &arguments,
+            taken: None,
         };
-        let mut origins = Vec::new();
+        let mut origins = Held::new();
         if holds {
-            if let Some(receiver) = receiver {
-                match self.receiver_kept(receiver, summary, call) {
-                    Some(kept) => origins.extend(kept),
-                    None => known = false,
+            match &summary.output {
+                Some(taps) => {
+                    for tap in taps {
+                        match self.read_input(&mut inputs, tap.from) {
+                            Some(held) => origins.extend(region::place(&held, tap.into)),
+                            None => known = false,
+                        }
+                    }
                 }
-            }
-            for (index, found) in arguments.iter().enumerate() {
-                let keeps = summary
-                    .parameters
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Keeps::Unknown);
-                match argument(found, keeps) {
-                    Some(kept) => origins.extend(kept),
-                    None => known = false,
-                }
+                None => known = false,
             }
         }
-        for (index, found) in arguments.iter().enumerate() {
-            let stores = summary.stores.get(index).copied().unwrap_or(Keeps::Nothing);
-            if stores != Keeps::Nothing {
-                match (argument(found, stores), receiver) {
-                    (Some(stored), _) if stored.is_empty() => {}
-                    (Some(stored), Some(receiver)) if receiver.place => {
-                        known &= self.flow().store(receiver.start, &stored);
+        let any_holds = arguments.iter().any(|argument| argument.holds);
+        match &summary.stores {
+            Some(taps) => {
+                for tap in taps {
+                    match (self.read_input(&mut inputs, tap.from), receiver) {
+                        (Some(stored), _) if stored.is_empty() => {}
+                        (Some(stored), Some(receiver)) if receiver.place => {
+                            let stored = region::place(&stored, tap.into);
+                            known &= self.flow().store(receiver.start, &stored);
+                        }
+                        _ => known = false,
                     }
-                    _ => known = false,
                 }
             }
-            let statics = summary
-                .statics
-                .get(index)
-                .copied()
-                .unwrap_or(Keeps::Nothing);
-            if statics != Keeps::Nothing {
-                match argument(found, statics) {
-                    Some(forever) => self.flow().forever(&forever),
-                    None => known = false,
+            None if any_holds => known = false,
+            None => {}
+        }
+        match &summary.statics {
+            Some(statics) => {
+                for &(input, at) in statics {
+                    match self.read_input(&mut inputs, Source::Input(input, at)) {
+                        Some(forever) if forever.is_empty() => {}
+                        Some(forever) => self.flow().forever(&forever),
+                        None => known = false,
+                    }
                 }
             }
-            // A receiver that can hold no borrow stores none (`s.push_str`).
-            if summary.unknown_stores
-                && found.holds
-                && receiver.is_none_or(|receiver| self.may_hold_borrow(&receiver.ty))
-            {
-                known = false;
-            }
+            None if any_holds => known = false,
+            None => {}
+        }
+        // A receiver that can hold no borrow stores none (`s.push_str`).
+        if summary.unknown_stores
+            && any_holds
+            && receiver.is_none_or(|receiver| self.may_hold_borrow(&receiver.ty))
+        {
+            known = false;
         }
         if !known {
             self.flow()
@@ -930,74 +1165,126 @@ impl Parser<'_> {
         }
     }
 
-    /// What a call's value keeps of its receiver, as `summary` says, or
-    /// `None`.
-    fn receiver_kept(
-        &self,
-        receiver: &CallReceiver,
-        summary: &Summary,
-        call: Span,
-    ) -> Option<Vec<Origin>> {
-        let holds = self.may_hold_borrow(&receiver.ty);
-        let reference = is_reference(&receiver.ty);
-        let value = || self.flow().origins(receiver.span).map(<[Origin]>::to_vec);
-        let held = || -> Option<Vec<Origin>> {
-            if !holds {
-                return Some(Vec::new());
+    /// What `from` holds of a call's inputs, or `None` where these facts
+    /// can't tell.
+    fn read_input(&self, inputs: &mut CallInputs<'_>, from: Source) -> Option<Held> {
+        match from {
+            Source::Input(Input::Argument(index), at) => {
+                let argument = inputs.arguments.get(index)?;
+                if !argument.holds {
+                    return Some(Held::new());
+                }
+                let held = self.flow().origins(argument.span)?.to_vec();
+                Some(region::sub(&held, at))
             }
-            let held = self.flow().held(receiver.start);
-            match held {
-                Some(origin) => Some(vec![origin]),
-                None => value(),
-            }
-        };
-        let mode = summary.mode.unwrap_or(signature::Receiver::Owned);
-        match (summary.receiver, mode) {
-            (Keeps::Nothing, _) => Some(Vec::new()),
-            (Keeps::Unknown, _) => None,
-            // By value: what the receiver holds, as it is.
-            (_, signature::Receiver::Owned) if !holds => Some(Vec::new()),
-            (_, signature::Receiver::Owned) if receiver.place => held(),
-            (_, signature::Receiver::Owned) => value(),
-            // `s.trim()` of a `&str`: the reference itself, reborrowed.
-            (_, _) if receiver.ty == Ty::Str => {
-                if receiver.place {
-                    held()
-                } else {
-                    value()
+            Source::Input(Input::Receiver, at) => {
+                let receiver = inputs.receiver?;
+                // The receiver's own region is the borrow made for the call,
+                // made only when a position reads it.
+                let own = at.is_root() || at.steps().next() == Some(Step::Own);
+                if own && inputs.taken.is_none() {
+                    inputs.taken = Some(self.receiver_input(receiver, inputs.mode, inputs.call));
+                }
+                match &inputs.taken {
+                    Some(taken) => Some(region::sub(taken.as_ref()?, at)),
+                    None => {
+                        let value = self.receiver_value(receiver, inputs.mode)?;
+                        Some(region::sub(&value, at))
+                    }
                 }
             }
-            (Keeps::All, mode) if receiver.place => {
-                let mutable = mode == signature::Receiver::Mutable;
-                let below = match &receiver.ty {
-                    Ty::Reference { target, .. } => self.may_hold_borrow(target),
-                    ty => self.may_hold_borrow(ty),
-                };
-                let whole = span(receiver.start, call.end());
-                self.flow()
-                    .autoref(receiver.start, whole, mutable, below)
-                    .map(|origin| vec![origin])
+            // What a closure's call returns of what it captured.
+            Source::Call(index) => {
+                let argument = inputs.arguments.get(index)?;
+                match self.flow().closure_keeps(argument.span) {
+                    Some(keeps) => keeps.clone(),
+                    None if !argument.returns => Some(Held::new()),
+                    None => None,
+                }
             }
-            // A reference made here (`v.iter().as_slice()`) is its loans.
-            (Keeps::All, _) if reference => value(),
+        }
+    }
+
+    /// The receiver of a method taking it as `mode`, as the method takes it,
+    /// but for a `&self` method's own region: for `&self` the reference, with
+    /// the value it refers to below `Arg(0)`, through any references and
+    /// boxes the call goes through. `None` where these facts can't tell.
+    fn receiver_value(
+        &self,
+        receiver: &CallReceiver,
+        mode: Option<signature::Receiver>,
+    ) -> Option<Held> {
+        let value = if !self.may_hold_borrow(&receiver.ty) {
+            Held::new()
+        } else if receiver.place
+            && let Some(origin) = self.flow().held(receiver.start)
+        {
+            vec![(Path::ROOT, origin)]
+        } else {
+            self.flow().origins(receiver.span)?.to_vec()
+        };
+        // By value, or `s.trim()` of a `&str`: the receiver as it is.
+        if mode.is_none_or(|mode| mode == signature::Receiver::Owned) || receiver.ty == Ty::Str {
+            return Some(value);
+        }
+        match through(&receiver.ty) {
+            // A reference to a reference: all of it, wherever it is.
+            (_, references) if references > 1 => Some(region::collapse(&value)),
+            // A reference made here is the reference passed.
+            (at, 1) if !receiver.place && at.len() == 1 => Some(value),
+            (at, _) => Some(region::place(
+                &region::sub(&value, at),
+                path(&[Step::Arg(0)]),
+            )),
+        }
+    }
+
+    /// The receiver as a method taking it as `mode` takes it, with its own
+    /// region: for `&self` of a place, the borrow made for the call.
+    fn receiver_input(
+        &self,
+        receiver: &CallReceiver,
+        mode: Option<signature::Receiver>,
+        call: Span,
+    ) -> Option<Held> {
+        let mut value = self.receiver_value(receiver, mode)?;
+        let mode = mode.unwrap_or(signature::Receiver::Owned);
+        if mode == signature::Receiver::Owned || receiver.ty == Ty::Str {
+            return Some(value);
+        }
+        let (at, references) = through(&receiver.ty);
+        if references > 1 {
+            return Some(value);
+        }
+        let mutable = mode == signature::Receiver::Mutable;
+        if !receiver.place {
+            // A reference made here (`v.iter().as_slice()`) has its own
+            // region already.
+            if references == 1 && at.len() == 1 {
+                return Some(value);
+            }
             // A value made here (`String::from("a").as_str()`): a temporary
             // borrowed for the call, which its temporary scope holds.
-            (Keeps::All, mode)
-                if !self.flow().in_place(receiver.span)
-                    && self.made_here(receiver.span, &receiver.ty) =>
+            if references == 0
+                && !self.flow().in_place(receiver.span)
+                && self.made_here(receiver.span, &receiver.ty)
             {
-                let held = if holds { value()? } else { Vec::new() };
-                let mutable = mode == signature::Receiver::Mutable;
-                let loan = self
-                    .flow()
-                    .borrow_temporary(receiver.span, mutable, &held, false);
-                Some(vec![Origin::Loan(loan)])
+                let held = region::sub(&value, path(&[Step::Arg(0)]));
+                return Some(
+                    self.flow()
+                        .borrow_temporary(receiver.span, mutable, &held, false),
+                );
             }
-            (Keeps::All, _) => None,
-            (Keeps::Inner, _) if receiver.place && !reference => held(),
-            (Keeps::Inner, _) if !reference => value(),
-            (Keeps::Inner, _) => None,
+            return None;
         }
+        let below = match &receiver.ty {
+            Ty::Reference { target, .. } => self.may_hold_borrow(target),
+            ty => self.may_hold_borrow(ty),
+        };
+        let whole = span(receiver.start, call.end());
+        let loan = self.flow().autoref(receiver.start, whole, mutable, below)?;
+        value.push((Path::OWN, loan));
+        Some(value)
     }
 
     /// The place `value` reads one step further down.
@@ -1131,16 +1418,40 @@ impl Parser<'_> {
         let origins = self
             .flow()
             .origins(replacement.span)
-            .map(<[borrowck::Origin]>::to_vec);
+            .map(<[(Path, Origin)]>::to_vec);
         let stored = holds
             && !compound
             && self.may_hold_borrow(target_ty)
-            && origins.is_some_and(|origins| self.flow().store(target.start(), &origins));
+            && origins.is_some_and(|origins| self.store_borrows(target.start(), lvalue, &origins));
         // `s += &t` of a `String` makes a new value that holds no borrow.
         let holds = holds && self.may_hold_borrow(target_ty);
         if !stored {
             self.flow().escapes(replacement.span, start, holds);
         }
+    }
+
+    /// The place the use starting at `start` reads, the target `lvalue`,
+    /// takes `held`: a crate type's field of a local at the field's
+    /// positions in the local's type. Whether these facts follow it.
+    fn store_borrows(&self, start: Position, lvalue: &Lvalue, held: &[(Path, Origin)]) -> bool {
+        if let Lvalue::Field(field) = lvalue
+            && let Some(positions) = self.field_positions(field.definition.id(), None, field.slot)
+        {
+            let mut placed = Held::new();
+            let mut statics = Held::new();
+            for (field_at, at) in positions {
+                let part = region::sub(held, field_at);
+                match at {
+                    Some(at) => placed.extend(region::place(&part, at)),
+                    None => statics.extend(part),
+                }
+            }
+            if !statics.is_empty() {
+                self.flow().forever(&statics);
+            }
+            return self.flow().store_field(start, &placed);
+        }
+        self.flow().store(start, held)
     }
 
     /// Whether a value of type `ty` may hold a borrow: its loans then flow
@@ -1204,40 +1515,156 @@ impl Parser<'_> {
     }
 }
 
-/// What std's method `member` on a builtin value of type `receiver` keeps of
-/// its receiver and arguments, as its signature says, or `None` for one not
-/// listed. A method whose value holds no borrow needs no entry unless it
-/// stores its arguments.
-fn builtin_summary(receiver: &Ty, member: &str, arguments: usize) -> Option<Summary> {
+/// The path through the references and boxes of `ty` to the value they
+/// hold, and how many of them are references.
+fn through(ty: &Ty) -> (Path, usize) {
+    let mut ty = ty;
+    let mut at = Path::ROOT;
+    let mut references = 0;
+    loop {
+        match ty {
+            Ty::Reference { target, .. } => {
+                references += 1;
+                at = at.push(Step::Arg(0));
+                ty = target;
+            }
+            Ty::Boxed(_, target) => {
+                at = at.push(Step::Arg(0));
+                ty = target;
+            }
+            _ => return (at, references),
+        }
+    }
+}
+
+/// A call's inputs, as [`Parser::kept_by_call`] reads them.
+struct CallInputs<'a> {
+    call: Span,
+    receiver: Option<&'a CallReceiver>,
+    mode: Option<signature::Receiver>,
+    arguments: &'a [record::Argument],
+    /// The receiver as the method takes it, with its own region, once a
+    /// position reads that.
+    taken: Option<Option<Held>>,
+}
+
+/// What std's method `member` on a builtin value of type `receiver`, whose
+/// value has type `output`, keeps of its receiver and arguments, position by
+/// position, as its signature says, or `None` for one not listed. A method
+/// whose value holds no borrow needs no entry unless it stores its
+/// arguments.
+///
+/// The receiver is as the method takes it: for `&self`, `[Own]` is the
+/// borrow and `Self` is below `[Arg(0)]`.
+fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> {
     use signature::Receiver::{Mutable, Owned, Shared};
-    use Keeps::{All, Inner, Nothing};
+    const O: Step = Step::Own;
+    const A0: Step = Step::Arg(0);
+    const A1: Step = Step::Arg(1);
     let mut ty = receiver;
+    let mut references = 0;
     while let Ty::Reference { target, .. } = ty {
         ty = target;
+        references += 1;
     }
-    let entry = |mode, receiver, parameters: &[Keeps], stores: &[Keeps]| {
-        Some(Summary::builtin(
-            mode, receiver, parameters, stores, arguments,
-        ))
+    let tap = |into: &[Step], from: Source| Tap {
+        into: path(into),
+        from,
     };
+    let own = |at: &[Step]| Source::Input(Input::Receiver, path(at));
+    let argument = |index: usize, at: &[Step]| Source::Input(Input::Argument(index), path(at));
+    let call = Source::Call;
+    let entry =
+        |mode, output: Vec<Tap>, stores: Vec<Tap>| Some(Summary::taps(Some(mode), output, stores));
+    // All of the receiver, borrow and all, at every position: a value
+    // whose regions are all the borrow's (`s.trim()`).
+    let all = || vec![tap(&[], own(&[O]))];
+    // All of what `&self` refers to, without the borrow, at every position:
+    // a value these facts don't place (`v.remove(i)` of a `Vec` or a
+    // `VecDeque`).
+    let inner = || vec![tap(&[], own(&[A0, O]))];
+    // `&'a T` of what `&'a self` refers to at `at`, placed at `into`.
+    let reference = |into: &[Step], at: &[Step]| {
+        let mut target = into.to_vec();
+        target.push(A0);
+        let mut referred = vec![A0];
+        referred.extend_from_slice(at);
+        let mut own_at = into.to_vec();
+        own_at.push(O);
+        vec![tap(&own_at, own(&[O])), tap(&target, own(&referred))]
+    };
+    // An iterator of `&'a T` of what `&'a self` refers to at `at`.
+    let iter = |at: &[Step]| {
+        let mut taps = vec![tap(&[O], own(&[O]))];
+        taps.extend(reference(&[A0], at));
+        taps
+    };
+    let map = |arguments: &[Ty]| arguments.len() == 2;
     match ty {
         Ty::Array { .. } => match member {
-            "first" | "last" | "get" | "iter" | "as_slice" | "split_first" | "split_last"
-            | "split_at" | "windows" | "chunks" | "chunks_exact" | "rchunks" | "front" | "back"
-            | "as_ref" | "range" => entry(Shared, All, &[], &[]),
-            "get_mut" | "first_mut" | "last_mut" | "iter_mut" | "as_mut_slice" | "split_at_mut"
-            | "chunks_mut" | "drain" | "front_mut" | "back_mut" | "split_first_mut"
-            | "split_last_mut" => entry(Mutable, All, &[], &[]),
-            "to_vec" | "clone" | "concat" | "to_owned" => entry(Shared, Inner, &[], &[]),
-            "pop" | "remove" | "swap_remove" | "pop_front" | "pop_back" | "split_off" => {
-                entry(Mutable, Inner, &[], &[])
+            // `v.get(1..3)` gives a slice.
+            "get" | "get_mut"
+                if matches!(output, Ty::Option(item)
+                    if matches!(&**item, Ty::Reference { target, .. }
+                        if matches!(&**target, Ty::Array { .. }))) =>
+            {
+                entry(Shared, vec![tap(&[A0], own(&[]))], Vec::new())
             }
-            "into_iter" => entry(Owned, All, &[], &[]),
-            "push" | "push_back" | "push_front" | "extend" | "fill" => {
-                entry(Mutable, Nothing, &[], &[All])
+            "first" | "last" | "get" | "front" | "back" => {
+                entry(Shared, reference(&[A0], &[A0]), Vec::new())
             }
-            "insert" | "resize" => entry(Mutable, Nothing, &[], &[Nothing, All]),
-            "append" | "extend_from_slice" => entry(Mutable, Nothing, &[], &[Inner]),
+            "get_mut" | "first_mut" | "last_mut" | "front_mut" | "back_mut" => {
+                entry(Mutable, reference(&[A0], &[A0]), Vec::new())
+            }
+            "iter" => entry(Shared, iter(&[A0]), Vec::new()),
+            "iter_mut" => entry(Mutable, iter(&[A0]), Vec::new()),
+            "as_slice" | "as_ref" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
+            "as_mut_slice" | "as_mut" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
+            "split_at" => entry(
+                Shared,
+                vec![tap(&[A0], own(&[])), tap(&[A1], own(&[]))],
+                Vec::new(),
+            ),
+            "split_at_mut" => entry(
+                Mutable,
+                vec![tap(&[A0], own(&[])), tap(&[A1], own(&[]))],
+                Vec::new(),
+            ),
+            "windows" | "chunks" | "chunks_exact" | "rchunks" | "range" => entry(
+                Shared,
+                vec![tap(&[O], own(&[O])), tap(&[A0], own(&[]))],
+                Vec::new(),
+            ),
+            "split_first" | "split_last" => entry(Shared, all(), Vec::new()),
+            "chunks_mut" | "split_first_mut" | "split_last_mut" => {
+                entry(Mutable, all(), Vec::new())
+            }
+            "drain" => entry(
+                Mutable,
+                vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
+                Vec::new(),
+            ),
+            "to_vec" | "clone" | "to_owned" => {
+                entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new())
+            }
+            "concat" => entry(Shared, inner(), Vec::new()),
+            "pop" | "pop_front" | "pop_back" => {
+                entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
+            }
+            "remove" | "swap_remove" => entry(Mutable, inner(), Vec::new()),
+            "split_off" => entry(Mutable, vec![tap(&[], own(&[A0]))], Vec::new()),
+            "into_iter" if references > 0 => entry(Owned, iter(&[A0]), Vec::new()),
+            "into_iter" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
+            "push" | "push_back" | "push_front" | "fill" => {
+                entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[]))])
+            }
+            "insert" | "resize" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(1, &[]))]),
+            "extend" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[O]))]),
+            "append" | "extend_from_slice" => entry(
+                Mutable,
+                Vec::new(),
+                vec![tap(&[A0], argument(0, &[A0, A0]))],
+            ),
             _ => None,
         },
         Ty::String | Ty::Str => match member {
@@ -1261,59 +1688,283 @@ fn builtin_summary(receiver: &Ty, member: &str, arguments: usize) -> Option<Summ
             | "rsplit_once"
             | "get"
             | "as_ref"
-            | "split_at" => entry(Shared, All, &[], &[]),
+            | "split_at" => entry(Shared, all(), Vec::new()),
             // `Split<'a, P>` keeps its pattern.
             "split" | "rsplit" | "split_terminator" | "split_inclusive" | "matches"
-            | "match_indices" => entry(Shared, All, &[All], &[]),
-            "splitn" | "rsplitn" => entry(Shared, All, &[Nothing, All], &[]),
-            _ => None,
-        },
-        Ty::Keyed(..) => match member {
-            "get" | "get_key_value" | "iter" | "keys" | "values" | "first_key_value"
-            | "last_key_value" | "range" | "first" | "last" => entry(Shared, All, &[], &[]),
-            "union" | "intersection" | "difference" | "symmetric_difference" => {
-                entry(Shared, All, &[All], &[])
+            | "match_indices" => {
+                let mut taps = all();
+                taps.push(tap(&[], argument(0, &[O])));
+                entry(Shared, taps, Vec::new())
             }
-            "get_mut" | "iter_mut" | "values_mut" => entry(Mutable, All, &[], &[]),
-            "remove" | "remove_entry" | "pop_first" | "pop_last" | "take" => {
-                entry(Mutable, Inner, &[], &[])
+            "splitn" | "rsplitn" => {
+                let mut taps = all();
+                taps.push(tap(&[], argument(1, &[O])));
+                entry(Shared, taps, Vec::new())
             }
-            "insert" => entry(Mutable, Inner, &[], &[All, All]),
-            "extend" | "push" => entry(Mutable, Nothing, &[], &[All]),
-            "clone" => entry(Shared, Inner, &[], &[]),
-            "into_iter" | "into_keys" | "into_values" => entry(Owned, All, &[], &[]),
             _ => None,
         },
-        // A value's borrows are one set in these facts, so a method whose
-        // value is part of an item (`copied` of `Option<&T>`) or a closure's
-        // result can't be followed when that value holds a borrow.
-        Ty::Option(_) | Ty::Result(..) => match member {
-            "unwrap" | "expect" | "unwrap_or_default" | "flatten" | "ok" | "err" | "unwrap_err"
-            | "expect_err" | "filter" | "inspect" => entry(Owned, All, &[], &[]),
-            "unwrap_or" | "ok_or" | "or" | "xor" | "zip" => entry(Owned, All, &[All], &[]),
-            "and" => entry(Owned, Nothing, &[All], &[]),
-            "as_ref" | "as_deref" | "iter" => entry(Shared, All, &[], &[]),
-            "as_mut" | "as_deref_mut" | "iter_mut" => entry(Mutable, All, &[], &[]),
-            "get_or_insert" | "insert" => entry(Mutable, All, &[], &[All]),
-            // What it stores is its closure's value, not the closure.
-            "get_or_insert_with" => entry(Mutable, All, &[], &[Keeps::Unknown]),
-            "take" => entry(Mutable, Inner, &[], &[]),
-            "replace" => entry(Mutable, Inner, &[], &[All]),
-            _ => None,
-        },
+        Ty::Keyed(_, arguments) => {
+            let map = map(arguments);
+            // Where a map keeps its values, or a set its keys.
+            let values: &[Step] = if map { &[A1] } else { &[A0] };
+            // `(&'a K, &'a V)` of a map's entry, or `&'a K` of a set's.
+            let entry_ref = |into: &[Step]| {
+                if map {
+                    let mut taps = Vec::new();
+                    for (member, argument) in [(A0, A0), (A1, A1)] {
+                        let mut at = into.to_vec();
+                        at.push(member);
+                        taps.extend(reference(&at, &[argument]));
+                    }
+                    taps
+                } else {
+                    reference(into, &[A0])
+                }
+            };
+            match member {
+                "get" | "first" | "last" => entry(Shared, reference(&[A0], values), Vec::new()),
+                "get_mut" => entry(Mutable, reference(&[A0], values), Vec::new()),
+                "get_key_value" | "first_key_value" | "last_key_value" if map => {
+                    entry(Shared, entry_ref(&[A0]), Vec::new())
+                }
+                "iter" | "range" => {
+                    let mut taps = vec![tap(&[O], own(&[O]))];
+                    taps.extend(entry_ref(&[A0]));
+                    entry(Shared, taps, Vec::new())
+                }
+                "iter_mut" => {
+                    let mut taps = vec![tap(&[O], own(&[O]))];
+                    taps.extend(entry_ref(&[A0]));
+                    entry(Mutable, taps, Vec::new())
+                }
+                "keys" => entry(Shared, iter(&[A0]), Vec::new()),
+                "values" => entry(Shared, iter(values), Vec::new()),
+                "values_mut" => entry(Mutable, iter(values), Vec::new()),
+                "union" | "intersection" | "difference" | "symmetric_difference" => {
+                    let mut taps = iter(&[A0]);
+                    taps.push(tap(&[O], argument(0, &[O])));
+                    taps.push(tap(&[A0, O], argument(0, &[O])));
+                    taps.push(tap(&[A0, A0], argument(0, &[A0, A0])));
+                    entry(Shared, taps, Vec::new())
+                }
+                "remove" | "take" => {
+                    let mut at = vec![A0];
+                    at.extend_from_slice(values);
+                    entry(Mutable, vec![tap(&[A0], own(&at))], Vec::new())
+                }
+                "remove_entry" | "pop_first" | "pop_last" if map => {
+                    entry(Mutable, vec![tap(&[A0], own(&[A0]))], Vec::new())
+                }
+                "pop_first" | "pop_last" => {
+                    entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
+                }
+                "insert" if map => entry(
+                    Mutable,
+                    vec![tap(&[A0], own(&[A0, A1]))],
+                    vec![tap(&[A0], argument(0, &[])), tap(&[A1], argument(1, &[]))],
+                ),
+                "insert" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[]))]),
+                "extend" | "push" => entry(Mutable, Vec::new(), vec![tap(&[], argument(0, &[O]))]),
+                "clone" => entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new()),
+                "into_iter" if references > 0 => {
+                    let mut taps = vec![tap(&[O], own(&[O]))];
+                    taps.extend(entry_ref(&[A0]));
+                    entry(Owned, taps, Vec::new())
+                }
+                // A map's `(K, V)` items are where its arguments are.
+                "into_iter" if map => entry(Owned, vec![tap(&[A0], own(&[]))], Vec::new()),
+                "into_iter" | "into_keys" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
+                "into_values" => entry(Owned, vec![tap(&[A0], own(&[A1]))], Vec::new()),
+                _ => None,
+            }
+        }
+        Ty::Option(_) | Ty::Result(..) => {
+            let result = matches!(ty, Ty::Result(..));
+            // A `Result`'s error stays where it is.
+            let error = |mut taps: Vec<Tap>| {
+                if result {
+                    taps.push(tap(&[A1], own(&[A1])));
+                }
+                taps
+            };
+            match member {
+                "unwrap" | "expect" | "unwrap_or_default" | "unwrap_unchecked" | "flatten" => {
+                    entry(Owned, vec![tap(&[], own(&[A0]))], Vec::new())
+                }
+                "unwrap_err" | "expect_err" => entry(Owned, vec![tap(&[], own(&[A1]))], Vec::new()),
+                "ok" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
+                "err" => entry(Owned, vec![tap(&[A0], own(&[A1]))], Vec::new()),
+                "filter" | "inspect" => entry(Owned, vec![tap(&[], own(&[]))], Vec::new()),
+                "unwrap_or" => entry(
+                    Owned,
+                    vec![tap(&[], own(&[A0])), tap(&[], argument(0, &[]))],
+                    Vec::new(),
+                ),
+                "ok_or" => entry(
+                    Owned,
+                    vec![tap(&[A0], own(&[A0])), tap(&[A1], argument(0, &[]))],
+                    Vec::new(),
+                ),
+                "or" | "xor" => entry(
+                    Owned,
+                    vec![tap(&[], own(&[])), tap(&[], argument(0, &[]))],
+                    Vec::new(),
+                ),
+                "zip" => entry(
+                    Owned,
+                    vec![
+                        tap(&[A0, A0], own(&[A0])),
+                        tap(&[A0, A1], argument(0, &[A0])),
+                    ],
+                    Vec::new(),
+                ),
+                "and" => entry(Owned, vec![tap(&[], argument(0, &[]))], Vec::new()),
+                "as_ref" | "as_mut" => {
+                    let mut taps = reference(&[A0], &[A0]);
+                    if result {
+                        taps.extend(reference(&[A1], &[A1]));
+                    }
+                    entry(
+                        if member == "as_ref" { Shared } else { Mutable },
+                        taps,
+                        Vec::new(),
+                    )
+                }
+                "as_deref" => entry(Shared, all(), Vec::new()),
+                "as_deref_mut" => entry(Mutable, all(), Vec::new()),
+                "iter" => entry(Shared, iter(&[A0]), Vec::new()),
+                "iter_mut" => entry(Mutable, iter(&[A0]), Vec::new()),
+                "get_or_insert" | "insert" => entry(
+                    Mutable,
+                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
+                    vec![tap(&[A0], argument(0, &[]))],
+                ),
+                // What it stores is its closure's value.
+                "get_or_insert_with" => entry(
+                    Mutable,
+                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
+                    vec![tap(&[A0], call(0))],
+                ),
+                "take" => entry(Mutable, vec![tap(&[], own(&[A0]))], Vec::new()),
+                "replace" => entry(
+                    Mutable,
+                    vec![tap(&[], own(&[A0]))],
+                    vec![tap(&[A0], argument(0, &[]))],
+                ),
+                "copied" | "cloned" => {
+                    entry(Owned, error(vec![tap(&[A0], own(&[A0, A0]))]), Vec::new())
+                }
+                "map" => entry(Owned, error(vec![tap(&[A0], call(0))]), Vec::new()),
+                "and_then" => entry(Owned, error(vec![tap(&[], call(0))]), Vec::new()),
+                "unwrap_or_else" => entry(
+                    Owned,
+                    vec![tap(&[], own(&[A0])), tap(&[], call(0))],
+                    Vec::new(),
+                ),
+                "map_or" => entry(
+                    Owned,
+                    vec![tap(&[], argument(0, &[])), tap(&[], call(1))],
+                    Vec::new(),
+                ),
+                "map_or_else" => entry(
+                    Owned,
+                    vec![tap(&[], call(0)), tap(&[], call(1))],
+                    Vec::new(),
+                ),
+                "ok_or_else" | "map_err" => entry(
+                    Owned,
+                    vec![tap(&[A0], own(&[A0])), tap(&[A1], call(0))],
+                    Vec::new(),
+                ),
+                "or_else" => entry(
+                    Owned,
+                    vec![tap(&[], own(&[])), tap(&[], call(0))],
+                    Vec::new(),
+                ),
+                _ => None,
+            }
+        }
         // An adapter holds the iterator it takes, and its closure; a method
-        // whose value is items is not listed.
-        Ty::Iter(_) => match member {
-            "enumerate" | "rev" | "skip" | "take" | "step_by" | "cloned" | "copied"
-            | "peekable" | "flatten" | "fuse" | "cycle" | "into_iter" => {
-                entry(Owned, All, &[], &[])
+        // whose value is an item holds the item's regions only.
+        Ty::Iter(_) => {
+            let closure = |item: Vec<Tap>| {
+                let mut taps = vec![tap(&[O], own(&[O])), tap(&[O], argument(0, &[O]))];
+                taps.extend(item);
+                taps
+            };
+            match member {
+                "rev" | "skip" | "take" | "step_by" | "peekable" | "fuse" | "cycle"
+                | "into_iter" => entry(Owned, vec![tap(&[], own(&[]))], Vec::new()),
+                "by_ref" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
+                "enumerate" => entry(
+                    Owned,
+                    vec![tap(&[O], own(&[O])), tap(&[A0, A1], own(&[A0]))],
+                    Vec::new(),
+                ),
+                "copied" | "cloned" => entry(
+                    Owned,
+                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
+                    Vec::new(),
+                ),
+                "filter" | "take_while" | "skip_while" | "inspect" => {
+                    entry(Owned, closure(vec![tap(&[A0], own(&[A0]))]), Vec::new())
+                }
+                "map" | "filter_map" | "flat_map" | "map_while" => {
+                    entry(Owned, closure(vec![tap(&[A0], call(0))]), Vec::new())
+                }
+                "flatten" => entry(Owned, vec![tap(&[], own(&[O]))], Vec::new()),
+                "zip" => entry(
+                    Owned,
+                    vec![
+                        tap(&[O], own(&[O])),
+                        tap(&[O], argument(0, &[O])),
+                        tap(&[A0, A0], own(&[A0])),
+                        tap(&[A0, A1], argument(0, &[O])),
+                    ],
+                    Vec::new(),
+                ),
+                "chain" => entry(
+                    Owned,
+                    vec![
+                        tap(&[O], own(&[O])),
+                        tap(&[O], argument(0, &[O])),
+                        tap(&[A0], own(&[A0])),
+                        tap(&[A0], argument(0, &[O])),
+                    ],
+                    Vec::new(),
+                ),
+                "scan" => entry(
+                    Owned,
+                    vec![
+                        tap(&[], own(&[O])),
+                        tap(&[], argument(0, &[O])),
+                        tap(&[], argument(1, &[O])),
+                    ],
+                    Vec::new(),
+                ),
+                "next" | "next_back" | "nth" | "nth_back" | "find" => {
+                    entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
+                }
+                "find_map" => entry(Mutable, vec![tap(&[A0], call(0))], Vec::new()),
+                "peek" => entry(Mutable, reference(&[A0], &[A0]), Vec::new()),
+                "last" | "max" | "min" | "max_by_key" | "min_by_key" | "max_by" | "min_by" => {
+                    entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new())
+                }
+                "collect" => {
+                    let taps = match output {
+                        Ty::Array { .. } => vec![tap(&[A0], own(&[A0]))],
+                        Ty::Keyed(_, arguments) if map(arguments) => {
+                            vec![tap(&[A0], own(&[A0, A0])), tap(&[A1], own(&[A0, A1]))]
+                        }
+                        Ty::Keyed(..) => vec![tap(&[A0], own(&[A0]))],
+                        // Made of the items, wherever they are in it.
+                        _ => vec![tap(&[], own(&[A0, O]))],
+                    };
+                    entry(Owned, taps, Vec::new())
+                }
+                _ => None,
             }
-            "map" | "filter" | "filter_map" | "flat_map" | "zip" | "chain" | "take_while"
-            | "skip_while" | "map_while" | "inspect" => entry(Owned, All, &[All], &[]),
-            "scan" => entry(Owned, All, &[All, All], &[]),
-            "by_ref" => entry(Mutable, All, &[], &[]),
-            _ => None,
-        },
+        }
         _ => None,
     }
 }

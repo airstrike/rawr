@@ -1887,6 +1887,10 @@ fn resolve_item(
                 native,
             )?;
             let types = scope.as_ref().unwrap_or(types);
+            let regions = item::TypeRegions::of(
+                &parsed.lifetimes,
+                parsed.fields.iter().map(|field| &field.ty),
+            );
             let mut fields = Vec::with_capacity(parsed.fields.len());
             let mut names = BTreeMap::new();
 
@@ -1929,6 +1933,7 @@ fn resolve_item(
                 name: parsed.name,
                 generics,
                 lifetimes: parsed.lifetimes.params.len(),
+                regions,
                 fields: fields.into_boxed_slice(),
                 form: parsed.form,
             })
@@ -1943,6 +1948,13 @@ fn resolve_item(
                 native,
             )?;
             let types = scope.as_ref().unwrap_or(types);
+            let regions = item::TypeRegions::of(
+                &parsed.lifetimes,
+                parsed
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.payload.iter()),
+            );
             let mut variants = Vec::with_capacity(parsed.variants.len());
             let mut names = BTreeMap::new();
 
@@ -1987,6 +1999,7 @@ fn resolve_item(
                 name: parsed.name,
                 generics,
                 lifetimes: parsed.lifetimes.params.len(),
+                regions,
                 variants: variants.into_boxed_slice(),
             })
         }

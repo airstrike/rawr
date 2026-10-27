@@ -1,0 +1,15 @@
+fn main() {
+    let mut a = vec![1];
+    let b = vec![2];
+    let mut r = &a;
+    println!("{}", r.len());
+    r = &b;
+    a.push(3);
+    let __v = vec![&a];
+    let __k = __v.iter().copied().next().unwrap();
+    println!("{} {:?}", r.len(), a);
+    __see(&__k);
+}
+
+fn __see<T>(_: &T) {}
+struct __Two<'a, 'b, A, B>(&'a A, &'b B);

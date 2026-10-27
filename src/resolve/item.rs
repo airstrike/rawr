@@ -150,6 +150,7 @@ pub(crate) struct Struct {
     pub generics: Box<[Generic]>,
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
+    pub regions: TypeRegions,
     pub fields: Box<[Field]>,
     pub form: crate::item::StructForm,
 }
@@ -173,7 +174,41 @@ pub(crate) struct Enum {
     pub generics: Box<[Generic]>,
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
+    pub regions: TypeRegions,
     pub variants: Box<[Variant]>,
+}
+
+/// What the borrow checker reads of a crate type's lifetimes (T127): its
+/// lifetime parameters by name, in order, the lifetimes written in its
+/// fields' types by where they are written, and whether it bounds them
+/// (`'b: 'a`, `T: 'a`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TypeRegions {
+    pub params: Box<[crate::ImmutableString]>,
+    pub written: Lifetimes,
+    pub bounded: bool,
+}
+
+impl TypeRegions {
+    /// A type's, from its declared lifetimes and its fields' types.
+    pub(crate) fn of<'a>(
+        lifetimes: &crate::item::Lifetimes,
+        fields: impl IntoIterator<Item = &'a crate::item::type_ref::Type>,
+    ) -> Self {
+        let mut written = Lifetimes::default();
+        for ty in fields {
+            written.name(ty);
+        }
+        Self {
+            params: lifetimes
+                .params
+                .iter()
+                .map(|name| name.text.clone())
+                .collect(),
+            written,
+            bounded: !lifetimes.bounds.is_empty(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

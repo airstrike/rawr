@@ -14,7 +14,10 @@
 
 pub(crate) mod nll;
 pub(crate) mod record;
+pub(crate) mod region;
 pub(crate) mod signature;
+
+pub(crate) use region::{Path, Step};
 
 #[cfg(test)]
 mod differential;
@@ -98,11 +101,20 @@ pub(crate) enum Access {
     None,
 }
 
-/// Where a loan or a holder's loans flow: into a local's type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where a loan or a holder's loans flow from: a loan, or what a local
+/// holds at a position of its type ([`Path::ROOT`]: all of it, position by
+/// position).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Origin {
     Loan(LoanId),
-    Local(Local),
+    Local(Local, Path),
+}
+
+impl Origin {
+    /// All a local holds.
+    pub(crate) fn local(local: Local) -> Self {
+        Self::Local(local, Path::ROOT)
+    }
 }
 
 /// One fact of a block, in the order the body runs them.
@@ -173,12 +185,14 @@ pub(crate) struct BlockData {
     pub(crate) successors: Vec<Block>,
 }
 
-/// A loan flowing into a local at a point: the local's region is within
-/// the loan's (`'loan: 'local`).
+/// A loan flowing into a local at a point: the local's region at `path` is
+/// within the loan's (`'loan: 'local`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Flow {
     pub(crate) from: Origin,
     pub(crate) into: Local,
+    /// The position of `into`'s type the borrows flow into.
+    pub(crate) path: Path,
     /// Where it flows. NLL's constraints hold at every point and do not
     /// read it; a location-sensitive rule such as the Polonius alpha does.
     #[allow(dead_code)]
@@ -257,8 +271,9 @@ impl Body {
 /// The rule that says where each loan is live, from the body's facts.
 pub(crate) trait Rule {
     /// For each loan, the points where it is in scope, by [`point_index`]:
-    /// an access there that conflicts with it is an error.
-    fn loans_in_scope(&self, body: &Body) -> Vec<Points>;
+    /// an access there that conflicts with it is an error. `reach` is
+    /// [`region::reach`] of the body: the locals each loan flows into.
+    fn loans_in_scope(&self, body: &Body, reach: &[Vec<bool>]) -> Vec<Points>;
 }
 
 /// A set of a body's points, by [`point_index`].
@@ -312,13 +327,14 @@ pub(crate) struct Conflict {
 /// The first borrow error in `body` under `rule`, in the order the body
 /// runs, as rustc reports the first of a place's conflicts at one access.
 pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
-    if let Some(returned) = returned_local(body).or_else(|| returned_parameter(body)) {
+    let reach = region::reach(body);
+    if let Some(returned) = returned_local(body, &reach).or_else(|| returned_parameter(body)) {
         return Some(returned);
     }
     if body.loans.is_empty() {
         return None;
     }
-    let in_scope = rule.loans_in_scope(body);
+    let in_scope = rule.loans_in_scope(body, &reach);
     let index = point_index(body);
     // Only a loan of the same local can conflict with an access.
     let mut by_local = std::collections::BTreeMap::<Local, Vec<usize>>::new();
@@ -328,8 +344,8 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             .or_default()
             .push(loan_index);
     }
-    let forever = reaches(body, &body.everywhere);
-    let returned = reaches(body, &body.returned);
+    let forever = region::reaches_any(&reach, &body.everywhere);
+    let returned = region::reaches_any(&reach, &body.returned);
     for point in body.points() {
         let Some(Fact::Access {
             place,
@@ -408,12 +424,12 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
 
 /// A borrow of one of the function's own locals, or of a temporary, that
 /// the function returns: rustc's E0515, reported at the returned value.
-fn returned_local(body: &Body) -> Option<Conflict> {
+/// `reach` is [`region::reach`] of the body.
+fn returned_local(body: &Body, reach: &[Vec<bool>]) -> Option<Conflict> {
     for &returned in &body.returned {
-        let reached = reaches(body, &[returned]);
-        let Some(loan) = body.loans.iter().zip(reached).find_map(|(loan, reached)| {
+        let Some(loan) = body.loans.iter().zip(reach).find_map(|(loan, reached)| {
             // A returned closure's capture is E0373, below.
-            (reached
+            (reached[returned.0 as usize]
                 && !loan.of_reference
                 && loan.capture == Capture::No
                 && !loan.place.projection.contains(&Projection::Deref))
@@ -454,12 +470,11 @@ fn returned_parameter(body: &Body) -> Option<Conflict> {
         return None;
     };
     for &returned in &body.returned {
-        let reached = reaching(body, &[returned]);
         for (local, borrows, receiver) in &own.parameters {
             let Borrows::One(lifetime) = borrows else {
                 continue;
             };
-            if !reached[local.0 as usize]
+            if !region::reach_from(body, &[(*local, Path::ROOT)])[returned.0 as usize]
                 || borrows.outlive(&own.output, &own.bounds) != Some(false)
             {
                 continue;
@@ -528,7 +543,7 @@ pub(crate) fn reaching(body: &Body, sinks: &[Local]) -> Vec<bool> {
     while changed {
         changed = false;
         for flow in &body.flows {
-            if let Origin::Local(from) = flow.from
+            if let Origin::Local(from, _) = flow.from
                 && reaches[flow.into.0 as usize]
                 && !reaches[from.0 as usize]
             {
