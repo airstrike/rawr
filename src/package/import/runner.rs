@@ -756,6 +756,25 @@ fn authenticate_structural(
     Ok(adapters.into_boxed_slice())
 }
 
+/// A field's type `ty` that is one of `owner`'s parameters, at its default:
+/// the bridge reads a generic struct's fields at its defaulted instance, as
+/// palette's `Rgb` is `Rgb<Srgb, f32>`.
+fn defaulted<'a>(
+    ty: &'a host::type_ref::Type,
+    owner: &'a host::type_def::Definition,
+) -> &'a host::type_ref::Type {
+    let host::type_ref::Shape::Parameter(parameter) = ty.shape() else {
+        return ty;
+    };
+    owner
+        .parameters()
+        .iter()
+        .position(|name| name.as_str() == parameter.name())
+        .and_then(|index| owner.defaults().get(index))
+        .and_then(Option::as_ref)
+        .unwrap_or(ty)
+}
+
 /// Whether a field of type `ty` is read as a copy, as the generated bridge
 /// reads it: a scalar, an imported Copy type of `facade`, or an `Option` or
 /// `Result` of them.
@@ -825,7 +844,7 @@ fn structural_path<'facade>(
                 .chain(fields.iter().filter_map(|field| {
                     (field.imported_identity().fingerprint() == row.selector).then_some(
                         StructuralKind::Field {
-                            copy: copy_scalar(field.ty(), facade),
+                            copy: copy_scalar(defaulted(field.ty(), definition), facade),
                         },
                     )
                 }))

@@ -939,10 +939,18 @@ fn imported_lowering_report(
     let crate::ParseErrorType::Resolution(resolution) = error.err_type() else {
         return Ok(None);
     };
-    let Some((path, namespace)) = diagnostic_path(resolution) else {
-        return Ok(None);
+    let mut outcomes = match diagnostic_path(resolution) {
+        Some((path, namespace)) => diagnostic_outcomes(paths, &path, namespace)?,
+        None => Vec::new(),
     };
-    let outcomes = diagnostic_outcomes(paths, &path, namespace)?;
+    // A member the importer saw and couldn't bind: its own outcome says why.
+    if let crate::resolve::Error::UnknownMember { owner, member, .. } = resolution {
+        let retained = paths.outcomes(&format!("{owner}::{member}"));
+        outcomes
+            .try_reserve(retained.len())
+            .map_err(|_| diagnostic::Error::Allocation)?;
+        outcomes.extend(retained);
+    }
     if outcomes.is_empty() {
         return Ok(None);
     }
@@ -976,15 +984,27 @@ fn augment_external(
     spans
         .try_reserve_exact(span_capacity)
         .map_err(|_| diagnostic::Error::Allocation)?;
+    let mut reasons = Vec::new();
     for outcome in outcomes {
         if let Some(origin) = outcome.origin() {
             spans.push(origin.source());
             spans.push(origin.declaration());
         }
+        if let rawr_import::classify::representability::Representability::Rejected(reason) =
+            outcome.representability()
+        {
+            reasons.push(format!(
+                "rawr has no binding for `{}`: {}",
+                outcome.name(),
+                reason.kind().describe()
+            ));
+        }
     }
     spans.sort_unstable();
     spans.dedup();
-    if spans.is_empty() {
+    reasons.sort_unstable();
+    reasons.dedup();
+    if spans.is_empty() && reasons.is_empty() {
         return Ok(None);
     }
 
@@ -1014,6 +1034,9 @@ fn augment_external(
     }
     for note in report.notes() {
         builder = builder.note(note);
+    }
+    for reason in reasons {
+        builder = builder.note(reason);
     }
     builder.reserve_external_labels(spans.len())?;
     for span in spans {

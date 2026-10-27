@@ -586,7 +586,7 @@ fn clone_operation(
         ) if plan.constructor() == Some(selected) => Ok(Operation::StructConstructor {
             parameters: clone_parameters(plan.parameters())?,
             form: plan.form(),
-            fields: clone_fields(plan.fields())?,
+            fields: defaulted_fields(clone_fields(plan.fields())?, plan.parameters()),
         }),
         (representability::Representability::Struct(plan), selected) => {
             let field = plan
@@ -596,9 +596,15 @@ fn clone_operation(
                 .ok_or(Error::AdapterPlan {
                     reason: "struct selector is absent from its exact plan",
                 })?;
+            let field = defaulted_fields(Box::from([clone_field(field)?]), plan.parameters())
+                .into_vec()
+                .pop()
+                .ok_or(Error::AdapterPlan {
+                    reason: "struct selector is absent from its exact plan",
+                })?;
             Ok(Operation::StructField {
                 parameters: clone_parameters(plan.parameters())?,
-                field: clone_field(field)?,
+                field,
             })
         }
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
@@ -844,6 +850,70 @@ fn clone_field(field: &representability::structure::Field) -> Result<Field, Erro
         index: field.index(),
         ty: clone_type(field.ty())?,
         span: clone_span(field.span())?,
+    })
+}
+
+/// A generic struct's fields at its defaulted instance, which its path
+/// names as a Rust type: palette's `Rgb` is `Rgb<Srgb, f32>`, so its
+/// `red: T` is an `f32`. A struct's adapter reaches only that instance. A
+/// field naming a parameter without a default keeps its declared type.
+fn defaulted_fields(fields: Box<[Field]>, parameters: &[signature::Parameter]) -> Box<[Field]> {
+    if parameters.is_empty() {
+        return fields;
+    }
+    fields
+        .into_vec()
+        .into_iter()
+        .map(|field| match defaulted(&field.ty, parameters) {
+            Some(ty) => Field { ty, ..field },
+            None => field,
+        })
+        .collect()
+}
+
+/// `ty` with each type parameter replaced by its default.
+fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<convert::Type> {
+    let all = |types: &[convert::Type]| {
+        types
+            .iter()
+            .map(|ty| defaulted(ty, parameters))
+            .collect::<Option<Box<[_]>>>()
+    };
+    let one = |ty: &convert::Type| defaulted(ty, parameters).map(Box::new);
+    Some(match ty {
+        convert::Type::Parameter(index) => parameters
+            .iter()
+            .find(|parameter| parameter.index() == *index)?
+            .default()?
+            .clone(),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: *definition,
+            arguments: all(arguments)?,
+        },
+        convert::Type::Option(element) => convert::Type::Option(one(element)?),
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: one(ty)?,
+        },
+        convert::Type::Range(element) => convert::Type::Range(one(element)?),
+        convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
+        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+            element: one(element)?,
+            owned: *owned,
+        },
+        convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
+        convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
+            input: one(input)?,
+            output: one(output)?,
+        },
+        convert::Type::ProfileMessage { mapper, payload } => convert::Type::ProfileMessage {
+            mapper: *mapper,
+            payload: one(payload)?,
+        },
+        convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
     })
 }
 
