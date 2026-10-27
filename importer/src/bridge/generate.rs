@@ -1428,6 +1428,23 @@ fn attest_read(
     Ok(value)
 }
 
+/// A native value a closure's input crosses as, with the closure
+/// parameter's witness when the call that made the closure had one.
+#[allow(dead_code)]
+fn attest_input(
+    arena: &mut Arena,
+    value: Dynamic,
+    witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
+) -> Result<Dynamic, Error> {
+    if let (Some(Some(witness)), Some(handle)) = (
+        witness,
+        value.read_lock::<NativeHandle>().map(|handle| handle.clone()),
+    ) {
+        arena.attest(handle, witness.clone())?;
+    }
+    Ok(value)
+}
+
 /// The witnesses of the `count` parameters of the closure that is operand
 /// `index` of the running call.
 #[allow(dead_code)]
@@ -8369,7 +8386,12 @@ fn render_take_callable(
         .map(|input| substituted(input, signature, substitutions))
         .collect::<Result<Vec<_>, _>>()?;
     let returned = substituted(call.output(), signature, substitutions)?;
-    let native_inputs = !inputs.iter().all(by_value);
+    // A native value, or a borrow of one, which crosses as a copy.
+    let native = |ty: &convert::Type| match ty {
+        convert::Type::Borrowed { ty, .. } => !by_value(ty),
+        ty => !by_value(ty),
+    };
+    let native_inputs = inputs.iter().any(native);
     let native_output = !by_value(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
@@ -8380,6 +8402,13 @@ fn render_take_callable(
         parameters.push(format!("input_{position}: {rust}"));
         let mut converted = String::new();
         render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
+        // A native value takes the closure parameter's witness, so script
+        // code reads it as its type, as a `match` on an imported enum does.
+        if native(input) {
+            converted = format!(
+                "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
+            );
+        }
         values.push(if native_inputs {
             format!("({converted})?")
         } else {
@@ -8400,6 +8429,14 @@ fn render_take_callable(
                 inputs.len()
             ),
             "callable.call_checked(&mut values, &witnesses)",
+        )
+    } else if native_inputs {
+        (
+            format!(
+                "\n        let witnesses = closure_inputs({index}, {});",
+                inputs.len()
+            ),
+            "callable.call(&mut values)",
         )
     } else {
         (String::new(), "callable.call(&mut values)")

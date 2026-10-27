@@ -1751,14 +1751,16 @@ fn imported_item(
         ),
         Representability::Invocation(plan) => Some(
             match outcome.identity().selector() {
+                // A closure the item takes, as a generic type's `style(impl
+                // Fn(&Theme, Status) -> Style + 'a)`, is the closure's type.
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -1773,16 +1775,16 @@ fn imported_item(
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Function { .. } => host::item::Definition::function(
                     path,
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -2150,13 +2152,13 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
 /// bound's inputs and output (D513.7 b).
 fn callable_signature(
     types: &Types,
-    plan: &representability::callable::Item,
+    signature: &representability::signature::Signature,
+    call: Option<&representability::callable::Call>,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<host::signature::Definition, Error> {
-    let Some(call) = plan.call() else {
-        return signature(types, plan.signature(), allocation);
+    let Some(call) = call else {
+        return self::signature(types, signature, allocation);
     };
-    let signature = plan.signature();
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         if parameter.kind() == representability::signature::Kind::Type {

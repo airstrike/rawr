@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 32;
+const CLASSIFIER_VERSION: u32 = 33;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1015,10 +1015,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     lifetime: model::Lifetime::Static | model::Lifetime::Early { .. },
                 } if *index == parameter => static_owned = true,
                 // `R: 'static` of another parameter, as `spawn_blocking`'s
-                // output has: rustc checks it where the bridge names `R`.
+                // output has, or `Message: 'a` of an early `'a`, which is
+                // `'static` (D558): rustc checks it where the bridge names
+                // `R`.
                 model::Predicate::TypeOutlives {
                     ty: model::Type::Parameter { .. },
-                    lifetime: model::Lifetime::Static,
+                    lifetime: model::Lifetime::Static | model::Lifetime::Early { .. },
                 } => {}
                 // A default method's bound on `Self`, as Freya's `on_press`
                 // has `where Self: AccessibilityExt`: rustc checks it where
