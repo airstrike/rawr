@@ -106,6 +106,7 @@ impl Kind {
             Self::UnsupportedConstant => "it is a constant of an unsupported type",
             Self::Extraction => "the importer couldn't extract it",
             Self::ScriptFutureType => "its signature names a future parameter's own type",
+            Self::MacroRules => "it is a `macro_rules!` macro, which rawr expands from its source",
         }
     }
 }
