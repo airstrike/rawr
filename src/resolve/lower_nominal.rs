@@ -12781,6 +12781,85 @@ impl<'a> Parser<'a> {
         self.parse_closure(Token::Pipe, owner_span, false)
     }
 
+    /// `Type::method(receiver, a, ..)` read from its `(`: the tokens of
+    /// `(receiver.method(a, ..))`, the receiver without its `&` or `&mut`,
+    /// which the method call takes again. `None`, consuming the arguments,
+    /// when there is no receiver argument.
+    fn path_method_call(
+        &mut self,
+        member: &str,
+        member_span: Span,
+    ) -> Option<Vec<(Token, Position)>> {
+        let (arguments, end) = self.take_argument_tokens().ok()?;
+        let mut depth = 0_usize;
+        let comma = arguments.iter().position(|(token, _)| {
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                Token::Comma => return depth == 0,
+                _ => {}
+            }
+            false
+        });
+        let (receiver, rest) = match comma {
+            Some(comma) => (&arguments[..comma], &arguments[comma + 1..]),
+            None => (&arguments[..], &[][..]),
+        };
+        let receiver = match receiver {
+            [(Token::Ampersand, _), (Token::Mut, _), rest @ ..]
+            | [(Token::Ampersand, _), rest @ ..] => rest,
+            receiver => receiver,
+        };
+        if receiver.is_empty() {
+            return None;
+        }
+        let at = member_span.start();
+        // A place (`a`, `a.b`, `v[i].c`) stays one, so a `&mut self`
+        // method changes it; any other receiver is parenthesised.
+        let mut depth = 0_usize;
+        let plain = receiver.iter().all(|(token, _)| match token {
+            Token::LeftBracket => {
+                depth += 1;
+                true
+            }
+            Token::RightBracket => {
+                depth = depth.saturating_sub(1);
+                true
+            }
+            _ if depth > 0 => true,
+            token => matches!(
+                token,
+                Token::Identifier(_) | Token::Period | Token::IntegerConstant(_)
+            ),
+        });
+        let mut tokens = vec![(Token::LeftParen, at)];
+        if !plain {
+            tokens.push((Token::LeftParen, at));
+        }
+        tokens.extend(receiver.iter().cloned());
+        if !plain {
+            tokens.push((Token::RightParen, at));
+        }
+        tokens.push((Token::Period, at));
+        tokens.push((
+            Token::Identifier(Box::new(member.into())),
+            member_span.start(),
+        ));
+        if rest.is_empty() {
+            tokens.push((Token::Unit, end));
+        } else {
+            tokens.push((Token::LeftParen, at));
+            tokens.extend(rest.iter().cloned());
+            tokens.push((Token::RightParen, end));
+        }
+        tokens.push((Token::RightParen, end));
+        Some(tokens)
+    }
+
     /// Put `tokens` before the rest of the input, to be parsed next.
     /// After `name`, a path `::seg::<A, B>::member`: the type `name::seg<A,
     /// B>` it writes, its arguments taken from the input so the path reads
@@ -13570,6 +13649,76 @@ impl<'a> Parser<'a> {
                 reference: member_span,
             });
         };
+        // `Trait::f` or `<T as Trait>::f` as a value: the closure
+        // `|a, ..| Trait::f(a, ..)`, the receiver first.
+        if let Some(receiver) = &function.receiver
+            && !function.body.constant
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            let arity = function.parameters.len() + 1;
+            let at = member_span.start();
+            let parameter =
+                |index: usize| Token::Identifier(Box::new(format!("__rawr_method{index}").into()));
+            let mut tokens = Vec::new();
+            for index in 0..arity {
+                if index > 0 {
+                    tokens.push((Token::Comma, at));
+                }
+                tokens.push((parameter(index), at));
+            }
+            tokens.push((Token::Pipe, at));
+            tokens.push((
+                Token::Identifier(Box::new(trait_name.as_str().into())),
+                trait_span.start(),
+            ));
+            tokens.push((Token::DoubleColon, at));
+            tokens.push((Token::Identifier(Box::new(member.as_str().into())), at));
+            tokens.push((Token::LeftParen, at));
+            for index in 0..arity {
+                if index > 0 {
+                    tokens.push((Token::Comma, at));
+                }
+                tokens.push((parameter(index), at));
+            }
+            tokens.push((Token::RightParen, at));
+            // The written type is the receiver's, as Rust takes it.
+            if let Some(self_ty) = self_ty {
+                let receiver = match receiver {
+                    crate::item::Receiver::Shared(_) => Ty::Reference {
+                        mutable: false,
+                        target: Box::new(self_ty),
+                    },
+                    crate::item::Receiver::Mutable(_) => Ty::Reference {
+                        mutable: true,
+                        target: Box::new(self_ty),
+                    },
+                    _ => self_ty,
+                };
+                let mut hint = vec![receiver];
+                hint.extend((1..arity).map(|_| self.inference.fresh()));
+                self.closure_hint = Some(hint.into_boxed_slice());
+            }
+            self.splice_tokens(tokens);
+            return self.parse_closure(Token::Pipe, span(start, member_span.end()), false);
+        }
+        // `Trait::f(&mut x, ..)` of a `&mut self` function: the receiver
+        // is the place `x`, which the call changes as `x.f(..)` does.
+        let mut lent = false;
+        if matches!(function.receiver, Some(crate::item::Receiver::Mutable(_)))
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            let mut ahead = self.input.clone();
+            ahead.next();
+            if matches!(ahead.next(), Some((Token::Ampersand, _)))
+                && matches!(ahead.next(), Some((Token::Mut, _)))
+            {
+                let open = self.next();
+                self.next();
+                self.next();
+                self.splice_tokens(vec![open]);
+                lent = true;
+            }
+        }
         let (mut arguments, end) = if function.body.constant {
             (Vec::new(), text_end(member_span.start(), &member))
         } else {
@@ -13637,6 +13786,7 @@ impl<'a> Parser<'a> {
             crate::item::Receiver::Shared(_) | crate::item::Receiver::Mutable(_)
         );
         let receiver_ty = match (by_reference, self.inference.resolve(&receiver.ty)) {
+            (true, ty) if lent => ty,
             (true, Ty::Reference { target, .. }) => *target,
             (true, ty) => {
                 return Err(Error::TypeMismatch {
@@ -34960,9 +35110,10 @@ impl<'a> Parser<'a> {
             if this_parameter(&function.definition).is_some()
                 || !copied_parameters(&function.definition.parameters, None).is_empty()
             {
-                return Err(
-                    self.unsupported("a function with a `&mut` parameter as a value; call it")
-                );
+                // A `&mut` parameter is copied in and back out of a call, so
+                // the value is the closure `|a, ..| f(a, ..)` over the
+                // function's parameter types, whose call does that.
+                return self.mutable_function_value(&function, name, name_span);
             }
             return Ok(self.function_value(&function, name_span));
         }
@@ -35696,6 +35847,47 @@ impl<'a> Parser<'a> {
             },
             span,
         )
+    }
+
+    /// A named function with a `&mut` parameter used as a value: the
+    /// closure `|a, ..| name(a, ..)` over its parameter types, as a call of
+    /// it copies the `&mut` arguments in and back out.
+    fn mutable_function_value(
+        &mut self,
+        function: &ScriptFunction,
+        name: ImmutableString,
+        span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let substitution = self.fresh_generics(&function.definition.generics, span);
+        let inputs: Box<[Ty]> = function
+            .definition
+            .parameters
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect();
+        let at = span.start();
+        let parameter =
+            |index: usize| Token::Identifier(Box::new(format!("__rawr_argument_{index}").into()));
+        let mut tokens = Vec::new();
+        for index in 0..inputs.len() {
+            if index > 0 {
+                tokens.push((Token::Comma, at));
+            }
+            tokens.push((parameter(index), at));
+        }
+        tokens.push((Token::Pipe, at));
+        tokens.push((Token::Identifier(Box::new(name.as_str().into())), at));
+        tokens.push((Token::LeftParen, at));
+        for index in 0..inputs.len() {
+            if index > 0 {
+                tokens.push((Token::Comma, at));
+            }
+            tokens.push((parameter(index), at));
+        }
+        tokens.push((Token::RightParen, at));
+        self.splice_tokens(tokens);
+        self.closure_hint = Some(inputs);
+        self.parse_closure(Token::Pipe, span, false)
     }
 
     /// An enum variant with a payload used as a value: the function from
@@ -42369,29 +42561,41 @@ impl<'a> Parser<'a> {
             .method(model.definition().id(), &member)
             .cloned()
         {
-            // `Type::method` as a value: `fn(&Type, ..) -> Output`.
+            // `Type::method` as a value: `fn(&Type, ..) -> Output`, or
+            // `fn(&mut Type, ..)` for a `&mut self` method.
             if let Some(mode) = definition.receiver()
-                && mode != receiver::Mode::Mutable
                 && !definition.constant()
-                && definition.generics().is_empty()
                 && !matches!(self.peek(), Token::LeftParen | Token::Unit)
             {
                 let receiver = match mode {
                     receiver::Mode::Owned => model.ty(),
-                    _ => Ty::Reference {
-                        mutable: false,
+                    mode => Ty::Reference {
+                        mutable: mode == receiver::Mode::Mutable,
                         target: Box::new(model.ty()),
                     },
                 };
+                // A generic method's parameters take its turbofish, or are
+                // inferred where the value is used, as in Rust.
+                let substitution = self.instantiate_generics(
+                    definition.generics(),
+                    span(owner_span.start(), member_span.end()),
+                )?;
                 let inputs = std::iter::once(receiver)
-                    .chain(
-                        definition
-                            .parameters()
-                            .iter()
-                            .map(|parameter| Ty::from_resolved(&parameter.ty)),
-                    )
+                    .chain(definition.parameters().iter().map(|parameter| {
+                        instantiate(&Ty::from_resolved(&parameter.ty), &substitution)
+                    }))
                     .collect();
                 return self.method_value(member, inputs, owner_span, member_span);
+            }
+            // `Type::method(receiver, ..)`: the method called on its first
+            // argument, as Rust's path call is.
+            if definition.receiver().is_some()
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
             }
             if definition.receiver().is_some() {
                 return Err(Error::InvalidMethodCall {

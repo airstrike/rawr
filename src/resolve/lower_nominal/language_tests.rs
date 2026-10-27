@@ -8010,6 +8010,66 @@ fn language_fn_pointer_casts_and_trait_function_values() {
     assert_eq!(value, 17);
 }
 
+/// A method or function path is a function value wherever Rust takes one,
+/// a `&mut self` method and a `&mut` parameter among them, and a path call
+/// `Type::method(&mut x, ..)` changes `x` (T218).
+#[test]
+fn language_method_paths_are_function_values() {
+    let value = run(r#"
+        #[derive(Default)]
+        struct Counter { value: i64 }
+        #[derive(Clone, Copy)]
+        enum Message { Increment, Decrement }
+        trait Grow { fn grow(&mut self, by: i64); fn size(&self) -> i64; }
+        impl Counter {
+            fn update(&mut self, message: Message) {
+                match message {
+                    Message::Increment => self.value += 1,
+                    Message::Decrement => self.value -= 1,
+                }
+            }
+            fn view(&self) -> i64 { self.value }
+            fn tagged<T: std::fmt::Display>(&self, tag: T) -> String { format!("{tag}{}", self.value) }
+            fn add_five(&mut self) { self.value += 5; }
+        }
+        impl Grow for Counter {
+            fn grow(&mut self, by: i64) { self.value += by; }
+            fn size(&self) -> i64 { self.value }
+        }
+        fn bump(counter: &mut Counter, by: i64) { counter.value += by; }
+        fn drive<U: Fn(&mut Counter, Message), V: Fn(&Counter) -> i64>(update: U, view: V) -> i64 {
+            let mut counter = Counter::default();
+            update(&mut counter, Message::Increment);
+            update(&mut counter, Message::Increment);
+            update(&mut counter, Message::Decrement);
+            view(&counter)
+        }
+        pub fn run() -> i64 {
+            let driven = drive(Counter::update, Counter::view);
+            let mut counter = Counter::default();
+            let update = Counter::update;
+            update(&mut counter, Message::Increment);
+            let pointer: fn(&mut Counter, Message) = Counter::update;
+            pointer(&mut counter, Message::Increment);
+            let add: fn(&mut Counter, i64) = bump;
+            add(&mut counter, 10);
+            Counter::add_five(&mut counter);
+            Grow::grow(&mut counter, 100);
+            let grow = <Counter as Grow>::grow;
+            grow(&mut counter, 1000);
+            let tagged = Counter::tagged::<&str>;
+            let tag = tagged(&counter, "n").len() as i64;
+            let mut counters = vec![Counter::default(), Counter::default()];
+            counters.iter_mut().for_each(Counter::add_five);
+            Counter::update(&mut counters[1], Message::Increment);
+            let sizes: i64 = counters.iter().map(Grow::size).sum();
+            driven * 10000 + Counter::view(&counter) + tag * 100000 + sizes * 1000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 11 * 1_000_000 + 5 * 100_000 + 10_000 + 1117);
+}
+
 #[test]
 fn language_std_glob_imports_bind_the_module_names() {
     let value = run(r#"
