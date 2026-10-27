@@ -7,6 +7,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 
+## 0.2.6 (2026-10-27)
+
+- Reading or writing a struct's field no longer copies the struct.
+- Passing `&s` or `&mut s` to a function lends the value instead of copying it.
+- A method called on a field or an element reaches it in place.
+- A script that calls `view(&state)` 2,000 times on a 20,000-element state runs about 6 times faster.
+
 ## 0.2.5 (2026-10-27)
 
 - A script struct or enum can stand where a crate expects a generic type, such as an app's state and message passed to iced's `application`.
