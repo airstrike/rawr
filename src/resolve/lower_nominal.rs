@@ -34935,6 +34935,14 @@ impl<'a> Parser<'a> {
                 .flow()
                 .closure(&key)
                 .is_some_and(|closure| closure.mutable),
+            // A closure a function returned, as `impl FnMut(i32)`: its type
+            // doesn't say which `Fn` trait it has, and a call of one
+            // declared `mut` is an `FnMut` call, which borrows it `&mut`.
+            Ty::Fn { .. } => {
+                binding.mutable
+                    && matches!(binding.kind, BindingKind::Local)
+                    && !self.parameter_declarations.contains(&binding.declaration)
+            }
             _ => false,
         };
         if mutable {
