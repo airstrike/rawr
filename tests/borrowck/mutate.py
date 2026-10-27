@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | moves | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -12,6 +12,8 @@ where the borrow ends first. With `kept`, the borrow is one a call's value
 keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
 `kept-mutations`. With `closures`, the borrow is a closure's capture, or one
 a closure's call returns, and the variants go to `closures/mutations`.
+With `moves`, a closure moves `x` in, or is moved or copied while it
+captures `x`, and the variants go to `closure-moves/mutations`.
 rustc decides which are errors: run `record.py` on the folder afterwards.
 """
 
@@ -25,15 +27,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 KEPT = sys.argv[1:] == ["kept"]
 CLOSURES = sys.argv[1:] == ["closures"]
+MOVES = sys.argv[1:] == ["moves"]
 OUT = os.path.join(
-    HERE, "kept-mutations" if KEPT else "closures/mutations" if CLOSURES else "mutations"
+    HERE,
+    "kept-mutations"
+    if KEPT
+    else "closures/mutations"
+    if CLOSURES
+    else "closure-moves/mutations"
+    if MOVES
+    else "mutations",
 )
 SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
     + [os.path.join(ROOT, "examples/cart.rs"), os.path.join(ROOT, "examples/nominal_counter.rs")]
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
     + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT else [])
-    + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES else [])
+    + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES or MOVES else [])
+    + (glob.glob(os.path.join(HERE, "closure-moves/*.rs")) if MOVES else [])
 )
 HELPERS = """
 fn __touch<T>(_: &mut T) {}
@@ -158,6 +169,42 @@ def closure_variants(indent, name, statement):
     }
 
 
+def move_variants(indent, name, statement):
+    """A closure that moves `name` in, or one moved or copied while it captures `name`."""
+    i = indent
+    return {
+        "move_closure_across": [f"{i}let __m = move || __see(&{name});", statement, f"{i}__m();"],
+        "move_closure_after": [statement, f"{i}let __m = move || __see(&{name});", f"{i}__m();"],
+        "move_closure_into_branch": [
+            f"{i}if __c() {{",
+            f"{i}    let __m = move || __see(&{name});",
+            f"{i}    __m();",
+            f"{i}}}",
+            statement,
+        ],
+        "mut_closure_moved_across": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            f"{i}let mut __g = __f;",
+            statement,
+            f"{i}__g();",
+        ],
+        "mut_closure_moved_then_called": [
+            f"{i}let mut __f = || __touch(&mut {name});",
+            f"{i}let mut __g = __f;",
+            f"{i}__g();",
+            f"{i}__f();",
+            statement,
+        ],
+        "shared_closure_copied": [
+            f"{i}let __f = || __see(&{name});",
+            f"{i}let __g = __f;",
+            f"{i}__f();",
+            statement,
+            f"{i}__g();",
+        ],
+    }
+
+
 def main():
     out, sources = OUT, SOURCES
     if len(sys.argv) > 2:
@@ -175,7 +222,15 @@ def main():
                 continue
             indent, name = declared.group(1), declared.group(2)
             for target in list(statements(lines, start, indent, name))[:PER_LOCAL]:
-                mutate = kept_variants if KEPT else closure_variants if CLOSURES else variants
+                mutate = (
+                    kept_variants
+                    if KEPT
+                    else closure_variants
+                    if CLOSURES
+                    else move_variants
+                    if MOVES
+                    else variants
+                )
                 written = mutate(indent, name, lines[target])
                 for kind, replacement in written.items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]

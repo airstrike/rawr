@@ -85,7 +85,7 @@ codes!(Resolve;
     (BORROW_AFTER_UNIQUE, "E0501", "A borrow of a place while a closure's unique capture of it is live, as rustc reports it."),
     (BORROW_TWO_UNIQUE, "E0524", "Two closures' unique captures of a place live at once, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
-    (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
+    (RESOLVE_MOVED_VALUE, "E0382", "A use of a value after it was moved, as rustc reports it."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_TYPE_MISMATCH, "RAWR-RESOLVE-TYPE-MISMATCH", "Resolved type mismatch."),
     (RESOLVE_IMMUTABLE_BINDING, "RAWR-RESOLVE-IMMUTABLE-BINDING", "Mutation of an immutable binding."),

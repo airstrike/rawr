@@ -8,7 +8,7 @@
   <pre><code data-lang="rust" data-run="use-after-move.rs" id="src-use-after-move">let a = String::from("ra");
 let b = a + "wr";
 println!("{a}"); // error: `a` was moved</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-use-after-move" data-out="out-use-after-move" aria-label="Run use-after-move.rs" hidden></button><b>rawr run use-after-move.rs</b><span id="out-use-after-move" aria-live="polite"><span class="err">error[RAWR-RESOLVE-MOVED-VALUE]: use of moved value: `a`</span></span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-use-after-move" data-out="out-use-after-move" aria-label="Run use-after-move.rs" hidden></button><b>rawr run use-after-move.rs</b><span id="out-use-after-move" aria-live="polite"><span class="err">error[E0382]: use of moved value: `a`</span></span></div>
 </div>
 <p>Run shows the check&rsquo;s error. Write <code>a.clone() + "wr"</code> and the program prints <code>ra</code>.</p>
 <h2 id="partial">Partial moves</h2>
