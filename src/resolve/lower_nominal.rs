@@ -20069,6 +20069,73 @@ impl<'a> Parser<'a> {
         true
     }
 
+    /// A `move` closure written at `at` takes the parts `parts` of the local
+    /// `name` (each a path below it, and whether it is copied), as rustc's
+    /// capture analysis has it from edition 2021 (T145). A field that is
+    /// not `Copy` moves out, so the local is partly moved; the others are
+    /// copied. A type with `impl Drop` can't be moved out of, so its local
+    /// moves whole.
+    fn move_capture_parts(
+        &mut self,
+        name: &ImmutableString,
+        parts: &[&(Span, Vec<FactStep>, bool)],
+        at: Span,
+    ) -> Result<bool, Error> {
+        let Some(binding) = self.bindings.get(name.as_str()) else {
+            return Ok(false);
+        };
+        if !matches!(binding.kind, BindingKind::Local)
+            || self.aliases.contains_key(name.as_str())
+            || self.entry_aliases.contains_key(name.as_str())
+            || !binding.available
+        {
+            return Ok(false);
+        }
+        let ty = binding.ty.clone();
+        let moved: Vec<&Vec<FactStep>> = parts
+            .iter()
+            .filter(|(_, _, copy)| !copy)
+            .map(|(_, path, _)| path)
+            .collect();
+        if moved.is_empty() {
+            return Ok(false);
+        }
+        if let Ty::Script(id, _) = self.inference.resolve(&ty)
+            && self.models.has_drop(id)
+        {
+            return Ok(self.move_capture(name, at));
+        }
+        for path in moved {
+            let Some(FactStep::Field(field)) = path.first() else {
+                continue;
+            };
+            // A field with drop glue would drop with the local and not with
+            // the closure, which Rawr's closures, values copied freely,
+            // cannot do.
+            if let Some(part) = self.part_ty(&ty, &path[..1])
+                && self.needs_drop(&part, at)?
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "a closure that takes `{name}.{field}`, whose type implements `Drop`, by \
+                         move: dropping it with the closure is not supported in Rawr yet"
+                    )
+                    .into(),
+                    source: at,
+                });
+            }
+            if path.len() > 1 {
+                self.flow()
+                    .unmodeled("a `move` closure that moves a part below a field", at);
+                continue;
+            }
+            if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+                binding.moved_fields.entry(field.clone()).or_insert(at);
+            }
+        }
+        Ok(false)
+    }
+
     /// After branches, a local is available when each branch that goes on
     /// left it available. A branch that diverges (`return`, `break`, a
     /// panic) does not go on, as rustc's move check has it.
@@ -38749,7 +38816,13 @@ impl<'a> Parser<'a> {
                     value.lvalue = None;
                 }
                 if !assignment_token(&self.peek()) {
-                    self.move_out_value(&mut value)?;
+                    // `|| x` returns its capture `x` by value: the closure
+                    // takes it and is called once, as in Rust.
+                    if matches!(value.lvalue, Some(Lvalue::Binding { .. })) {
+                        self.move_local(&mut value)?;
+                    } else {
+                        self.move_out_value(&mut value)?;
+                    }
                     return Ok(value);
                 }
                 let start = value.span;
@@ -38799,8 +38872,22 @@ impl<'a> Parser<'a> {
             _ => Some(Vec::new()),
         };
         let declared: Vec<Span> = parameters.iter().map(|(_, _, at)| *at).collect();
+        // Each captured local's type, by its declaration, for whether a part
+        // captured by value is `Copy`.
+        let capture_types: BTreeMap<Span, Ty> = scope
+            .captures
+            .iter()
+            .filter_map(|name| {
+                let declaration = *scope.outer.get(name)?;
+                Some((declaration, self.bindings.get(name.as_str())?.ty.clone()))
+            })
+            .collect();
         let closure = {
-            let mut flow = self.flow();
+            let this = &*self;
+            let copy_of = |declaration: Span, path: &[FactStep]| {
+                this.part_copy(capture_types.get(&declaration)?, path)
+            };
+            let mut flow = this.flow();
             if !scope.captures.is_empty() {
                 flow.captured();
             }
@@ -38811,6 +38898,7 @@ impl<'a> Parser<'a> {
                 tail,
                 moved,
                 point_span(start.start()),
+                &copy_of,
             )
         };
         let mut body = body?;
@@ -38892,21 +38980,41 @@ impl<'a> Parser<'a> {
                 expression,
             );
         }
+        // A closure that captures by `&mut`, or by value a part that is not
+        // `Copy`, is not `Copy` (T146).
+        let copy = closure.copy || scope.asynchronous;
         // A closure holds its captures' borrows. An async block's are left
         // to `cargo check`: its value is a future the facts don't follow.
         if !scope.asynchronous {
             self.flow().set_origins(expression, closure.origins.clone());
         }
-        // `move` moves each capture that is not `Copy` into the closure as
-        // it is created, and copies the others. A closure that is not
-        // `move` moves in only the captures its body moves out.
-        let moving: BTreeSet<ImmutableString> = scope
-            .captures
-            .iter()
-            .filter(|name| *name != "this" && (moved || scope.consumed.contains(*name)))
-            .filter(|name| self.move_capture(name, expression))
-            .cloned()
-            .collect();
+        // `move` moves each captured place that is not `Copy` into the
+        // closure as it is created, and copies the others: a field leaves
+        // the local partly moved (T145). A closure that is not `move` moves
+        // in only the captures its body moves out.
+        let mut moving = BTreeSet::new();
+        for name in &scope.captures {
+            if name == "this" || !(moved || scope.consumed.contains(name)) {
+                continue;
+            }
+            let parts = match scope.outer.get(name) {
+                Some(declaration) if moved && !scope.asynchronous => closure
+                    .by_value
+                    .iter()
+                    .filter(|(captured, ..)| captured == declaration)
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            if parts.is_empty() || parts.iter().any(|(_, path, _)| path.is_empty()) {
+                if self.move_capture(name, expression) {
+                    moving.insert(name.clone());
+                }
+                continue;
+            }
+            if self.move_capture_parts(name, &parts, expression)? {
+                moving.insert(name.clone());
+            }
+        }
         // A closure that owns a value with drop glue drops it with itself,
         // which Rawr's closures, values copied freely, cannot do.
         for name in &moving {
@@ -38982,7 +39090,7 @@ impl<'a> Parser<'a> {
             if !scope.asynchronous {
                 self.flow().set_closure((**key).clone(), closure);
             }
-            if !moving.is_empty() {
+            if !moving.is_empty() || !copy {
                 self.owning_closures.insert((**key).clone());
             }
             if !scope.consumed.is_empty() {

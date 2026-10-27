@@ -1,0 +1,1378 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+closure-moves/body_block_moves_local_then_used.rs	E0382:7
+closure-moves/body_moves_called_once.rs	ok	0	"ab\n"
+closure-moves/body_moves_called_twice.rs	E0382:5
+closure-moves/body_moves_field_then_other.rs	ok	0	"ab cde\n"
+closure-moves/body_moves_field_then_same.rs	E0382:9
+closure-moves/body_moves_local_then_used.rs	E0382:4
+closure-moves/body_moves_local_unused_closure.rs	E0382:4
+closure-moves/body_moves_param_then_used.rs	E0382:3
+closure-moves/body_returns_copy_capture.rs	ok	0	"3 3 3\n"
+closure-moves/move_closure_returned_twice.rs	E0382:5
+closure-moves/move_copy_capture_copied.rs	ok	0	"2 2 1\n"
+closure-moves/move_copy_field_of_drop_type.rs	ok	0	"n\nn\ndrop n\n"
+closure-moves/move_copy_field_then_whole.rs	ok	0	"5 4 cde\n"
+closure-moves/move_field_assigned_again.rs	ok	0	"2 x cde\n"
+closure-moves/move_field_closure_moved.rs	E0382:10
+closure-moves/move_field_of_drop_type.rs	E0382:13
+closure-moves/move_field_then_borrow_other.rs	ok	0	"1 [2, 3]\n"
+closure-moves/move_field_then_borrow_same.rs	E0382:9
+closure-moves/move_field_then_other_field.rs	ok	0	"2 cde\n"
+closure-moves/move_field_then_same_field.rs	E0382:9
+closure-moves/move_field_then_whole.rs	E0382:9
+closure-moves/move_field_while_borrowed.rs	E0505:9
+closure-moves/move_nested_field_then_borrow_sibling.rs	ok	0	"2 cde\n"
+closure-moves/move_nested_field_then_sibling.rs	ok	0	"2 cde\n"
+closure-moves/move_string_capture_moved.rs	E0382:5
+closure-moves/move_tuple_member_then_borrow_other.rs	ok	0	"2 cde\n"
+closure-moves/move_tuple_member_then_other.rs	ok	0	"2 cde\n"
+closure-moves/move_tuple_member_then_same.rs	E0382:4
+closure-moves/move_two_fields_then_one.rs	E0382:14
+closure-moves/move_two_fields_then_third.rs	ok	0	"5 f\n"
+closure-moves/mut_capture_moved_ok.rs	ok	0	"2\n"
+closure-moves/mut_capture_moved_then_called.rs	E0382:6
+closure-moves/mut_capture_passed_then_called.rs	E0382:9
+closure-moves/nonmove_field_shared_then_move_other.rs	ok	0	"2 cde\n"
+closure-moves/shared_capture_copied.rs	ok	0	"3 3\n"
+closure-moves/shared_capture_passed_then_called.rs	ok	0	"2 2\n"
+closure-moves/unique_capture_moved_then_called.rs	E0382:7
+closure-moves/unique_capture_param_moved_ok.rs	ok	0	"2\n"
+closure-moves/unique_capture_param_moved_then_called.rs	E0382:5
+closure-moves/mutations/array_index_captures_whole_a_6_move_closure_across.rs	E0503:4
+closure-moves/mutations/array_index_captures_whole_a_6_move_closure_after.rs	E0503:4
+closure-moves/mutations/array_index_captures_whole_a_6_move_closure_into_branch.rs	E0503:4
+closure-moves/mutations/array_index_captures_whole_a_6_mut_closure_moved_across.rs	E0503:4 E0502:8
+closure-moves/mutations/array_index_captures_whole_a_6_mut_closure_moved_then_called.rs	E0503:4 E0382:9
+closure-moves/mutations/array_index_captures_whole_a_6_shared_closure_copied.rs	E0503:4
+closure-moves/mutations/array_index_captures_whole_c_5_move_closure_across.rs	E0503:4 E0382:6
+closure-moves/mutations/array_index_captures_whole_c_5_move_closure_after.rs	E0503:4
+closure-moves/mutations/array_index_captures_whole_c_5_move_closure_into_branch.rs	E0503:4 E0382:9
+closure-moves/mutations/array_index_captures_whole_c_5_mut_closure_moved_across.rs	E0503:4 E0499:7
+closure-moves/mutations/array_index_captures_whole_c_5_mut_closure_moved_then_called.rs	E0503:4 E0382:8
+closure-moves/mutations/array_index_captures_whole_c_5_shared_closure_copied.rs	E0503:4 E0502:8
+closure-moves/mutations/assign_after_capture_ended_n_5_move_closure_across.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_5_move_closure_after.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_5_move_closure_into_branch.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_5_mut_closure_moved_across.rs	E0506:7
+closure-moves/mutations/assign_after_capture_ended_n_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/assign_after_capture_ended_n_5_shared_closure_copied.rs	E0506:8
+closure-moves/mutations/assign_after_capture_ended_n_6_move_closure_across.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_6_move_closure_after.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_6_move_closure_into_branch.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_capture_ended_n_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/assign_after_capture_ended_n_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/assign_after_capture_ended_n_6_shared_closure_copied.rs	ok	0	"2\n5\n"
+closure-moves/mutations/assign_after_last_use_x_5_move_closure_across.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_5_move_closure_after.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_5_move_closure_into_branch.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_5_mut_closure_moved_across.rs	E0506:7
+closure-moves/mutations/assign_after_last_use_x_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/assign_after_last_use_x_5_shared_closure_copied.rs	E0506:8
+closure-moves/mutations/assign_after_last_use_x_6_move_closure_across.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_6_move_closure_after.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_6_move_closure_into_branch.rs	ok	0	"3\n"
+closure-moves/mutations/assign_after_last_use_x_6_mut_closure_moved_across.rs	E0503:8
+closure-moves/mutations/assign_after_last_use_x_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/assign_after_last_use_x_6_shared_closure_copied.rs	ok	0	"3\n"
+closure-moves/mutations/assign_borrowed_x_4_move_closure_across.rs	E0506:5
+closure-moves/mutations/assign_borrowed_x_4_move_closure_after.rs	E0506:4
+closure-moves/mutations/assign_borrowed_x_4_move_closure_into_branch.rs	E0506:8
+closure-moves/mutations/assign_borrowed_x_4_mut_closure_moved_across.rs	E0502:4 E0506:6
+closure-moves/mutations/assign_borrowed_x_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0506:8
+closure-moves/mutations/assign_borrowed_x_4_shared_closure_copied.rs	E0506:7
+closure-moves/mutations/assign_borrowed_x_5_move_closure_across.rs	E0506:4
+closure-moves/mutations/assign_borrowed_x_5_move_closure_after.rs	E0506:4
+closure-moves/mutations/assign_borrowed_x_5_move_closure_into_branch.rs	E0506:4
+closure-moves/mutations/assign_borrowed_x_5_mut_closure_moved_across.rs	E0506:4 E0503:7
+closure-moves/mutations/assign_borrowed_x_5_mut_closure_moved_then_called.rs	E0506:4 E0382:8
+closure-moves/mutations/assign_borrowed_x_5_shared_closure_copied.rs	E0506:4
+closure-moves/mutations/assign_while_captured_n_4_move_closure_across.rs	E0506:5
+closure-moves/mutations/assign_while_captured_n_4_move_closure_after.rs	E0506:4
+closure-moves/mutations/assign_while_captured_n_4_move_closure_into_branch.rs	E0506:8
+closure-moves/mutations/assign_while_captured_n_4_mut_closure_moved_across.rs	E0502:4 E0506:6
+closure-moves/mutations/assign_while_captured_n_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0506:8
+closure-moves/mutations/assign_while_captured_n_4_shared_closure_copied.rs	E0506:7
+closure-moves/mutations/block_scope_dead_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/block_scope_dead_v_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/block_scope_dead_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/block_scope_dead_v_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/block_scope_dead_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/block_scope_dead_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/block_scope_dead_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/block_scope_dead_v_8_move_closure_after.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/block_scope_dead_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/block_scope_dead_v_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/block_scope_dead_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/block_scope_dead_v_8_shared_closure_copied.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/body_borrows_ok_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/body_borrows_ok_v_9_move_closure_after.rs	ok	0	"3\n[1, 2, 1]\n"
+closure-moves/mutations/body_borrows_ok_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/body_borrows_ok_v_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/body_borrows_ok_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/body_borrows_ok_v_9_shared_closure_copied.rs	ok	0	"3\n[1, 2, 1]\n"
+closure-moves/mutations/branch_call_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/branch_call_v_8_move_closure_after.rs	ok	0	"[1]\n"
+closure-moves/mutations/branch_call_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/branch_call_v_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/branch_call_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/branch_call_v_8_shared_closure_copied.rs	ok	0	"[1]\n"
+closure-moves/mutations/branch_use_then_call_c_8_move_closure_across.rs	E0502:6 E0382:9
+closure-moves/mutations/branch_use_then_call_c_8_move_closure_after.rs	E0502:6
+closure-moves/mutations/branch_use_then_call_c_8_move_closure_into_branch.rs	E0502:6 E0382:12
+closure-moves/mutations/branch_use_then_call_c_8_mut_closure_moved_across.rs	E0502:6 E0499:10
+closure-moves/mutations/branch_use_then_call_c_8_mut_closure_moved_then_called.rs	E0502:6 E0382:11
+closure-moves/mutations/branch_use_then_call_c_8_shared_closure_copied.rs	E0502:6 E0502:11
+closure-moves/mutations/branch_value_after_last_use_b_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/branch_value_after_last_use_b_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/branch_value_after_last_use_b_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/branch_value_after_last_use_b_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/branch_value_after_last_use_b_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/branch_value_after_last_use_b_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/branch_value_after_last_use_b_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/branch_value_after_last_use_b_8_move_closure_after.rs	ok	0	"1\n[2, 3]\n"
+closure-moves/mutations/branch_value_after_last_use_b_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/branch_value_after_last_use_b_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/branch_value_after_last_use_b_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/branch_value_after_last_use_b_8_shared_closure_copied.rs	ok	0	"1\n[2, 3]\n"
+closure-moves/mutations/branch_value_holds_both_b_6_move_closure_across.rs	E0505:6 E0382:7 E0502:7
+closure-moves/mutations/branch_value_holds_both_b_6_move_closure_after.rs	E0502:6 E0505:7
+closure-moves/mutations/branch_value_holds_both_b_6_move_closure_into_branch.rs	E0505:7 E0382:10 E0502:10
+closure-moves/mutations/branch_value_holds_both_b_6_mut_closure_moved_across.rs	E0502:6 E0499:8
+closure-moves/mutations/branch_value_holds_both_b_6_mut_closure_moved_then_called.rs	E0502:6 E0382:9 E0502:10
+closure-moves/mutations/branch_value_holds_both_b_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/break_continue_end_paths_v_16_move_closure_across.rs	E0382:17
+closure-moves/mutations/break_continue_end_paths_v_16_move_closure_after.rs	ok	0	"[1, 1, 3, 9]\n"
+closure-moves/mutations/break_continue_end_paths_v_16_move_closure_into_branch.rs	E0382:20
+closure-moves/mutations/break_continue_end_paths_v_16_mut_closure_moved_across.rs	E0502:18
+closure-moves/mutations/break_continue_end_paths_v_16_mut_closure_moved_then_called.rs	E0382:19
+closure-moves/mutations/break_continue_end_paths_v_16_shared_closure_copied.rs	ok	0	"[1, 1, 3, 9]\n"
+closure-moves/mutations/closure_calls_closure_ok_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/closure_calls_closure_ok_v_6_move_closure_after.rs	E0382:9
+closure-moves/mutations/closure_calls_closure_ok_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/closure_calls_closure_ok_v_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/closure_calls_closure_ok_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/closure_calls_closure_ok_v_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/closure_calls_closure_ok_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/closure_calls_closure_ok_v_7_move_closure_after.rs	ok	0	"3\n[1, 2, 1]\n"
+closure-moves/mutations/closure_calls_closure_ok_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/closure_calls_closure_ok_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/closure_calls_closure_ok_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/closure_calls_closure_ok_v_7_shared_closure_copied.rs	ok	0	"3\n[1, 2, 1]\n"
+closure-moves/mutations/closure_calls_closure_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/closure_calls_closure_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/closure_calls_closure_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/closure_calls_closure_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/closure_calls_closure_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/closure_calls_closure_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/closure_copied_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/closure_copied_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/closure_copied_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/closure_copied_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/closure_copied_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/closure_copied_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/closure_in_loop_fresh_c_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/closure_in_loop_fresh_c_5_move_closure_after.rs	ok	0	"2\n3\n4\n"
+closure-moves/mutations/closure_in_loop_fresh_c_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/closure_in_loop_fresh_c_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/closure_in_loop_fresh_c_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/closure_in_loop_fresh_c_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/closure_inline_use_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/closure_inline_use_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/closure_inline_use_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/closure_inline_use_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/closure_inline_use_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/closure_inline_use_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/closure_inline_use_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/closure_inline_use_v_6_move_closure_after.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+closure-moves/mutations/closure_inline_use_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/closure_inline_use_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/closure_inline_use_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/closure_inline_use_v_6_shared_closure_copied.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+closure-moves/mutations/counter_struct_method_c_12_move_closure_across.rs	E0382:13 E0502:15
+closure-moves/mutations/counter_struct_method_c_12_move_closure_after.rs	E0502:15 E0382:16
+closure-moves/mutations/counter_struct_method_c_12_move_closure_into_branch.rs	E0382:16 E0502:17
+closure-moves/mutations/counter_struct_method_c_12_mut_closure_moved_across.rs	E0499:14 E0502:16
+closure-moves/mutations/counter_struct_method_c_12_mut_closure_moved_then_called.rs	E0382:15 E0502:17
+closure-moves/mutations/counter_struct_method_c_12_shared_closure_copied.rs	E0502:15 E0502:17
+closure-moves/mutations/counter_struct_method_c_14_move_closure_across.rs	E0502:13 E0382:15
+closure-moves/mutations/counter_struct_method_c_14_move_closure_after.rs	E0502:13
+closure-moves/mutations/counter_struct_method_c_14_move_closure_into_branch.rs	E0502:13 E0382:18
+closure-moves/mutations/counter_struct_method_c_14_mut_closure_moved_across.rs	E0502:13 E0499:16
+closure-moves/mutations/counter_struct_method_c_14_mut_closure_moved_then_called.rs	E0502:13 E0382:17
+closure-moves/mutations/counter_struct_method_c_14_shared_closure_copied.rs	E0502:13 E0502:17
+closure-moves/mutations/counter_struct_method_counter_13_move_closure_across.rs	E0505:13 E0502:14 E0382:14
+closure-moves/mutations/counter_struct_method_counter_13_move_closure_after.rs	E0502:13 E0505:14
+closure-moves/mutations/counter_struct_method_counter_13_move_closure_into_branch.rs	E0505:14 E0502:17 E0382:17
+closure-moves/mutations/counter_struct_method_counter_13_mut_closure_moved_across.rs	E0499:13 E0502:15
+closure-moves/mutations/counter_struct_method_counter_13_mut_closure_moved_then_called.rs	E0499:13 E0382:16 E0502:17
+closure-moves/mutations/counter_struct_method_counter_13_shared_closure_copied.rs	E0502:13 E0502:16
+closure-moves/mutations/counter_struct_method_ok_c_12_move_closure_across.rs	E0382:13
+closure-moves/mutations/counter_struct_method_ok_c_12_move_closure_after.rs	E0382:15
+closure-moves/mutations/counter_struct_method_ok_c_12_move_closure_into_branch.rs	E0382:16
+closure-moves/mutations/counter_struct_method_ok_c_12_mut_closure_moved_across.rs	E0499:14
+closure-moves/mutations/counter_struct_method_ok_c_12_mut_closure_moved_then_called.rs	E0382:15
+closure-moves/mutations/counter_struct_method_ok_c_12_shared_closure_copied.rs	E0502:15
+closure-moves/mutations/counter_struct_method_ok_c_13_move_closure_across.rs	E0382:14
+closure-moves/mutations/counter_struct_method_ok_c_13_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/counter_struct_method_ok_c_13_move_closure_into_branch.rs	E0382:17
+closure-moves/mutations/counter_struct_method_ok_c_13_mut_closure_moved_across.rs	E0499:15
+closure-moves/mutations/counter_struct_method_ok_c_13_mut_closure_moved_then_called.rs	E0382:16
+closure-moves/mutations/counter_struct_method_ok_c_13_shared_closure_copied.rs	E0502:16
+closure-moves/mutations/counter_struct_method_ok_counter_14_move_closure_across.rs	E0382:15
+closure-moves/mutations/counter_struct_method_ok_counter_14_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/counter_struct_method_ok_counter_14_move_closure_into_branch.rs	E0382:18
+closure-moves/mutations/counter_struct_method_ok_counter_14_mut_closure_moved_across.rs	E0502:16
+closure-moves/mutations/counter_struct_method_ok_counter_14_mut_closure_moved_then_called.rs	E0382:17
+closure-moves/mutations/counter_struct_method_ok_counter_14_shared_closure_copied.rs	ok	0	"2\n"
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_move_closure_across.rs	E0505:11 E0382:12 E0502:12
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_move_closure_after.rs	E0502:11 E0505:12
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_move_closure_into_branch.rs	E0505:12 E0382:15 E0502:15
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_mut_closure_moved_across.rs	E0502:11 E0499:13
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_mut_closure_moved_then_called.rs	E0502:11 E0382:14 E0502:15
+closure-moves/mutations/disjoint_field_and_whole_merged_s_11_shared_closure_copied.rs	E0502:14
+closure-moves/mutations/disjoint_fields_c_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/disjoint_fields_c_9_move_closure_after.rs	ok	0	"[1, 5] [2, 6]\n"
+closure-moves/mutations/disjoint_fields_c_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/disjoint_fields_c_9_mut_closure_moved_across.rs	E0499:11
+closure-moves/mutations/disjoint_fields_c_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/disjoint_fields_c_9_shared_closure_copied.rs	E0502:12
+closure-moves/mutations/disjoint_fields_s_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/disjoint_fields_s_10_move_closure_after.rs	ok	0	"[1, 5] [2, 6]\n"
+closure-moves/mutations/disjoint_fields_s_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/disjoint_fields_s_10_mut_closure_moved_across.rs	E0502:12 E0502:12
+closure-moves/mutations/disjoint_fields_s_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/disjoint_fields_s_10_shared_closure_copied.rs	ok	0	"[1, 5] [2, 6]\n"
+closure-moves/mutations/disjoint_fields_s_8_move_closure_across.rs	E0505:8 E0382:12
+closure-moves/mutations/disjoint_fields_s_8_move_closure_after.rs	E0505:9 E0382:12
+closure-moves/mutations/disjoint_fields_s_8_move_closure_into_branch.rs	E0505:9 E0382:14
+closure-moves/mutations/disjoint_fields_s_8_mut_closure_moved_across.rs	E0499:8 E0499:10
+closure-moves/mutations/disjoint_fields_s_8_mut_closure_moved_then_called.rs	E0499:8 E0382:11
+closure-moves/mutations/disjoint_fields_s_8_shared_closure_copied.rs	E0502:8 E0502:11
+closure-moves/mutations/disjoint_same_field_c_9_move_closure_across.rs	E0502:8 E0382:10
+closure-moves/mutations/disjoint_same_field_c_9_move_closure_after.rs	E0502:8
+closure-moves/mutations/disjoint_same_field_c_9_move_closure_into_branch.rs	E0502:8 E0382:13
+closure-moves/mutations/disjoint_same_field_c_9_mut_closure_moved_across.rs	E0502:8 E0499:11
+closure-moves/mutations/disjoint_same_field_c_9_mut_closure_moved_then_called.rs	E0502:8 E0382:12
+closure-moves/mutations/disjoint_same_field_c_9_shared_closure_copied.rs	E0502:8 E0502:12
+closure-moves/mutations/disjoint_same_field_s_10_move_closure_across.rs	E0502:8 E0382:11
+closure-moves/mutations/disjoint_same_field_s_10_move_closure_after.rs	E0502:8
+closure-moves/mutations/disjoint_same_field_s_10_move_closure_into_branch.rs	E0502:8 E0382:14
+closure-moves/mutations/disjoint_same_field_s_10_mut_closure_moved_across.rs	E0502:8 E0502:12
+closure-moves/mutations/disjoint_same_field_s_10_mut_closure_moved_then_called.rs	E0502:8 E0382:13
+closure-moves/mutations/disjoint_same_field_s_10_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/disjoint_same_field_s_8_move_closure_across.rs	E0505:8 E0502:9 E0382:12
+closure-moves/mutations/disjoint_same_field_s_8_move_closure_after.rs	E0502:8 E0505:9 E0382:12
+closure-moves/mutations/disjoint_same_field_s_8_move_closure_into_branch.rs	E0505:9 E0502:12 E0382:14
+closure-moves/mutations/disjoint_same_field_s_8_mut_closure_moved_across.rs	E0499:8 E0502:10
+closure-moves/mutations/disjoint_same_field_s_8_mut_closure_moved_then_called.rs	E0499:8 E0382:11 E0502:12
+closure-moves/mutations/disjoint_same_field_s_8_shared_closure_copied.rs	E0502:8 E0502:11
+closure-moves/mutations/disjoint_tuple_members_c_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/disjoint_tuple_members_c_5_move_closure_after.rs	ok	0	"[1, 3] [2, 4]\n"
+closure-moves/mutations/disjoint_tuple_members_c_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/disjoint_tuple_members_c_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/disjoint_tuple_members_c_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/disjoint_tuple_members_c_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/disjoint_tuple_members_t_4_move_closure_across.rs	E0505:4 E0382:8
+closure-moves/mutations/disjoint_tuple_members_t_4_move_closure_after.rs	E0505:5 E0382:8
+closure-moves/mutations/disjoint_tuple_members_t_4_move_closure_into_branch.rs	E0505:5 E0382:10
+closure-moves/mutations/disjoint_tuple_members_t_4_mut_closure_moved_across.rs	E0499:4 E0499:6
+closure-moves/mutations/disjoint_tuple_members_t_4_mut_closure_moved_then_called.rs	E0499:4 E0382:7
+closure-moves/mutations/disjoint_tuple_members_t_4_shared_closure_copied.rs	E0502:4 E0502:7
+closure-moves/mutations/disjoint_tuple_members_t_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/disjoint_tuple_members_t_6_move_closure_after.rs	ok	0	"[1, 3] [2, 4]\n"
+closure-moves/mutations/disjoint_tuple_members_t_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/disjoint_tuple_members_t_6_mut_closure_moved_across.rs	E0502:8 E0502:8
+closure-moves/mutations/disjoint_tuple_members_t_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/disjoint_tuple_members_t_6_shared_closure_copied.rs	ok	0	"[1, 3] [2, 4]\n"
+closure-moves/mutations/disjoint_whole_struct_c_12_move_closure_across.rs	E0502:11 E0382:13
+closure-moves/mutations/disjoint_whole_struct_c_12_move_closure_after.rs	E0502:11
+closure-moves/mutations/disjoint_whole_struct_c_12_move_closure_into_branch.rs	E0502:11 E0382:16
+closure-moves/mutations/disjoint_whole_struct_c_12_mut_closure_moved_across.rs	E0502:11 E0499:14
+closure-moves/mutations/disjoint_whole_struct_c_12_mut_closure_moved_then_called.rs	E0502:11 E0382:15
+closure-moves/mutations/disjoint_whole_struct_c_12_shared_closure_copied.rs	E0502:11 E0502:15
+closure-moves/mutations/disjoint_whole_struct_s_11_move_closure_across.rs	E0505:11 E0502:12 E0382:12
+closure-moves/mutations/disjoint_whole_struct_s_11_move_closure_after.rs	E0502:11 E0505:12
+closure-moves/mutations/disjoint_whole_struct_s_11_move_closure_into_branch.rs	E0505:12 E0502:15 E0382:15
+closure-moves/mutations/disjoint_whole_struct_s_11_mut_closure_moved_across.rs	E0499:11 E0502:13
+closure-moves/mutations/disjoint_whole_struct_s_11_mut_closure_moved_then_called.rs	E0499:11 E0382:14 E0502:15
+closure-moves/mutations/disjoint_whole_struct_s_11_shared_closure_copied.rs	E0502:11 E0502:14
+closure-moves/mutations/element_method_cs_12_move_closure_across.rs	E0382:13
+closure-moves/mutations/element_method_cs_12_move_closure_after.rs	E0382:15
+closure-moves/mutations/element_method_cs_12_move_closure_into_branch.rs	E0382:16
+closure-moves/mutations/element_method_cs_12_mut_closure_moved_across.rs	E0499:14
+closure-moves/mutations/element_method_cs_12_mut_closure_moved_then_called.rs	E0382:15
+closure-moves/mutations/element_method_cs_12_shared_closure_copied.rs	E0502:15
+closure-moves/mutations/element_method_cs_13_move_closure_across.rs	E0382:14
+closure-moves/mutations/element_method_cs_13_move_closure_after.rs	ok	0	"[1]\n"
+closure-moves/mutations/element_method_cs_13_move_closure_into_branch.rs	E0382:17
+closure-moves/mutations/element_method_cs_13_mut_closure_moved_across.rs	E0502:15
+closure-moves/mutations/element_method_cs_13_mut_closure_moved_then_called.rs	E0382:16
+closure-moves/mutations/element_method_cs_13_shared_closure_copied.rs	ok	0	"[1]\n"
+closure-moves/mutations/element_method_while_borrowed_cs_12_move_closure_across.rs	E0505:12 E0502:13 E0382:13
+closure-moves/mutations/element_method_while_borrowed_cs_12_move_closure_after.rs	E0502:12 E0505:13
+closure-moves/mutations/element_method_while_borrowed_cs_12_move_closure_into_branch.rs	E0505:13 E0502:16 E0382:16
+closure-moves/mutations/element_method_while_borrowed_cs_12_mut_closure_moved_across.rs	E0502:12 E0502:14
+closure-moves/mutations/element_method_while_borrowed_cs_12_mut_closure_moved_then_called.rs	E0502:12 E0382:15 E0502:16
+closure-moves/mutations/element_method_while_borrowed_cs_12_shared_closure_copied.rs	E0502:15
+closure-moves/mutations/field_conflict_s_10_move_closure_across.rs	E0503:8 E0382:11
+closure-moves/mutations/field_conflict_s_10_move_closure_after.rs	E0503:8
+closure-moves/mutations/field_conflict_s_10_move_closure_into_branch.rs	E0503:8 E0382:14
+closure-moves/mutations/field_conflict_s_10_mut_closure_moved_across.rs	E0503:8 E0502:12 E0502:12
+closure-moves/mutations/field_conflict_s_10_mut_closure_moved_then_called.rs	E0503:8 E0382:13
+closure-moves/mutations/field_conflict_s_10_shared_closure_copied.rs	E0503:8
+closure-moves/mutations/field_conflict_s_8_move_closure_across.rs	E0505:8 E0503:9 E0382:12
+closure-moves/mutations/field_conflict_s_8_move_closure_after.rs	E0503:8 E0382:12
+closure-moves/mutations/field_conflict_s_8_move_closure_into_branch.rs	E0505:9 E0503:12 E0382:14
+closure-moves/mutations/field_conflict_s_8_mut_closure_moved_across.rs	E0499:8 E0503:10
+closure-moves/mutations/field_conflict_s_8_mut_closure_moved_then_called.rs	E0499:8 E0382:11 E0503:12
+closure-moves/mutations/field_conflict_s_8_shared_closure_copied.rs	E0502:8 E0503:11
+closure-moves/mutations/fields_apart_s_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/fields_apart_s_10_move_closure_after.rs	ok	0	"101 12\n"
+closure-moves/mutations/fields_apart_s_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/fields_apart_s_10_mut_closure_moved_across.rs	E0502:12 E0502:12
+closure-moves/mutations/fields_apart_s_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/fields_apart_s_10_shared_closure_copied.rs	ok	0	"101 12\n"
+closure-moves/mutations/fields_apart_s_8_move_closure_across.rs	E0505:8 E0382:12
+closure-moves/mutations/fields_apart_s_8_move_closure_after.rs	E0505:9 E0382:12
+closure-moves/mutations/fields_apart_s_8_move_closure_into_branch.rs	E0505:9 E0382:14
+closure-moves/mutations/fields_apart_s_8_mut_closure_moved_across.rs	E0499:8 E0503:10
+closure-moves/mutations/fields_apart_s_8_mut_closure_moved_then_called.rs	E0499:8 E0382:11
+closure-moves/mutations/fields_apart_s_8_shared_closure_copied.rs	E0502:8 E0506:11
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_move_closure_across.rs	E0502:5 E0382:9
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_move_closure_after.rs	E0502:5
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_move_closure_into_branch.rs	E0502:5 E0382:12
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_mut_closure_moved_across.rs	E0502:5 E0502:10
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_mut_closure_moved_then_called.rs	E0502:5 E0382:11
+closure-moves/mutations/for_over_shared_borrow_mutated_v_8_shared_closure_copied.rs	E0502:5
+closure-moves/mutations/for_over_shared_borrow_total_7_move_closure_across.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/for_over_shared_borrow_total_7_move_closure_after.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/for_over_shared_borrow_total_7_move_closure_into_branch.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/for_over_shared_borrow_total_7_mut_closure_moved_across.rs	E0503:9
+closure-moves/mutations/for_over_shared_borrow_total_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/for_over_shared_borrow_total_7_shared_closure_copied.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/for_over_shared_borrow_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/for_over_shared_borrow_v_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/for_over_shared_borrow_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/for_over_shared_borrow_v_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/for_over_shared_borrow_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/for_over_shared_borrow_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/for_over_shared_borrow_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/for_over_shared_borrow_v_8_move_closure_after.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/for_over_shared_borrow_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/for_over_shared_borrow_v_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/for_over_shared_borrow_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/for_over_shared_borrow_v_8_shared_closure_copied.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/holder_captured_ended_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/holder_captured_ended_v_6_move_closure_after.rs	E0382:9
+closure-moves/mutations/holder_captured_ended_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/holder_captured_ended_v_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/holder_captured_ended_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/holder_captured_ended_v_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/holder_captured_ended_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/holder_captured_ended_v_7_move_closure_after.rs	ok	0	"2\n[1, 2, 1]\n"
+closure-moves/mutations/holder_captured_ended_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/holder_captured_ended_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/holder_captured_ended_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/holder_captured_ended_v_7_shared_closure_copied.rs	ok	0	"2\n[1, 2, 1]\n"
+closure-moves/mutations/holder_captured_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/holder_captured_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/holder_captured_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/holder_captured_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/holder_captured_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/holder_captured_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/holder_copy_keeps_borrow_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/holder_reassigned_a_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/holder_reassigned_a_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/holder_reassigned_a_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/holder_reassigned_a_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/holder_reassigned_a_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/holder_reassigned_a_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/holder_reassigned_a_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/holder_reassigned_a_8_move_closure_after.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_a_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/holder_reassigned_a_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/holder_reassigned_a_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/holder_reassigned_a_8_shared_closure_copied.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_5_move_closure_across.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_5_move_closure_after.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_5_move_closure_into_branch.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_5_mut_closure_moved_across.rs	E0502:7
+closure-moves/mutations/holder_reassigned_r_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/holder_reassigned_r_5_shared_closure_copied.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_6_move_closure_across.rs	E0502:9
+closure-moves/mutations/holder_reassigned_r_6_move_closure_after.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_6_move_closure_into_branch.rs	ok	0	"1\n1 [1, 3]\n"
+closure-moves/mutations/holder_reassigned_r_6_mut_closure_moved_across.rs	E0506:8 E0502:10
+closure-moves/mutations/holder_reassigned_r_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/holder_reassigned_r_6_shared_closure_copied.rs	E0506:9 E0502:11
+closure-moves/mutations/index_assign_after_last_use_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/index_assign_after_last_use_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/index_assign_after_last_use_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/index_assign_after_last_use_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/index_assign_after_last_use_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/index_assign_after_last_use_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/index_assign_after_last_use_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/index_assign_after_last_use_v_6_move_closure_after.rs	ok	0	"1 [5, 2]\n"
+closure-moves/mutations/index_assign_after_last_use_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/index_assign_after_last_use_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/index_assign_after_last_use_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/index_assign_after_last_use_v_6_shared_closure_copied.rs	ok	0	"1 [5, 2]\n"
+closure-moves/mutations/index_assign_borrowed_v_4_move_closure_across.rs	E0505:4 E0502:5 E0382:5
+closure-moves/mutations/index_assign_borrowed_v_4_move_closure_after.rs	E0502:4 E0505:5
+closure-moves/mutations/index_assign_borrowed_v_4_move_closure_into_branch.rs	E0505:5 E0502:8 E0382:8
+closure-moves/mutations/index_assign_borrowed_v_4_mut_closure_moved_across.rs	E0502:4 E0502:6
+closure-moves/mutations/index_assign_borrowed_v_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0502:8
+closure-moves/mutations/index_assign_borrowed_v_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/index_assign_index_reads_v_3_move_closure_across.rs	E0382:4 E0502:4
+closure-moves/mutations/index_assign_index_reads_v_3_move_closure_after.rs	E0502:3 E0382:6
+closure-moves/mutations/index_assign_index_reads_v_3_move_closure_into_branch.rs	E0382:7 E0502:7
+closure-moves/mutations/index_assign_index_reads_v_3_mut_closure_moved_across.rs	E0499:5 E0502:5
+closure-moves/mutations/index_assign_index_reads_v_3_mut_closure_moved_then_called.rs	E0382:6 E0502:7
+closure-moves/mutations/index_assign_index_reads_v_3_shared_closure_copied.rs	E0502:6 E0502:6
+closure-moves/mutations/index_assign_index_reads_v_4_move_closure_across.rs	E0502:3 E0382:5
+closure-moves/mutations/index_assign_index_reads_v_4_move_closure_after.rs	E0502:3
+closure-moves/mutations/index_assign_index_reads_v_4_move_closure_into_branch.rs	E0502:3 E0382:8
+closure-moves/mutations/index_assign_index_reads_v_4_mut_closure_moved_across.rs	E0502:3 E0502:6
+closure-moves/mutations/index_assign_index_reads_v_4_mut_closure_moved_then_called.rs	E0502:3 E0382:7
+closure-moves/mutations/index_assign_index_reads_v_4_shared_closure_copied.rs	E0502:3
+closure-moves/mutations/index_captures_whole_c_5_move_closure_across.rs	E0502:4 E0382:6
+closure-moves/mutations/index_captures_whole_c_5_move_closure_after.rs	E0502:4
+closure-moves/mutations/index_captures_whole_c_5_move_closure_into_branch.rs	E0502:4 E0382:9
+closure-moves/mutations/index_captures_whole_c_5_mut_closure_moved_across.rs	E0502:4 E0499:7
+closure-moves/mutations/index_captures_whole_c_5_mut_closure_moved_then_called.rs	E0502:4 E0382:8
+closure-moves/mutations/index_captures_whole_c_5_shared_closure_copied.rs	E0502:4 E0502:8
+closure-moves/mutations/index_captures_whole_v_4_move_closure_across.rs	E0505:4 E0502:5 E0382:5
+closure-moves/mutations/index_captures_whole_v_4_move_closure_after.rs	E0502:4 E0505:5
+closure-moves/mutations/index_captures_whole_v_4_move_closure_into_branch.rs	E0505:5 E0502:8 E0382:8
+closure-moves/mutations/index_captures_whole_v_4_mut_closure_moved_across.rs	E0499:4 E0502:6
+closure-moves/mutations/index_captures_whole_v_4_mut_closure_moved_then_called.rs	E0499:4 E0382:7 E0502:8
+closure-moves/mutations/index_captures_whole_v_4_shared_closure_copied.rs	E0502:4 E0502:7
+closure-moves/mutations/kept_mut_called_first_c_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/kept_mut_called_first_c_4_move_closure_after.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/kept_mut_called_first_c_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/kept_mut_called_first_c_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/kept_mut_called_first_c_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/kept_mut_called_first_c_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/kept_mut_called_first_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/kept_mut_called_first_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/kept_mut_called_first_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/kept_mut_called_first_v_5_mut_closure_moved_across.rs	E0502:7
+closure-moves/mutations/kept_mut_called_first_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/kept_mut_called_first_v_5_shared_closure_copied.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/kept_mut_called_first_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/kept_mut_called_first_v_6_move_closure_after.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/kept_mut_called_first_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/kept_mut_called_first_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/kept_mut_called_first_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/kept_mut_called_first_v_6_shared_closure_copied.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/kept_mut_called_twice_c_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/kept_mut_called_twice_c_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/kept_mut_called_twice_c_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/kept_mut_called_twice_c_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/kept_mut_called_twice_c_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/kept_mut_called_twice_c_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/kept_mut_called_twice_c_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/kept_mut_called_twice_c_5_move_closure_after.rs	ok	0	"4\n[1, 2, 3, 3]\n"
+closure-moves/mutations/kept_mut_called_twice_c_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/kept_mut_called_twice_c_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/kept_mut_called_twice_c_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/kept_mut_called_twice_c_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/kept_mut_called_twice_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/kept_mut_called_twice_v_6_move_closure_after.rs	E0382:9
+closure-moves/mutations/kept_mut_called_twice_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/kept_mut_called_twice_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/kept_mut_called_twice_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/kept_mut_called_twice_v_6_shared_closure_copied.rs	ok	0	"4\n[1, 2, 3, 3]\n"
+closure-moves/mutations/kept_mut_called_twice_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/kept_mut_called_twice_v_7_move_closure_after.rs	ok	0	"4\n[1, 2, 3, 3]\n"
+closure-moves/mutations/kept_mut_called_twice_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/kept_mut_called_twice_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/kept_mut_called_twice_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/kept_mut_called_twice_v_7_shared_closure_copied.rs	ok	0	"4\n[1, 2, 3, 3]\n"
+closure-moves/mutations/kept_mut_conflict_c_5_move_closure_across.rs	E0502:4 E0382:6
+closure-moves/mutations/kept_mut_conflict_c_5_move_closure_after.rs	E0502:4
+closure-moves/mutations/kept_mut_conflict_c_5_move_closure_into_branch.rs	E0502:4 E0382:9
+closure-moves/mutations/kept_mut_conflict_c_5_mut_closure_moved_across.rs	E0502:4 E0499:7
+closure-moves/mutations/kept_mut_conflict_c_5_mut_closure_moved_then_called.rs	E0502:4 E0382:8
+closure-moves/mutations/kept_mut_conflict_c_5_shared_closure_copied.rs	E0502:4 E0502:8
+closure-moves/mutations/kept_mut_conflict_v_4_move_closure_across.rs	E0505:4 E0502:5 E0382:5
+closure-moves/mutations/kept_mut_conflict_v_4_move_closure_after.rs	E0502:4 E0505:5 E0382:8
+closure-moves/mutations/kept_mut_conflict_v_4_move_closure_into_branch.rs	E0505:5 E0502:8 E0382:8
+closure-moves/mutations/kept_mut_conflict_v_4_mut_closure_moved_across.rs	E0499:4 E0502:6
+closure-moves/mutations/kept_mut_conflict_v_4_mut_closure_moved_then_called.rs	E0499:4 E0382:7 E0502:8
+closure-moves/mutations/kept_mut_conflict_v_4_shared_closure_copied.rs	E0502:4 E0502:7
+closure-moves/mutations/kept_mut_conflict_v_6_move_closure_across.rs	E0502:4 E0382:7
+closure-moves/mutations/kept_mut_conflict_v_6_move_closure_after.rs	E0502:4
+closure-moves/mutations/kept_mut_conflict_v_6_move_closure_into_branch.rs	E0502:4 E0382:10
+closure-moves/mutations/kept_mut_conflict_v_6_mut_closure_moved_across.rs	E0502:4 E0502:8
+closure-moves/mutations/kept_mut_conflict_v_6_mut_closure_moved_then_called.rs	E0502:4 E0382:9
+closure-moves/mutations/kept_mut_conflict_v_6_shared_closure_copied.rs	E0502:4
+closure-moves/mutations/labeled_break_v_14_move_closure_across.rs	E0382:15
+closure-moves/mutations/labeled_break_v_14_move_closure_after.rs	E0382:17
+closure-moves/mutations/labeled_break_v_14_move_closure_into_branch.rs	E0382:18
+closure-moves/mutations/labeled_break_v_14_mut_closure_moved_across.rs	E0499:16
+closure-moves/mutations/labeled_break_v_14_mut_closure_moved_then_called.rs	E0382:17
+closure-moves/mutations/labeled_break_v_14_shared_closure_copied.rs	E0502:17
+closure-moves/mutations/labeled_break_v_15_move_closure_across.rs	E0382:16
+closure-moves/mutations/labeled_break_v_15_move_closure_after.rs	ok	0	"[1, 1, 2, 7]\n"
+closure-moves/mutations/labeled_break_v_15_move_closure_into_branch.rs	E0382:19
+closure-moves/mutations/labeled_break_v_15_mut_closure_moved_across.rs	E0502:17
+closure-moves/mutations/labeled_break_v_15_mut_closure_moved_then_called.rs	E0382:18
+closure-moves/mutations/labeled_break_v_15_shared_closure_copied.rs	ok	0	"[1, 1, 2, 7]\n"
+closure-moves/mutations/labeled_continue_conflict_v_13_move_closure_across.rs	E0499:8 E0382:14
+closure-moves/mutations/labeled_continue_conflict_v_13_move_closure_after.rs	E0499:8
+closure-moves/mutations/labeled_continue_conflict_v_13_move_closure_into_branch.rs	E0499:8 E0382:17
+closure-moves/mutations/labeled_continue_conflict_v_13_mut_closure_moved_across.rs	E0499:8 E0502:15
+closure-moves/mutations/labeled_continue_conflict_v_13_mut_closure_moved_then_called.rs	E0499:8 E0382:16
+closure-moves/mutations/labeled_continue_conflict_v_13_shared_closure_copied.rs	E0499:8
+closure-moves/mutations/last_use_ends_borrow_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/last_use_ends_borrow_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/last_use_ends_borrow_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/last_use_ends_borrow_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/last_use_ends_borrow_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/last_use_ends_borrow_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/last_use_ends_borrow_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/last_use_ends_borrow_v_8_move_closure_after.rs	E0382:11
+closure-moves/mutations/last_use_ends_borrow_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/last_use_ends_borrow_v_8_mut_closure_moved_across.rs	E0499:10
+closure-moves/mutations/last_use_ends_borrow_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/last_use_ends_borrow_v_8_shared_closure_copied.rs	E0502:11
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_move_closure_across.rs	E0499:7 E0382:13
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_move_closure_after.rs	E0499:7
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_move_closure_into_branch.rs	E0499:7 E0382:16
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_mut_closure_moved_across.rs	E0499:7 E0502:14
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_mut_closure_moved_then_called.rs	E0499:7 E0382:15
+closure-moves/mutations/loop_borrow_carried_conflict_a_12_shared_closure_copied.rs	E0499:7
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_move_closure_across.rs	E0382:15
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_move_closure_after.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_move_closure_into_branch.rs	E0382:18
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_mut_closure_moved_across.rs	E0502:16
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_mut_closure_moved_then_called.rs	E0382:17
+closure-moves/mutations/loop_borrow_carried_into_next_a_14_shared_closure_copied.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_move_closure_across.rs	E0382:14
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_move_closure_after.rs	E0382:16
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_move_closure_into_branch.rs	E0382:17
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_mut_closure_moved_across.rs	E0499:15
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_mut_closure_moved_then_called.rs	E0382:16
+closure-moves/mutations/loop_borrow_carried_into_next_b_13_shared_closure_copied.rs	E0502:16
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_move_closure_across.rs	E0382:15
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_move_closure_after.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_move_closure_into_branch.rs	E0382:18
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_mut_closure_moved_across.rs	E0502:16
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_mut_closure_moved_then_called.rs	E0382:17
+closure-moves/mutations/loop_borrow_carried_into_next_b_14_shared_closure_copied.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+closure-moves/mutations/loop_borrow_each_iteration_n_9_move_closure_across.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_each_iteration_n_9_move_closure_after.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_each_iteration_n_9_move_closure_into_branch.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_each_iteration_n_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/loop_borrow_each_iteration_n_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/loop_borrow_each_iteration_n_9_shared_closure_copied.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_each_iteration_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/loop_borrow_each_iteration_v_9_move_closure_after.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_each_iteration_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/loop_borrow_each_iteration_v_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/loop_borrow_each_iteration_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/loop_borrow_each_iteration_v_9_shared_closure_copied.rs	ok	0	"5 [1, 0, 2]\n"
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_move_closure_across.rs	ok	0	"[1, 0, 1, 2]\n"
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_move_closure_after.rs	ok	0	"[1, 0, 1, 2]\n"
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_move_closure_into_branch.rs	ok	0	"[1, 0, 1, 2]\n"
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_mut_closure_moved_across.rs	E0502:12
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/loop_borrow_outlives_iteration_keep_10_shared_closure_copied.rs	ok	0	"[1, 0, 1, 2]\n"
+closure-moves/mutations/loop_calls_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/loop_calls_v_7_move_closure_after.rs	ok	0	"[1, 1, 1, 1]\n"
+closure-moves/mutations/loop_calls_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/loop_calls_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/loop_calls_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/loop_calls_v_7_shared_closure_copied.rs	ok	0	"[1, 1, 1, 1]\n"
+closure-moves/mutations/map_capture_ended_k_5_move_closure_across.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_5_move_closure_after.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_5_move_closure_into_branch.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_5_mut_closure_moved_across.rs	E0503:7
+closure-moves/mutations/map_capture_ended_k_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/map_capture_ended_k_5_shared_closure_copied.rs	E0506:8
+closure-moves/mutations/map_capture_ended_k_6_move_closure_across.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_6_move_closure_after.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_6_move_closure_into_branch.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_capture_ended_k_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/map_capture_ended_k_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/map_capture_ended_k_6_shared_closure_copied.rs	ok	0	"9 2\n"
+closure-moves/mutations/map_keeps_capture_k_5_move_closure_across.rs	E0506:6
+closure-moves/mutations/map_keeps_capture_k_5_move_closure_after.rs	E0506:5
+closure-moves/mutations/map_keeps_capture_k_5_move_closure_into_branch.rs	E0506:9
+closure-moves/mutations/map_keeps_capture_k_5_mut_closure_moved_across.rs	E0502:5 E0503:7
+closure-moves/mutations/map_keeps_capture_k_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0506:9
+closure-moves/mutations/map_keeps_capture_k_5_shared_closure_copied.rs	E0506:8
+closure-moves/mutations/map_keeps_capture_k_7_move_closure_across.rs	E0506:5
+closure-moves/mutations/map_keeps_capture_k_7_move_closure_after.rs	E0506:5
+closure-moves/mutations/map_keeps_capture_k_7_move_closure_into_branch.rs	E0506:5
+closure-moves/mutations/map_keeps_capture_k_7_mut_closure_moved_across.rs	E0506:5 E0502:9
+closure-moves/mutations/map_keeps_capture_k_7_mut_closure_moved_then_called.rs	E0506:5 E0382:10
+closure-moves/mutations/map_keeps_capture_k_7_shared_closure_copied.rs	E0506:5
+closure-moves/mutations/match_arm_conflict_v_10_move_closure_across.rs	E0499:6 E0382:11
+closure-moves/mutations/match_arm_conflict_v_10_move_closure_after.rs	E0499:6
+closure-moves/mutations/match_arm_conflict_v_10_move_closure_into_branch.rs	E0499:6 E0382:14
+closure-moves/mutations/match_arm_conflict_v_10_mut_closure_moved_across.rs	E0499:6 E0502:12
+closure-moves/mutations/match_arm_conflict_v_10_mut_closure_moved_then_called.rs	E0499:6 E0382:13
+closure-moves/mutations/match_arm_conflict_v_10_shared_closure_copied.rs	E0499:6
+closure-moves/mutations/match_arms_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/match_arms_v_9_move_closure_after.rs	ok	0	"[1, 2, 2]\n"
+closure-moves/mutations/match_arms_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/match_arms_v_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/match_arms_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/match_arms_v_9_shared_closure_copied.rs	ok	0	"[1, 2, 2]\n"
+closure-moves/mutations/method_two_phase_c_14_move_closure_across.rs	E0382:19
+closure-moves/mutations/method_two_phase_c_14_move_closure_after.rs	E0382:19
+closure-moves/mutations/method_two_phase_c_14_move_closure_into_branch.rs	E0382:21
+closure-moves/mutations/method_two_phase_c_14_mut_closure_moved_across.rs	E0499:16 E0502:16
+closure-moves/mutations/method_two_phase_c_14_mut_closure_moved_then_called.rs	E0382:17
+closure-moves/mutations/method_two_phase_c_14_shared_closure_copied.rs	E0502:17
+closure-moves/mutations/method_two_phase_c_16_move_closure_across.rs	E0505:16 E0382:19
+closure-moves/mutations/method_two_phase_c_16_move_closure_after.rs	E0382:19
+closure-moves/mutations/method_two_phase_c_16_move_closure_into_branch.rs	E0505:17 E0382:21
+closure-moves/mutations/method_two_phase_c_16_mut_closure_moved_across.rs	E0502:16 E0499:18
+closure-moves/mutations/method_two_phase_c_16_mut_closure_moved_then_called.rs	E0502:16 E0382:19
+closure-moves/mutations/method_two_phase_c_16_shared_closure_copied.rs	E0502:19
+closure-moves/mutations/method_while_borrowed_c_15_move_closure_across.rs	E0505:15 E0382:16 E0502:16
+closure-moves/mutations/method_while_borrowed_c_15_move_closure_after.rs	E0502:15 E0505:16
+closure-moves/mutations/method_while_borrowed_c_15_move_closure_into_branch.rs	E0505:16 E0382:19 E0502:19
+closure-moves/mutations/method_while_borrowed_c_15_mut_closure_moved_across.rs	E0502:15 E0499:17
+closure-moves/mutations/method_while_borrowed_c_15_mut_closure_moved_then_called.rs	E0502:15 E0382:18 E0502:19
+closure-moves/mutations/method_while_borrowed_c_15_shared_closure_copied.rs	E0502:18
+closure-moves/mutations/move_copy_capture_copied_d_8_move_closure_across.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_d_8_move_closure_after.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_d_8_move_closure_into_branch.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_d_8_mut_closure_moved_across.rs	E0499:10
+closure-moves/mutations/move_copy_capture_copied_d_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/move_copy_capture_copied_d_8_shared_closure_copied.rs	E0502:11
+closure-moves/mutations/move_copy_capture_copied_n_8_move_closure_across.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_n_8_move_closure_after.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_n_8_move_closure_into_branch.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_capture_copied_n_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/move_copy_capture_copied_n_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/move_copy_capture_copied_n_8_shared_closure_copied.rs	ok	0	"2 2 1\n"
+closure-moves/mutations/move_copy_then_change_n_4_move_closure_across.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_4_move_closure_after.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_4_move_closure_into_branch.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_4_mut_closure_moved_across.rs	E0503:6
+closure-moves/mutations/move_copy_then_change_n_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/move_copy_then_change_n_4_shared_closure_copied.rs	E0506:7
+closure-moves/mutations/move_copy_then_change_n_5_move_closure_across.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_5_move_closure_after.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_5_move_closure_into_branch.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_copy_then_change_n_5_mut_closure_moved_across.rs	E0502:7
+closure-moves/mutations/move_copy_then_change_n_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/move_copy_then_change_n_5_shared_closure_copied.rs	ok	0	"2 11\n"
+closure-moves/mutations/move_field_assigned_again_s_9_move_closure_across.rs	E0382:9 E0382:10
+closure-moves/mutations/move_field_assigned_again_s_9_move_closure_after.rs	E0382:12
+closure-moves/mutations/move_field_assigned_again_s_9_move_closure_into_branch.rs	E0382:10 E0382:13
+closure-moves/mutations/move_field_assigned_again_s_9_mut_closure_moved_across.rs	E0382:9 E0506:11
+closure-moves/mutations/move_field_assigned_again_s_9_mut_closure_moved_then_called.rs	E0382:9 E0382:12
+closure-moves/mutations/move_field_assigned_again_s_9_shared_closure_copied.rs	E0382:9 E0506:12
+closure-moves/mutations/move_field_then_borrow_other_s_10_move_closure_across.rs	E0382:10 E0382:11
+closure-moves/mutations/move_field_then_borrow_other_s_10_move_closure_after.rs	E0382:11
+closure-moves/mutations/move_field_then_borrow_other_s_10_move_closure_into_branch.rs	E0382:11 E0382:14
+closure-moves/mutations/move_field_then_borrow_other_s_10_mut_closure_moved_across.rs	E0382:10 E0502:12
+closure-moves/mutations/move_field_then_borrow_other_s_10_mut_closure_moved_then_called.rs	E0382:10 E0382:13
+closure-moves/mutations/move_field_then_borrow_other_s_10_shared_closure_copied.rs	E0382:10
+closure-moves/mutations/move_field_then_borrow_other_s_9_move_closure_across.rs	E0382:9 E0382:10
+closure-moves/mutations/move_field_then_borrow_other_s_9_move_closure_after.rs	E0382:10 E0382:12
+closure-moves/mutations/move_field_then_borrow_other_s_9_move_closure_into_branch.rs	E0382:10 E0382:13
+closure-moves/mutations/move_field_then_borrow_other_s_9_mut_closure_moved_across.rs	E0382:9 E0499:11
+closure-moves/mutations/move_field_then_borrow_other_s_9_mut_closure_moved_then_called.rs	E0382:9 E0382:12
+closure-moves/mutations/move_field_then_borrow_other_s_9_shared_closure_copied.rs	E0382:9 E0502:12
+closure-moves/mutations/move_keeps_state_count_8_move_closure_across.rs	ok	0	"1\n2 0\n"
+closure-moves/mutations/move_keeps_state_count_8_move_closure_after.rs	ok	0	"1\n2 0\n"
+closure-moves/mutations/move_keeps_state_count_8_move_closure_into_branch.rs	ok	0	"1\n2 0\n"
+closure-moves/mutations/move_keeps_state_count_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/move_keeps_state_count_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/move_keeps_state_count_8_shared_closure_copied.rs	ok	0	"1\n2 0\n"
+closure-moves/mutations/mut_capture_moved_ok_d_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/mut_capture_moved_ok_d_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/mut_capture_moved_ok_d_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/mut_capture_moved_ok_d_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/mut_capture_moved_ok_d_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/mut_capture_moved_ok_d_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/mut_capture_moved_ok_d_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/mut_capture_moved_ok_d_6_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/mut_capture_moved_ok_d_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/mut_capture_moved_ok_d_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/mut_capture_moved_ok_d_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/mut_capture_moved_ok_d_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/mut_capture_moved_ok_n_7_move_closure_across.rs	ok	0	"2\n"
+closure-moves/mutations/mut_capture_moved_ok_n_7_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/mut_capture_moved_ok_n_7_move_closure_into_branch.rs	ok	0	"2\n"
+closure-moves/mutations/mut_capture_moved_ok_n_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/mut_capture_moved_ok_n_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/mut_capture_moved_ok_n_7_shared_closure_copied.rs	ok	0	"2\n"
+closure-moves/mutations/mut_capture_moved_then_called_c_6_move_closure_across.rs	E0382:6 E0382:7
+closure-moves/mutations/mut_capture_moved_then_called_c_6_move_closure_after.rs	E0382:6
+closure-moves/mutations/mut_capture_moved_then_called_c_6_move_closure_into_branch.rs	E0382:7 E0382:10
+closure-moves/mutations/mut_capture_moved_then_called_c_6_mut_closure_moved_across.rs	E0382:6 E0499:8
+closure-moves/mutations/mut_capture_moved_then_called_c_6_mut_closure_moved_then_called.rs	E0382:6 E0382:9
+closure-moves/mutations/mut_capture_moved_then_called_c_6_shared_closure_copied.rs	E0382:6 E0502:9
+closure-moves/mutations/mut_capture_moved_then_called_d_5_move_closure_across.rs	E0382:6 E0382:8
+closure-moves/mutations/mut_capture_moved_then_called_d_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/mut_capture_moved_then_called_d_5_move_closure_into_branch.rs	E0382:9 E0382:10
+closure-moves/mutations/mut_capture_moved_then_called_d_5_mut_closure_moved_across.rs	E0499:7 E0382:9
+closure-moves/mutations/mut_capture_moved_then_called_d_5_mut_closure_moved_then_called.rs	E0382:8 E0382:10
+closure-moves/mutations/mut_capture_moved_then_called_d_5_shared_closure_copied.rs	E0502:8 E0382:10
+closure-moves/mutations/mut_capture_moved_then_called_n_7_move_closure_across.rs	E0382:6
+closure-moves/mutations/mut_capture_moved_then_called_n_7_move_closure_after.rs	E0382:6
+closure-moves/mutations/mut_capture_moved_then_called_n_7_move_closure_into_branch.rs	E0382:6
+closure-moves/mutations/mut_capture_moved_then_called_n_7_mut_closure_moved_across.rs	E0382:6 E0502:9
+closure-moves/mutations/mut_capture_moved_then_called_n_7_mut_closure_moved_then_called.rs	E0382:6 E0382:10
+closure-moves/mutations/mut_capture_moved_then_called_n_7_shared_closure_copied.rs	E0382:6
+closure-moves/mutations/mut_capture_passed_then_called_c_8_move_closure_across.rs	E0382:9 E0382:11
+closure-moves/mutations/mut_capture_passed_then_called_c_8_move_closure_after.rs	E0382:9 E0382:11
+closure-moves/mutations/mut_capture_passed_then_called_c_8_move_closure_into_branch.rs	E0382:12 E0382:13
+closure-moves/mutations/mut_capture_passed_then_called_c_8_mut_closure_moved_across.rs	E0505:10 E0382:12
+closure-moves/mutations/mut_capture_passed_then_called_c_8_mut_closure_moved_then_called.rs	E0382:11 E0382:13
+closure-moves/mutations/mut_capture_passed_then_called_c_8_shared_closure_copied.rs	E0505:11 E0382:13
+closure-moves/mutations/mut_capture_passed_then_called_c_9_move_closure_across.rs	E0382:9 E0382:10
+closure-moves/mutations/mut_capture_passed_then_called_c_9_move_closure_after.rs	E0382:9
+closure-moves/mutations/mut_capture_passed_then_called_c_9_move_closure_into_branch.rs	E0382:10 E0382:13
+closure-moves/mutations/mut_capture_passed_then_called_c_9_mut_closure_moved_across.rs	E0382:9 E0499:11
+closure-moves/mutations/mut_capture_passed_then_called_c_9_mut_closure_moved_then_called.rs	E0382:9 E0382:12
+closure-moves/mutations/mut_capture_passed_then_called_c_9_shared_closure_copied.rs	E0382:9 E0502:12
+closure-moves/mutations/mut_capture_passed_then_called_n_10_move_closure_across.rs	E0382:9
+closure-moves/mutations/mut_capture_passed_then_called_n_10_move_closure_after.rs	E0382:9
+closure-moves/mutations/mut_capture_passed_then_called_n_10_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/mut_capture_passed_then_called_n_10_mut_closure_moved_across.rs	E0382:9 E0502:12
+closure-moves/mutations/mut_capture_passed_then_called_n_10_mut_closure_moved_then_called.rs	E0382:9 E0382:13
+closure-moves/mutations/mut_capture_passed_then_called_n_10_shared_closure_copied.rs	E0382:9
+closure-moves/mutations/mut_reference_declared_mut_c_7_move_closure_across.rs	E0502:6 E0382:8
+closure-moves/mutations/mut_reference_declared_mut_c_7_move_closure_after.rs	E0502:6
+closure-moves/mutations/mut_reference_declared_mut_c_7_move_closure_into_branch.rs	E0502:6 E0382:11
+closure-moves/mutations/mut_reference_declared_mut_c_7_mut_closure_moved_across.rs	E0502:6 E0499:9
+closure-moves/mutations/mut_reference_declared_mut_c_7_mut_closure_moved_then_called.rs	E0502:6 E0382:10
+closure-moves/mutations/mut_reference_declared_mut_c_7_shared_closure_copied.rs	E0502:6 E0502:10
+closure-moves/mutations/mut_reference_declared_mut_r_8_move_closure_across.rs	E0502:6 E0505:8
+closure-moves/mutations/mut_reference_declared_mut_r_8_move_closure_after.rs	E0502:6 E0382:11
+closure-moves/mutations/mut_reference_declared_mut_r_8_move_closure_into_branch.rs	E0502:6 E0505:9
+closure-moves/mutations/mut_reference_declared_mut_r_8_mut_closure_moved_across.rs	E0502:6 E0502:8 E0506:10
+closure-moves/mutations/mut_reference_declared_mut_r_8_mut_closure_moved_then_called.rs	E0502:6 E0502:8 E0382:11
+closure-moves/mutations/mut_reference_declared_mut_r_8_shared_closure_copied.rs	E0502:6 E0506:11
+closure-moves/mutations/mut_reference_declared_mut_r_9_move_closure_across.rs	E0502:6 E0382:10
+closure-moves/mutations/mut_reference_declared_mut_r_9_move_closure_after.rs	E0502:6
+closure-moves/mutations/mut_reference_declared_mut_r_9_move_closure_into_branch.rs	E0502:6 E0382:13
+closure-moves/mutations/mut_reference_declared_mut_r_9_mut_closure_moved_across.rs	E0502:6 E0502:11
+closure-moves/mutations/mut_reference_declared_mut_r_9_mut_closure_moved_then_called.rs	E0502:6 E0382:12
+closure-moves/mutations/mut_reference_declared_mut_r_9_shared_closure_copied.rs	E0502:6
+closure-moves/mutations/mut_reference_declared_mut_y_8_move_closure_across.rs	E0502:6
+closure-moves/mutations/mut_reference_declared_mut_y_8_move_closure_after.rs	E0502:6 E0503:9
+closure-moves/mutations/mut_reference_declared_mut_y_8_move_closure_into_branch.rs	E0502:6
+closure-moves/mutations/mut_reference_declared_mut_y_8_mut_closure_moved_across.rs	E0502:6 E0499:10
+closure-moves/mutations/mut_reference_declared_mut_y_8_mut_closure_moved_then_called.rs	E0502:6 E0382:11
+closure-moves/mutations/mut_reference_declared_mut_y_8_shared_closure_copied.rs	E0502:6 E0502:11
+closure-moves/mutations/mutable_twice_v_7_move_closure_across.rs	E0499:4 E0382:8
+closure-moves/mutations/mutable_twice_v_7_move_closure_after.rs	E0499:4
+closure-moves/mutations/mutable_twice_v_7_move_closure_into_branch.rs	E0499:4 E0382:11
+closure-moves/mutations/mutable_twice_v_7_mut_closure_moved_across.rs	E0499:4 E0502:9
+closure-moves/mutations/mutable_twice_v_7_mut_closure_moved_then_called.rs	E0499:4 E0382:10
+closure-moves/mutations/mutable_twice_v_7_shared_closure_copied.rs	E0499:4
+closure-moves/mutations/nested_closure_inner_5_move_closure_across.rs	E0382:6 E0502:9
+closure-moves/mutations/nested_closure_inner_5_move_closure_after.rs	E0502:9
+closure-moves/mutations/nested_closure_inner_5_move_closure_into_branch.rs	E0382:9 E0502:11
+closure-moves/mutations/nested_closure_inner_5_mut_closure_moved_across.rs	E0499:7 E0502:10
+closure-moves/mutations/nested_closure_inner_5_mut_closure_moved_then_called.rs	E0382:8 E0502:11
+closure-moves/mutations/nested_closure_inner_5_shared_closure_copied.rs	E0502:8 E0502:11
+closure-moves/mutations/nested_closure_ok_inner_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/nested_closure_ok_inner_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/nested_closure_ok_inner_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/nested_closure_ok_inner_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/nested_closure_ok_inner_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/nested_closure_ok_inner_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/nested_closure_ok_inner_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/nested_closure_ok_inner_6_move_closure_after.rs	ok	0	"[1, 2, 1, 1]\n"
+closure-moves/mutations/nested_closure_ok_inner_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/nested_closure_ok_inner_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/nested_closure_ok_inner_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/nested_closure_ok_inner_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/nested_closure_ok_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/nested_closure_ok_v_9_move_closure_after.rs	ok	0	"[1, 2, 1, 1]\n"
+closure-moves/mutations/nested_closure_ok_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/nested_closure_ok_v_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/nested_closure_ok_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/nested_closure_ok_v_9_shared_closure_copied.rs	ok	0	"[1, 2, 1, 1]\n"
+closure-moves/mutations/nested_closure_v_7_move_closure_across.rs	E0505:7 E0502:8 E0382:8
+closure-moves/mutations/nested_closure_v_7_move_closure_after.rs	E0502:7 E0505:8
+closure-moves/mutations/nested_closure_v_7_move_closure_into_branch.rs	E0505:8 E0502:11 E0382:11
+closure-moves/mutations/nested_closure_v_7_mut_closure_moved_across.rs	E0499:7 E0502:9
+closure-moves/mutations/nested_closure_v_7_mut_closure_moved_then_called.rs	E0499:7 E0382:10 E0502:11
+closure-moves/mutations/nested_closure_v_7_shared_closure_copied.rs	E0502:7 E0502:10
+closure-moves/mutations/option_get_or_insert_with_o_6_move_closure_across.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_get_or_insert_with_o_6_move_closure_after.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_get_or_insert_with_o_6_move_closure_into_branch.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_get_or_insert_with_o_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/option_get_or_insert_with_o_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/option_get_or_insert_with_o_6_shared_closure_copied.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_get_or_insert_with_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/option_get_or_insert_with_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/option_get_or_insert_with_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/option_get_or_insert_with_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/option_get_or_insert_with_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/option_get_or_insert_with_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/option_get_or_insert_with_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/option_get_or_insert_with_v_6_move_closure_after.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_get_or_insert_with_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/option_get_or_insert_with_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/option_get_or_insert_with_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/option_get_or_insert_with_v_6_shared_closure_copied.rs	ok	0	"2 Some(2) [1, 2, 3]\n"
+closure-moves/mutations/option_pattern_in_body_o_4_move_closure_across.rs	E0506:5
+closure-moves/mutations/option_pattern_in_body_o_4_move_closure_after.rs	E0506:4
+closure-moves/mutations/option_pattern_in_body_o_4_move_closure_into_branch.rs	E0506:8
+closure-moves/mutations/option_pattern_in_body_o_4_mut_closure_moved_across.rs	E0502:4 E0506:6
+closure-moves/mutations/option_pattern_in_body_o_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0506:8
+closure-moves/mutations/option_pattern_in_body_o_4_shared_closure_copied.rs	E0506:7
+closure-moves/mutations/option_pattern_in_body_o_5_move_closure_across.rs	E0506:4
+closure-moves/mutations/option_pattern_in_body_o_5_move_closure_after.rs	E0506:4
+closure-moves/mutations/option_pattern_in_body_o_5_move_closure_into_branch.rs	E0506:4
+closure-moves/mutations/option_pattern_in_body_o_5_mut_closure_moved_across.rs	E0506:4 E0502:7
+closure-moves/mutations/option_pattern_in_body_o_5_mut_closure_moved_then_called.rs	E0506:4 E0382:8
+closure-moves/mutations/option_pattern_in_body_o_5_shared_closure_copied.rs	E0506:4
+closure-moves/mutations/oracle_branch_arms_v_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/oracle_branch_arms_v_10_move_closure_after.rs	ok	0	"[1, 1]\n"
+closure-moves/mutations/oracle_branch_arms_v_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/oracle_branch_arms_v_10_mut_closure_moved_across.rs	E0502:12
+closure-moves/mutations/oracle_branch_arms_v_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/oracle_branch_arms_v_10_shared_closure_copied.rs	ok	0	"[1, 1]\n"
+closure-moves/mutations/oracle_loop_back_edge_n_12_move_closure_across.rs	E0502:7
+closure-moves/mutations/oracle_loop_back_edge_n_12_move_closure_after.rs	E0502:7
+closure-moves/mutations/oracle_loop_back_edge_n_12_move_closure_into_branch.rs	E0502:7
+closure-moves/mutations/oracle_loop_back_edge_n_12_mut_closure_moved_across.rs	E0502:7 E0502:14
+closure-moves/mutations/oracle_loop_back_edge_n_12_mut_closure_moved_then_called.rs	E0502:7 E0382:15
+closure-moves/mutations/oracle_loop_back_edge_n_12_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/oracle_stale_shared_v_4_move_closure_across.rs	E0505:4 E0382:5 E0502:5
+closure-moves/mutations/oracle_stale_shared_v_4_move_closure_after.rs	E0502:4 E0505:5
+closure-moves/mutations/oracle_stale_shared_v_4_move_closure_into_branch.rs	E0505:5 E0382:8 E0502:8
+closure-moves/mutations/oracle_stale_shared_v_4_mut_closure_moved_across.rs	E0502:4 E0499:6
+closure-moves/mutations/oracle_stale_shared_v_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0502:8
+closure-moves/mutations/oracle_stale_shared_v_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/panic_ends_path_ok_v_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/panic_ends_path_ok_v_10_move_closure_after.rs	ok	0	"[1, 2]\n"
+closure-moves/mutations/panic_ends_path_ok_v_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/panic_ends_path_ok_v_10_mut_closure_moved_across.rs	E0502:12
+closure-moves/mutations/panic_ends_path_ok_v_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/panic_ends_path_ok_v_10_shared_closure_copied.rs	ok	0	"[1, 2]\n"
+closure-moves/mutations/panic_ends_path_v_9_move_closure_across.rs	E0502:4 E0382:10
+closure-moves/mutations/panic_ends_path_v_9_move_closure_after.rs	E0502:4
+closure-moves/mutations/panic_ends_path_v_9_move_closure_into_branch.rs	E0502:4 E0382:13
+closure-moves/mutations/panic_ends_path_v_9_mut_closure_moved_across.rs	E0502:4 E0502:11
+closure-moves/mutations/panic_ends_path_v_9_mut_closure_moved_then_called.rs	E0502:4 E0382:12
+closure-moves/mutations/panic_ends_path_v_9_shared_closure_copied.rs	E0502:4
+closure-moves/mutations/parameter_borrow_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/parameter_borrow_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/parameter_borrow_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/parameter_borrow_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/parameter_borrow_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/parameter_borrow_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/parameter_borrow_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/parameter_borrow_v_6_move_closure_after.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/parameter_borrow_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/parameter_borrow_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/parameter_borrow_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/parameter_borrow_v_6_shared_closure_copied.rs	ok	0	"[1, 2, 1]\n"
+closure-moves/mutations/parameter_mut_reference_c_4_move_closure_across.rs	E0501:3 E0382:5
+closure-moves/mutations/parameter_mut_reference_c_4_move_closure_after.rs	E0501:3
+closure-moves/mutations/parameter_mut_reference_c_4_move_closure_into_branch.rs	E0501:3 E0382:8
+closure-moves/mutations/parameter_mut_reference_c_4_mut_closure_moved_across.rs	E0501:3 E0499:6
+closure-moves/mutations/parameter_mut_reference_c_4_mut_closure_moved_then_called.rs	E0501:3 E0382:7
+closure-moves/mutations/parameter_mut_reference_c_4_shared_closure_copied.rs	E0501:3 E0502:7
+closure-moves/mutations/parameter_mut_reference_ok_c_3_move_closure_across.rs	E0382:4
+closure-moves/mutations/parameter_mut_reference_ok_c_3_move_closure_after.rs	E0382:6
+closure-moves/mutations/parameter_mut_reference_ok_c_3_move_closure_into_branch.rs	E0382:7
+closure-moves/mutations/parameter_mut_reference_ok_c_3_mut_closure_moved_across.rs	E0499:5
+closure-moves/mutations/parameter_mut_reference_ok_c_3_mut_closure_moved_then_called.rs	E0382:6
+closure-moves/mutations/parameter_mut_reference_ok_c_3_shared_closure_copied.rs	E0502:6
+closure-moves/mutations/parameter_mut_reference_ok_c_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/parameter_mut_reference_ok_c_4_move_closure_after.rs	ok	0	"3\n[1, 1, 1]\n"
+closure-moves/mutations/parameter_mut_reference_ok_c_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/parameter_mut_reference_ok_c_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/parameter_mut_reference_ok_c_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/parameter_mut_reference_ok_c_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/parameter_mut_reference_ok_v_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/parameter_mut_reference_ok_v_10_move_closure_after.rs	ok	0	"3\n[1, 1, 1]\n"
+closure-moves/mutations/parameter_mut_reference_ok_v_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/parameter_mut_reference_ok_v_10_mut_closure_moved_across.rs	E0502:12
+closure-moves/mutations/parameter_mut_reference_ok_v_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/parameter_mut_reference_ok_v_10_shared_closure_copied.rs	ok	0	"3\n[1, 1, 1]\n"
+closure-moves/mutations/parameter_mut_reference_ok_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/parameter_mut_reference_ok_v_9_move_closure_after.rs	E0382:12
+closure-moves/mutations/parameter_mut_reference_ok_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/parameter_mut_reference_ok_v_9_mut_closure_moved_across.rs	E0499:11
+closure-moves/mutations/parameter_mut_reference_ok_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/parameter_mut_reference_ok_v_9_shared_closure_copied.rs	E0502:12
+closure-moves/mutations/parameter_mut_reference_v_8_move_closure_across.rs	E0501:3 E0382:9
+closure-moves/mutations/parameter_mut_reference_v_8_move_closure_after.rs	E0501:3 E0382:11
+closure-moves/mutations/parameter_mut_reference_v_8_move_closure_into_branch.rs	E0501:3 E0382:12
+closure-moves/mutations/parameter_mut_reference_v_8_mut_closure_moved_across.rs	E0501:3 E0499:10
+closure-moves/mutations/parameter_mut_reference_v_8_mut_closure_moved_then_called.rs	E0501:3 E0382:11
+closure-moves/mutations/parameter_mut_reference_v_8_shared_closure_copied.rs	E0501:3 E0502:11
+closure-moves/mutations/parameter_mut_reference_v_9_move_closure_across.rs	E0501:3 E0382:10
+closure-moves/mutations/parameter_mut_reference_v_9_move_closure_after.rs	E0501:3
+closure-moves/mutations/parameter_mut_reference_v_9_move_closure_into_branch.rs	E0501:3 E0382:13
+closure-moves/mutations/parameter_mut_reference_v_9_mut_closure_moved_across.rs	E0501:3 E0502:11
+closure-moves/mutations/parameter_mut_reference_v_9_mut_closure_moved_then_called.rs	E0501:3 E0382:12
+closure-moves/mutations/parameter_mut_reference_v_9_shared_closure_copied.rs	E0501:3
+closure-moves/mutations/passed_to_function_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/passed_to_function_v_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/passed_to_function_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/passed_to_function_v_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/passed_to_function_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/passed_to_function_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/passed_to_function_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/passed_to_function_v_8_move_closure_after.rs	ok	0	"[1, 2, 3, 3]\n"
+closure-moves/mutations/passed_to_function_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/passed_to_function_v_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/passed_to_function_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/passed_to_function_v_8_shared_closure_copied.rs	ok	0	"[1, 2, 3, 3]\n"
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_move_closure_across.rs	E0505:7 E0502:8 E0382:8
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_move_closure_after.rs	E0502:7 E0505:8
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_move_closure_into_branch.rs	E0505:8 E0502:11 E0382:11
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_mut_closure_moved_across.rs	E0502:7 E0502:9
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_mut_closure_moved_then_called.rs	E0502:7 E0382:10 E0502:11
+closure-moves/mutations/passed_to_function_while_borrowed_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/reborrow_conflict_v_7_move_closure_across.rs	E0499:5 E0382:8
+closure-moves/mutations/reborrow_conflict_v_7_move_closure_after.rs	E0499:5
+closure-moves/mutations/reborrow_conflict_v_7_move_closure_into_branch.rs	E0499:5 E0382:11
+closure-moves/mutations/reborrow_conflict_v_7_mut_closure_moved_across.rs	E0499:5 E0502:9
+closure-moves/mutations/reborrow_conflict_v_7_mut_closure_moved_then_called.rs	E0499:5 E0382:10
+closure-moves/mutations/reborrow_conflict_v_7_shared_closure_copied.rs	E0499:5
+closure-moves/mutations/reborrow_through_holder_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/reborrow_through_holder_v_7_move_closure_after.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/reborrow_through_holder_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/reborrow_through_holder_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/reborrow_through_holder_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/reborrow_through_holder_v_7_shared_closure_copied.rs	ok	0	"[1, 2, 3]\n"
+closure-moves/mutations/retain_capture_v_3_move_closure_across.rs	E0382:4 E0502:4
+closure-moves/mutations/retain_capture_v_3_move_closure_after.rs	E0502:3 E0382:6
+closure-moves/mutations/retain_capture_v_3_move_closure_into_branch.rs	E0382:7 E0502:7
+closure-moves/mutations/retain_capture_v_3_mut_closure_moved_across.rs	E0499:5 E0502:5
+closure-moves/mutations/retain_capture_v_3_mut_closure_moved_then_called.rs	E0382:6 E0502:7
+closure-moves/mutations/retain_capture_v_3_shared_closure_copied.rs	E0502:6
+closure-moves/mutations/retain_capture_v_4_move_closure_across.rs	E0502:3 E0382:5
+closure-moves/mutations/retain_capture_v_4_move_closure_after.rs	E0502:3
+closure-moves/mutations/retain_capture_v_4_move_closure_into_branch.rs	E0502:3 E0382:8
+closure-moves/mutations/retain_capture_v_4_mut_closure_moved_across.rs	E0502:3 E0502:6
+closure-moves/mutations/retain_capture_v_4_mut_closure_moved_then_called.rs	E0502:3 E0382:7
+closure-moves/mutations/retain_capture_v_4_shared_closure_copied.rs	E0502:3
+closure-moves/mutations/retain_other_v_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/retain_other_v_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/retain_other_v_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/retain_other_v_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/retain_other_v_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/retain_other_v_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/retain_other_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/retain_other_v_5_move_closure_after.rs	ok	0	"[1]\n"
+closure-moves/mutations/retain_other_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/retain_other_v_5_mut_closure_moved_across.rs	E0502:7
+closure-moves/mutations/retain_other_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/retain_other_v_5_shared_closure_copied.rs	ok	0	"[1]\n"
+closure-moves/mutations/returned_kept_after_closure_v_7_move_closure_across.rs	E0505:7 E0382:8 E0502:8
+closure-moves/mutations/returned_kept_after_closure_v_7_move_closure_after.rs	E0502:7 E0505:8
+closure-moves/mutations/returned_kept_after_closure_v_7_move_closure_into_branch.rs	E0505:8 E0382:11 E0502:11
+closure-moves/mutations/returned_kept_after_closure_v_7_mut_closure_moved_across.rs	E0502:7 E0499:9
+closure-moves/mutations/returned_kept_after_closure_v_7_mut_closure_moved_then_called.rs	E0502:7 E0382:10 E0502:11
+closure-moves/mutations/returned_kept_after_closure_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/returns_borrow_ended_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/returns_borrow_ended_v_6_move_closure_after.rs	E0382:9
+closure-moves/mutations/returns_borrow_ended_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/returns_borrow_ended_v_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/returns_borrow_ended_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/returns_borrow_ended_v_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/returns_borrow_ended_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/returns_borrow_ended_v_7_move_closure_after.rs	ok	0	"[1, 2]\n[1, 2, 3]\n"
+closure-moves/mutations/returns_borrow_ended_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/returns_borrow_ended_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/returns_borrow_ended_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/returns_borrow_ended_v_7_shared_closure_copied.rs	ok	0	"[1, 2]\n[1, 2, 3]\n"
+closure-moves/mutations/returns_borrow_through_reference_v_6_move_closure_across.rs	E0505:6 E0382:7 E0502:7
+closure-moves/mutations/returns_borrow_through_reference_v_6_move_closure_after.rs	E0502:6 E0505:7
+closure-moves/mutations/returns_borrow_through_reference_v_6_move_closure_into_branch.rs	E0505:7 E0382:10 E0502:10
+closure-moves/mutations/returns_borrow_through_reference_v_6_mut_closure_moved_across.rs	E0502:6 E0499:8
+closure-moves/mutations/returns_borrow_through_reference_v_6_mut_closure_moved_then_called.rs	E0502:6 E0382:9 E0502:10
+closure-moves/mutations/returns_borrow_through_reference_v_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/returns_borrow_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/returns_borrow_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/returns_borrow_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/returns_borrow_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/returns_borrow_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/returns_borrow_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/returns_early_v_11_move_closure_across.rs	E0505:11 E0382:12 E0502:12
+closure-moves/mutations/returns_early_v_11_move_closure_after.rs	E0502:11 E0505:12
+closure-moves/mutations/returns_early_v_11_move_closure_into_branch.rs	E0505:12 E0382:15 E0502:15
+closure-moves/mutations/returns_early_v_11_mut_closure_moved_across.rs	E0502:11 E0499:13
+closure-moves/mutations/returns_early_v_11_mut_closure_moved_then_called.rs	E0502:11 E0382:14 E0502:15
+closure-moves/mutations/returns_early_v_11_shared_closure_copied.rs	E0502:14
+closure-moves/mutations/returns_one_of_two_b_10_move_closure_across.rs	E0382:11
+closure-moves/mutations/returns_one_of_two_b_10_move_closure_after.rs	ok	0	"[1] [2, 3]\n"
+closure-moves/mutations/returns_one_of_two_b_10_move_closure_into_branch.rs	E0382:14
+closure-moves/mutations/returns_one_of_two_b_10_mut_closure_moved_across.rs	E0502:12
+closure-moves/mutations/returns_one_of_two_b_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/returns_one_of_two_b_10_shared_closure_copied.rs	ok	0	"[1] [2, 3]\n"
+closure-moves/mutations/returns_one_of_two_b_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/returns_one_of_two_b_9_move_closure_after.rs	E0382:12
+closure-moves/mutations/returns_one_of_two_b_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/returns_one_of_two_b_9_mut_closure_moved_across.rs	E0499:11
+closure-moves/mutations/returns_one_of_two_b_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/returns_one_of_two_b_9_shared_closure_copied.rs	E0502:12
+closure-moves/mutations/returns_one_of_two_conflict_a_9_move_closure_across.rs	E0505:9 E0382:10 E0502:10
+closure-moves/mutations/returns_one_of_two_conflict_a_9_move_closure_after.rs	E0502:9 E0505:10
+closure-moves/mutations/returns_one_of_two_conflict_a_9_move_closure_into_branch.rs	E0505:10 E0382:13 E0502:13
+closure-moves/mutations/returns_one_of_two_conflict_a_9_mut_closure_moved_across.rs	E0502:9 E0499:11
+closure-moves/mutations/returns_one_of_two_conflict_a_9_mut_closure_moved_then_called.rs	E0502:9 E0382:12 E0502:13
+closure-moves/mutations/returns_one_of_two_conflict_a_9_shared_closure_copied.rs	E0502:12
+closure-moves/mutations/returns_owned_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/returns_owned_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/returns_owned_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/returns_owned_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/returns_owned_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/returns_owned_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/returns_owned_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/returns_owned_v_6_move_closure_after.rs	ok	0	"3 [1, 2, 3]\n"
+closure-moves/mutations/returns_owned_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/returns_owned_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/returns_owned_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/returns_owned_v_6_shared_closure_copied.rs	ok	0	"3 [1, 2, 3]\n"
+closure-moves/mutations/returns_reference_copied_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/returns_reference_copied_v_7_move_closure_after.rs	E0382:10
+closure-moves/mutations/returns_reference_copied_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/returns_reference_copied_v_7_mut_closure_moved_across.rs	E0499:9
+closure-moves/mutations/returns_reference_copied_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/returns_reference_copied_v_7_shared_closure_copied.rs	E0502:10
+closure-moves/mutations/returns_reference_copied_v_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/returns_reference_copied_v_8_move_closure_after.rs	ok	0	"[3] [1, 2, 3]\n"
+closure-moves/mutations/returns_reference_copied_v_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/returns_reference_copied_v_8_mut_closure_moved_across.rs	E0502:10
+closure-moves/mutations/returns_reference_copied_v_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/returns_reference_copied_v_8_shared_closure_copied.rs	ok	0	"[3] [1, 2, 3]\n"
+closure-moves/mutations/shared_kept_ended_v_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/shared_kept_ended_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/shared_kept_ended_v_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/shared_kept_ended_v_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/shared_kept_ended_v_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/shared_kept_ended_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/shared_kept_ended_v_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/shared_kept_ended_v_6_move_closure_after.rs	ok	0	"2\n[1, 2, 3]\n"
+closure-moves/mutations/shared_kept_ended_v_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/shared_kept_ended_v_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/shared_kept_ended_v_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/shared_kept_ended_v_6_shared_closure_copied.rs	ok	0	"2\n[1, 2, 3]\n"
+closure-moves/mutations/shared_kept_push_v_4_move_closure_across.rs	E0505:4 E0382:5 E0502:5
+closure-moves/mutations/shared_kept_push_v_4_move_closure_after.rs	E0502:4 E0505:5
+closure-moves/mutations/shared_kept_push_v_4_move_closure_into_branch.rs	E0505:5 E0382:8 E0502:8
+closure-moves/mutations/shared_kept_push_v_4_mut_closure_moved_across.rs	E0502:4 E0499:6
+closure-moves/mutations/shared_kept_push_v_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0502:8
+closure-moves/mutations/shared_kept_push_v_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/string_capture_add_4_move_closure_across.rs	E0382:5 E0502:7
+closure-moves/mutations/string_capture_add_4_move_closure_after.rs	E0502:7 E0382:8
+closure-moves/mutations/string_capture_add_4_move_closure_into_branch.rs	E0382:8 E0502:9
+closure-moves/mutations/string_capture_add_4_mut_closure_moved_across.rs	E0499:6 E0502:8
+closure-moves/mutations/string_capture_add_4_mut_closure_moved_then_called.rs	E0382:7 E0502:9
+closure-moves/mutations/string_capture_add_4_shared_closure_copied.rs	E0502:7 E0502:9
+closure-moves/mutations/string_capture_add_6_move_closure_across.rs	E0502:5 E0382:7
+closure-moves/mutations/string_capture_add_6_move_closure_after.rs	E0502:5
+closure-moves/mutations/string_capture_add_6_move_closure_into_branch.rs	E0502:5 E0382:10
+closure-moves/mutations/string_capture_add_6_mut_closure_moved_across.rs	E0502:5 E0499:8
+closure-moves/mutations/string_capture_add_6_mut_closure_moved_then_called.rs	E0502:5 E0382:9
+closure-moves/mutations/string_capture_add_6_shared_closure_copied.rs	E0502:5 E0502:9
+closure-moves/mutations/string_capture_name_5_move_closure_across.rs	E0505:5 E0502:6 E0382:6
+closure-moves/mutations/string_capture_name_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/string_capture_name_5_move_closure_into_branch.rs	E0505:6 E0502:9 E0382:9
+closure-moves/mutations/string_capture_name_5_mut_closure_moved_across.rs	E0499:5 E0502:7
+closure-moves/mutations/string_capture_name_5_mut_closure_moved_then_called.rs	E0499:5 E0382:8 E0502:9
+closure-moves/mutations/string_capture_name_5_shared_closure_copied.rs	E0502:5 E0502:8
+closure-moves/mutations/string_capture_ok_add_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/string_capture_ok_add_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/string_capture_ok_add_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/string_capture_ok_add_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/string_capture_ok_add_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/string_capture_ok_add_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/string_capture_ok_add_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/string_capture_ok_add_5_move_closure_after.rs	ok	0	"abc\n"
+closure-moves/mutations/string_capture_ok_add_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/string_capture_ok_add_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/string_capture_ok_add_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/string_capture_ok_add_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/string_capture_ok_name_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/string_capture_ok_name_6_move_closure_after.rs	ok	0	"abc\n"
+closure-moves/mutations/string_capture_ok_name_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/string_capture_ok_name_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/string_capture_ok_name_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/string_capture_ok_name_6_shared_closure_copied.rs	ok	0	"abc\n"
+closure-moves/mutations/string_push_after_last_use_s_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/string_push_after_last_use_s_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/string_push_after_last_use_s_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/string_push_after_last_use_s_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/string_push_after_last_use_s_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/string_push_after_last_use_s_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/string_push_after_last_use_s_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/string_push_after_last_use_s_6_move_closure_after.rs	ok	0	"1 ab\n"
+closure-moves/mutations/string_push_after_last_use_s_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/string_push_after_last_use_s_6_mut_closure_moved_across.rs	E0502:8
+closure-moves/mutations/string_push_after_last_use_s_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/string_push_after_last_use_s_6_shared_closure_copied.rs	ok	0	"1 ab\n"
+closure-moves/mutations/string_push_while_borrowed_s_4_move_closure_across.rs	E0505:4 E0382:5 E0502:5
+closure-moves/mutations/string_push_while_borrowed_s_4_move_closure_after.rs	E0502:4 E0505:5
+closure-moves/mutations/string_push_while_borrowed_s_4_move_closure_into_branch.rs	E0505:5 E0382:8 E0502:8
+closure-moves/mutations/string_push_while_borrowed_s_4_mut_closure_moved_across.rs	E0502:4 E0499:6
+closure-moves/mutations/string_push_while_borrowed_s_4_mut_closure_moved_then_called.rs	E0502:4 E0382:7 E0502:8
+closure-moves/mutations/string_push_while_borrowed_s_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/strings_best_21_move_closure_across.rs	E0382:25
+closure-moves/mutations/strings_best_21_move_closure_after.rs	E0382:25
+closure-moves/mutations/strings_best_21_move_closure_into_branch.rs	E0382:27
+closure-moves/mutations/strings_best_21_mut_closure_moved_across.rs	E0502:23 E0502:23
+closure-moves/mutations/strings_best_21_mut_closure_moved_then_called.rs	E0382:24
+closure-moves/mutations/strings_best_21_shared_closure_copied.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+closure-moves/mutations/try_operator_path_v_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/try_operator_path_v_9_move_closure_after.rs	ok	0	"Some(4) [4, 4]\n"
+closure-moves/mutations/try_operator_path_v_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/try_operator_path_v_9_mut_closure_moved_across.rs	E0499:11 E0502:11
+closure-moves/mutations/try_operator_path_v_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/try_operator_path_v_9_shared_closure_copied.rs	E0502:12
+closure-moves/mutations/two_mut_closures_a_5_move_closure_across.rs	E0499:4 E0382:6
+closure-moves/mutations/two_mut_closures_a_5_move_closure_after.rs	E0499:4
+closure-moves/mutations/two_mut_closures_a_5_move_closure_into_branch.rs	E0499:4 E0382:9
+closure-moves/mutations/two_mut_closures_a_5_mut_closure_moved_across.rs	E0499:4 E0499:7
+closure-moves/mutations/two_mut_closures_a_5_mut_closure_moved_then_called.rs	E0499:4 E0382:8
+closure-moves/mutations/two_mut_closures_a_5_shared_closure_copied.rs	E0499:4 E0502:8
+closure-moves/mutations/two_mut_closures_b_6_move_closure_across.rs	E0499:4 E0382:7
+closure-moves/mutations/two_mut_closures_b_6_move_closure_after.rs	E0499:4
+closure-moves/mutations/two_mut_closures_b_6_move_closure_into_branch.rs	E0499:4 E0382:10
+closure-moves/mutations/two_mut_closures_b_6_mut_closure_moved_across.rs	E0499:4 E0499:8
+closure-moves/mutations/two_mut_closures_b_6_mut_closure_moved_then_called.rs	E0499:4 E0382:9
+closure-moves/mutations/two_mut_closures_b_6_shared_closure_copied.rs	E0499:4 E0502:9
+closure-moves/mutations/two_mut_closures_in_turn_a_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/two_mut_closures_in_turn_a_4_move_closure_after.rs	ok	0	"[1, 1, 2]\n"
+closure-moves/mutations/two_mut_closures_in_turn_a_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/two_mut_closures_in_turn_a_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/two_mut_closures_in_turn_a_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/two_mut_closures_in_turn_a_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/two_mut_closures_in_turn_b_6_move_closure_across.rs	E0382:7
+closure-moves/mutations/two_mut_closures_in_turn_b_6_move_closure_after.rs	ok	0	"[1, 1, 2]\n"
+closure-moves/mutations/two_mut_closures_in_turn_b_6_move_closure_into_branch.rs	E0382:10
+closure-moves/mutations/two_mut_closures_in_turn_b_6_mut_closure_moved_across.rs	E0499:8
+closure-moves/mutations/two_mut_closures_in_turn_b_6_mut_closure_moved_then_called.rs	E0382:9
+closure-moves/mutations/two_mut_closures_in_turn_b_6_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/two_mut_closures_in_turn_v_7_move_closure_across.rs	E0382:8
+closure-moves/mutations/two_mut_closures_in_turn_v_7_move_closure_after.rs	ok	0	"[1, 1, 2]\n"
+closure-moves/mutations/two_mut_closures_in_turn_v_7_move_closure_into_branch.rs	E0382:11
+closure-moves/mutations/two_mut_closures_in_turn_v_7_mut_closure_moved_across.rs	E0502:9
+closure-moves/mutations/two_mut_closures_in_turn_v_7_mut_closure_moved_then_called.rs	E0382:10
+closure-moves/mutations/two_mut_closures_in_turn_v_7_shared_closure_copied.rs	ok	0	"[1, 1, 2]\n"
+closure-moves/mutations/two_phase_holder_arg_v_4_move_closure_across.rs	E0505:4 E0502:5 E0382:5
+closure-moves/mutations/two_phase_holder_arg_v_4_move_closure_after.rs	E0502:4 E0382:7
+closure-moves/mutations/two_phase_holder_arg_v_4_move_closure_into_branch.rs	E0505:5 E0502:8 E0382:8
+closure-moves/mutations/two_phase_holder_arg_v_4_mut_closure_moved_across.rs	E0499:4 E0502:6
+closure-moves/mutations/two_phase_holder_arg_v_4_mut_closure_moved_then_called.rs	E0499:4 E0382:7 E0502:8
+closure-moves/mutations/two_phase_holder_arg_v_4_shared_closure_copied.rs	E0502:4 E0502:7
+closure-moves/mutations/two_phase_holder_arg_v_5_move_closure_across.rs	E0502:4 E0382:6
+closure-moves/mutations/two_phase_holder_arg_v_5_move_closure_after.rs	E0502:4
+closure-moves/mutations/two_phase_holder_arg_v_5_move_closure_into_branch.rs	E0502:4 E0382:9
+closure-moves/mutations/two_phase_holder_arg_v_5_mut_closure_moved_across.rs	E0502:4 E0502:7
+closure-moves/mutations/two_phase_holder_arg_v_5_mut_closure_moved_then_called.rs	E0502:4 E0382:8
+closure-moves/mutations/two_phase_holder_arg_v_5_shared_closure_copied.rs	E0502:4
+closure-moves/mutations/two_phase_len_v_3_move_closure_across.rs	E0382:4
+closure-moves/mutations/two_phase_len_v_3_move_closure_after.rs	E0382:6
+closure-moves/mutations/two_phase_len_v_3_move_closure_into_branch.rs	E0382:7
+closure-moves/mutations/two_phase_len_v_3_mut_closure_moved_across.rs	E0499:5 E0502:5
+closure-moves/mutations/two_phase_len_v_3_mut_closure_moved_then_called.rs	E0382:6
+closure-moves/mutations/two_phase_len_v_3_shared_closure_copied.rs	E0502:6
+closure-moves/mutations/two_phase_len_v_5_move_closure_across.rs	E0505:5 E0382:6
+closure-moves/mutations/two_phase_len_v_5_move_closure_after.rs	E0382:8
+closure-moves/mutations/two_phase_len_v_5_move_closure_into_branch.rs	E0505:6 E0382:9
+closure-moves/mutations/two_phase_len_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/two_phase_len_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8
+closure-moves/mutations/two_phase_len_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/two_phase_mutable_arg_v_7_move_closure_across.rs	E0499:4 E0382:8
+closure-moves/mutations/two_phase_mutable_arg_v_7_move_closure_after.rs	E0499:4
+closure-moves/mutations/two_phase_mutable_arg_v_7_move_closure_into_branch.rs	E0499:4 E0382:11
+closure-moves/mutations/two_phase_mutable_arg_v_7_mut_closure_moved_across.rs	E0499:4 E0502:9
+closure-moves/mutations/two_phase_mutable_arg_v_7_mut_closure_moved_then_called.rs	E0499:4 E0382:10
+closure-moves/mutations/two_phase_mutable_arg_v_7_shared_closure_copied.rs	E0499:4
+closure-moves/mutations/unique_capture_moved_then_called_c_7_move_closure_across.rs	E0382:7 E0382:8
+closure-moves/mutations/unique_capture_moved_then_called_c_7_move_closure_after.rs	E0382:7
+closure-moves/mutations/unique_capture_moved_then_called_c_7_move_closure_into_branch.rs	E0382:8 E0382:11
+closure-moves/mutations/unique_capture_moved_then_called_c_7_mut_closure_moved_across.rs	E0382:7 E0499:9
+closure-moves/mutations/unique_capture_moved_then_called_c_7_mut_closure_moved_then_called.rs	E0382:7 E0382:10
+closure-moves/mutations/unique_capture_moved_then_called_c_7_shared_closure_copied.rs	E0382:7 E0502:10
+closure-moves/mutations/unique_capture_moved_then_called_d_6_move_closure_across.rs	E0382:7 E0382:9
+closure-moves/mutations/unique_capture_moved_then_called_d_6_move_closure_after.rs	E0382:9
+closure-moves/mutations/unique_capture_moved_then_called_d_6_move_closure_into_branch.rs	E0382:10 E0382:11
+closure-moves/mutations/unique_capture_moved_then_called_d_6_mut_closure_moved_across.rs	E0499:8 E0382:10
+closure-moves/mutations/unique_capture_moved_then_called_d_6_mut_closure_moved_then_called.rs	E0382:9 E0382:11
+closure-moves/mutations/unique_capture_moved_then_called_d_6_shared_closure_copied.rs	E0502:9 E0382:11
+closure-moves/mutations/unique_capture_moved_then_called_n_8_move_closure_across.rs	E0382:7
+closure-moves/mutations/unique_capture_moved_then_called_n_8_move_closure_after.rs	E0382:7
+closure-moves/mutations/unique_capture_moved_then_called_n_8_move_closure_into_branch.rs	E0382:7
+closure-moves/mutations/unique_capture_moved_then_called_n_8_mut_closure_moved_across.rs	E0382:7 E0502:10
+closure-moves/mutations/unique_capture_moved_then_called_n_8_mut_closure_moved_then_called.rs	E0382:7 E0382:11
+closure-moves/mutations/unique_capture_moved_then_called_n_8_shared_closure_copied.rs	E0382:7
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/unique_capture_param_moved_ok_d_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/unique_capture_param_moved_ok_d_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_move_closure_across.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_move_closure_into_branch.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_mut_closure_moved_across.rs	E0499:12
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_mut_closure_moved_then_called.rs	E0382:13
+closure-moves/mutations/unique_capture_param_moved_ok_n_10_shared_closure_copied.rs	E0502:13
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_move_closure_across.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_move_closure_into_branch.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_mut_closure_moved_across.rs	E0502:13
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_mut_closure_moved_then_called.rs	E0382:14
+closure-moves/mutations/unique_capture_param_moved_ok_n_11_shared_closure_copied.rs	ok	0	"2\n"
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_move_closure_across.rs	E0382:5 E0382:6
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_move_closure_after.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_move_closure_into_branch.rs	E0382:6 E0382:9
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_mut_closure_moved_across.rs	E0382:5 E0499:7
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_mut_closure_moved_then_called.rs	E0382:5 E0382:8
+closure-moves/mutations/unique_capture_param_moved_then_called_c_5_shared_closure_copied.rs	E0382:5 E0502:8
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_move_closure_across.rs	E0382:5 E0382:7
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_move_closure_into_branch.rs	E0382:8 E0382:9
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_mut_closure_moved_across.rs	E0499:6 E0382:8
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_mut_closure_moved_then_called.rs	E0382:7 E0382:9
+closure-moves/mutations/unique_capture_param_moved_then_called_d_4_shared_closure_copied.rs	E0502:7 E0382:9
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_move_closure_across.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_move_closure_after.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_move_closure_into_branch.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_mut_closure_moved_across.rs	E0382:5 E0499:12
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_mut_closure_moved_then_called.rs	E0382:5 E0382:13
+closure-moves/mutations/unique_capture_param_moved_then_called_n_10_shared_closure_copied.rs	E0382:5 E0502:13
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_move_closure_across.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_move_closure_after.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_move_closure_into_branch.rs	E0382:5
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_mut_closure_moved_across.rs	E0382:5 E0502:13
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_mut_closure_moved_then_called.rs	E0382:5 E0382:14
+closure-moves/mutations/unique_capture_param_moved_then_called_n_11_shared_closure_copied.rs	E0382:5
+closure-moves/mutations/unique_ended_c_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/unique_ended_c_5_move_closure_after.rs	ok	0	"2\n"
+closure-moves/mutations/unique_ended_c_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/unique_ended_c_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/unique_ended_c_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/unique_ended_c_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/unique_then_shared_c_6_move_closure_across.rs	E0501:5 E0382:7
+closure-moves/mutations/unique_then_shared_c_6_move_closure_after.rs	E0501:5
+closure-moves/mutations/unique_then_shared_c_6_move_closure_into_branch.rs	E0501:5 E0382:10
+closure-moves/mutations/unique_then_shared_c_6_mut_closure_moved_across.rs	E0501:5 E0499:8
+closure-moves/mutations/unique_then_shared_c_6_mut_closure_moved_then_called.rs	E0501:5 E0382:9
+closure-moves/mutations/unique_then_shared_c_6_shared_closure_copied.rs	E0501:5 E0502:9
+closure-moves/mutations/unique_two_closures_c_6_move_closure_across.rs	E0524:5 E0382:7
+closure-moves/mutations/unique_two_closures_c_6_move_closure_after.rs	E0524:5
+closure-moves/mutations/unique_two_closures_c_6_move_closure_into_branch.rs	E0524:5 E0382:10
+closure-moves/mutations/unique_two_closures_c_6_mut_closure_moved_across.rs	E0524:5 E0499:8
+closure-moves/mutations/unique_two_closures_c_6_mut_closure_moved_then_called.rs	E0524:5 E0382:9
+closure-moves/mutations/unique_two_closures_c_6_shared_closure_copied.rs	E0524:5 E0502:9
+closure-moves/mutations/unique_two_closures_d_7_move_closure_across.rs	E0524:5 E0382:8
+closure-moves/mutations/unique_two_closures_d_7_move_closure_after.rs	E0524:5
+closure-moves/mutations/unique_two_closures_d_7_move_closure_into_branch.rs	E0524:5 E0382:11
+closure-moves/mutations/unique_two_closures_d_7_mut_closure_moved_across.rs	E0524:5 E0499:9
+closure-moves/mutations/unique_two_closures_d_7_mut_closure_moved_then_called.rs	E0524:5 E0382:10
+closure-moves/mutations/unique_two_closures_d_7_shared_closure_copied.rs	E0524:5 E0502:10
+closure-moves/mutations/unique_while_borrowed_c_6_move_closure_across.rs	E0500:5 E0382:7
+closure-moves/mutations/unique_while_borrowed_c_6_move_closure_after.rs	E0500:5
+closure-moves/mutations/unique_while_borrowed_c_6_move_closure_into_branch.rs	E0500:5 E0382:10
+closure-moves/mutations/unique_while_borrowed_c_6_mut_closure_moved_across.rs	E0500:5 E0499:8
+closure-moves/mutations/unique_while_borrowed_c_6_mut_closure_moved_then_called.rs	E0500:5 E0382:9
+closure-moves/mutations/unique_while_borrowed_c_6_shared_closure_copied.rs	E0500:5 E0502:9
+closure-moves/mutations/use_after_mut_capture_ended_c_4_move_closure_across.rs	E0382:5
+closure-moves/mutations/use_after_mut_capture_ended_c_4_move_closure_after.rs	E0382:7
+closure-moves/mutations/use_after_mut_capture_ended_c_4_move_closure_into_branch.rs	E0382:8
+closure-moves/mutations/use_after_mut_capture_ended_c_4_mut_closure_moved_across.rs	E0499:6
+closure-moves/mutations/use_after_mut_capture_ended_c_4_mut_closure_moved_then_called.rs	E0382:7
+closure-moves/mutations/use_after_mut_capture_ended_c_4_shared_closure_copied.rs	E0502:7
+closure-moves/mutations/use_after_mut_capture_ended_c_5_move_closure_across.rs	E0382:6
+closure-moves/mutations/use_after_mut_capture_ended_c_5_move_closure_after.rs	ok	0	"3\n"
+closure-moves/mutations/use_after_mut_capture_ended_c_5_move_closure_into_branch.rs	E0382:9
+closure-moves/mutations/use_after_mut_capture_ended_c_5_mut_closure_moved_across.rs	E0499:7
+closure-moves/mutations/use_after_mut_capture_ended_c_5_mut_closure_moved_then_called.rs	E0382:8
+closure-moves/mutations/use_after_mut_capture_ended_c_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/use_while_mut_captured_c_5_move_closure_across.rs	E0503:4 E0382:6
+closure-moves/mutations/use_while_mut_captured_c_5_move_closure_after.rs	E0503:4
+closure-moves/mutations/use_while_mut_captured_c_5_move_closure_into_branch.rs	E0503:4 E0382:9
+closure-moves/mutations/use_while_mut_captured_c_5_mut_closure_moved_across.rs	E0503:4 E0499:7
+closure-moves/mutations/use_while_mut_captured_c_5_mut_closure_moved_then_called.rs	E0503:4 E0382:8
+closure-moves/mutations/use_while_mut_captured_c_5_shared_closure_copied.rs	E0503:4 E0502:8
+closure-moves/mutations/use_while_mutably_borrowed_x_6_move_closure_across.rs	E0503:4
+closure-moves/mutations/use_while_mutably_borrowed_x_6_move_closure_after.rs	E0503:4
+closure-moves/mutations/use_while_mutably_borrowed_x_6_move_closure_into_branch.rs	E0503:4
+closure-moves/mutations/use_while_mutably_borrowed_x_6_mut_closure_moved_across.rs	E0503:4 E0502:8
+closure-moves/mutations/use_while_mutably_borrowed_x_6_mut_closure_moved_then_called.rs	E0503:4 E0382:9
+closure-moves/mutations/use_while_mutably_borrowed_x_6_shared_closure_copied.rs	E0503:4
+closure-moves/mutations/vec_of_closures_calls_4_move_closure_across.rs	E0382:5 E0502:7
+closure-moves/mutations/vec_of_closures_calls_4_move_closure_after.rs	E0502:7 E0382:8
+closure-moves/mutations/vec_of_closures_calls_4_move_closure_into_branch.rs	E0382:8 E0502:9
+closure-moves/mutations/vec_of_closures_calls_4_mut_closure_moved_across.rs	E0499:6 E0502:8
+closure-moves/mutations/vec_of_closures_calls_4_mut_closure_moved_then_called.rs	E0382:7 E0502:9
+closure-moves/mutations/vec_of_closures_calls_4_shared_closure_copied.rs	E0502:7 E0502:9
+closure-moves/mutations/vec_of_closures_calls_6_move_closure_across.rs	E0502:5 E0382:7
+closure-moves/mutations/vec_of_closures_calls_6_move_closure_after.rs	E0502:5
+closure-moves/mutations/vec_of_closures_calls_6_move_closure_into_branch.rs	E0502:5 E0382:10
+closure-moves/mutations/vec_of_closures_calls_6_mut_closure_moved_across.rs	E0502:5 E0502:8
+closure-moves/mutations/vec_of_closures_calls_6_mut_closure_moved_then_called.rs	E0502:5 E0382:9
+closure-moves/mutations/vec_of_closures_calls_6_shared_closure_copied.rs	E0502:5
+closure-moves/mutations/vec_of_closures_v_4_move_closure_across.rs	E0382:5 E0502:7
+closure-moves/mutations/vec_of_closures_v_4_move_closure_after.rs	E0505:5 E0382:7 E0502:7
+closure-moves/mutations/vec_of_closures_v_4_move_closure_into_branch.rs	E0382:8 E0502:9
+closure-moves/mutations/vec_of_closures_v_4_mut_closure_moved_across.rs	E0502:6 E0502:8
+closure-moves/mutations/vec_of_closures_v_4_mut_closure_moved_then_called.rs	E0382:7 E0502:9
+closure-moves/mutations/vec_of_closures_v_4_shared_closure_copied.rs	E0502:9
+closure-moves/mutations/vec_of_closures_v_5_move_closure_across.rs	E0505:5 E0382:6 E0502:6
+closure-moves/mutations/vec_of_closures_v_5_move_closure_after.rs	E0502:5 E0505:6
+closure-moves/mutations/vec_of_closures_v_5_move_closure_into_branch.rs	E0505:6 E0382:9 E0502:9
+closure-moves/mutations/vec_of_closures_v_5_mut_closure_moved_across.rs	E0502:5 E0499:7
+closure-moves/mutations/vec_of_closures_v_5_mut_closure_moved_then_called.rs	E0502:5 E0382:8 E0502:9
+closure-moves/mutations/vec_of_closures_v_5_shared_closure_copied.rs	E0502:8
+closure-moves/mutations/while_let_borrow_stack_8_move_closure_across.rs	E0382:9
+closure-moves/mutations/while_let_borrow_stack_8_move_closure_after.rs	E0382:11
+closure-moves/mutations/while_let_borrow_stack_8_move_closure_into_branch.rs	E0382:12
+closure-moves/mutations/while_let_borrow_stack_8_mut_closure_moved_across.rs	E0499:10
+closure-moves/mutations/while_let_borrow_stack_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/while_let_borrow_stack_8_shared_closure_copied.rs	E0502:11
+closure-moves/mutations/while_let_borrow_stack_9_move_closure_across.rs	E0382:10
+closure-moves/mutations/while_let_borrow_stack_9_move_closure_after.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_borrow_stack_9_move_closure_into_branch.rs	E0382:13
+closure-moves/mutations/while_let_borrow_stack_9_mut_closure_moved_across.rs	E0502:11
+closure-moves/mutations/while_let_borrow_stack_9_mut_closure_moved_then_called.rs	E0382:12
+closure-moves/mutations/while_let_borrow_stack_9_shared_closure_copied.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_borrow_total_8_move_closure_across.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_borrow_total_8_move_closure_after.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_borrow_total_8_move_closure_into_branch.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_borrow_total_8_mut_closure_moved_across.rs	E0503:10
+closure-moves/mutations/while_let_borrow_total_8_mut_closure_moved_then_called.rs	E0382:11
+closure-moves/mutations/while_let_borrow_total_8_shared_closure_copied.rs	ok	0	"[6]\n"
+closure-moves/mutations/while_let_conflict_total_11_move_closure_across.rs	E0499:8
+closure-moves/mutations/while_let_conflict_total_11_move_closure_after.rs	E0499:8
+closure-moves/mutations/while_let_conflict_total_11_move_closure_into_branch.rs	E0499:8
+closure-moves/mutations/while_let_conflict_total_11_mut_closure_moved_across.rs	E0499:8 E0502:13
+closure-moves/mutations/while_let_conflict_total_11_mut_closure_moved_then_called.rs	E0499:8 E0382:14
+closure-moves/mutations/while_let_conflict_total_11_shared_closure_copied.rs	E0499:8
+closure-moves/mutations/word_count_top_12_move_closure_across.rs	E0382:13
+closure-moves/mutations/word_count_top_12_move_closure_after.rs	E0382:15
+closure-moves/mutations/word_count_top_12_move_closure_into_branch.rs	E0382:16
+closure-moves/mutations/word_count_top_12_mut_closure_moved_across.rs	E0499:14
+closure-moves/mutations/word_count_top_12_mut_closure_moved_then_called.rs	E0382:15
+closure-moves/mutations/word_count_top_12_shared_closure_copied.rs	E0502:15
+closure-moves/mutations/word_count_top_16_move_closure_across.rs	E0382:17
+closure-moves/mutations/word_count_top_16_move_closure_after.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+closure-moves/mutations/word_count_top_16_move_closure_into_branch.rs	E0382:20
+closure-moves/mutations/word_count_top_16_mut_closure_moved_across.rs	E0502:18
+closure-moves/mutations/word_count_top_16_mut_closure_moved_then_called.rs	E0382:19
+closure-moves/mutations/word_count_top_16_shared_closure_copied.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
