@@ -50657,7 +50657,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1008);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1040);
         assert_eq!(
             std::mem::size_of::<Box<crate::host::operation::Proof>>(),
             std::mem::size_of::<usize>()
