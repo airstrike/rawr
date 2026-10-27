@@ -647,9 +647,25 @@ fn imported_resolution_report(
     evidence
         .try_reserve_exact(outcomes.len())
         .map_err(|_| diagnostic::Error::Allocation)?;
+    let mut declared = None;
     for outcome in outcomes {
         if let Some(retained) = unavailable_evidence(outcome) {
             evidence.push(retained);
+            continue;
+        }
+        // An item whose signature names a type its crate's facade does not
+        // declare is left out of the facade, as a function beside a module
+        // of its name can be (`mod text` and `fn text`).
+        let declared =
+            declared.get_or_insert_with(|| paths.declared(outcome.export().root_alias()));
+        if !names_declared(outcome, declared)
+            && let Some(origin) = outcome.origin()
+        {
+            evidence.push(UnavailableEvidence {
+                reason: "its signature names a Rust type that Rawr can't name yet".into(),
+                source: origin.source(),
+                declaration: origin.declaration(),
+            });
         }
     }
     evidence.sort_unstable_by(|left, right| {
@@ -1060,6 +1076,26 @@ impl<'contract> ImportedPaths<'contract> {
             .entries
             .partition_point(|entry| entry.path.as_ref() <= path);
         self.entries[start..end].iter().map(|entry| entry.outcome)
+    }
+
+    /// The crate types the facade of `root` declares, as the facade build
+    /// reads them: each struct and enum outcome's definition.
+    fn declared(
+        &self,
+        root: &str,
+    ) -> std::collections::BTreeSet<rawr_import::surface::identity::Definition> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.outcome.export().root_alias() == root)
+            .filter(|entry| entry.outcome.variant().is_none())
+            .filter(|entry| {
+                matches!(
+                    entry.outcome.representability(),
+                    Representability::Struct(_) | Representability::Enum(_)
+                )
+            })
+            .filter_map(|entry| entry.outcome.identity().definition())
+            .collect()
     }
 }
 

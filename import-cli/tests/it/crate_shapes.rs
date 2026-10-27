@@ -86,3 +86,16 @@ fn a_re_exported_variant_and_a_used_variant_are_the_enums_variants() {
 fn a_crates_type_aliases_name_their_targets_with_defaults() {
     runs_as_cargo_does("aliases", "message 7\nErr(Failed(\"no\"))\n");
 }
+
+/// A module and a function of the same name (`mod text` and `fn text`),
+/// which a glob brings in and another module re-exports with a glob, as
+/// `iced::widget` does: `use widget::text` binds both, so `text(..)` calls
+/// the function and `text::Text` names the module's type, in an annotation
+/// too.
+#[test]
+fn a_module_and_a_function_of_one_name_are_both_reached() {
+    runs_as_cargo_does(
+        "text",
+        "count at 20\nother at 16\nfull at 16\nbase at 16\n1\n",
+    );
+}

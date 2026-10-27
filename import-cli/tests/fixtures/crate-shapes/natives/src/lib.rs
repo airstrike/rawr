@@ -125,6 +125,8 @@ pub fn run(succeed: bool) -> Result {
 /// called as a method and through the trait's path, as iced's `column!`
 /// calls `Widget::_boxed`.
 pub mod widget {
+    pub use crate::base::*;
+
     pub trait Widget {
         fn width(&self) -> u32;
 
@@ -155,38 +157,41 @@ pub mod widget {
     }
 }
 
-/// A module and a function of the same name, as iced's `widget::text`
-/// module and its `text` helper, which a glob re-export brings in.
-pub mod text {
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct Text {
-        content: String,
-        size: u32,
-    }
+/// A module and a function of the same name, as iced_widget's `text`
+/// module and its `text` helper, which a glob re-export brings in, and
+/// which `widget` re-exports again with a glob, as `iced::widget` does.
+pub mod base {
+    pub mod text {
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct Text {
+            content: String,
+            size: u32,
+        }
 
-    impl Text {
-        pub fn new(content: impl ToString) -> Self {
-            Text {
-                content: content.to_string(),
-                size: 16,
+        impl Text {
+            pub fn new(content: impl ToString) -> Self {
+                Text {
+                    content: content.to_string(),
+                    size: 16,
+                }
+            }
+
+            pub fn size(mut self, size: u32) -> Self {
+                self.size = size;
+                self
+            }
+
+            pub fn describe(&self) -> String {
+                format!("{} at {}", self.content, self.size)
             }
         }
+    }
 
-        pub fn size(mut self, size: u32) -> Self {
-            self.size = size;
-            self
-        }
-
-        pub fn describe(&self) -> String {
-            format!("{} at {}", self.content, self.size)
+    pub mod helpers {
+        pub fn text(content: impl ToString) -> super::text::Text {
+            super::text::Text::new(content)
         }
     }
-}
 
-pub mod helpers {
-    pub fn text(content: impl ToString) -> crate::text::Text {
-        crate::text::Text::new(content)
-    }
+    pub use helpers::*;
 }
-
-pub use helpers::*;

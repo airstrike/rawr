@@ -10495,6 +10495,20 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A name a `use` binds to a crate module only, used as a value: the
+    /// crate's value of that path, as a function beside a module of its name
+    /// (`mod text` and `fn text`), is one Rawr can't call, and the import
+    /// says why.
+    fn module_value(&self, name: &str, reference: Span) -> Option<Error> {
+        let binding = self.models.import(name)?;
+        (matches!(binding.target, item::Import::Module)
+            && self.models.host.entry(&binding.qualified).is_some())
+        .then(|| Error::UnknownImport {
+            path: binding.qualified.clone(),
+            reference,
+        })
+    }
+
     /// A path that names no local, constant or function in scope. A library
     /// function of that name is offered to import.
     fn unknown_variable(&mut self, name: &ImmutableString, at: Span) -> Error {
@@ -10506,6 +10520,9 @@ impl<'a> Parser<'a> {
         }
         let written = crate::tokenizer::demangle_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
+        if let Some(error) = self.module_value(name, reference) {
+            return error;
+        }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         if imports.is_empty() {
             return Error::UnknownVariable {
@@ -41848,6 +41865,9 @@ impl<'a> Parser<'a> {
             .expect("qualified paths retain a member after their owner");
         // `Nope::<i32>`: a turbofish on a name that is no value.
         if segments.is_empty() {
+            if let Some(error) = self.module_value(&member, member_span) {
+                return Err(error);
+            }
             return Err(Error::UnknownVariable {
                 name: member,
                 reference: member_span,
@@ -43476,9 +43496,12 @@ impl<'a> Parser<'a> {
             }
             _ if generic => Err(self.unsupported("generic arguments on a non-generic type")),
             Some((definition, owner)) if qualified.is_some() => {
+                // The use is of the type's own path, as a path through a
+                // module import (`alignment::Alignment` after `use
+                // iced::alignment;`) names it.
                 #[cfg(feature = "rust-import")]
                 if let Some(selector) = definition.imported_declaration() {
-                    self.push_imported_op(&name, &selector, None, name_span)?;
+                    self.push_imported_op(&definition.path(), &selector, None, name_span)?;
                 }
                 let alias = definition.identity().imported().map(|_| definition.clone());
                 Ok(Ty::Host {
