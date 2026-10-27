@@ -885,7 +885,10 @@ impl Parser<'_> {
         let place = self.flow().in_place(value.span);
         match held {
             Some(held) if !place && self.made_here(value.span, &ty) => {
-                let reference = self.flow().borrow_temporary(value.span, false, &held, true);
+                let drops = self.temporary_drop_use(&ty, value.span);
+                let reference = self
+                    .flow()
+                    .borrow_temporary(value.span, false, &held, true, drops);
                 self.flow().set_origins(whole, reference);
             }
             // `&v.first()` of a value these facts do not follow: what the
@@ -896,6 +899,22 @@ impl Parser<'_> {
             }
             _ if holds => {}
             _ => self.flow().set_origins(whole, Vec::new()),
+        }
+    }
+
+    /// Whether the drop of a temporary of type `ty` spanning `span` uses
+    /// the borrows it holds. One whose drop uses only some is noted.
+    fn temporary_drop_use(&self, ty: &Ty, span: Span) -> bool {
+        match self.drop_use(ty) {
+            drops::DropUse::None => false,
+            drops::DropUse::All => true,
+            drops::DropUse::Some => {
+                self.flow().unmodeled(
+                    "a value whose drop uses some of the borrows it holds and not others",
+                    span,
+                );
+                false
+            }
         }
     }
 
@@ -1007,11 +1026,6 @@ impl Parser<'_> {
                     .unmodeled("a value whose type has an impl for `'static` only", whole);
                 return;
             }
-            if self.needs_drop(ty, whole).unwrap_or(true) {
-                self.flow()
-                    .unmodeled("a value with drop glue that holds a borrow", whole);
-                return;
-            }
             self.flow().set_origins(whole, origins);
         } else if !origins.is_empty() {
             self.flow().forever(&origins);
@@ -1094,11 +1108,6 @@ impl Parser<'_> {
         let mut known = !arguments
             .iter()
             .any(|argument| argument.holds && self.flow().origins(argument.span).is_none());
-        // A value with drop glue uses its borrows where it drops, which
-        // these facts don't follow yet.
-        if holds && self.needs_drop(ty, call).unwrap_or(true) {
-            known = false;
-        }
         let mut inputs = CallInputs {
             call,
             receiver,
@@ -1149,6 +1158,19 @@ impl Parser<'_> {
             }
             None if any_holds => known = false,
             None => {}
+        }
+        // A value made for a `&self` or `&mut self` call is a temporary,
+        // whose drop at its temporary scope's end may use what it holds.
+        if let Some(receiver) = receiver
+            && inputs.taken.is_none()
+            && !receiver.place
+            && matches!(
+                summary.mode,
+                Some(signature::Receiver::Shared | signature::Receiver::Mutable)
+            )
+            && self.drop_use(&receiver.ty) != drops::DropUse::None
+        {
+            inputs.taken = Some(self.receiver_input(receiver, summary.mode, call));
         }
         // A receiver that can hold no borrow stores none (`s.push_str`).
         if summary.unknown_stores
@@ -1270,10 +1292,14 @@ impl Parser<'_> {
                 && self.made_here(receiver.span, &receiver.ty)
             {
                 let held = region::sub(&value, path(&[Step::Arg(0)]));
-                return Some(
-                    self.flow()
-                        .borrow_temporary(receiver.span, mutable, &held, false),
-                );
+                let drops = self.temporary_drop_use(&receiver.ty, receiver.span);
+                return Some(self.flow().borrow_temporary(
+                    receiver.span,
+                    mutable,
+                    &held,
+                    false,
+                    drops,
+                ));
             }
             return None;
         }
@@ -1373,12 +1399,6 @@ impl Parser<'_> {
         start: ValueStart,
     ) {
         let holds = self.may_hold_borrow(&value.ty);
-        // A value with drop glue uses its borrows where it drops, which
-        // these facts don't follow yet.
-        if holds && self.needs_drop(&value.ty, value.span).unwrap_or(true) {
-            self.flow()
-                .unmodeled("a value with drop glue that holds a borrow", value.span);
-        }
         let mut flow = self.flow();
         let into = flow.local(name, declaration);
         flow.claim(into, value.span, start, holds);
@@ -1405,6 +1425,15 @@ impl Parser<'_> {
             && self.may_hold_borrow(&local.ty)
             && self.may_hold_borrow(target_ty)
         {
+            // The old value drops before the new one is stored.
+            match self.drop_use(&local.ty) {
+                drops::DropUse::None => {}
+                drops::DropUse::All => self.flow().drop_use(local.declaration),
+                drops::DropUse::Some => self.flow().unmodeled(
+                    "a value whose drop uses some of the borrows it holds and not others",
+                    local.declaration,
+                ),
+            }
             let whole = span(target.start(), replacement.span.end());
             let into = self.flow().rebound(target.start(), whole);
             if let Some(into) = into {

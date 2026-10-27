@@ -70,6 +70,21 @@ pub(super) struct Scope {
     /// Outer locals this scope's bindings shadow, by scope and position,
     /// whose own names read them again once it ends.
     shadowed: Vec<(usize, usize)>,
+    /// The borrow facts have the uses its drops make at its end already
+    /// ([`Parser::block_drop_uses`]).
+    uses_recorded: bool,
+}
+
+/// Which of the borrows a value holds its drop uses, as rustc's drop check
+/// has it: a type's own `Drop` may use all of them, and a reference or
+/// `std`'s containers (whose `Drop` is `#[may_dangle]`) use none of their
+/// own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DropUse {
+    None,
+    All,
+    /// Some and not others, which these facts do not tell apart.
+    Some,
 }
 
 /// The parts of `value` the glue goes on to after the value's own `drop`:
@@ -81,7 +96,7 @@ pub(super) struct Scope {
 /// refers to is not the value's to drop.
 pub(super) fn parts(value: &Dynamic, shape: &Dynamic, models: &Models) -> Dynamic {
     let mut parts = crate::Array::new();
-    each_part(value, shape, &mut |part, shape| {
+    each_part(value, shape, models, &mut |part, shape| {
         if !matches!(shape.0, Union::Bool(false, ..)) && holds(part, models) {
             parts.push(vec![part.clone(), shape].into());
         }
@@ -89,9 +104,38 @@ pub(super) fn parts(value: &Dynamic, shape: &Dynamic, models: &Models) -> Dynami
     parts.into()
 }
 
-/// Each part of `value` with its shape, from `shape`, the value's: `()`
-/// walks every part.
-fn each_part(value: &Dynamic, shape: &Dynamic, each: &mut dyn FnMut(&Dynamic, Dynamic)) {
+/// Each part of `value` with its shape, from `shape`, the value's. Under
+/// `()`, the walk of every part, a crate type's field or payload its
+/// declaration types as a reference is passed over: only a generic
+/// argument that is a reference is still walked.
+fn each_part(
+    value: &Dynamic,
+    shape: &Dynamic,
+    models: &Models,
+    each: &mut dyn FnMut(&Dynamic, Dynamic),
+) {
+    let declared = |identity: &type_def::Identity, variant: Option<&str>| {
+        let types: Vec<&type_ref::Type> = match models.by_identity.get(identity) {
+            Some(Nominal::Struct { item, .. }) => {
+                item.fields.iter().map(|field| &field.ty).collect()
+            }
+            Some(Nominal::Enum { item, .. }) => item
+                .variants
+                .iter()
+                .filter(|candidate| Some(candidate.name.text.as_str()) == variant)
+                .flat_map(|candidate| candidate.payload.iter())
+                .collect(),
+            None => Vec::new(),
+        };
+        let shapes: crate::Array = types
+            .into_iter()
+            .map(|ty| match ty {
+                type_ref::Type::Reference { .. } => false.into(),
+                _ => Dynamic::UNIT,
+            })
+            .collect();
+        Dynamic::from(shapes)
+    };
     let at = |shape: &Dynamic, index: usize| match &shape.0 {
         Union::Array(shapes, ..) => shapes.get(index).cloned().unwrap_or(Dynamic::UNIT),
         Union::Map(shapes, ..) => shapes.get("e").cloned().unwrap_or(Dynamic::UNIT),
@@ -101,14 +145,24 @@ fn each_part(value: &Dynamic, shape: &Dynamic, each: &mut dyn FnMut(&Dynamic, Dy
         Union::Map(shapes, ..) => shapes.get(key).cloned().unwrap_or(Dynamic::UNIT),
         _ => Dynamic::UNIT,
     };
+    let walk = shape.is_unit();
     match &value.0 {
         Union::Struct(value, ..) => {
+            let shape = if walk {
+                &declared(value.identity(), None)
+            } else {
+                shape
+            };
             for (index, field) in value.fields().iter().enumerate() {
                 each(field, at(shape, index));
             }
         }
         Union::Enum(value, ..) => {
-            let payload = key(shape, value.variant().name());
+            let payload = if walk {
+                declared(value.identity(), Some(value.variant().name()))
+            } else {
+                key(shape, value.variant().name())
+            };
             for (index, part) in value.payload().iter().enumerate() {
                 each(part, at(&payload, index));
             }
@@ -118,7 +172,7 @@ fn each_part(value: &Dynamic, shape: &Dynamic, each: &mut dyn FnMut(&Dynamic, Dy
                 each(element, at(shape, index));
             }
         }
-        Union::Shared(..) => each_part(&value.flatten_clone(), shape, each),
+        Union::Shared(..) => each_part(&value.flatten_clone(), shape, models, each),
         Union::Variant(..) => {
             if let Some(Some(inner)) = crate::option::read(value) {
                 each(&inner, shape.clone());
@@ -206,8 +260,8 @@ fn holds(value: &Dynamic, models: &Models) -> bool {
         return true;
     }
     let mut found = false;
-    each_part(value, &Dynamic::UNIT, &mut |part, _| {
-        found = found || holds(part, models);
+    each_part(value, &Dynamic::UNIT, models, &mut |part, shape| {
+        found = found || !matches!(shape.0, Union::Bool(false, ..)) && holds(part, models);
     });
     found
 }
@@ -449,6 +503,130 @@ impl Parser<'_> {
         }
     }
 
+    /// Which of the borrows a value of `ty` holds its drop uses.
+    pub(super) fn drop_use(&self, ty: &Ty) -> DropUse {
+        if !self.drops() {
+            return DropUse::None;
+        }
+        match self.drop_uses_in(ty, &mut Vec::new()) {
+            (false, _) => DropUse::None,
+            (true, false) => DropUse::All,
+            (true, true) => DropUse::Some,
+        }
+    }
+
+    /// Whether the drop of a value of `ty` uses some borrow the value
+    /// holds, and whether it leaves some other unused.
+    fn drop_uses_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> (bool, bool) {
+        if !self.may_hold_borrow(ty) {
+            return (false, false);
+        }
+        let any = |parts: &mut dyn Iterator<Item = (bool, bool)>| {
+            parts.fold((false, false), |(used, unused), (a, b)| {
+                (used || a, unused || b)
+            })
+        };
+        match &self.inference.resolve(ty) {
+            Ty::Reference { .. } => (false, true),
+            Ty::Script(id, arguments) => {
+                if self.models.has_drop(*id) {
+                    return (true, false);
+                }
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return (false, false);
+                }
+                visiting.push(key);
+                let substitution = self.nominal_substitution(*id, arguments);
+                let fields: Vec<Ty> = match self.models.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
+                        .collect(),
+                    Nominal::Enum { item, .. } => item
+                        .variants
+                        .iter()
+                        .flat_map(|variant| variant.payload.iter())
+                        .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                        .collect(),
+                };
+                let uses = any(&mut fields
+                    .iter()
+                    .map(|field| self.drop_uses_in(field, visiting)));
+                visiting.pop();
+                uses
+            }
+            Ty::Array { element, .. }
+            | Ty::Option(element)
+            | Ty::Boxed(_, element)
+            | Ty::Cell(_, element)
+            | Ty::Reverse(element) => self.drop_uses_in(element, visiting),
+            Ty::Result(ok, err) => any(&mut [ok, err]
+                .into_iter()
+                .map(|ty| self.drop_uses_in(ty, visiting))),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => any(&mut members
+                .iter()
+                .map(|member| self.drop_uses_in(member, visiting))),
+            // A generic or a trait object may have a `Drop` of its own.
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown => {
+                (true, false)
+            }
+            _ => (false, true),
+        }
+    }
+
+    /// The local's drop here uses the borrows it holds, as rustc's drop
+    /// liveness has it.
+    fn note_drop_use(&self, local: &Local) {
+        match self.drop_use(&local.ty) {
+            DropUse::None => {}
+            DropUse::All => self.flow().drop_use(local.declaration),
+            DropUse::Some => self.flow().unmodeled(
+                "a value whose drop uses some of the borrows it holds and not others",
+                local.declaration,
+            ),
+        }
+    }
+
+    /// The locals of the innermost scope whose drops use the borrows they
+    /// hold, by declaration, for the block's end to record with its
+    /// locals' ends (`Recorder::storage_dead`). A local whose drop uses
+    /// only some is noted here.
+    pub(super) fn block_drop_uses(&mut self) -> Vec<Span> {
+        let mut uses = Vec::new();
+        if !self.drops() {
+            return uses;
+        }
+        let Some(scope) = self.drop_scopes.last() else {
+            return uses;
+        };
+        for local in &scope.locals {
+            match self.drop_use(&local.ty) {
+                DropUse::None => {}
+                DropUse::All => uses.push(local.declaration),
+                DropUse::Some => self.note_drop_use(local),
+            }
+        }
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.uses_recorded = true;
+        }
+        uses
+    }
+
+    /// A jump out of the scopes above `depth`: the uses the drops of their
+    /// locals make, innermost first.
+    pub(super) fn exit_drop_uses(&self, depth: usize) {
+        if !self.drops() {
+            return;
+        }
+        for scope in self.drop_scopes.iter().skip(depth).rev() {
+            for local in scope.locals.iter().rev() {
+                self.note_drop_use(local);
+            }
+        }
+    }
+
     fn needs_drop_in(
         &self,
         ty: &Ty,
@@ -685,6 +863,11 @@ impl Parser<'_> {
                 local.place = local.name.clone();
             }
         }
+        if !scope.uses_recorded {
+            for local in scope.locals.iter().rev() {
+                self.note_drop_use(local);
+            }
+        }
         self.local_drops(&scope.locals)
     }
 
@@ -819,6 +1002,19 @@ impl Parser<'_> {
 
     /// Close a body: its scope's drops after its tail's value.
     pub(super) fn close_body_drops(&mut self) -> Result<(), Error> {
+        // The body's locals and parameters end, each after its drop, in
+        // reverse order of declaration: a loan of one that a later one's
+        // drop uses is rustc's E0597.
+        if self.drops() && self.drop_scopes.len() > self.drop_base {
+            let uses = self.block_drop_uses();
+            let declared: Vec<Span> = self
+                .drop_scopes
+                .last()
+                .map(|scope| scope.locals.iter().map(|local| local.declaration).collect())
+                .unwrap_or_default();
+            let end = point_span(self.position());
+            self.flow().body_end(&declared, &uses, end);
+        }
         let drops = self.close_drops()?;
         if drops.is_empty() {
             return Ok(());

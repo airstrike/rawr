@@ -25159,6 +25159,7 @@ impl<'a> Parser<'a> {
             }
         }
         let flow_depth = self.loops[target].flow_depth;
+        self.exit_drop_uses(self.loops[target].drop_depth);
         self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
         let drops =
@@ -25226,6 +25227,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let copied = self.copied_return("()".into());
                 source = self.jump_with_drops(&drops, "return", copied);
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25249,6 +25251,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let returned = self.copied_return(returned.clone()).unwrap_or(returned);
                 source = self.jump_with_drops(&drops, "return", Some(returned));
+                self.exit_drop_uses(self.drop_base);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -25256,6 +25259,7 @@ impl<'a> Parser<'a> {
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         }
         source.push_text("; }");
+        self.exit_drop_uses(self.drop_base);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
     }
@@ -27322,7 +27326,9 @@ impl<'a> Parser<'a> {
                 .map(|binding| binding.declaration)
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
-            self.flow().storage_dead(&declared, point_span(end));
+            let drop_uses = self.block_drop_uses();
+            self.flow()
+                .storage_dead(&declared, &drop_uses, point_span(end));
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
             let ty = std::mem::replace(&mut self.last_type, outer_last_type);
             let inner_last_expression =

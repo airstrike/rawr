@@ -111,11 +111,19 @@ fn liveness(
 ) -> Points {
     let mut live = Points::new(count);
     let mut stack = Vec::new();
+    let mut initialized = None;
     for &point in points {
         // A read, a borrow or a move of a place is a use of its local, as
-        // rustc's liveness has it.
+        // rustc's liveness has it. So is a drop that uses what the local
+        // holds, where it may still hold a value.
         let used = match body.fact(point) {
             Some(Fact::Use(used)) => *used == local,
+            Some(Fact::DropUse(dropped)) => {
+                *dropped == local
+                    && initialized
+                        .get_or_insert_with(|| maybe_initialized(body, local, points, index, count))
+                        .contains(index(point))
+            }
             Some(Fact::Access { place, access, .. }) => {
                 place.local == local
                     && matches!(
@@ -152,6 +160,37 @@ fn liveness(
         live.intersect(&given(body, local, points, index, count));
     }
     live
+}
+
+/// The points where `local` may hold a value: reached from where it is
+/// given one without passing a move out of all of it.
+fn maybe_initialized(
+    body: &Body,
+    local: Local,
+    points: &[Point],
+    index: &impl Fn(Point) -> usize,
+    count: usize,
+) -> Points {
+    let mut reached = Points::new(count);
+    let mut stack: Vec<Point> = points
+        .iter()
+        .filter(|point| defines(body, **point, local))
+        .flat_map(|point| body.successors(*point))
+        .collect();
+    while let Some(point) = stack.pop() {
+        if !reached.insert(index(point)) {
+            continue;
+        }
+        let moved = matches!(
+            body.fact(point),
+            Some(Fact::Access { place, access: Access::Move, .. })
+                if place.local == local && place.projection.is_empty()
+        );
+        if !moved {
+            stack.extend(body.successors(point));
+        }
+    }
+    reached
 }
 
 /// The points a value given to `local` may reach.
