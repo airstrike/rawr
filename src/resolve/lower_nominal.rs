@@ -29405,6 +29405,7 @@ impl<'a> Parser<'a> {
             }
         };
         let mut arguments = Vec::<(Option<ImmutableString>, ParsedExpr)>::new();
+        let mut borrowed = Vec::new();
         while matches!(self.peek(), Token::Comma) {
             self.next();
             if matches!(self.peek(), Token::RightParen) {
@@ -29420,13 +29421,16 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            // A format argument is borrowed.
+            // A format argument is borrowed, and the borrow lasts until the
+            // macro has read every argument, as rustc's `format_args!` has
+            // it: a later argument that moves or changes it is refused.
             let mut argument = self.parse_expr()?;
-            self.call_on_place(&argument);
+            self.format_argument_borrow(&argument, &mut borrowed);
             self.hold_temporary(&mut argument)?;
             arguments.push((name, argument));
         }
         let end = self.expect(Token::RightParen, "')' after `format!` arguments")?;
+        self.flow().use_held(&borrowed);
         let expression = span(start.start(), end);
         let positional = arguments
             .iter()

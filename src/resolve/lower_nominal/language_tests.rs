@@ -2254,7 +2254,7 @@ fn language_hand_written_std_trait_impls() {
                 "{} {} {:?} {} {} {} {} {} {} {} {} {} {} {}",
                 p, q, d, equal, unequal, Tag::B, show(&p), show(&Tag::A), show(&5),
                 same(&p, &Point { x: 1, y: 0 }), dup(&p).x, dbg(&p), dbg(&Tag::A),
-                shout(p) + &d.to_string()
+                shout(Point { x: 1, y: 2 }) + &d.to_string()
             )
         }
         run()
@@ -2280,6 +2280,17 @@ fn language_hand_written_std_trait_impls() {
     rejected(
         "fn show<T: std::fmt::Display>(x: T) -> String { format!(\"{}\", x) } struct P { x: i64 } \
          pub fn run() -> i64 { show(P { x: 1 }).len() } run()",
+    );
+    // `format!` borrows `p` until it has read every argument: a later one
+    // that moves it is rustc's E0505.
+    let moved = rejected(
+        "fn shout<T: std::fmt::Display>(x: T) -> String { x.to_string() } \
+         pub fn run() -> i64 { let p = String::from(\"a\"); format!(\"{} {}\", p, shout(p)).len() as i64 } \
+         run()",
+    );
+    assert!(
+        moved.contains("E0505") || moved.contains("borrowed"),
+        "{moved}"
     );
 }
 

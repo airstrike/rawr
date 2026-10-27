@@ -340,6 +340,16 @@ impl Recorder {
         }
     }
 
+    /// `held` is used here: what a macro borrowed of its arguments lasts
+    /// until it has read them all (`format!("{} {}", p, f(p))` borrows `p`
+    /// over `f(p)`).
+    pub(crate) fn use_held(&mut self, held: &[(Path, Origin)]) {
+        for &(_, origin) in held {
+            let local = self.origin_local(origin);
+            self.push(Fact::Use(local));
+        }
+    }
+
     /// The call whose `)` is at `end`: its arguments.
     pub(crate) fn arguments(&self, end: Position) -> Option<Vec<Argument>> {
         self.arguments.get(&end).cloned()
