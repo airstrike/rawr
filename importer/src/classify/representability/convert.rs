@@ -141,6 +141,10 @@ pub enum Type {
         path: Box<str>,
         arguments: Box<[Type]>,
     },
+    /// A type parameter no script value fixes, as iced's `Theme` and
+    /// `Renderer` of `run` are, which the view's widget gives: rustc infers
+    /// it where the bridge calls the item (D594).
+    Inferred,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

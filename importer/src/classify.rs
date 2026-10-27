@@ -3167,6 +3167,7 @@ fn field_type_nameable(
         } => members
             .iter()
             .all(|member| field_type_nameable(member, nominal)),
+        Type::Inferred => true,
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
@@ -3332,6 +3333,7 @@ fn type_nameable(
         | representability::convert::Type::Script {
             arguments: members, ..
         } => all_nameable(members.iter(), root, names),
+        representability::convert::Type::Inferred => (true, false),
         representability::convert::Type::Unit
         | representability::convert::Type::Builtin(_)
         | representability::convert::Type::Parameter(_) => (true, false),
@@ -4545,6 +4547,7 @@ impl<P: api::Phase> Context<'_, P> {
     fn clones(&self, ty: &representability::convert::Type) -> bool {
         use representability::convert::Type;
         match ty {
+            Type::Inferred => false,
             Type::Unit | Type::Builtin(_) => true,
             Type::Nominal { definition, .. } => self
                 .graph
@@ -6244,6 +6247,7 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
     let other = |ty: &Type| names_other_parameter(ty, except);
     match ty {
         Type::Parameter(index) => *index != except,
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
@@ -6263,6 +6267,7 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
     use representability::convert::Type;
     match ty {
         Type::Parameter(parameter) => *parameter == index,
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. } => arguments
             .iter()

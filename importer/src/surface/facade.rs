@@ -2615,6 +2615,7 @@ fn ty(
 ) -> Result<Type, super::Error> {
     use representability::convert::{Builtin, Type as Source};
     Ok(match source {
+        Source::Inferred => return Err(super::Error::ForeignIdentity),
         Source::Unit => Type::Unit,
         Source::Builtin(Builtin::Bool) => Type::Bool,
         Source::Builtin(Builtin::Char) => Type::Char,

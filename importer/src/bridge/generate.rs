@@ -7930,6 +7930,7 @@ fn render_rust_type(
                     .as_bytes(),
             )
             .map_err(|_| request::Error::Encoding),
+        convert::Type::Inferred => output.write_all(b"_").map_err(|_| request::Error::Encoding),
         convert::Type::Unit => output
             .write_all(b"()")
             .map_err(|_| request::Error::Encoding),
@@ -8946,6 +8947,11 @@ fn render_take(
             )
             .map_err(|_| request::Error::Encoding);
         }
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit | convert::Type::Builtin(_) => "take_primitive",
     };
     writeln!(
@@ -8994,6 +9000,11 @@ fn render_give(
             writeln!(output, "    Ok(Dynamic::from({value}.to_string()))")
         }
         // The unit type, or a `PhantomData` field, which Rawr holds as it.
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit => {
             writeln!(output, "    let _ = {value};\n    Ok(Dynamic::from(()))")
         }
@@ -9065,6 +9076,7 @@ fn render_from_dynamic(
         )
     };
     match ty {
+        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
         convert::Type::Unit => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
@@ -9254,6 +9266,7 @@ fn render_to_dynamic(
         convert::Type::Builtin(convert::Builtin::Text) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}.to_string()))")
         }
+        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
         convert::Type::Unit | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
@@ -9594,6 +9607,7 @@ fn substituted(
             mapper: *mapper,
             payload: one(payload)?,
         },
+        convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
     })
 }
@@ -10389,6 +10403,7 @@ impl Drop for TypePaths {
 /// `None` when it has no exact spelling.
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
+        convert::Type::Inferred => "_".to_owned(),
         convert::Type::Unit => "()".to_owned(),
         convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
             "String".to_owned()
@@ -10547,6 +10562,7 @@ fn render_generic_arguments(
                 };
                 output
                     .write_all(match ty {
+                        convert::Type::Inferred => b"_",
                         convert::Type::Unit => b"()" as &[u8],
                         // Rust infers the range's integer type from the
                         // call's bounds, as it does for `1..=6`.
@@ -10925,6 +10941,11 @@ fn builder_execution_inputs(operation: &Operation) -> Option<Vec<&convert::Type>
 
 fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), request::Error> {
     let source = match ty {
+        convert::Type::Inferred => {
+            return Err(request::Error::Drift {
+                field: "an inferred type parameter reached a runtime value",
+            })
+        }
         convert::Type::Unit => "Dynamic::from(())",
         convert::Type::Builtin(convert::Builtin::Bool) => "Dynamic::from(false)",
         convert::Type::Builtin(convert::Builtin::Char) => "Dynamic::from('\\0')",

@@ -1927,6 +1927,7 @@ fn ty_ok(
             arguments: members, ..
         } => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
+        Type::Inferred => true,
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
@@ -1995,6 +1996,7 @@ impl Types {
     ) -> Result<host::type_ref::Type, Error> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
+            Type::Inferred => return Err(Error::Cardinality),
             Type::Unit => host::type_ref::Type::unit(),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
                 Builtin::Bool => host::type_ref::Builtin::Bool,
@@ -2227,6 +2229,7 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
     use representability::convert::Type;
     match ty {
         Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
@@ -2351,6 +2354,7 @@ fn type_usage(
                     bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
                 ))
             })?,
+        Type::Inferred => (0, 0),
         Type::Unit | Type::Builtin(_) => (0, 0),
     };
     Ok((

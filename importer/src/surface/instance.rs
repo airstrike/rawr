@@ -682,6 +682,7 @@ fn concrete_type_bytes(
                 })
             })
         }
+        convert::Type::Inferred => Ok(std::mem::size_of::<convert::Type>()),
         convert::Type::Unit | convert::Type::Builtin(_) => Ok(std::mem::size_of::<convert::Type>()),
     }
 }

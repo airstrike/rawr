@@ -837,6 +837,10 @@ fn imported_surface_type(
                 owned: true,
             }
         }
+        // A type parameter no script value fixes, as iced's `Theme` that the
+        // view's widget gives: rustc infers it where the bridge calls the
+        // item (D594).
+        Ty::Infer(_) => Type::Inferred,
         // A script type is its proxy in the runner, named as the script
         // names it, so Rust's bounds, `TypeId` and `type_name` are its own
         // (D594).
@@ -1009,6 +1013,7 @@ fn instance_surface_type(
                 owned: true,
             }
         }
+        Ty::Infer(_) => Type::Inferred,
         Ty::Script(definition, arguments) => Type::Script {
             path: models.script_path(*definition),
             arguments: arguments
@@ -1055,6 +1060,7 @@ fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> boo
         | Type::Sequence { element, .. } => is_erased(element),
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
+        Type::Inferred => false,
         Type::Unit | Type::Builtin(_) | Type::FunctionItem { .. } | Type::Parameter(_) => false,
     }
 }
@@ -14729,6 +14735,12 @@ impl<'a> Parser<'a> {
                 } = *operation;
                 for (parameter, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
+                    // A parameter no script value fixes is rustc's to infer
+                    // and to check (D594).
+                    #[cfg(feature = "rust-import")]
+                    if matches!(ty, Ty::Infer(_)) && item.imported_identity().is_some() {
+                        continue;
+                    }
                     for capability in required.iter() {
                         if !self.type_provides(&ty, capability) {
                             return Err(Error::MissingCapability {
@@ -46543,16 +46555,29 @@ impl<'a> Parser<'a> {
         } else {
             requirements.iter().collect()
         };
-        for (_, ty, _) in ordered {
-            types.push(imported_surface_type(
-                &self.inference,
-                &self.models,
-                ty,
-                span,
-                self.imported
-                    .as_mut()
-                    .expect("imported lowering retains allocation authority"),
-            )?);
+        for (name, ty, _) in ordered {
+            types.push(
+                imported_surface_type(
+                    &self.inference,
+                    &self.models,
+                    ty,
+                    span,
+                    self.imported
+                        .as_mut()
+                        .expect("imported lowering retains allocation authority"),
+                )
+                .map_err(|error| match error {
+                    // Which of the item's parameters it is.
+                    Error::InvalidHostOperation {
+                        reason, operation, ..
+                    } => Error::InvalidHostOperation {
+                        item: format!("{}'s `{name}`", item.path()).into(),
+                        reason,
+                        operation,
+                    },
+                    error => error,
+                })?,
+            );
         }
         let types = types.into_boxed_slice();
         let function_count = arguments
