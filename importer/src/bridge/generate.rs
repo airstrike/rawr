@@ -4373,7 +4373,12 @@ fn render_source(
     let _type_paths = TypePaths::install(facade.as_ref());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
-            for path in facade.traits() {
+            // A macro's `$crate` path to a trait is no Rust path; the
+            // trait's spelling through the root brings it into scope.
+            for path in facade
+                .traits()
+                .filter(|path| !path.contains(crate::api::ledger::CRATE_SEGMENT))
+            {
                 writeln!(
                     stamps,
                     "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",

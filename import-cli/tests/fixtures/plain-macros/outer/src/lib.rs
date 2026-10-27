@@ -2,7 +2,7 @@
 //! `$crate` is `inner`, a crate the program does not name, and has a macro
 //! of its own whose `$crate` path is a hidden item.
 
-pub use inner::{list, scaled, total, List};
+pub use inner::{list, measured, scaled, total, written, List, Measure};
 
 #[doc(hidden)]
 pub use inner::__private;

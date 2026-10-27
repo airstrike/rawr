@@ -68,3 +68,30 @@ macro_rules! scaled {
         $value * $by
     };
 }
+
+/// The literal as written, and its length: `stringify!` of a fragment.
+#[macro_export]
+macro_rules! written {
+    ($value:literal) => {
+        (stringify!($value), stringify!($value).len())
+    };
+}
+
+/// A measure of a value, which a macro calls through its trait's path.
+pub trait Measure {
+    fn measure(&self) -> i64;
+}
+
+impl Measure for List {
+    fn measure(&self) -> i64 {
+        self.sum() * 10
+    }
+}
+
+/// The measure of a list, as `$crate::Measure::measure(&list)`.
+#[macro_export]
+macro_rules! measured {
+    ($list:expr) => {
+        $crate::Measure::measure(&$list)
+    };
+}

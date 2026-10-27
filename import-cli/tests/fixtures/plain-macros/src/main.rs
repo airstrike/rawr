@@ -14,4 +14,10 @@ fn main() {
     println!("{sum}");
     println!("{} {}", scaled!(4), outer::scaled!(2, 3 + 1));
     println!("{}", outer::offset!(sum * 2));
+    println!("{:?}", outer::written!(0x123));
+    println!(
+        "{} {}",
+        outer::measured!(doubled),
+        outer::Measure::measure(&doubled)
+    );
 }

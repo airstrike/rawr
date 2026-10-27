@@ -706,7 +706,9 @@ struct ImportedFunctionProof {
 pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
     let start = u32::try_from(location::byte_at(source, span.start())?).ok()?;
     let end = u32::try_from(location::byte_at(source, span.end())?).ok()?;
-    Some((start, end))
+    // A use a macro's expansion makes may end at the macro's own token, at
+    // its call, before a token the caller passed in: it is the use's start.
+    Some((start, end.max(start)))
 }
 
 #[cfg(feature = "rust-import")]
@@ -12846,23 +12848,23 @@ impl<'a> Parser<'a> {
                 Token::Identifier(_) | Token::Period | Token::IntegerConstant(_)
             ),
         });
+        // What follows the receiver takes its last position, so each span
+        // the call makes runs forward.
+        let after = receiver.last().map_or(end, |(_, position)| *position);
         let mut tokens = vec![(Token::LeftParen, at)];
         if !plain {
             tokens.push((Token::LeftParen, at));
         }
         tokens.extend(receiver.iter().cloned());
         if !plain {
-            tokens.push((Token::RightParen, at));
+            tokens.push((Token::RightParen, after));
         }
-        tokens.push((Token::Period, at));
-        tokens.push((
-            Token::Identifier(Box::new(member.into())),
-            member_span.start(),
-        ));
+        tokens.push((Token::Period, after));
+        tokens.push((Token::Identifier(Box::new(member.into())), after));
         if rest.is_empty() {
             tokens.push((Token::Unit, end));
         } else {
-            tokens.push((Token::LeftParen, at));
+            tokens.push((Token::LeftParen, after));
             tokens.extend(rest.iter().cloned());
             tokens.push((Token::RightParen, end));
         }
@@ -42493,6 +42495,24 @@ impl<'a> Parser<'a> {
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
             });
+            // `Trait::method(receiver, ..)` through a crate's trait, which
+            // Rawr names as a module (`iced::advanced::Widget::_boxed(w)`,
+            // as a macro writes it): the method called on its receiver.
+            if matches!(
+                self.models.host.entry(&owner),
+                Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+            ) && owner
+                .rsplit("::")
+                .next()
+                .and_then(|name| name.chars().next())
+                .is_some_and(char::is_uppercase)
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
             // A library module or type that exists lacks only the member:
             // `iced::widget::Column::missing`.
             let error = if self.models.host.entry(&owner).is_some() {
@@ -48563,10 +48583,37 @@ fn stringify_tokens(text: &str, tokens: &[(Token, Position)], end: Position) -> 
         .map(|(_, at)| offset(*at))
         .chain(std::iter::once(offset(end)))
         .collect::<Option<Vec<usize>>>()?;
+    // A token runs to the next one's start. One a macro's expansion put
+    // before tokens from elsewhere (`stringify!($hex)`) runs as far as it
+    // is written: a word, a number or a quoted literal.
+    let written = |start: usize| -> String {
+        let rest = &chars[start..];
+        match rest.first() {
+            Some(quote @ ('"' | '\'')) => {
+                let mut end = 1;
+                while end < rest.len() && rest[end] != *quote {
+                    end += if rest[end] == '\\' { 2 } else { 1 };
+                }
+                rest[..(end + 1).min(rest.len())].iter().collect()
+            }
+            _ => rest
+                .iter()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+                .collect(),
+        }
+    };
     let pieces: Vec<String> = starts
         .windows(2)
-        .map(|pair| {
-            chars[pair[0]..pair[1].max(pair[0])]
+        .zip(tokens)
+        .map(|(pair, (token, _))| {
+            // Tokens a macro's own body wrote share its call's position.
+            if pair[1] == pair[0] {
+                return token.to_string();
+            }
+            if pair[1] < pair[0] {
+                return written(pair[0]);
+            }
+            chars[pair[0]..pair[1]]
                 .iter()
                 .collect::<String>()
                 .trim_end()
