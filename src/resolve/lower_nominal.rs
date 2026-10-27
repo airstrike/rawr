@@ -2681,6 +2681,10 @@ struct Tables {
     /// The enum variants each source imports by name (`use Shape::*;`), with
     /// the name of their enum in that source.
     variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
+    /// The crate enums' variants each source imports by name (`use
+    /// iced::Center;`), each as the hidden name its enum is imported under
+    /// and the variant's own name, which a renamed import keeps.
+    host_variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
     by_definition: BTreeMap<type_def::Id, Nominal>,
     by_identity: BTreeMap<type_def::Identity, Nominal>,
     qualified_functions: BTreeMap<(crate::program::source::Id, Span), crate::item::Key>,
@@ -2950,6 +2954,7 @@ impl Models {
 
         let mut imported_variants = Vec::new();
         let mut ordering_variants = Vec::new();
+        let mut host_variants = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
@@ -2980,6 +2985,14 @@ impl Models {
                     }
                     item::Import::OrderingVariant => {
                         ordering_variants.push((shell.source, binding.name.text.clone()));
+                    }
+                    item::Import::HostVariant { owner } => {
+                        host_variants.push((
+                            shell.source,
+                            binding.name.text.clone(),
+                            owner.clone(),
+                            binding.qualified.clone(),
+                        ));
                     }
                     item::Import::Module
                     | item::Import::ModuleItem { .. }
@@ -3020,6 +3033,44 @@ impl Models {
                 Box::from(["std".into(), "cmp".into(), "Ordering".into()]),
             );
         }
+        // A crate enum's variant reads as its enum's variant,
+        // `Alignment::Center`, with the enum imported under a name no source
+        // can write. A renamed import keeps the variant's own name.
+        let mut variant_owners =
+            BTreeMap::<(crate::program::source::Id, ImmutableString), ImmutableString>::new();
+        let mut host_variants_by_name = BTreeMap::new();
+        for (source, name, owner, qualified) in host_variants {
+            let Some(crate::host::Entry::Type(definition)) = host.entry(&owner) else {
+                continue;
+            };
+            let canonical = host.canonical_str(&qualified);
+            let Some(variant) = canonical.rsplit("::").next() else {
+                continue;
+            };
+            let count = variant_owners.len();
+            let hidden = variant_owners
+                .entry((source, owner.clone()))
+                .or_insert_with(|| format!("\u{2}{count}").into())
+                .clone();
+            imports
+                .entry((source, hidden.clone()))
+                .or_insert_with(|| item::Binding {
+                    name: crate::item::Name {
+                        text: hidden.clone(),
+                        span: Span::NONE,
+                    },
+                    qualified: owner.clone(),
+                    target: item::Import::Type {
+                        definition: definition.clone(),
+                        owner: host.type_owner(&owner).cloned(),
+                    },
+                });
+            host_variants_by_name.insert(
+                (source, name),
+                Box::from([hidden, ImmutableString::from(variant)]),
+            );
+        }
+        let host_variants: BTreeMap<_, Box<[ImmutableString]>> = host_variants_by_name;
 
         let mut associated = AssociatedTypes::default();
         let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
@@ -3166,6 +3217,7 @@ impl Models {
             imports,
             by_name,
             variants,
+            host_variants,
             by_definition,
             by_identity,
             qualified_functions: program.qualified_functions.clone(),
@@ -3257,10 +3309,22 @@ impl Models {
     }
 
     fn imports_variants(&self) -> bool {
-        self.variants
-            .range((self.context, ImmutableString::new())..)
-            .next()
-            .is_some_and(|((source, _), _)| *source == self.context)
+        [&self.variants, &self.host_variants]
+            .into_iter()
+            .any(|variants| {
+                variants
+                    .range((self.context, ImmutableString::new())..)
+                    .next()
+                    .is_some_and(|((source, _), _)| *source == self.context)
+            })
+    }
+
+    /// The whole path of the crate enum variant a name stands for in this
+    /// source (`use iced::Center;`).
+    fn imported_host_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+        self.host_variants
+            .get(&(self.context, name.into()))
+            .map(AsRef::as_ref)
     }
 
     fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
@@ -10443,6 +10507,20 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A name a `use` binds to a crate module only, used as a value: the
+    /// crate's value of that path, as a function beside a module of its name
+    /// (`mod text` and `fn text`), is one Rawr can't call, and the import
+    /// says why.
+    fn module_value(&self, name: &str, reference: Span) -> Option<Error> {
+        let binding = self.models.import(name)?;
+        (matches!(binding.target, item::Import::Module)
+            && self.models.host.entry(&binding.qualified).is_some())
+        .then(|| Error::UnknownImport {
+            path: binding.qualified.clone(),
+            reference,
+        })
+    }
+
     /// A path that names no local, constant or function in scope. A library
     /// function of that name is offered to import.
     fn unknown_variable(&mut self, name: &ImmutableString, at: Span) -> Error {
@@ -10454,6 +10532,9 @@ impl<'a> Parser<'a> {
         }
         let written = crate::tokenizer::demangle_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
+        if let Some(error) = self.module_value(name, reference) {
+            return error;
+        }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         if imports.is_empty() {
             return Error::UnknownVariable {
@@ -26753,7 +26834,19 @@ impl<'a> Parser<'a> {
         };
         let owner_path = proof.definition.path();
         let written = self.host_pattern_owner(&pattern.owner);
-        if written != owner_path.as_str() {
+        // A crate type re-exported at another path is the same type, as
+        // `iced::Alignment` is `iced::alignment::Alignment`.
+        let reexported = || {
+            proof.definition.identity().imported().is_some()
+                && self
+                    .models
+                    .host
+                    .source_type(&written)
+                    .is_some_and(|definition| {
+                        definition.identity().imported() == proof.definition.identity().imported()
+                    })
+        };
+        if written != owner_path.as_str() && !reexported() {
             return Err(Error::TypeMismatch {
                 expected: owner_path.as_str().into(),
                 actual: written.into(),
@@ -42065,6 +42158,9 @@ impl<'a> Parser<'a> {
             .expect("qualified paths retain a member after their owner");
         // `Nope::<i32>`: a turbofish on a name that is no value.
         if segments.is_empty() {
+            if let Some(error) = self.module_value(&member, member_span) {
+                return Err(error);
+            }
             return Err(Error::UnknownVariable {
                 name: member,
                 reference: member_span,
@@ -42277,6 +42373,26 @@ impl<'a> Parser<'a> {
         let imported_owner = (qualified_model.is_none() && segments.len() == 1)
             .then(|| self.models.import(&owner).cloned())
             .flatten()
+            // A crate's type alias of a crate type, as `Element::new`
+            // through `use iced::Element;`, is that type's.
+            .map(|binding| match &binding.target {
+                item::Import::Alias => match self
+                    .models
+                    .alias(&owner)
+                    .and_then(|alias| alias.target.as_deref().cloned())
+                {
+                    Some(type_ref::Type::Path(type_ref::Path {
+                        target: type_ref::Target::Host { definition, owner },
+                        ..
+                    })) => item::Binding {
+                        name: binding.name,
+                        qualified: definition.path().as_str().into(),
+                        target: item::Import::Type { definition, owner },
+                    },
+                    _ => binding,
+                },
+                _ => binding,
+            })
             .filter(|binding| {
                 matches!(
                     &binding.target,
@@ -42318,6 +42434,25 @@ impl<'a> Parser<'a> {
                     owner.clone(),
                     span(owner_span.start(), member_span.end()),
                 );
+            }
+            // `Trait::method(receiver, ..)` through a crate's trait a `use`
+            // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
+            // which Rawr names as a module: the method called on its
+            // receiver, as through the trait's whole path.
+            if self.models.host_items(&path).is_none()
+                && matches!(binding.target, item::Import::Module)
+                && binding
+                    .qualified
+                    .rsplit("::")
+                    .next()
+                    .and_then(|name| name.chars().next())
+                    .is_some_and(char::is_uppercase)
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(tokens) = self.path_method_call(&member, member_span)
+            {
+                self.pending_turbofish = None;
+                self.splice_tokens(tokens);
+                return self.parse_primary();
             }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
@@ -43501,37 +43636,7 @@ impl<'a> Parser<'a> {
             && !self.generics.contains_key(name.as_str())
             && let Some(alias) = self.models.alias(&name).cloned()
         {
-            let mut arguments = Vec::new();
-            if matches!(self.peek(), Token::LessThan) {
-                self.next();
-                while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                    if !self.skip_lifetime() {
-                        arguments.push(self.parse_local_type()?);
-                    }
-                    if matches!(self.peek(), Token::Comma) {
-                        self.next();
-                    } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                        return Err(self.unsupported("generic arguments"));
-                    }
-                }
-                self.expect_close_angle("'>' after generic arguments")?;
-            }
-            if arguments.len() != alias.params.len() {
-                return Err(Error::InvalidTypeArguments {
-                    ty: name,
-                    expected: alias.params.len(),
-                    actual: arguments.len(),
-                    reference: name_span,
-                });
-            }
-            let Some(target) = &alias.target else {
-                return Err(Error::UnknownType {
-                    name,
-                    reference: name_span,
-                });
-            };
-            let substitution = alias.params.iter().cloned().zip(arguments).collect();
-            return Ok(instantiate(&Ty::from_resolved(target), &substitution));
+            return self.parse_alias_type(name, name_span, &alias);
         }
         let mut qualified = None;
         // `T::Output`, `Self::Output`, `Square::Output`: an associated type.
@@ -43602,6 +43707,12 @@ impl<'a> Parser<'a> {
                 && let Some(ty) = builtin_path_type(builtin)
             {
                 return Ok(ty);
+            }
+            // A crate's type alias, as `iced::Result`.
+            if let Some(crate::host::Entry::TypeAlias(alias)) = self.models.host.entry(&path)
+                && let Some(alias) = type_ref::Alias::host(alias, &self.models.host, name_span)
+            {
+                return self.parse_alias_type(name, name_span, &alias);
             }
             let Some(definition) = self.models.host.source_type(&path).cloned() else {
                 return Err(Error::UnknownType {
@@ -43755,9 +43866,12 @@ impl<'a> Parser<'a> {
             }
             _ if generic => Err(self.unsupported("generic arguments on a non-generic type")),
             Some((definition, owner)) if qualified.is_some() => {
+                // The use is of the type's own path, as a path through a
+                // module import (`alignment::Alignment` after `use
+                // iced::alignment;`) names it.
                 #[cfg(feature = "rust-import")]
                 if let Some(selector) = definition.imported_declaration() {
-                    self.push_imported_op(&name, &selector, None, name_span)?;
+                    self.push_imported_op(&definition.path(), &selector, None, name_span)?;
                 }
                 let alias = definition.identity().imported().map(|_| definition.clone());
                 Ok(Ty::Host {
@@ -46154,6 +46268,61 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A type alias's target, with the generic arguments written after its
+    /// name, and each parameter not written its default, as
+    /// `Element<'a, Message>` leaves `Theme` to its own.
+    fn parse_alias_type(
+        &mut self,
+        name: ImmutableString,
+        name_span: Span,
+        alias: &type_ref::Alias,
+    ) -> Result<Ty, Error> {
+        let mut arguments = Vec::new();
+        if matches!(self.peek(), Token::LessThan) {
+            self.next();
+            while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                if !self.skip_lifetime() {
+                    arguments.push(self.parse_local_type()?);
+                }
+                if matches!(self.peek(), Token::Comma) {
+                    self.next();
+                } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                    return Err(self.unsupported("generic arguments"));
+                }
+            }
+            self.expect_close_angle("'>' after generic arguments")?;
+        }
+        let written = arguments.len();
+        while arguments.len() < alias.params.len() {
+            let Some(Some(default)) = alias.defaults.get(arguments.len()) else {
+                break;
+            };
+            let substitution = alias
+                .params
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            arguments.push(instantiate(&Ty::from_resolved(default), &substitution));
+        }
+        if arguments.len() != alias.params.len() {
+            return Err(Error::InvalidTypeArguments {
+                ty: name,
+                expected: alias.params.len(),
+                actual: written,
+                reference: name_span,
+            });
+        }
+        let Some(target) = &alias.target else {
+            return Err(Error::UnknownType {
+                name,
+                reference: name_span,
+            });
+        };
+        let substitution = alias.params.iter().cloned().zip(arguments).collect();
+        Ok(instantiate(&Ty::from_resolved(target), &substitution))
+    }
+
     #[cfg(feature = "rust-import")]
     fn retain_imported(&mut self, items: Option<usize>, bytes: Option<usize>) -> Result<(), Error> {
         self.imported
@@ -46857,7 +47026,7 @@ fn expand_imported_variants(
     let mut expanded = Vec::with_capacity(tokens.len());
     for index in 0..tokens.len() {
         let (token, position) = &tokens[index];
-        let owner = match token {
+        let name = match token {
             Token::Identifier(name)
                 if !matches!(
                     expanded.last(),
@@ -46871,10 +47040,21 @@ fn expand_imported_variants(
                         )
                 ) =>
             {
-                models.imported_variant(name)
+                Some(name)
             }
             _ => None,
         };
+        // A crate enum's variant is its enum's, `Alignment::Center`.
+        if let Some(path) = name.and_then(|name| models.imported_host_variant(name)) {
+            for (segment, name) in path.iter().enumerate() {
+                if segment > 0 {
+                    expanded.push((Token::DoubleColon, *position));
+                }
+                expanded.push((Token::Identifier(Box::new(name.as_str().into())), *position));
+            }
+            continue;
+        }
+        let owner = name.and_then(|name| models.imported_variant(name));
         for segment in owner.into_iter().flatten() {
             expanded.push((
                 Token::Identifier(Box::new(segment.as_str().into())),

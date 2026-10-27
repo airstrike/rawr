@@ -1071,6 +1071,36 @@ fn build(
             .builtin_alias(path, builtin)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
+    // A crate's type alias, as `pub type Result = std::result::Result<(),
+    // Error>;`.
+    for alias in facade.type_aliases() {
+        let path = alias.path();
+        let parameters = alias.parameters().map(ImmutableString::from).collect();
+        let defaults = alias
+            .defaults()
+            .iter()
+            .map(|default| {
+                default
+                    .as_ref()
+                    .map(|default| self::ty(facade, default, profile, installed))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| entry_error(facade.root(), path, source))?
+            .into_boxed_slice();
+        let target = self::ty(facade, alias.target(), profile, installed)
+            .map_err(|source| entry_error(facade.root(), path, source))?;
+        builder
+            .type_alias(path, parameters, defaults, target)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
+    // A re-exported variant, as `pub use Alignment::Center;`, names its
+    // enum's variant.
+    for (path, variant) in facade.variants() {
+        builder
+            .variant_alias(path, variant)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
     // A trait the program names is a module (`use rand::Rng;`), unless the
     // profile already gives its path a meaning (iced's `Widget`).
     for path in facade.traits() {

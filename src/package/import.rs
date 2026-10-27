@@ -647,9 +647,25 @@ fn imported_resolution_report(
     evidence
         .try_reserve_exact(outcomes.len())
         .map_err(|_| diagnostic::Error::Allocation)?;
+    let mut declared = None;
     for outcome in outcomes {
         if let Some(retained) = unavailable_evidence(outcome) {
             evidence.push(retained);
+            continue;
+        }
+        // An item whose signature names a type its crate's facade does not
+        // declare is left out of the facade, as a function beside a module
+        // of its name can be (`mod text` and `fn text`).
+        let declared =
+            declared.get_or_insert_with(|| paths.declared(outcome.export().root_alias()));
+        if !names_declared(outcome, declared)
+            && let Some(origin) = outcome.origin()
+        {
+            evidence.push(UnavailableEvidence {
+                reason: "its signature names a Rust type that Rawr can't name yet".into(),
+                source: origin.source(),
+                declaration: origin.declaration(),
+            });
         }
     }
     evidence.sort_unstable_by(|left, right| {
@@ -1084,6 +1100,26 @@ impl<'contract> ImportedPaths<'contract> {
             .partition_point(|entry| entry.path.as_ref() <= path);
         self.entries[start..end].iter().map(|entry| entry.outcome)
     }
+
+    /// The crate types the facade of `root` declares, as the facade build
+    /// reads them: each struct and enum outcome's definition.
+    fn declared(
+        &self,
+        root: &str,
+    ) -> std::collections::BTreeSet<rawr_import::surface::identity::Definition> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.outcome.export().root_alias() == root)
+            .filter(|entry| entry.outcome.variant().is_none())
+            .filter(|entry| {
+                matches!(
+                    entry.outcome.representability(),
+                    Representability::Struct(_) | Representability::Enum(_)
+                )
+            })
+            .filter_map(|entry| entry.outcome.identity().definition())
+            .collect()
+    }
 }
 
 fn imported_paths<'contract>(
@@ -1175,6 +1211,13 @@ struct Facade<'contract> {
     entries: Vec<Entry<'contract>>,
     /// The traits the program names: modules, as in the facade plan.
     traits: Vec<Box<str>>,
+    /// The re-exported enum variants, as `pub use Alignment::Center;`: each
+    /// path, its enum and the variant's name.
+    variants: Vec<(
+        Box<str>,
+        rawr_import::surface::identity::Definition,
+        &'contract str,
+    )>,
     /// The root's `macro_rules!` macros, as in the facade plan.
     macros: Vec<&'contract rawr_import::surface::facade::Macro>,
 }
@@ -1341,6 +1384,7 @@ fn install(
                         root,
                         entries: Vec::new(),
                         traits: Vec::new(),
+                        variants: Vec::new(),
                         macros: Vec::new(),
                     },
                 );
@@ -1368,6 +1412,7 @@ fn install(
                             root,
                             entries: Vec::new(),
                             traits: Vec::new(),
+                            variants: Vec::new(),
                             macros: Vec::new(),
                         },
                     );
@@ -1403,6 +1448,7 @@ fn install(
                         root,
                         entries: Vec::new(),
                         traits: Vec::new(),
+                        variants: Vec::new(),
                         macros: Vec::new(),
                     },
                 );
@@ -1410,6 +1456,18 @@ fn install(
             }
         };
         let facade = &mut facades[facade_index];
+        // A re-exported variant, as `pub use Alignment::Center;`, is its
+        // enum's variant.
+        if let Some(variant) = outcome.variant() {
+            facade
+                .variants
+                .try_reserve(1)
+                .map_err(|_| Error::Allocation)?;
+            facade
+                .variants
+                .push((relative.into_boxed_str(), definition, variant));
+            continue;
+        }
         facade
             .entries
             .try_reserve(1)
@@ -1608,6 +1666,21 @@ fn build(
                     && let Some(builtin) = rawr_import::surface::facade::builtin_alias(plan.ty())
                 {
                     builder.builtin_alias(entry.relative.as_ref(), builtin)?;
+                } else if ty_ok(plan.ty(), declared)
+                    && plan
+                        .parameters()
+                        .iter()
+                        .filter_map(representability::signature::Parameter::default)
+                        .all(|default| ty_ok(default, declared))
+                {
+                    // Any other type alias, as `iced::Result`, names its
+                    // target with its own parameters.
+                    builder.type_alias(
+                        entry.relative.as_ref(),
+                        names(plan.parameters(), allocation)?,
+                        defaults(&types, plan.parameters(), allocation)?,
+                        types.convert(plan.ty(), plan.parameters(), allocation)?,
+                    )?;
                 }
                 continue;
             }
@@ -1742,6 +1815,20 @@ fn build(
             }
         }
     }
+    // A re-exported variant names its enum's variant, through a path the
+    // facade declares the enum at. One of an enum it does not declare is
+    // unavailable.
+    for (path, definition, variant) in &facade.variants {
+        let Some(owner) = facade.entries.iter().find(|entry| {
+            entry.definition == *definition
+                && matches!(entry.outcome.representability(), Representability::Enum(_))
+        }) else {
+            continue;
+        };
+        let target = format!("{}::{variant}", owner.relative);
+        allocation.retain(1, target.len())?;
+        builder.variant_alias(path.as_ref(), &target)?;
+    }
     // A dependency's `macro_rules!` macros, which Rawr expands: `$crate`
     // reads as the defining crate's root through this root.
     for rules in &facade.macros {
@@ -1823,14 +1910,16 @@ fn imported_item(
         ),
         Representability::Invocation(plan) => Some(
             match outcome.identity().selector() {
+                // A closure the item takes, as a generic type's `style(impl
+                // Fn(&Theme, Status) -> Style + 'a)`, is the closure's type.
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    signature(types, plan.signature(), allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -1845,16 +1934,16 @@ fn imported_item(
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
                     path,
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Function { .. } => host::item::Definition::function(
                     path,
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
                     receiver(plan.receiver().ok_or(Error::Cardinality)?),
-                    callable_signature(types, plan, allocation)?,
+                    callable_signature(types, plan.signature(), plan.call(), allocation)?,
                 )?,
                 _ => return Err(Error::Cardinality),
             }
@@ -2222,13 +2311,13 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
 /// bound's inputs and output (D513.7 b).
 fn callable_signature(
     types: &Types,
-    plan: &representability::callable::Item,
+    signature: &representability::signature::Signature,
+    call: Option<&representability::callable::Call>,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<host::signature::Definition, Error> {
-    let Some(call) = plan.call() else {
-        return signature(types, plan.signature(), allocation);
+    let Some(call) = call else {
+        return self::signature(types, signature, allocation);
     };
-    let signature = plan.signature();
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         if parameter.kind() == representability::signature::Kind::Type {

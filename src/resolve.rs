@@ -935,6 +935,7 @@ fn unresolved_alias(alias: &crate::item::TypeAlias) -> type_ref::Target {
             .map(|generic| generic.name.text.clone())
             .collect(),
         target: None,
+        defaults: Box::default(),
     })
 }
 
@@ -1163,7 +1164,12 @@ fn resolve_imports(
             match host.entry(&std_reexport(&prefix, host)) {
                 None if std_fmt_import(&prefix) => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
-                Some(host::Entry::Item(_) | host::Entry::Endpoint(_) | host::Entry::Builtin(_)) => {
+                Some(
+                    host::Entry::Item(_)
+                    | host::Entry::Endpoint(_)
+                    | host::Entry::Builtin(_)
+                    | host::Entry::TypeAlias(_),
+                ) => {
                     return Err(Error::InvalidImport {
                         path: prefix,
                         reason: "import groups require a module or type namespace".into(),
@@ -1231,13 +1237,25 @@ fn resolve_imports(
                     },
                 );
             }
-            if matches!(binding.target, item::Import::Alias)
-                && let Some(host::Entry::Builtin(builtin)) = host.entry(&binding.qualified)
-            {
-                types.insert(
-                    binding.name.text.clone(),
-                    type_ref::Target::Alias(type_ref::Alias::builtin(builtin, binding.name.span)),
-                );
+            if matches!(binding.target, item::Import::Alias) {
+                match host.entry(&binding.qualified) {
+                    Some(host::Entry::Builtin(builtin)) => {
+                        types.insert(
+                            binding.name.text.clone(),
+                            type_ref::Target::Alias(type_ref::Alias::builtin(
+                                builtin,
+                                binding.name.span,
+                            )),
+                        );
+                    }
+                    // A crate's type alias, as `use iced::Result;`.
+                    Some(host::Entry::TypeAlias(alias)) => {
+                        if let Some(alias) = type_ref::Alias::host(alias, host, binding.name.span) {
+                            types.insert(binding.name.text.clone(), type_ref::Target::Alias(alias));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -1302,6 +1320,11 @@ fn module_header_types(
                     type_ref::Target::Alias(type_ref::Alias::builtin(builtin, path.span)),
                 );
             }
+            Some(host::Entry::TypeAlias(alias)) => {
+                if let Some(alias) = type_ref::Alias::host(alias, host, path.span) {
+                    types.insert(name, type_ref::Target::Alias(alias));
+                }
+            }
             _ => {}
         }
     }
@@ -1329,8 +1352,14 @@ fn resolve_import_binding(
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),
         },
-        // A facade's alias of a builtin, as iced's `markdown::Uri`.
-        Some(host::Entry::Builtin(_)) => item::Import::Alias,
+        // A facade's alias of a builtin, as iced's `markdown::Uri`, or a
+        // crate's type alias, as `iced::Result`.
+        Some(host::Entry::Builtin(_) | host::Entry::TypeAlias(_)) => item::Import::Alias,
+        // A variant of a crate's enum, as `use iced::Alignment::Center;` or
+        // the re-exported `use iced::Center;`.
+        None if let Some(owner) = host.enum_variant(&qualified) => {
+            item::Import::HostVariant { owner }
+        }
         Some(host::Entry::Endpoint(contract)) => {
             let (_, owner) =
                 host.operation_endpoint(&qualified)

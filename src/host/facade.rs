@@ -37,7 +37,107 @@ pub struct Definition {
     endpoints: Box<[host::endpoint::Contract]>,
     items: Box<[host::item::Definition]>,
     aliases: Box<[(host::path::Path, host::path::Path)]>,
+    type_aliases: Box<[TypeAlias]>,
     fingerprint: Fingerprint,
+}
+
+/// A crate's type alias, as `pub type Result = std::result::Result<(),
+/// Error>;` or `pub type Element<'a, Message, Theme = Plain> =
+/// element::Element<'a, Message, Theme>;`: its qualified path, its type
+/// parameters with their defaults, and the type it names, in which each
+/// parameter is a type parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TypeAlias {
+    path: host::path::Path,
+    parameters: Box<[ImmutableString]>,
+    defaults: Box<[Option<host::type_ref::Type>]>,
+    target: host::type_ref::Type,
+}
+
+impl TypeAlias {
+    pub(crate) const fn path(&self) -> &host::path::Path {
+        &self.path
+    }
+
+    pub(crate) fn parameters(&self) -> &[ImmutableString] {
+        &self.parameters
+    }
+
+    /// Each parameter's default, by position; empty when none has one.
+    pub(crate) fn defaults(&self) -> &[Option<host::type_ref::Type>] {
+        &self.defaults
+    }
+
+    pub(crate) const fn target(&self) -> &host::type_ref::Type {
+        &self.target
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn try_clone(&self) -> Result<Self, rawr_import::surface::Error> {
+        Ok(Self {
+            path: self.path.try_clone()?,
+            parameters: self.parameters.clone(),
+            defaults: self
+                .defaults
+                .iter()
+                .map(|default| {
+                    default
+                        .as_ref()
+                        .map(host::type_ref::Type::try_clone)
+                        .transpose()
+                })
+                .collect::<Result<_, _>>()?,
+            target: self.target.try_clone()?,
+        })
+    }
+
+    /// This alias with its target and defaults resolved against the
+    /// facade's own types.
+    fn resolve(
+        &self,
+        root: &host::path::Path,
+        types: &[host::type_def::Definition],
+        supports: &[host::support::SignatureContract],
+        imported: &host::type_ref::ImportedTypes,
+    ) -> Result<Self, host::Error> {
+        let mut parameters = self
+            .parameters
+            .iter()
+            .map(|name| {
+                Ok((
+                    host::path::Path::parse(name.clone())?,
+                    crate::capability::Set::from_explicit([]),
+                ))
+            })
+            .collect::<Result<Vec<_>, host::Error>>()?;
+        parameters.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let resolve = |ty: &host::type_ref::Type| {
+            ty.resolve(root, types, supports, &parameters, imported, &self.path)
+        };
+        Ok(Self {
+            path: self.path.clone(),
+            parameters: self.parameters.clone(),
+            defaults: self
+                .defaults
+                .iter()
+                .map(|default| default.as_ref().map(resolve).transpose())
+                .collect::<Result<_, _>>()?,
+            target: resolve(&self.target)?,
+        })
+    }
+
+    /// The pseudo-module this alias joins a facade's proof as, under a
+    /// spelling no module has: its path and a digest of what it names.
+    fn proof_path(&self) -> Result<host::path::Path, host::Error> {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!(
+            "{:?}|{:?}|{:?}",
+            self.parameters, self.defaults, self.target
+        )
+        .hash(&mut hasher);
+        host::path::Path::parse(format!("{}::alias_{:016x}", self.path, hasher.finish()))
+    }
 }
 
 pub(crate) struct RegistryParts {
@@ -48,6 +148,7 @@ pub(crate) struct RegistryParts {
     pub(crate) endpoints: Box<[host::endpoint::Contract]>,
     pub(crate) items: Box<[host::item::Definition]>,
     pub(crate) aliases: Box<[(host::path::Path, host::path::Path)]>,
+    pub(crate) type_aliases: Box<[TypeAlias]>,
     pub(crate) fingerprint: Fingerprint,
 }
 
@@ -141,6 +242,7 @@ pub struct Builder {
     profile_items: Vec<host::item::Definition>,
     projections: Vec<ProjectionDeclaration>,
     aliases: Vec<(host::path::Path, host::path::Path)>,
+    type_aliases: Vec<TypeAlias>,
 }
 
 #[derive(Debug)]
@@ -179,6 +281,7 @@ impl Builder {
             profile_items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
+            type_aliases: Vec::new(),
         })
     }
 
@@ -204,6 +307,7 @@ impl Builder {
             profile_items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
+            type_aliases: Vec::new(),
         })
     }
 
@@ -327,6 +431,70 @@ impl Builder {
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(target)?);
+        self.ensure_vacant(&path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path, target));
+        Ok(self)
+    }
+
+    /// Name a crate's type alias at `path`, as Rust's `pub type Result =
+    /// std::result::Result<(), Error>;`: `parameters` are its type
+    /// parameters, each with its default in `defaults` (empty when none has
+    /// one), and `target` is the type it names. `path` is relative.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn type_alias(
+        &mut self,
+        path: &str,
+        parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
+        target: host::type_ref::Type,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        self.ensure_vacant(&path, "type alias")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path)
+            || self.type_aliases.iter().any(|alias| alias.path == path)
+        {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "type alias",
+            });
+        }
+        if !defaults.is_empty() && defaults.len() != parameters.len() {
+            return Err(host::Error::InvalidTypeParameter(path.to_string().into()));
+        }
+        self.type_aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.type_aliases.push(TypeAlias {
+            path,
+            parameters,
+            defaults,
+            target,
+        });
+        Ok(self)
+    }
+
+    /// Re-export this facade's enum variant `variant` at `path`, as Rust's
+    /// `pub use Alignment::Center;`: `variant` is the variant's path through
+    /// its enum (`alignment::Alignment::Center`). Both are relative.
+    #[cfg(feature = "rust-import")]
+    pub fn variant_alias(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        variant: &str,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(variant)?);
         self.ensure_vacant(&path, "re-export")?;
         if self.aliases.iter().any(|(alias, _)| *alias == path) {
             return Err(host::Error::DuplicateFacadeEntry {
@@ -1254,11 +1422,15 @@ impl Builder {
         // A re-export names one of this facade's types at another path, or a
         // builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
+            let declared = |path: &host::path::Path| {
+                self.types
+                    .binary_search_by(|definition| definition.path_ref().cmp(path))
+                    .is_ok()
+            };
+            // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
-                && self
-                    .types
-                    .binary_search_by(|definition| definition.path_ref().cmp(target))
-                    .is_err()
+                && !declared(target)
+                && !target.parent().is_some_and(|owner| declared(&owner))
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),
@@ -1272,6 +1444,15 @@ impl Builder {
         for (alias, target) in &self.aliases {
             // Re-exports join the proof under a spelling no module has.
             modules.push(host::path::Path::parse(format!("{alias}::{target}"))?);
+        }
+        let mut type_aliases = self
+            .type_aliases
+            .iter()
+            .map(|alias| alias.resolve(&self.root, &self.types, &self.supports, &imported))
+            .collect::<Result<Vec<_>, _>>()?;
+        type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
+        for alias in &type_aliases {
+            modules.push(alias.proof_path()?);
         }
         let fingerprint = fingerprint(
             &self.root,
@@ -1292,6 +1473,7 @@ impl Builder {
             endpoints: self.endpoints.into_boxed_slice(),
             items,
             aliases: self.aliases.into_boxed_slice(),
+            type_aliases: type_aliases.into_boxed_slice(),
             fingerprint,
         })
     }
@@ -1368,11 +1550,15 @@ impl Builder {
         // A carried re-export names one of this facade's types at another
         // path, or a builtin (`builtin_alias`).
         for (alias, target) in &self.aliases {
+            let declared = |path: &host::path::Path| {
+                self.types
+                    .binary_search_by(|definition| definition.path_ref().cmp(path))
+                    .is_ok()
+            };
+            // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
-                && self
-                    .types
-                    .binary_search_by(|definition| definition.path_ref().cmp(target))
-                    .is_err()
+                && !declared(target)
+                && !target.parent().is_some_and(|owner| declared(&owner))
             {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: alias.to_string().into(),
@@ -1382,14 +1568,25 @@ impl Builder {
             }
         }
         self.aliases.sort();
+        let mut type_aliases = Vec::new();
+        type_aliases
+            .try_reserve_exact(self.type_aliases.len())
+            .map_err(|_| host::Error::Allocation)?;
+        for alias in &self.type_aliases {
+            type_aliases.push(alias.resolve(&self.root, &self.types, &self.supports, &imported)?);
+        }
+        type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         let mut modules = Vec::new();
         modules
-            .try_reserve_exact(self.modules.len() + self.aliases.len())
+            .try_reserve_exact(self.modules.len() + self.aliases.len() + type_aliases.len())
             .map_err(|_| host::Error::Allocation)?;
         modules.extend(self.modules.iter().cloned());
         for (alias, target) in &self.aliases {
             // Re-exports join the proof under a spelling no module has.
             modules.push(host::path::Path::parse(format!("{alias}::{target}"))?);
+        }
+        for alias in &type_aliases {
+            modules.push(alias.proof_path()?);
         }
         let fingerprint = fingerprint(
             &self.root,
@@ -1410,6 +1607,7 @@ impl Builder {
             endpoints: self.endpoints.into_boxed_slice(),
             items,
             aliases: self.aliases.into_boxed_slice(),
+            type_aliases: type_aliases.into_boxed_slice(),
             fingerprint,
         })
     }
@@ -1673,6 +1871,7 @@ impl Definition {
             endpoints: self.endpoints,
             items: self.items,
             aliases: self.aliases,
+            type_aliases: self.type_aliases,
             fingerprint: self.fingerprint,
         }
     }

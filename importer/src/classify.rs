@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 33;
+const CLASSIFIER_VERSION: u32 = 34;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -41,6 +41,9 @@ pub(crate) struct OutcomeRecord {
     origin: Option<representability::origin::Set>,
     evidence: OutcomeEvidence,
     implementations: Box<[ImplementationRecord]>,
+    /// The variant of its enum this path re-exports, as `pub use
+    /// Alignment::Center;` does.
+    variant: Option<Box<str>>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -201,6 +204,8 @@ struct StoredOutcome {
     definition_plan: Option<crate::surface::identity::Definition>,
     representability: Option<representability::Representability>,
     implementations: Box<[StoredImplementation]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<Box<str>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1015,10 +1020,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     lifetime: model::Lifetime::Static | model::Lifetime::Early { .. },
                 } if *index == parameter => static_owned = true,
                 // `R: 'static` of another parameter, as `spawn_blocking`'s
-                // output has: rustc checks it where the bridge names `R`.
+                // output has, or `Message: 'a` of an early `'a`, which is
+                // `'static` (D558): rustc checks it where the bridge names
+                // `R`.
                 model::Predicate::TypeOutlives {
                     ty: model::Type::Parameter { .. },
-                    lifetime: model::Lifetime::Static,
+                    lifetime: model::Lifetime::Static | model::Lifetime::Early { .. },
                 } => {}
                 // A default method's bound on `Self`, as Freya's `on_press`
                 // has `where Self: AccessibilityExt`: rustc checks it where
@@ -1647,6 +1654,13 @@ impl<'contract> Outcome<'contract> {
         self.representability
     }
 
+    /// The variant of its enum this path re-exports, as `pub use
+    /// Alignment::Center;` does: the outcome is otherwise its enum's.
+    #[must_use]
+    pub fn variant(&self) -> Option<&'contract str> {
+        self.record.variant.as_deref()
+    }
+
     /// Return the export/declaration positions for a definition-backed outcome.
     #[must_use]
     pub const fn origin(&self) -> Option<&'contract representability::origin::Set> {
@@ -2004,6 +2018,9 @@ impl DriverAudit {
     fn outcome(&mut self, outcome: &OutcomeRecord) -> Option<()> {
         self.add(0, outcome.export.retained_bytes()?)?;
         self.add(0, outcome.name.len())?;
+        if let Some(variant) = &outcome.variant {
+            self.add(0, variant.len())?;
+        }
         if let Some(origin) = &outcome.origin {
             self.add(0, outcome.identity.selector().retained_bytes()?)?;
             self.span(origin.source())?;
@@ -2175,7 +2192,7 @@ impl Serialize for OutcomeRecord {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Outcome", 7)?;
+        let mut state = serializer.serialize_struct("Outcome", 8)?;
         state.serialize_field("export", &self.export)?;
         state.serialize_field("identity", &self.identity)?;
         state.serialize_field("name", &self.name)?;
@@ -2191,6 +2208,10 @@ impl Serialize for OutcomeRecord {
         };
         state.serialize_field("representability", &inline)?;
         state.serialize_field("implementations", &self.implementations)?;
+        match &self.variant {
+            Some(variant) => state.serialize_field("variant", variant)?,
+            None => state.skip_field("variant")?,
+        }
         state.end()
     }
 }
@@ -2530,6 +2551,7 @@ impl StoredOutcome {
             origin: self.origin,
             evidence,
             implementations: implementations.into_boxed_slice(),
+            variant: self.variant,
         })
     }
 }
@@ -3178,6 +3200,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ),
                     )),
                     implementations: Box::default(),
+                    variant: None,
                 })
             }
             ledger::Path::Rejected { reason, span, .. } => {
@@ -3197,6 +3220,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ),
                     )),
                     implementations: Box::default(),
+                    variant: None,
                 })
             }
             ledger::Path::Imported(export) => {
@@ -3243,7 +3267,20 @@ impl<P: api::Phase> Context<'_, P> {
                     definition.span().clone(),
                 );
                 let evidence = plan_evidence(definitions, definition)?;
-                let implementations = self.implementations(export, definitions)?;
+                // A re-exported variant is its enum's variant, whose members
+                // are the enum's.
+                let variant = match export.variant() {
+                    Some(variant) => {
+                        self.retain_str(variant)?;
+                        Some(Box::from(variant))
+                    }
+                    None => None,
+                };
+                let implementations = if variant.is_some() {
+                    Box::default()
+                } else {
+                    self.implementations(export, definitions)?
+                };
                 Ok(OutcomeRecord {
                     export: export.key().clone(),
                     identity,
@@ -3251,6 +3288,7 @@ impl<P: api::Phase> Context<'_, P> {
                     origin: Some(origin),
                     evidence,
                     implementations,
+                    variant,
                 })
             }
         }
@@ -3337,6 +3375,7 @@ impl<P: api::Phase> Context<'_, P> {
                     origin: Some(origin),
                     evidence,
                     implementations: Box::default(),
+                    variant: None,
                 });
             }
             self.retain_span(implementation.span())?;
@@ -3519,27 +3558,45 @@ impl<P: api::Phase> Context<'_, P> {
             // `impl<'a, Message, W, ..> Content<'a, Message, Void, W, ..>`
             // does: its own parameters stand in order among them, and the
             // bridge reaches the type at that instance.
+            // An implementation's parameters its type doesn't name, as
+            // `Renderer` of iced's `impl<'a, Message, W, Theme, Renderer>
+            // Widget<Message, Theme, Renderer> for Button<'a, Message, W,
+            // Theme>` and `Message` of its `impl<Message, Theme, Renderer>
+            // Widget<Message, Theme, Renderer> for Text<'_, Theme,
+            // Renderer>`, are the call's to infer, from what it gives and
+            // takes, as rustc infers them. A trait's arguments name them.
+            let trait_impl = matches!(implementation.trait_ref(), model::Trait::Trait { .. });
+            let mut inferred = Vec::new();
+            let mut infer = |parameter: &model::Parameter| {
+                if trait_impl && matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                    inferred.push(parameter.index());
+                    Ok(())
+                } else {
+                    Err(reject::Kind::GenericImplementation)
+                }
+            };
             let mut own = parameters.iter();
             let mut fixed = false;
             for argument in arguments {
                 match argument {
-                    model::Argument::Type(model::Type::Parameter { owner, index }) => {
+                    model::Argument::Type(model::Type::Parameter { owner, index }) => loop {
                         let Some(parameter) = own.next() else {
                             return Err(reject::Kind::GenericImplementation.into());
                         };
-                        if owner != implementation.id()
-                            || *index != parameter.index()
-                            || !matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                        if owner == implementation.id()
+                            && *index == parameter.index()
+                            && matches!(parameter.kind(), model::ParameterKind::Type { .. })
                         {
-                            return Err(reject::Kind::GenericImplementation.into());
+                            break;
                         }
-                    }
+                        infer(parameter)?;
+                    },
                     model::Argument::Type(_) => fixed = true,
                     _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
             }
-            if own.next().is_some() {
-                return Err(reject::Kind::GenericImplementation.into());
+            for parameter in own {
+                infer(parameter)?;
             }
             if !implementation.relevance().any(|relevant| relevant == id)
                 || !implementation.retains_associated_owner(definition)
@@ -3560,12 +3617,70 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 return Err(reject::Kind::GenericImplementation.into());
             }
-            let container_parameters = parameters.len();
+            let container_parameters = parameters.len() - inferred.len();
+            // A trait's provided method, as iced's `Widget::_boxed`, names
+            // the trait's parameters, which this implementation's trait
+            // arguments are. Its own parameters follow the trait's, so they
+            // follow the implementation's here.
+            let provided = match (definition.owner(), implementation.trait_ref()) {
+                (model::Owner::Definition(owner), model::Trait::Trait { id, arguments })
+                    if owner == id =>
+                {
+                    let mut substitutions = arguments
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, argument)| match argument {
+                            model::Argument::Type(ty) => {
+                                Some(((id.clone(), u32::try_from(index).ok()?), ty.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let first = implementation
+                        .generics()
+                        .parameters()
+                        .map(|parameter| parameter.index().saturating_add(1))
+                        .max()
+                        .unwrap_or(0);
+                    let mut own = Vec::new();
+                    for (position, parameter) in generics.parameters().enumerate() {
+                        let index = first
+                            .checked_add(u32::try_from(position).map_err(|_| Error::IndexOverflow)?)
+                            .ok_or(Error::IndexOverflow)?;
+                        if matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                            substitutions.push((
+                                (parameter.owner().clone(), parameter.index()),
+                                model::Type::Parameter {
+                                    owner: parameter.owner().clone(),
+                                    index,
+                                },
+                            ));
+                        }
+                        own.push(model::Parameter::new(
+                            parameter.owner().clone(),
+                            index,
+                            parameter.name().into(),
+                            parameter.kind().clone(),
+                        ));
+                    }
+                    let own = model::Generics::new(
+                        own.into_boxed_slice(),
+                        generics.predicates().cloned().collect(),
+                    );
+                    Some((substituted_signature(signature, &substitutions), own))
+                }
+                _ => None,
+            };
+            let (signature, generics) = match &provided {
+                Some((signature, generics)) => (signature, generics),
+                None => (signature, generics),
+            };
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
+            let item = item.with_inferred(&inferred, parameters.len());
             // An invocation's signature declares each of its parameters, and
             // an argument's `impl Fn(..)` has no name to declare, as in
             // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`,
@@ -5929,6 +6044,41 @@ fn futurize(
         },
         other => other,
     }
+}
+
+/// `signature` with each parameter in `substitutions` replaced in its
+/// receiver, inputs and output.
+fn substituted_signature(
+    signature: &model::Signature,
+    substitutions: &[((api::identity::Definition, u32), model::Type)],
+) -> model::Signature {
+    let substitute = |ty: &model::Type| substitute_parameters(ty, substitutions);
+    let receiver = match signature.receiver() {
+        model::Receiver::None => model::Receiver::None,
+        model::Receiver::Value { ty } => model::Receiver::Value { ty: substitute(ty) },
+        model::Receiver::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Receiver::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: substitute(ty),
+        },
+        model::Receiver::Explicit { ty } => model::Receiver::Explicit { ty: substitute(ty) },
+    };
+    model::Signature::new(
+        signature.safety(),
+        signature.const_function(),
+        signature.async_function(),
+        signature.abi().into(),
+        signature.variadic(),
+        signature.binders().cloned().collect(),
+        receiver,
+        signature.inputs().map(substitute).collect(),
+        substitute(signature.output()),
+    )
+    .with_guard(signature.guard().cloned())
 }
 
 /// `ty` with each impl parameter in `substitutions` replaced.

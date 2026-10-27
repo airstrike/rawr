@@ -1106,6 +1106,7 @@ struct Export {
     aliases: Box<[ledger::Alias]>,
     reexports: Box<[ledger::Reexport]>,
     span: model::Span,
+    variant: Option<Box<str>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -4034,13 +4035,16 @@ impl Candidate {
                     ));
                 };
                 allocation.reserve(&mut paths, 1)?;
-                paths.push(ledger::Path::Imported(ledger::Export::new(
-                    export.key,
-                    target,
-                    export.aliases,
-                    export.reexports,
-                    export.span,
-                )));
+                paths.push(ledger::Path::Imported(
+                    ledger::Export::new(
+                        export.key,
+                        target,
+                        export.aliases,
+                        export.reexports,
+                        export.span,
+                    )
+                    .with_variant(export.variant),
+                ));
             }
         }
         paths.sort_unstable_by(|left, right| left.key().cmp(right.key()));
@@ -6115,6 +6119,10 @@ fn export(
             }
         }
     };
+    let variant = raw
+        .variant
+        .map(|variant| boxed("re-exported variant name", &variant, limits, allocation))
+        .transpose()?;
     allocation.items(1)?;
     Ok(Export {
         key,
@@ -6122,6 +6130,7 @@ fn export(
         aliases: aliases.into_boxed_slice(),
         reexports: reexports.into_boxed_slice(),
         span: span(raw.span, limits, allocation)?,
+        variant,
     })
 }
 
@@ -6172,6 +6181,7 @@ fn anonymous_import(
         aliases,
         reexports,
         span,
+        variant: None,
     } = export
     else {
         return Err(extraction(

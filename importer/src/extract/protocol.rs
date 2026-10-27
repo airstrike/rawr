@@ -12,7 +12,7 @@ std::thread_local! {
     static ACCOUNTED_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) const SCHEMA: u32 = 23;
+pub(crate) const SCHEMA: u32 = 24;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
@@ -193,6 +193,9 @@ pub(crate) struct Export {
     pub(crate) aliases: Vec<Alias>,
     pub(crate) reexports: Vec<Reexport>,
     pub(crate) span: Span,
+    /// A re-exported enum variant's name, whose enum `target` is.
+    #[serde(default)]
+    pub(crate) variant: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
