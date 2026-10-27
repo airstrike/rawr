@@ -264,9 +264,9 @@ impl Parser<'_> {
         matched: &Matched,
         subject: Span,
         declarations: &[PatternBinding],
-    ) {
+    ) -> Result<(), Error> {
         self.pattern_tests(&trace, matched, subject);
-        self.pattern_binds(trace, matched, declarations);
+        self.pattern_binds(trace, matched, subject, declarations)
     }
 
     /// A pattern's tests, read where the subject spanning `subject` is. A
@@ -286,13 +286,17 @@ impl Parser<'_> {
 
     /// A pattern's bindings, each the local `declarations` declares by its
     /// name: a borrow of its part, a read or a move of it, or the loans of
-    /// the reference it is below.
+    /// the reference it is below. A by-value binding can't move its part
+    /// out from behind a reference (rustc's E0507), nor out of a value whose
+    /// type implements `Drop` (E0509), which rustc reports at the subject
+    /// spanning `subject`.
     pub(super) fn pattern_binds(
         &self,
         trace: PatternTrace,
         matched: &Matched,
+        subject: Span,
         declarations: &[PatternBinding],
-    ) {
+    ) -> Result<(), Error> {
         // What each binding is, before the facts are borrowed.
         let binds: Vec<_> = trace
             .parts
@@ -315,6 +319,28 @@ impl Parser<'_> {
                 PartKind::Test(..) => None,
             })
             .collect();
+        let behind = matches!(matched, Matched::Place(base)
+            if base.projection.contains(&Projection::Deref));
+        for (path, regions, _, _, by_ref, _, moves) in &binds {
+            if by_ref.is_some() || !moves {
+                continue;
+            }
+            let dropped = regions.iter().find_map(|region| match region {
+                TraceRegion::Field(owner, ..) if self.models.has_drop(*owner) => Some(*owner),
+                _ => None,
+            });
+            if let Some(owner) = dropped {
+                self.reject_drop_move(owner, true, subject)?;
+            }
+            if behind || path.contains(&Projection::Deref) {
+                return Err(Error::BorrowConflict {
+                    code: "E0507",
+                    message: "cannot move out of a value behind a reference".into(),
+                    access: subject,
+                    borrow: subject,
+                });
+            }
+        }
         let mut flow = self.flow();
         if let Some((what, span)) = trace.unmodeled {
             flow.unmodeled(what, span);
@@ -337,10 +363,12 @@ impl Parser<'_> {
                     let access = if moves { Access::Move } else { Access::Read };
                     flow.part(below(base, &path), access, span);
                     // A part that holds borrows: what the place holds there.
-                    if holds {
-                        let held = vec![(Path::ROOT, record::place_origin(base))];
-                        flow.take(into, &self.walk(held, &regions), define);
-                    }
+                    let held = if holds {
+                        self.walk(vec![(Path::ROOT, record::place_origin(base))], &regions)
+                    } else {
+                        Vec::new()
+                    };
+                    flow.take(into, &held, define);
                 }
                 // Below a reference made for the match, a binding by
                 // reference reborrows through it, and holds all of it.
@@ -351,24 +379,29 @@ impl Parser<'_> {
                 (Matched::Origins(origins), None) if holds => {
                     flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
-                (Matched::Origins(_), None) => {}
                 // `Some(v)` of `v.first()`: a part of a value holding
                 // borrows holds them, bound by value or by reference.
                 (Matched::Held(origins), None) if holds => {
                     flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
+                // Each binding is given its value here, and has it again
+                // each time the pattern binds it, as in a loop.
+                (Matched::Origins(_), None) | (Matched::Held(_), None) => {
+                    flow.take(into, &[], define);
+                }
                 (Matched::Held(origins), Some(_)) => {
                     let part = self.walk(origins.clone(), &regions);
                     flow.take(into, &region::collapse(&part), define);
                 }
-                (Matched::Held(_), None) => {}
                 (Matched::Value { made }, by_ref) => {
                     if *made && (by_ref.is_some() || holds) {
                         flow.unmodeled("a pattern binding a borrow its subject made", span);
                     }
+                    flow.take(into, &[], define);
                 }
             }
         }
+        Ok(())
     }
 
     /// What a part `regions` below a value holding `held` holds.
@@ -1566,7 +1599,22 @@ impl Parser<'_> {
         let body = std::mem::take(&mut *self.flow()).finish();
         #[cfg(test)]
         borrowck::note_body(&body);
-        match borrowck::check(&body, &borrowck::nll::Nll) {
+        // rustc reports each error; this reports the first in the source.
+        let conflict = borrowck::check(&body, &borrowck::nll::Nll);
+        if let Some(moved) = borrowck::moves::check(&body)
+            && conflict
+                .as_ref()
+                .is_none_or(|conflict| moved.access.start() <= conflict.access.start())
+        {
+            return Err(Error::MovedValue {
+                name: moved.name.into(),
+                moved: moved.moved,
+                reference: moved.access,
+                // A move in a loop's body, made again on its next iteration.
+                previous_iteration: moved.moved == moved.access,
+            });
+        }
+        match conflict {
             None => Ok(()),
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,

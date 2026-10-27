@@ -218,7 +218,6 @@ impl Parser<'_> {
                 ty: ty.clone(),
                 mutable: true,
                 available: true,
-                moved_fields: Default::default(),
                 declaration: value.span,
                 kind: BindingKind::Local,
             },

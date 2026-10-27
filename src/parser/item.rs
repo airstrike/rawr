@@ -900,6 +900,10 @@ fn parse_static(
     }
     {
         let name = parse_name(input, "after 'static'")?;
+        // Read as a `const`: a move out of it (rustc's E0507) is left to
+        // rustc.
+        #[cfg(test)]
+        crate::resolve::borrowck::note_unlowered("a `static` item, read as a `const`", name.span);
         parse_const_rest(
             input,
             tokenizer_control,

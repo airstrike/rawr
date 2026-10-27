@@ -78,6 +78,9 @@ codes!(Resolve;
     (BORROW_SHARED_MUTABLE, "E0502", "A shared and a `&mut` borrow live at once, as rustc reports it."),
     (BORROW_USE_MUTABLE, "E0503", "A use of a place while a `&mut` borrow of it is live, as rustc reports it."),
     (BORROW_MOVE, "E0505", "A move out of a place while a borrow of it is live, as rustc reports it."),
+    (BORROW_MOVE_BEHIND, "E0507", "A move out of a place behind a reference, or out of an index, as rustc reports it."),
+    (BORROW_MOVE_ELEMENT, "E0508", "A move out of an array's or a slice's element, as rustc reports it."),
+    (BORROW_MOVE_DROP, "E0509", "A move out of a part of a value whose type implements `Drop`, as rustc reports it."),
     (BORROW_ASSIGN, "E0506", "An assignment to a place while a borrow of it is live, as rustc reports it."),
     (BORROW_LIFETIME, "E0597", "A local that ends while a borrow of it is live, as rustc reports it."),
     (BORROW_RETURNED_LOCAL, "E0515", "A function returns a borrow of its own local or a temporary, as rustc reports it."),
@@ -189,6 +192,9 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0500" => BORROW_CLOSURE_UNIQUE,
         "E0501" => BORROW_AFTER_UNIQUE,
         "E0524" => BORROW_TWO_UNIQUE,
+        "E0507" => BORROW_MOVE_BEHIND,
+        "E0508" => BORROW_MOVE_ELEMENT,
+        "E0509" => BORROW_MOVE_DROP,
         _ => BORROW_LIFETIME,
     }
 }

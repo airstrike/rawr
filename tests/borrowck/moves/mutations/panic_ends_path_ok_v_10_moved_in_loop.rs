@@ -1,0 +1,21 @@
+fn main() {
+    let mut v = vec![1];
+    let empty = v.is_empty();
+    let r = &mut v;
+    if empty {
+        v.push(1);
+        panic!("empty");
+    }
+    r.push(2);
+    for __i in 0..2 {
+        if __c() {
+            __take(v);
+        }
+    }
+    println!("{:?}", v);
+}
+
+fn __take<T>(_: T) {}
+fn __c() -> bool {
+    false
+}

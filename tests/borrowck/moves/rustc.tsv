@@ -1,0 +1,1029 @@
+# rustc 1.96.0 (ac68faa20 2026-05-25), edition 2024
+moves/array_temporary_index_moved.rs	E0508:2
+moves/as_ref_unwrap_then_used.rs	ok	0	"ab Some(\"ab\")\n"
+moves/assign_field_of_moved.rs	E0382:9
+moves/block_tail_copy_local.rs	ok	0	"3 4\n"
+moves/block_tail_moves_local.rs	E0382:7
+moves/closure_block_tail_after_call.rs	ok	0	"ab\n"
+moves/closure_block_tail_borrowed.rs	ok	0	"ab\n3\n"
+moves/closure_block_tail_moves.rs	E0382:7
+moves/closure_field_moved_other_used.rs	ok	0	"cde\nab\n"
+moves/closure_field_moved_same_used.rs	E0382:9
+moves/closure_field_moved_whole_used.rs	E0382:9
+moves/closure_in_loop_moves_capture.rs	ok	0	"1\n1\n"
+moves/closure_moved_capture_called_twice.rs	E0382:10
+moves/closure_moved_capture_fn_mut_bound.rs	E0507:7
+moves/closure_moved_capture_fn_once_bound.rs	ok	0	"done\n"
+moves/closure_nested_field_moved_other_used.rs	ok	0	"cde f\nab\n"
+moves/closure_nested_field_moved_same_used.rs	E0382:17
+moves/deref_box_moved.rs	ok	0	"ab\n"
+moves/deref_rc_moved.rs	E0507:5
+moves/deref_shared_copy.rs	ok	0	"4\n"
+moves/deref_shared_moved.rs	E0507:4
+moves/derived_copy_generic_bounded.rs	ok	0	"6\n"
+moves/derived_copy_generic_concrete.rs	ok	0	"6\n"
+moves/derived_copy_generic_concrete_string.rs	E0382:15
+moves/derived_copy_generic_moves.rs	E0382:14
+moves/field_moved_other_borrowed.rs	ok	0	"cde ab\n"
+moves/field_moved_while_borrowed.rs	E0505:9
+moves/for_element_moved_each_iteration.rs	ok	0	"5\n"
+moves/for_element_moved_twice.rs	E0382:9
+moves/for_pattern_moved_each_iteration.rs	ok	0	"8\n"
+moves/if_branch_moves_local.rs	ok	0	"ab\n"
+moves/if_let_copy_payload_in_loop.rs	ok	0	"3\n3\n"
+moves/if_let_payload_borrowed_then_used.rs	ok	0	"ab\nSome(\"ab\")\n"
+moves/if_let_payload_moved_in_loop.rs	E0382:4
+moves/if_let_payload_moved_then_used.rs	E0382:6
+moves/if_let_payload_ref_then_used.rs	ok	0	"ab\nSome(\"ab\")\n"
+moves/if_let_payload_wildcard_then_used.rs	ok	0	"some\nSome(\"ab\")\n"
+moves/let_drop_type_field_moved.rs	E0509:10
+moves/let_drop_type_field_ref.rs	ok	0	"ab\n"
+moves/let_nested_tuple_part_moved.rs	ok	0	"ab cde f\n"
+moves/let_nested_tuple_part_moved_used.rs	E0382:4
+moves/let_ref_pattern_copy.rs	ok	0	"5\n"
+moves/let_ref_pattern_moves_out.rs	E0507:3
+moves/let_tuple_part_moved_other_used.rs	ok	0	"ab cde\n"
+moves/let_tuple_part_moved_same_used.rs	E0382:4
+moves/let_variant_copy_field_then_used.rs	ok	0	"2 2\n"
+moves/let_variant_field_moved_then_used.rs	E0382:11
+moves/match_arm_moves_local.rs	E0382:8
+moves/match_deref_payload_moved.rs	E0507:7
+moves/match_deref_payload_ref.rs	ok	0	"ab c\n"
+moves/match_drop_type_field_moved.rs	E0509:10
+moves/match_payload_moved_in_one_arm.rs	ok	0	"ab\nab\n"
+moves/match_payload_moved_then_used.rs	E0382:12
+moves/match_wildcard_payload_then_used.rs	ok	0	"a\nab\n"
+moves/move_closure_nested_field_other_used.rs	ok	0	"cde 2\n"
+moves/move_closure_nested_field_parent_used.rs	E0382:15
+moves/move_closure_nested_field_same_used.rs	E0382:15
+moves/move_closure_tuple_member_other_used.rs	ok	0	"cde 2\n"
+moves/move_closure_tuple_member_same_used.rs	E0382:4
+moves/move_field_in_loop.rs	E0382:9
+moves/move_field_in_loop_reassigned.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/move_in_branch_then_used.rs	E0382:7
+moves/move_in_diverging_branch.rs	ok	0	"ab\n"
+moves/move_in_loop_not_reassigned.rs	E0382:4
+moves/move_in_loop_reassigned.rs	ok	0	"ab\n0\n1\n2\n"
+moves/move_out_of_array_index.rs	E0508:3
+moves/move_out_of_drop_type.rs	E0509:11
+moves/move_out_of_index_field.rs	E0507:8
+moves/move_out_of_nested_drop_type.rs	E0509:15
+moves/move_out_of_ref_field.rs	E0507:6
+moves/move_out_of_ref_nested_field.rs	E0507:12
+moves/move_out_of_vec_index.rs	E0507:3
+moves/move_whole_out_of_drop_field.rs	ok	0	"ab c\n"
+moves/moved_parts_then_run.rs	ok	0	"[1, 9] a b c\n"
+moves/nested_field_moved_in_branch.rs	E0382:20
+moves/nested_field_moved_in_branch_other_used.rs	ok	0	"cde\nab\n"
+moves/nested_field_moved_other_used.rs	ok	0	"ab f cde\n"
+moves/nested_field_moved_parent_used.rs	E0382:17
+moves/nested_field_moved_reassigned.rs	ok	0	"ab g f cde\n"
+moves/nested_field_moved_same_used.rs	E0382:17
+moves/nested_field_moved_while_parent_borrowed.rs	E0505:17
+moves/nested_field_moved_whole_used.rs	E0382:19
+moves/nested_field_parent_moved_child_used.rs	E0382:17
+moves/nested_field_parent_moved_sibling_used.rs	ok	0	"f cde\n"
+moves/nested_partial_move_method_on_parent.rs	E0382:23
+moves/nested_tuple_in_struct_moved.rs	ok	0	"ab cde\n"
+moves/nested_tuple_in_struct_moved_again.rs	E0382:8
+moves/option_cmp_then_used.rs	ok	0	"true Some(\"ab\") Some(\"c\")\n"
+moves/option_is_some_and_then_used.rs	E0382:4
+moves/option_take_then_used.rs	ok	0	"Some(\"ab\") None\n"
+moves/option_unwrap_in_loop.rs	E0382:4
+moves/partial_move_both_fields_reassigned.rs	ok	0	"cde ab\n"
+moves/partial_move_both_fields_then_whole.rs	E0382:10
+moves/partial_move_method_call_on_whole.rs	E0382:15
+moves/partial_move_then_whole_borrowed_in_branch.rs	ok	0	"ab\ncde\n"
+moves/partial_move_whole_reassigned.rs	ok	0	"ab f\n"
+moves/rc_field_cloned.rs	ok	0	"[1] [1]\n"
+moves/rc_field_moved.rs	E0507:9
+moves/ref_copy_option_map.rs	ok	0	"3\n"
+moves/ref_option_as_ref_map.rs	ok	0	"2\n"
+moves/ref_option_map_moves_out.rs	E0507:2
+moves/result_unwrap_local_then_used.rs	E0382:4
+moves/return_moves_field_behind_ref.rs	E0507:7
+moves/shorthand_after_read.rs	ok	0	"[1, 2] 2\n"
+moves/shorthand_copy_then_used.rs	ok	0	"3 3\n"
+moves/shorthand_moves_local.rs	E0382:8
+moves/shorthand_then_used.rs	E0382:8
+moves/try_operand_moved.rs	E0382:3
+moves/tuple_copy_member_then_whole.rs	ok	0	"3 cde\n"
+moves/tuple_member_moved_borrowed_other.rs	ok	0	"ab cde\n"
+moves/tuple_member_moved_borrowed_whole.rs	E0382:4
+moves/tuple_member_moved_other_used.rs	ok	0	"ab cde\n"
+moves/tuple_member_moved_reassigned.rs	ok	0	"ab f cde\n"
+moves/tuple_member_moved_same_used.rs	E0382:4
+moves/tuple_member_moved_while_borrowed.rs	E0505:4
+moves/tuple_member_moved_whole_used.rs	E0382:4
+moves/unwrap_copy_option_then_used.rs	ok	0	"3 Some(3)\n"
+moves/unwrap_local_reassigned_both.rs	ok	0	"ab Some(\"c\")\n"
+moves/unwrap_local_reassigned_in_branch.rs	E0382:7
+moves/unwrap_local_then_used.rs	E0382:4
+moves/unwrap_or_local_then_used.rs	E0382:4
+moves/vec_into_iter_then_used.rs	E0382:4
+moves/vec_iter_then_used.rs	ok	0	"1 1\n"
+moves/vec_temporary_index_moved.rs	E0507:2
+moves/while_let_payload_reassigned.rs	ok	0	"ab\n"
+moves/while_let_payload_reassigned_in_branch.rs	E0382:3
+moves/mutations/assign_after_last_use_x_5_bound_by_ref.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_after.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_and_given_back.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_and_given_back_in_loop.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_before.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_by_block_tail.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_by_match.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_in_loop.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_on_branch.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_5_moved_on_diverging_branch.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_bound_by_ref.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_after.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_and_given_back.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_and_given_back_in_loop.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_before.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_by_block_tail.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_by_match.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_in_loop.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_on_branch.rs	ok	0	"3\n"
+moves/mutations/assign_after_last_use_x_6_moved_on_diverging_branch.rs	ok	0	"3\n"
+moves/mutations/assign_borrowed_x_4_bound_by_ref.rs	E0506:5
+moves/mutations/assign_borrowed_x_4_moved_after.rs	E0506:4
+moves/mutations/assign_borrowed_x_4_moved_and_given_back.rs	E0506:5
+moves/mutations/assign_borrowed_x_4_moved_and_given_back_in_loop.rs	E0506:6 E0506:8
+moves/mutations/assign_borrowed_x_4_moved_before.rs	E0506:5
+moves/mutations/assign_borrowed_x_4_moved_by_block_tail.rs	E0506:5
+moves/mutations/assign_borrowed_x_4_moved_by_match.rs	E0506:7
+moves/mutations/assign_borrowed_x_4_moved_in_loop.rs	E0506:9
+moves/mutations/assign_borrowed_x_4_moved_on_branch.rs	E0506:7
+moves/mutations/assign_borrowed_x_4_moved_on_diverging_branch.rs	E0506:8
+moves/mutations/assign_borrowed_x_5_bound_by_ref.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_after.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_and_given_back.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_and_given_back_in_loop.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_before.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_by_block_tail.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_by_match.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_in_loop.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_on_branch.rs	E0506:4
+moves/mutations/assign_borrowed_x_5_moved_on_diverging_branch.rs	E0506:4
+moves/mutations/assign_field_of_moved_s_9_bound_by_ref.rs	E0382:9
+moves/mutations/assign_field_of_moved_s_9_moved_after.rs	E0382:9
+moves/mutations/assign_field_of_moved_s_9_moved_and_given_back.rs	E0382:9
+moves/mutations/assign_field_of_moved_s_9_moved_and_given_back_in_loop.rs	E0382:13
+moves/mutations/assign_field_of_moved_s_9_moved_before.rs	E0382:9 E0382:10
+moves/mutations/assign_field_of_moved_s_9_moved_by_block_tail.rs	E0382:9 E0382:10
+moves/mutations/assign_field_of_moved_s_9_moved_by_match.rs	E0382:10 E0382:12
+moves/mutations/assign_field_of_moved_s_9_moved_in_loop.rs	E0382:14
+moves/mutations/assign_field_of_moved_s_9_moved_on_branch.rs	E0382:10 E0382:12
+moves/mutations/assign_field_of_moved_s_9_moved_on_diverging_branch.rs	E0382:13
+moves/mutations/block_scope_dead_v_7_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_7_moved_after.rs	E0382:9
+moves/mutations/block_scope_dead_v_7_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_7_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_7_moved_before.rs	E0382:8
+moves/mutations/block_scope_dead_v_7_moved_by_block_tail.rs	E0382:8
+moves/mutations/block_scope_dead_v_7_moved_by_match.rs	E0382:10
+moves/mutations/block_scope_dead_v_7_moved_in_loop.rs	E0382:12
+moves/mutations/block_scope_dead_v_7_moved_on_branch.rs	E0382:10
+moves/mutations/block_scope_dead_v_7_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_8_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_8_moved_after.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_8_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_8_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/block_scope_dead_v_8_moved_before.rs	E0382:9
+moves/mutations/block_scope_dead_v_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/block_scope_dead_v_8_moved_by_match.rs	E0382:11
+moves/mutations/block_scope_dead_v_8_moved_in_loop.rs	E0382:13
+moves/mutations/block_scope_dead_v_8_moved_on_branch.rs	E0382:11
+moves/mutations/block_scope_dead_v_8_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_7_bound_by_ref.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_7_moved_after.rs	E0382:9
+moves/mutations/branch_value_after_last_use_b_7_moved_and_given_back.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_7_moved_and_given_back_in_loop.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_7_moved_before.rs	E0382:8
+moves/mutations/branch_value_after_last_use_b_7_moved_by_block_tail.rs	E0382:8
+moves/mutations/branch_value_after_last_use_b_7_moved_by_match.rs	E0382:10
+moves/mutations/branch_value_after_last_use_b_7_moved_in_loop.rs	E0382:12
+moves/mutations/branch_value_after_last_use_b_7_moved_on_branch.rs	E0382:10
+moves/mutations/branch_value_after_last_use_b_7_moved_on_diverging_branch.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_8_bound_by_ref.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_8_moved_after.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_8_moved_and_given_back.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_8_moved_and_given_back_in_loop.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_after_last_use_b_8_moved_before.rs	E0382:9
+moves/mutations/branch_value_after_last_use_b_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/branch_value_after_last_use_b_8_moved_by_match.rs	E0382:11
+moves/mutations/branch_value_after_last_use_b_8_moved_in_loop.rs	E0382:13
+moves/mutations/branch_value_after_last_use_b_8_moved_on_branch.rs	E0382:11
+moves/mutations/branch_value_after_last_use_b_8_moved_on_diverging_branch.rs	ok	0	"1\n[2, 3]\n"
+moves/mutations/branch_value_holds_both_b_6_bound_by_ref.rs	E0502:7
+moves/mutations/branch_value_holds_both_b_6_moved_after.rs	E0502:6 E0505:7
+moves/mutations/branch_value_holds_both_b_6_moved_and_given_back.rs	E0505:6 E0506:7
+moves/mutations/branch_value_holds_both_b_6_moved_and_given_back_in_loop.rs	E0505:7 E0506:8 E0502:10
+moves/mutations/branch_value_holds_both_b_6_moved_before.rs	E0505:6 E0382:7 E0502:7
+moves/mutations/branch_value_holds_both_b_6_moved_by_block_tail.rs	E0505:6 E0382:7 E0502:7
+moves/mutations/branch_value_holds_both_b_6_moved_by_match.rs	E0505:7 E0382:9 E0502:9
+moves/mutations/branch_value_holds_both_b_6_moved_in_loop.rs	E0505:8 E0382:11 E0502:11
+moves/mutations/branch_value_holds_both_b_6_moved_on_branch.rs	E0505:7 E0382:9 E0502:9
+moves/mutations/branch_value_holds_both_b_6_moved_on_diverging_branch.rs	E0502:10
+moves/mutations/break_continue_end_paths_v_16_bound_by_ref.rs	ok	0	"[1, 1, 3, 9]\n"
+moves/mutations/break_continue_end_paths_v_16_moved_after.rs	ok	0	"[1, 1, 3, 9]\n"
+moves/mutations/break_continue_end_paths_v_16_moved_and_given_back.rs	ok	0	"[1, 1, 3, 9]\n"
+moves/mutations/break_continue_end_paths_v_16_moved_and_given_back_in_loop.rs	ok	0	"[1, 1, 3, 9]\n"
+moves/mutations/break_continue_end_paths_v_16_moved_before.rs	E0382:17
+moves/mutations/break_continue_end_paths_v_16_moved_by_block_tail.rs	E0382:17
+moves/mutations/break_continue_end_paths_v_16_moved_by_match.rs	E0382:19
+moves/mutations/break_continue_end_paths_v_16_moved_in_loop.rs	E0382:21
+moves/mutations/break_continue_end_paths_v_16_moved_on_branch.rs	E0382:19
+moves/mutations/break_continue_end_paths_v_16_moved_on_diverging_branch.rs	ok	0	"[1, 1, 3, 9]\n"
+moves/mutations/closure_inline_use_v_5_bound_by_ref.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_5_moved_after.rs	E0382:7
+moves/mutations/closure_inline_use_v_5_moved_and_given_back.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_5_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_5_moved_before.rs	E0382:6
+moves/mutations/closure_inline_use_v_5_moved_by_block_tail.rs	E0382:6
+moves/mutations/closure_inline_use_v_5_moved_by_match.rs	E0382:8
+moves/mutations/closure_inline_use_v_5_moved_in_loop.rs	E0382:10
+moves/mutations/closure_inline_use_v_5_moved_on_branch.rs	E0382:8
+moves/mutations/closure_inline_use_v_5_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_6_bound_by_ref.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_6_moved_after.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_6_moved_and_given_back.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_6_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/closure_inline_use_v_6_moved_before.rs	E0382:7
+moves/mutations/closure_inline_use_v_6_moved_by_block_tail.rs	E0382:7
+moves/mutations/closure_inline_use_v_6_moved_by_match.rs	E0382:9
+moves/mutations/closure_inline_use_v_6_moved_in_loop.rs	E0382:11
+moves/mutations/closure_inline_use_v_6_moved_on_branch.rs	E0382:9
+moves/mutations/closure_inline_use_v_6_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3, 3] [2, 4, 6]\n"
+moves/mutations/element_method_cs_12_bound_by_ref.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_12_moved_after.rs	E0382:14
+moves/mutations/element_method_cs_12_moved_and_given_back.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_12_moved_and_given_back_in_loop.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_12_moved_before.rs	E0382:13
+moves/mutations/element_method_cs_12_moved_by_block_tail.rs	E0382:13
+moves/mutations/element_method_cs_12_moved_by_match.rs	E0382:15
+moves/mutations/element_method_cs_12_moved_in_loop.rs	E0382:17
+moves/mutations/element_method_cs_12_moved_on_branch.rs	E0382:15
+moves/mutations/element_method_cs_12_moved_on_diverging_branch.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_13_bound_by_ref.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_13_moved_after.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_13_moved_and_given_back.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_13_moved_and_given_back_in_loop.rs	ok	0	"[1]\n"
+moves/mutations/element_method_cs_13_moved_before.rs	E0382:14
+moves/mutations/element_method_cs_13_moved_by_block_tail.rs	E0382:14
+moves/mutations/element_method_cs_13_moved_by_match.rs	E0382:16
+moves/mutations/element_method_cs_13_moved_in_loop.rs	E0382:18
+moves/mutations/element_method_cs_13_moved_on_branch.rs	E0382:16
+moves/mutations/element_method_cs_13_moved_on_diverging_branch.rs	ok	0	"[1]\n"
+moves/mutations/element_method_while_borrowed_cs_12_bound_by_ref.rs	E0502:13
+moves/mutations/element_method_while_borrowed_cs_12_moved_after.rs	E0502:12 E0505:13
+moves/mutations/element_method_while_borrowed_cs_12_moved_and_given_back.rs	E0505:12 E0506:13
+moves/mutations/element_method_while_borrowed_cs_12_moved_and_given_back_in_loop.rs	E0505:13 E0506:14 E0502:16
+moves/mutations/element_method_while_borrowed_cs_12_moved_before.rs	E0505:12 E0502:13 E0382:13
+moves/mutations/element_method_while_borrowed_cs_12_moved_by_block_tail.rs	E0505:12 E0502:13 E0382:13
+moves/mutations/element_method_while_borrowed_cs_12_moved_by_match.rs	E0505:13 E0502:15 E0382:15
+moves/mutations/element_method_while_borrowed_cs_12_moved_in_loop.rs	E0505:14 E0502:17 E0382:17
+moves/mutations/element_method_while_borrowed_cs_12_moved_on_branch.rs	E0505:13 E0502:15 E0382:15
+moves/mutations/element_method_while_borrowed_cs_12_moved_on_diverging_branch.rs	E0502:16
+moves/mutations/field_conflict_s_10_bound_by_ref.rs	E0503:8
+moves/mutations/field_conflict_s_10_moved_after.rs	E0503:8
+moves/mutations/field_conflict_s_10_moved_and_given_back.rs	E0503:8
+moves/mutations/field_conflict_s_10_moved_and_given_back_in_loop.rs	E0503:8
+moves/mutations/field_conflict_s_10_moved_before.rs	E0503:8 E0382:11
+moves/mutations/field_conflict_s_10_moved_by_block_tail.rs	E0503:8 E0382:11
+moves/mutations/field_conflict_s_10_moved_by_match.rs	E0503:8 E0382:13
+moves/mutations/field_conflict_s_10_moved_in_loop.rs	E0503:8 E0382:15
+moves/mutations/field_conflict_s_10_moved_on_branch.rs	E0503:8 E0382:13
+moves/mutations/field_conflict_s_10_moved_on_diverging_branch.rs	E0503:8
+moves/mutations/field_conflict_s_8_bound_by_ref.rs	E0502:8 E0503:9
+moves/mutations/field_conflict_s_8_moved_after.rs	E0503:8 E0382:11
+moves/mutations/field_conflict_s_8_moved_and_given_back.rs	E0505:8 E0506:9
+moves/mutations/field_conflict_s_8_moved_and_given_back_in_loop.rs	E0505:9 E0506:10 E0503:12
+moves/mutations/field_conflict_s_8_moved_before.rs	E0505:8 E0503:9 E0382:11
+moves/mutations/field_conflict_s_8_moved_by_block_tail.rs	E0505:8 E0503:9 E0382:11
+moves/mutations/field_conflict_s_8_moved_by_match.rs	E0505:9 E0503:11 E0382:13
+moves/mutations/field_conflict_s_8_moved_in_loop.rs	E0505:10 E0503:13 E0382:15
+moves/mutations/field_conflict_s_8_moved_on_branch.rs	E0505:9 E0503:11 E0382:13
+moves/mutations/field_conflict_s_8_moved_on_diverging_branch.rs	E0503:12
+moves/mutations/fields_apart_s_10_bound_by_ref.rs	ok	0	"101 12\n"
+moves/mutations/fields_apart_s_10_moved_after.rs	ok	0	"101 12\n"
+moves/mutations/fields_apart_s_10_moved_and_given_back.rs	ok	0	"101 12\n"
+moves/mutations/fields_apart_s_10_moved_and_given_back_in_loop.rs	ok	0	"101 12\n"
+moves/mutations/fields_apart_s_10_moved_before.rs	E0382:11
+moves/mutations/fields_apart_s_10_moved_by_block_tail.rs	E0382:11
+moves/mutations/fields_apart_s_10_moved_by_match.rs	E0382:13
+moves/mutations/fields_apart_s_10_moved_in_loop.rs	E0382:15
+moves/mutations/fields_apart_s_10_moved_on_branch.rs	E0382:13
+moves/mutations/fields_apart_s_10_moved_on_diverging_branch.rs	ok	0	"101 12\n"
+moves/mutations/fields_apart_s_8_bound_by_ref.rs	E0502:8
+moves/mutations/fields_apart_s_8_moved_after.rs	E0505:9 E0382:11
+moves/mutations/fields_apart_s_8_moved_and_given_back.rs	E0505:8 E0506:9
+moves/mutations/fields_apart_s_8_moved_and_given_back_in_loop.rs	E0505:9 E0506:10
+moves/mutations/fields_apart_s_8_moved_before.rs	E0505:8 E0382:11
+moves/mutations/fields_apart_s_8_moved_by_block_tail.rs	E0505:8 E0382:11
+moves/mutations/fields_apart_s_8_moved_by_match.rs	E0505:9 E0382:13
+moves/mutations/fields_apart_s_8_moved_in_loop.rs	E0505:10 E0382:15
+moves/mutations/fields_apart_s_8_moved_on_branch.rs	E0505:9 E0382:13
+moves/mutations/fields_apart_s_8_moved_on_diverging_branch.rs	ok	0	"101 12\n"
+moves/mutations/for_element_moved_each_iteration_total_10_bound_by_ref.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_after.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_and_given_back.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_and_given_back_in_loop.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_before.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_by_block_tail.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_by_match.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_in_loop.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_on_branch.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_each_iteration_total_10_moved_on_diverging_branch.rs	ok	0	"5\n"
+moves/mutations/for_element_moved_twice_total_11_bound_by_ref.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_after.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_and_given_back.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_and_given_back_in_loop.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_before.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_by_block_tail.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_by_match.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_in_loop.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_on_branch.rs	E0382:9
+moves/mutations/for_element_moved_twice_total_11_moved_on_diverging_branch.rs	E0382:9
+moves/mutations/for_over_shared_borrow_mutated_v_8_bound_by_ref.rs	E0502:5
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_after.rs	E0502:5
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_and_given_back.rs	E0502:5
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_and_given_back_in_loop.rs	E0502:5
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_before.rs	E0502:5 E0382:9
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_by_block_tail.rs	E0502:5 E0382:9
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_by_match.rs	E0502:5 E0382:11
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_in_loop.rs	E0502:5 E0382:13
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_on_branch.rs	E0502:5 E0382:11
+moves/mutations/for_over_shared_borrow_mutated_v_8_moved_on_diverging_branch.rs	E0502:5
+moves/mutations/for_over_shared_borrow_total_7_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_after.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_before.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_by_block_tail.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_by_match.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_on_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_total_7_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_7_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_7_moved_after.rs	E0382:9
+moves/mutations/for_over_shared_borrow_v_7_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_7_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_7_moved_before.rs	E0382:8
+moves/mutations/for_over_shared_borrow_v_7_moved_by_block_tail.rs	E0382:8
+moves/mutations/for_over_shared_borrow_v_7_moved_by_match.rs	E0382:10
+moves/mutations/for_over_shared_borrow_v_7_moved_in_loop.rs	E0382:12
+moves/mutations/for_over_shared_borrow_v_7_moved_on_branch.rs	E0382:10
+moves/mutations/for_over_shared_borrow_v_7_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_8_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_8_moved_after.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_8_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_8_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_over_shared_borrow_v_8_moved_before.rs	E0382:9
+moves/mutations/for_over_shared_borrow_v_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/for_over_shared_borrow_v_8_moved_by_match.rs	E0382:11
+moves/mutations/for_over_shared_borrow_v_8_moved_in_loop.rs	E0382:13
+moves/mutations/for_over_shared_borrow_v_8_moved_on_branch.rs	E0382:11
+moves/mutations/for_over_shared_borrow_v_8_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_bound_by_ref.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_after.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_and_given_back.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_and_given_back_in_loop.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_before.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_by_block_tail.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_by_match.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_in_loop.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_on_branch.rs	ok	0	"8\n"
+moves/mutations/for_pattern_moved_each_iteration_total_10_moved_on_diverging_branch.rs	ok	0	"8\n"
+moves/mutations/holder_copy_keeps_borrow_v_5_bound_by_ref.rs	E0502:6
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_after.rs	E0502:5 E0505:6
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_and_given_back.rs	E0505:5 E0506:6
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_and_given_back_in_loop.rs	E0505:6 E0506:7 E0502:9
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_before.rs	E0505:5 E0382:6 E0502:6
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_by_block_tail.rs	E0505:5 E0382:6 E0502:6
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_by_match.rs	E0505:6 E0382:8 E0502:8
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_in_loop.rs	E0505:7 E0382:10 E0502:10
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_on_branch.rs	E0505:6 E0382:8 E0502:8
+moves/mutations/holder_copy_keeps_borrow_v_5_moved_on_diverging_branch.rs	E0502:9
+moves/mutations/holder_reassigned_a_7_bound_by_ref.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_7_moved_after.rs	E0382:9
+moves/mutations/holder_reassigned_a_7_moved_and_given_back.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_7_moved_and_given_back_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_7_moved_before.rs	E0382:8
+moves/mutations/holder_reassigned_a_7_moved_by_block_tail.rs	E0382:8
+moves/mutations/holder_reassigned_a_7_moved_by_match.rs	E0382:10
+moves/mutations/holder_reassigned_a_7_moved_in_loop.rs	E0382:12
+moves/mutations/holder_reassigned_a_7_moved_on_branch.rs	E0382:10
+moves/mutations/holder_reassigned_a_7_moved_on_diverging_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_8_bound_by_ref.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_8_moved_after.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_8_moved_and_given_back.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_8_moved_and_given_back_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_a_8_moved_before.rs	E0382:9
+moves/mutations/holder_reassigned_a_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/holder_reassigned_a_8_moved_by_match.rs	E0382:11
+moves/mutations/holder_reassigned_a_8_moved_in_loop.rs	E0382:13
+moves/mutations/holder_reassigned_a_8_moved_on_branch.rs	E0382:11
+moves/mutations/holder_reassigned_a_8_moved_on_diverging_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_bound_by_ref.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_after.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_and_given_back.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_and_given_back_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_before.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_by_block_tail.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_by_match.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_on_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_5_moved_on_diverging_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_bound_by_ref.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_after.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_and_given_back.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_and_given_back_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_before.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_by_block_tail.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_by_match.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_in_loop.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_on_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/holder_reassigned_r_6_moved_on_diverging_branch.rs	ok	0	"1\n1 [1, 3]\n"
+moves/mutations/index_assign_after_last_use_v_5_bound_by_ref.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_5_moved_after.rs	E0382:7
+moves/mutations/index_assign_after_last_use_v_5_moved_and_given_back.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_5_moved_and_given_back_in_loop.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_5_moved_before.rs	E0382:6
+moves/mutations/index_assign_after_last_use_v_5_moved_by_block_tail.rs	E0382:6
+moves/mutations/index_assign_after_last_use_v_5_moved_by_match.rs	E0382:8
+moves/mutations/index_assign_after_last_use_v_5_moved_in_loop.rs	E0382:10
+moves/mutations/index_assign_after_last_use_v_5_moved_on_branch.rs	E0382:8
+moves/mutations/index_assign_after_last_use_v_5_moved_on_diverging_branch.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_6_bound_by_ref.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_6_moved_after.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_6_moved_and_given_back.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_6_moved_and_given_back_in_loop.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_after_last_use_v_6_moved_before.rs	E0382:7
+moves/mutations/index_assign_after_last_use_v_6_moved_by_block_tail.rs	E0382:7
+moves/mutations/index_assign_after_last_use_v_6_moved_by_match.rs	E0382:9
+moves/mutations/index_assign_after_last_use_v_6_moved_in_loop.rs	E0382:11
+moves/mutations/index_assign_after_last_use_v_6_moved_on_branch.rs	E0382:9
+moves/mutations/index_assign_after_last_use_v_6_moved_on_diverging_branch.rs	ok	0	"1 [5, 2]\n"
+moves/mutations/index_assign_borrowed_v_4_bound_by_ref.rs	E0502:5
+moves/mutations/index_assign_borrowed_v_4_moved_after.rs	E0502:4 E0505:5
+moves/mutations/index_assign_borrowed_v_4_moved_and_given_back.rs	E0505:4 E0506:5
+moves/mutations/index_assign_borrowed_v_4_moved_and_given_back_in_loop.rs	E0505:5 E0506:6 E0502:8
+moves/mutations/index_assign_borrowed_v_4_moved_before.rs	E0505:4 E0502:5 E0382:5
+moves/mutations/index_assign_borrowed_v_4_moved_by_block_tail.rs	E0505:4 E0502:5 E0382:5
+moves/mutations/index_assign_borrowed_v_4_moved_by_match.rs	E0505:5 E0502:7 E0382:7
+moves/mutations/index_assign_borrowed_v_4_moved_in_loop.rs	E0505:6 E0502:9 E0382:9
+moves/mutations/index_assign_borrowed_v_4_moved_on_branch.rs	E0505:5 E0502:7 E0382:7
+moves/mutations/index_assign_borrowed_v_4_moved_on_diverging_branch.rs	E0502:8
+moves/mutations/index_assign_index_reads_v_3_bound_by_ref.rs	E0502:4
+moves/mutations/index_assign_index_reads_v_3_moved_after.rs	E0502:3 E0382:5
+moves/mutations/index_assign_index_reads_v_3_moved_and_given_back.rs	E0502:5
+moves/mutations/index_assign_index_reads_v_3_moved_and_given_back_in_loop.rs	E0502:7
+moves/mutations/index_assign_index_reads_v_3_moved_before.rs	E0382:4 E0502:4
+moves/mutations/index_assign_index_reads_v_3_moved_by_block_tail.rs	E0382:4 E0502:4
+moves/mutations/index_assign_index_reads_v_3_moved_by_match.rs	E0382:6 E0502:6
+moves/mutations/index_assign_index_reads_v_3_moved_in_loop.rs	E0382:8 E0502:8
+moves/mutations/index_assign_index_reads_v_3_moved_on_branch.rs	E0382:6 E0502:6
+moves/mutations/index_assign_index_reads_v_3_moved_on_diverging_branch.rs	E0502:7
+moves/mutations/index_assign_index_reads_v_4_bound_by_ref.rs	E0502:3
+moves/mutations/index_assign_index_reads_v_4_moved_after.rs	E0502:3
+moves/mutations/index_assign_index_reads_v_4_moved_and_given_back.rs	E0502:3
+moves/mutations/index_assign_index_reads_v_4_moved_and_given_back_in_loop.rs	E0502:3
+moves/mutations/index_assign_index_reads_v_4_moved_before.rs	E0502:3 E0382:5
+moves/mutations/index_assign_index_reads_v_4_moved_by_block_tail.rs	E0502:3 E0382:5
+moves/mutations/index_assign_index_reads_v_4_moved_by_match.rs	E0502:3 E0382:7
+moves/mutations/index_assign_index_reads_v_4_moved_in_loop.rs	E0502:3 E0382:9
+moves/mutations/index_assign_index_reads_v_4_moved_on_branch.rs	E0502:3 E0382:7
+moves/mutations/index_assign_index_reads_v_4_moved_on_diverging_branch.rs	E0502:3
+moves/mutations/labeled_break_v_14_bound_by_ref.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_14_moved_after.rs	E0382:16
+moves/mutations/labeled_break_v_14_moved_and_given_back.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_14_moved_and_given_back_in_loop.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_14_moved_before.rs	E0382:15
+moves/mutations/labeled_break_v_14_moved_by_block_tail.rs	E0382:15
+moves/mutations/labeled_break_v_14_moved_by_match.rs	E0382:17
+moves/mutations/labeled_break_v_14_moved_in_loop.rs	E0382:19
+moves/mutations/labeled_break_v_14_moved_on_branch.rs	E0382:17
+moves/mutations/labeled_break_v_14_moved_on_diverging_branch.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_15_bound_by_ref.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_15_moved_after.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_15_moved_and_given_back.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_15_moved_and_given_back_in_loop.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_break_v_15_moved_before.rs	E0382:16
+moves/mutations/labeled_break_v_15_moved_by_block_tail.rs	E0382:16
+moves/mutations/labeled_break_v_15_moved_by_match.rs	E0382:18
+moves/mutations/labeled_break_v_15_moved_in_loop.rs	E0382:20
+moves/mutations/labeled_break_v_15_moved_on_branch.rs	E0382:18
+moves/mutations/labeled_break_v_15_moved_on_diverging_branch.rs	ok	0	"[1, 1, 2, 7]\n"
+moves/mutations/labeled_continue_conflict_v_13_bound_by_ref.rs	E0499:8
+moves/mutations/labeled_continue_conflict_v_13_moved_after.rs	E0499:8
+moves/mutations/labeled_continue_conflict_v_13_moved_and_given_back.rs	E0499:8
+moves/mutations/labeled_continue_conflict_v_13_moved_and_given_back_in_loop.rs	E0499:8
+moves/mutations/labeled_continue_conflict_v_13_moved_before.rs	E0499:8 E0382:14
+moves/mutations/labeled_continue_conflict_v_13_moved_by_block_tail.rs	E0499:8 E0382:14
+moves/mutations/labeled_continue_conflict_v_13_moved_by_match.rs	E0499:8 E0382:16
+moves/mutations/labeled_continue_conflict_v_13_moved_in_loop.rs	E0499:8 E0382:18
+moves/mutations/labeled_continue_conflict_v_13_moved_on_branch.rs	E0499:8 E0382:16
+moves/mutations/labeled_continue_conflict_v_13_moved_on_diverging_branch.rs	E0499:8
+moves/mutations/last_use_ends_borrow_v_5_bound_by_ref.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_5_moved_after.rs	E0382:7
+moves/mutations/last_use_ends_borrow_v_5_moved_and_given_back.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_5_moved_and_given_back_in_loop.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_5_moved_before.rs	E0382:6
+moves/mutations/last_use_ends_borrow_v_5_moved_by_block_tail.rs	E0382:6
+moves/mutations/last_use_ends_borrow_v_5_moved_by_match.rs	E0382:8
+moves/mutations/last_use_ends_borrow_v_5_moved_in_loop.rs	E0382:10
+moves/mutations/last_use_ends_borrow_v_5_moved_on_branch.rs	E0382:8
+moves/mutations/last_use_ends_borrow_v_5_moved_on_diverging_branch.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_8_bound_by_ref.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_8_moved_after.rs	E0382:10
+moves/mutations/last_use_ends_borrow_v_8_moved_and_given_back.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_8_moved_and_given_back_in_loop.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/last_use_ends_borrow_v_8_moved_before.rs	E0382:9
+moves/mutations/last_use_ends_borrow_v_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/last_use_ends_borrow_v_8_moved_by_match.rs	E0382:11
+moves/mutations/last_use_ends_borrow_v_8_moved_in_loop.rs	E0382:13
+moves/mutations/last_use_ends_borrow_v_8_moved_on_branch.rs	E0382:11
+moves/mutations/last_use_ends_borrow_v_8_moved_on_diverging_branch.rs	ok	0	"2 [1, 2, 3, 4, 5]\n"
+moves/mutations/loop_borrow_carried_conflict_a_12_bound_by_ref.rs	E0499:7
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_after.rs	E0499:7
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_and_given_back.rs	E0499:7
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_and_given_back_in_loop.rs	E0499:7
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_before.rs	E0499:7 E0382:13
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_by_block_tail.rs	E0499:7 E0382:13
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_by_match.rs	E0499:7 E0382:15
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_in_loop.rs	E0499:7 E0382:17
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_on_branch.rs	E0499:7 E0382:15
+moves/mutations/loop_borrow_carried_conflict_a_12_moved_on_diverging_branch.rs	E0499:7
+moves/mutations/loop_borrow_carried_into_next_a_14_bound_by_ref.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_after.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_and_given_back.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_and_given_back_in_loop.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_before.rs	E0382:15
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_by_block_tail.rs	E0382:15
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_by_match.rs	E0382:17
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_in_loop.rs	E0382:19
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_on_branch.rs	E0382:17
+moves/mutations/loop_borrow_carried_into_next_a_14_moved_on_diverging_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_13_bound_by_ref.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_after.rs	E0382:15
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_and_given_back.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_and_given_back_in_loop.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_before.rs	E0382:14
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_by_block_tail.rs	E0382:14
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_by_match.rs	E0382:16
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_in_loop.rs	E0382:18
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_on_branch.rs	E0382:16
+moves/mutations/loop_borrow_carried_into_next_b_13_moved_on_diverging_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_14_bound_by_ref.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_after.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_and_given_back.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_and_given_back_in_loop.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_before.rs	E0382:15
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_by_block_tail.rs	E0382:15
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_by_match.rs	E0382:17
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_in_loop.rs	E0382:19
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_on_branch.rs	E0382:17
+moves/mutations/loop_borrow_carried_into_next_b_14_moved_on_diverging_branch.rs	ok	0	"[1, 0] [2, 0, 1, 1, 9]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_bound_by_ref.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_after.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_and_given_back.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_and_given_back_in_loop.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_before.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_by_block_tail.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_by_match.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_in_loop.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_on_branch.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_n_9_moved_on_diverging_branch.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_v_9_bound_by_ref.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_v_9_moved_after.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_v_9_moved_and_given_back.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_v_9_moved_and_given_back_in_loop.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_each_iteration_v_9_moved_before.rs	E0382:10
+moves/mutations/loop_borrow_each_iteration_v_9_moved_by_block_tail.rs	E0382:10
+moves/mutations/loop_borrow_each_iteration_v_9_moved_by_match.rs	E0382:12
+moves/mutations/loop_borrow_each_iteration_v_9_moved_in_loop.rs	E0382:14
+moves/mutations/loop_borrow_each_iteration_v_9_moved_on_branch.rs	E0382:12
+moves/mutations/loop_borrow_each_iteration_v_9_moved_on_diverging_branch.rs	ok	0	"5 [1, 0, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_bound_by_ref.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_after.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_and_given_back.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_and_given_back_in_loop.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_before.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_by_block_tail.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_by_match.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_in_loop.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_on_branch.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/loop_borrow_outlives_iteration_keep_10_moved_on_diverging_branch.rs	ok	0	"[1, 0, 1, 2]\n"
+moves/mutations/match_arm_conflict_v_10_bound_by_ref.rs	E0499:6
+moves/mutations/match_arm_conflict_v_10_moved_after.rs	E0499:6
+moves/mutations/match_arm_conflict_v_10_moved_and_given_back.rs	E0499:6
+moves/mutations/match_arm_conflict_v_10_moved_and_given_back_in_loop.rs	E0499:6
+moves/mutations/match_arm_conflict_v_10_moved_before.rs	E0499:6 E0382:11
+moves/mutations/match_arm_conflict_v_10_moved_by_block_tail.rs	E0499:6 E0382:11
+moves/mutations/match_arm_conflict_v_10_moved_by_match.rs	E0499:6 E0382:13
+moves/mutations/match_arm_conflict_v_10_moved_in_loop.rs	E0499:6 E0382:15
+moves/mutations/match_arm_conflict_v_10_moved_on_branch.rs	E0499:6 E0382:13
+moves/mutations/match_arm_conflict_v_10_moved_on_diverging_branch.rs	E0499:6
+moves/mutations/match_arms_v_9_bound_by_ref.rs	ok	0	"[1, 2, 2]\n"
+moves/mutations/match_arms_v_9_moved_after.rs	ok	0	"[1, 2, 2]\n"
+moves/mutations/match_arms_v_9_moved_and_given_back.rs	ok	0	"[1, 2, 2]\n"
+moves/mutations/match_arms_v_9_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 2]\n"
+moves/mutations/match_arms_v_9_moved_before.rs	E0382:10
+moves/mutations/match_arms_v_9_moved_by_block_tail.rs	E0382:10
+moves/mutations/match_arms_v_9_moved_by_match.rs	E0382:12
+moves/mutations/match_arms_v_9_moved_in_loop.rs	E0382:14
+moves/mutations/match_arms_v_9_moved_on_branch.rs	E0382:12
+moves/mutations/match_arms_v_9_moved_on_diverging_branch.rs	ok	0	"[1, 2, 2]\n"
+moves/mutations/method_two_phase_c_14_bound_by_ref.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_two_phase_c_14_moved_after.rs	E0382:18
+moves/mutations/method_two_phase_c_14_moved_and_given_back.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_two_phase_c_14_moved_and_given_back_in_loop.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_two_phase_c_14_moved_before.rs	E0382:18
+moves/mutations/method_two_phase_c_14_moved_by_block_tail.rs	E0382:18
+moves/mutations/method_two_phase_c_14_moved_by_match.rs	E0382:20
+moves/mutations/method_two_phase_c_14_moved_in_loop.rs	E0382:22
+moves/mutations/method_two_phase_c_14_moved_on_branch.rs	E0382:20
+moves/mutations/method_two_phase_c_14_moved_on_diverging_branch.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_two_phase_c_16_bound_by_ref.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_two_phase_c_16_moved_after.rs	E0382:18
+moves/mutations/method_two_phase_c_16_moved_and_given_back.rs	E0505:16 E0506:17
+moves/mutations/method_two_phase_c_16_moved_and_given_back_in_loop.rs	E0505:17 E0506:18
+moves/mutations/method_two_phase_c_16_moved_before.rs	E0505:16 E0382:18
+moves/mutations/method_two_phase_c_16_moved_by_block_tail.rs	E0505:16 E0382:18
+moves/mutations/method_two_phase_c_16_moved_by_match.rs	E0505:17 E0382:20
+moves/mutations/method_two_phase_c_16_moved_in_loop.rs	E0505:18 E0382:22
+moves/mutations/method_two_phase_c_16_moved_on_branch.rs	E0505:17 E0382:20
+moves/mutations/method_two_phase_c_16_moved_on_diverging_branch.rs	ok	0	"[0, 1]\n"
+moves/mutations/method_while_borrowed_c_15_bound_by_ref.rs	E0502:16
+moves/mutations/method_while_borrowed_c_15_moved_after.rs	E0502:15 E0505:16
+moves/mutations/method_while_borrowed_c_15_moved_and_given_back.rs	E0505:15 E0506:16
+moves/mutations/method_while_borrowed_c_15_moved_and_given_back_in_loop.rs	E0505:16 E0506:17 E0502:19
+moves/mutations/method_while_borrowed_c_15_moved_before.rs	E0505:15 E0382:16 E0502:16
+moves/mutations/method_while_borrowed_c_15_moved_by_block_tail.rs	E0505:15 E0382:16 E0502:16
+moves/mutations/method_while_borrowed_c_15_moved_by_match.rs	E0505:16 E0382:18 E0502:18
+moves/mutations/method_while_borrowed_c_15_moved_in_loop.rs	E0505:17 E0382:20 E0502:20
+moves/mutations/method_while_borrowed_c_15_moved_on_branch.rs	E0505:16 E0382:18 E0502:18
+moves/mutations/method_while_borrowed_c_15_moved_on_diverging_branch.rs	E0502:19
+moves/mutations/move_field_in_loop_reassigned_s_13_bound_by_ref.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_after.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_and_given_back.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_and_given_back_in_loop.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_before.rs	E0382:14
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_by_block_tail.rs	E0382:14
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_by_match.rs	E0382:16
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_in_loop.rs	E0382:18
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_on_branch.rs	E0382:16
+moves/mutations/move_field_in_loop_reassigned_s_13_moved_on_diverging_branch.rs	ok	0	"ab\n0\n1\ncde\n"
+moves/mutations/move_in_loop_reassigned_s_8_bound_by_ref.rs	ok	0	"ab\n0\n1\n2\n"
+moves/mutations/move_in_loop_reassigned_s_8_moved_after.rs	ok	0	"ab\n0\n1\n2\n"
+moves/mutations/move_in_loop_reassigned_s_8_moved_and_given_back.rs	ok	0	"ab\n0\n1\n2\n"
+moves/mutations/move_in_loop_reassigned_s_8_moved_and_given_back_in_loop.rs	ok	0	"ab\n0\n1\n2\n"
+moves/mutations/move_in_loop_reassigned_s_8_moved_before.rs	E0382:9
+moves/mutations/move_in_loop_reassigned_s_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/move_in_loop_reassigned_s_8_moved_by_match.rs	E0382:11
+moves/mutations/move_in_loop_reassigned_s_8_moved_in_loop.rs	E0382:13
+moves/mutations/move_in_loop_reassigned_s_8_moved_on_branch.rs	E0382:11
+moves/mutations/move_in_loop_reassigned_s_8_moved_on_diverging_branch.rs	ok	0	"ab\n0\n1\n2\n"
+moves/mutations/moved_parts_then_run_v_13_bound_by_ref.rs	ok	0	"[1, 9] a b c\n"
+moves/mutations/moved_parts_then_run_v_13_moved_after.rs	ok	0	"[1, 9] a b c\n"
+moves/mutations/moved_parts_then_run_v_13_moved_and_given_back.rs	ok	0	"[1, 9] a b c\n"
+moves/mutations/moved_parts_then_run_v_13_moved_and_given_back_in_loop.rs	ok	0	"[1, 9] a b c\n"
+moves/mutations/moved_parts_then_run_v_13_moved_before.rs	E0382:14
+moves/mutations/moved_parts_then_run_v_13_moved_by_block_tail.rs	E0382:14
+moves/mutations/moved_parts_then_run_v_13_moved_by_match.rs	E0382:16
+moves/mutations/moved_parts_then_run_v_13_moved_in_loop.rs	E0382:18
+moves/mutations/moved_parts_then_run_v_13_moved_on_branch.rs	E0382:16
+moves/mutations/moved_parts_then_run_v_13_moved_on_diverging_branch.rs	ok	0	"[1, 9] a b c\n"
+moves/mutations/mutable_twice_v_7_bound_by_ref.rs	E0499:4
+moves/mutations/mutable_twice_v_7_moved_after.rs	E0499:4
+moves/mutations/mutable_twice_v_7_moved_and_given_back.rs	E0499:4
+moves/mutations/mutable_twice_v_7_moved_and_given_back_in_loop.rs	E0499:4
+moves/mutations/mutable_twice_v_7_moved_before.rs	E0499:4 E0382:8
+moves/mutations/mutable_twice_v_7_moved_by_block_tail.rs	E0499:4 E0382:8
+moves/mutations/mutable_twice_v_7_moved_by_match.rs	E0499:4 E0382:10
+moves/mutations/mutable_twice_v_7_moved_in_loop.rs	E0499:4 E0382:12
+moves/mutations/mutable_twice_v_7_moved_on_branch.rs	E0499:4 E0382:10
+moves/mutations/mutable_twice_v_7_moved_on_diverging_branch.rs	E0499:4
+moves/mutations/option_take_then_used_o_4_bound_by_ref.rs	ok	0	"Some(\"ab\") None\n"
+moves/mutations/option_take_then_used_o_4_moved_after.rs	ok	0	"Some(\"ab\") None\n"
+moves/mutations/option_take_then_used_o_4_moved_and_given_back.rs	ok	0	"Some(\"ab\") None\n"
+moves/mutations/option_take_then_used_o_4_moved_and_given_back_in_loop.rs	ok	0	"Some(\"ab\") None\n"
+moves/mutations/option_take_then_used_o_4_moved_before.rs	E0382:5
+moves/mutations/option_take_then_used_o_4_moved_by_block_tail.rs	E0382:5
+moves/mutations/option_take_then_used_o_4_moved_by_match.rs	E0382:7
+moves/mutations/option_take_then_used_o_4_moved_in_loop.rs	E0382:9
+moves/mutations/option_take_then_used_o_4_moved_on_branch.rs	E0382:7
+moves/mutations/option_take_then_used_o_4_moved_on_diverging_branch.rs	ok	0	"Some(\"ab\") None\n"
+moves/mutations/oracle_branch_arms_v_10_bound_by_ref.rs	ok	0	"[1, 1]\n"
+moves/mutations/oracle_branch_arms_v_10_moved_after.rs	ok	0	"[1, 1]\n"
+moves/mutations/oracle_branch_arms_v_10_moved_and_given_back.rs	ok	0	"[1, 1]\n"
+moves/mutations/oracle_branch_arms_v_10_moved_and_given_back_in_loop.rs	ok	0	"[1, 1]\n"
+moves/mutations/oracle_branch_arms_v_10_moved_before.rs	E0382:11
+moves/mutations/oracle_branch_arms_v_10_moved_by_block_tail.rs	E0382:11
+moves/mutations/oracle_branch_arms_v_10_moved_by_match.rs	E0382:13
+moves/mutations/oracle_branch_arms_v_10_moved_in_loop.rs	E0382:15
+moves/mutations/oracle_branch_arms_v_10_moved_on_branch.rs	E0382:13
+moves/mutations/oracle_branch_arms_v_10_moved_on_diverging_branch.rs	ok	0	"[1, 1]\n"
+moves/mutations/oracle_loop_back_edge_n_12_bound_by_ref.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_after.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_and_given_back.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_and_given_back_in_loop.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_before.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_by_block_tail.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_by_match.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_in_loop.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_on_branch.rs	E0502:7
+moves/mutations/oracle_loop_back_edge_n_12_moved_on_diverging_branch.rs	E0502:7
+moves/mutations/oracle_stale_shared_v_4_bound_by_ref.rs	E0502:5
+moves/mutations/oracle_stale_shared_v_4_moved_after.rs	E0502:4 E0505:5
+moves/mutations/oracle_stale_shared_v_4_moved_and_given_back.rs	E0505:4 E0506:5
+moves/mutations/oracle_stale_shared_v_4_moved_and_given_back_in_loop.rs	E0505:5 E0506:6 E0502:8
+moves/mutations/oracle_stale_shared_v_4_moved_before.rs	E0505:4 E0382:5 E0502:5
+moves/mutations/oracle_stale_shared_v_4_moved_by_block_tail.rs	E0505:4 E0382:5 E0502:5
+moves/mutations/oracle_stale_shared_v_4_moved_by_match.rs	E0505:5 E0382:7 E0502:7
+moves/mutations/oracle_stale_shared_v_4_moved_in_loop.rs	E0505:6 E0382:9 E0502:9
+moves/mutations/oracle_stale_shared_v_4_moved_on_branch.rs	E0505:5 E0382:7 E0502:7
+moves/mutations/oracle_stale_shared_v_4_moved_on_diverging_branch.rs	E0502:8
+moves/mutations/panic_ends_path_ok_v_10_bound_by_ref.rs	ok	0	"[1, 2]\n"
+moves/mutations/panic_ends_path_ok_v_10_moved_after.rs	ok	0	"[1, 2]\n"
+moves/mutations/panic_ends_path_ok_v_10_moved_and_given_back.rs	ok	0	"[1, 2]\n"
+moves/mutations/panic_ends_path_ok_v_10_moved_and_given_back_in_loop.rs	ok	0	"[1, 2]\n"
+moves/mutations/panic_ends_path_ok_v_10_moved_before.rs	E0382:11
+moves/mutations/panic_ends_path_ok_v_10_moved_by_block_tail.rs	E0382:11
+moves/mutations/panic_ends_path_ok_v_10_moved_by_match.rs	E0382:13
+moves/mutations/panic_ends_path_ok_v_10_moved_in_loop.rs	E0382:15
+moves/mutations/panic_ends_path_ok_v_10_moved_on_branch.rs	E0382:13
+moves/mutations/panic_ends_path_ok_v_10_moved_on_diverging_branch.rs	ok	0	"[1, 2]\n"
+moves/mutations/panic_ends_path_v_9_bound_by_ref.rs	E0502:4
+moves/mutations/panic_ends_path_v_9_moved_after.rs	E0502:4
+moves/mutations/panic_ends_path_v_9_moved_and_given_back.rs	E0502:4
+moves/mutations/panic_ends_path_v_9_moved_and_given_back_in_loop.rs	E0502:4
+moves/mutations/panic_ends_path_v_9_moved_before.rs	E0502:4 E0382:10
+moves/mutations/panic_ends_path_v_9_moved_by_block_tail.rs	E0502:4 E0382:10
+moves/mutations/panic_ends_path_v_9_moved_by_match.rs	E0502:4 E0382:12
+moves/mutations/panic_ends_path_v_9_moved_in_loop.rs	E0502:4 E0382:14
+moves/mutations/panic_ends_path_v_9_moved_on_branch.rs	E0502:4 E0382:12
+moves/mutations/panic_ends_path_v_9_moved_on_diverging_branch.rs	E0502:4
+moves/mutations/partial_move_both_fields_reassigned_s_10_bound_by_ref.rs	E0382:10
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_after.rs	E0382:11 E0382:12
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_and_given_back.rs	E0382:10
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_and_given_back_in_loop.rs	E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_before.rs	E0382:10 E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_by_block_tail.rs	E0382:10 E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_by_match.rs	E0382:11 E0382:13
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_in_loop.rs	E0382:15
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_on_branch.rs	E0382:11 E0382:13
+moves/mutations/partial_move_both_fields_reassigned_s_10_moved_on_diverging_branch.rs	E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_11_bound_by_ref.rs	E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_after.rs	E0382:13
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_and_given_back.rs	E0382:11
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_and_given_back_in_loop.rs	E0382:12
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_before.rs	E0382:11 E0382:12
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_by_block_tail.rs	E0382:11 E0382:12
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_by_match.rs	E0382:12 E0382:14
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_in_loop.rs	E0382:16
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_on_branch.rs	E0382:12 E0382:14
+moves/mutations/partial_move_both_fields_reassigned_s_11_moved_on_diverging_branch.rs	E0382:12
+moves/mutations/partial_move_whole_reassigned_s_10_bound_by_ref.rs	ok	0	"ab f\n"
+moves/mutations/partial_move_whole_reassigned_s_10_moved_after.rs	ok	0	"ab f\n"
+moves/mutations/partial_move_whole_reassigned_s_10_moved_and_given_back.rs	ok	0	"ab f\n"
+moves/mutations/partial_move_whole_reassigned_s_10_moved_and_given_back_in_loop.rs	ok	0	"ab f\n"
+moves/mutations/partial_move_whole_reassigned_s_10_moved_before.rs	E0382:11
+moves/mutations/partial_move_whole_reassigned_s_10_moved_by_block_tail.rs	E0382:11
+moves/mutations/partial_move_whole_reassigned_s_10_moved_by_match.rs	E0382:13
+moves/mutations/partial_move_whole_reassigned_s_10_moved_in_loop.rs	E0382:15
+moves/mutations/partial_move_whole_reassigned_s_10_moved_on_branch.rs	E0382:13
+moves/mutations/partial_move_whole_reassigned_s_10_moved_on_diverging_branch.rs	ok	0	"ab f\n"
+moves/mutations/partial_move_whole_reassigned_s_9_bound_by_ref.rs	E0382:9
+moves/mutations/partial_move_whole_reassigned_s_9_moved_after.rs	E0382:11
+moves/mutations/partial_move_whole_reassigned_s_9_moved_and_given_back.rs	E0382:9
+moves/mutations/partial_move_whole_reassigned_s_9_moved_and_given_back_in_loop.rs	E0382:10
+moves/mutations/partial_move_whole_reassigned_s_9_moved_before.rs	E0382:9
+moves/mutations/partial_move_whole_reassigned_s_9_moved_by_block_tail.rs	E0382:9
+moves/mutations/partial_move_whole_reassigned_s_9_moved_by_match.rs	E0382:10
+moves/mutations/partial_move_whole_reassigned_s_9_moved_in_loop.rs	E0382:11
+moves/mutations/partial_move_whole_reassigned_s_9_moved_on_branch.rs	E0382:10
+moves/mutations/partial_move_whole_reassigned_s_9_moved_on_diverging_branch.rs	E0382:10
+moves/mutations/reborrow_conflict_v_7_bound_by_ref.rs	E0499:5
+moves/mutations/reborrow_conflict_v_7_moved_after.rs	E0499:5
+moves/mutations/reborrow_conflict_v_7_moved_and_given_back.rs	E0499:5
+moves/mutations/reborrow_conflict_v_7_moved_and_given_back_in_loop.rs	E0499:5
+moves/mutations/reborrow_conflict_v_7_moved_before.rs	E0499:5 E0382:8
+moves/mutations/reborrow_conflict_v_7_moved_by_block_tail.rs	E0499:5 E0382:8
+moves/mutations/reborrow_conflict_v_7_moved_by_match.rs	E0499:5 E0382:10
+moves/mutations/reborrow_conflict_v_7_moved_in_loop.rs	E0499:5 E0382:12
+moves/mutations/reborrow_conflict_v_7_moved_on_branch.rs	E0499:5 E0382:10
+moves/mutations/reborrow_conflict_v_7_moved_on_diverging_branch.rs	E0499:5
+moves/mutations/reborrow_through_holder_v_7_bound_by_ref.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/reborrow_through_holder_v_7_moved_after.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/reborrow_through_holder_v_7_moved_and_given_back.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/reborrow_through_holder_v_7_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/reborrow_through_holder_v_7_moved_before.rs	E0382:8
+moves/mutations/reborrow_through_holder_v_7_moved_by_block_tail.rs	E0382:8
+moves/mutations/reborrow_through_holder_v_7_moved_by_match.rs	E0382:10
+moves/mutations/reborrow_through_holder_v_7_moved_in_loop.rs	E0382:12
+moves/mutations/reborrow_through_holder_v_7_moved_on_branch.rs	E0382:10
+moves/mutations/reborrow_through_holder_v_7_moved_on_diverging_branch.rs	ok	0	"[1, 2, 3]\n"
+moves/mutations/string_push_after_last_use_s_5_bound_by_ref.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_5_moved_after.rs	E0382:7
+moves/mutations/string_push_after_last_use_s_5_moved_and_given_back.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_5_moved_and_given_back_in_loop.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_5_moved_before.rs	E0382:6
+moves/mutations/string_push_after_last_use_s_5_moved_by_block_tail.rs	E0382:6
+moves/mutations/string_push_after_last_use_s_5_moved_by_match.rs	E0382:8
+moves/mutations/string_push_after_last_use_s_5_moved_in_loop.rs	E0382:10
+moves/mutations/string_push_after_last_use_s_5_moved_on_branch.rs	E0382:8
+moves/mutations/string_push_after_last_use_s_5_moved_on_diverging_branch.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_6_bound_by_ref.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_6_moved_after.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_6_moved_and_given_back.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_6_moved_and_given_back_in_loop.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_after_last_use_s_6_moved_before.rs	E0382:7
+moves/mutations/string_push_after_last_use_s_6_moved_by_block_tail.rs	E0382:7
+moves/mutations/string_push_after_last_use_s_6_moved_by_match.rs	E0382:9
+moves/mutations/string_push_after_last_use_s_6_moved_in_loop.rs	E0382:11
+moves/mutations/string_push_after_last_use_s_6_moved_on_branch.rs	E0382:9
+moves/mutations/string_push_after_last_use_s_6_moved_on_diverging_branch.rs	ok	0	"1 ab\n"
+moves/mutations/string_push_while_borrowed_s_4_bound_by_ref.rs	E0502:5
+moves/mutations/string_push_while_borrowed_s_4_moved_after.rs	E0502:4 E0505:5
+moves/mutations/string_push_while_borrowed_s_4_moved_and_given_back.rs	E0505:4 E0506:5
+moves/mutations/string_push_while_borrowed_s_4_moved_and_given_back_in_loop.rs	E0505:5 E0506:6 E0502:8
+moves/mutations/string_push_while_borrowed_s_4_moved_before.rs	E0505:4 E0382:5 E0502:5
+moves/mutations/string_push_while_borrowed_s_4_moved_by_block_tail.rs	E0505:4 E0382:5 E0502:5
+moves/mutations/string_push_while_borrowed_s_4_moved_by_match.rs	E0505:5 E0382:7 E0502:7
+moves/mutations/string_push_while_borrowed_s_4_moved_in_loop.rs	E0505:6 E0382:9 E0502:9
+moves/mutations/string_push_while_borrowed_s_4_moved_on_branch.rs	E0505:5 E0382:7 E0502:7
+moves/mutations/string_push_while_borrowed_s_4_moved_on_diverging_branch.rs	E0502:8
+moves/mutations/strings_best_21_bound_by_ref.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+moves/mutations/strings_best_21_moved_after.rs	E0382:24
+moves/mutations/strings_best_21_moved_and_given_back.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+moves/mutations/strings_best_21_moved_and_given_back_in_loop.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+moves/mutations/strings_best_21_moved_before.rs	E0382:24
+moves/mutations/strings_best_21_moved_by_block_tail.rs	E0382:24
+moves/mutations/strings_best_21_moved_by_match.rs	E0382:26
+moves/mutations/strings_best_21_moved_in_loop.rs	E0382:28
+moves/mutations/strings_best_21_moved_on_branch.rs	E0382:26
+moves/mutations/strings_best_21_moved_on_diverging_branch.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+moves/mutations/try_operator_path_v_9_bound_by_ref.rs	ok	0	"Some(4) [4, 4]\n"
+moves/mutations/try_operator_path_v_9_moved_after.rs	ok	0	"Some(4) [4, 4]\n"
+moves/mutations/try_operator_path_v_9_moved_and_given_back.rs	ok	0	"Some(4) [4, 4]\n"
+moves/mutations/try_operator_path_v_9_moved_and_given_back_in_loop.rs	ok	0	"Some(4) [4, 4]\n"
+moves/mutations/try_operator_path_v_9_moved_before.rs	E0382:10
+moves/mutations/try_operator_path_v_9_moved_by_block_tail.rs	E0382:10
+moves/mutations/try_operator_path_v_9_moved_by_match.rs	E0382:12
+moves/mutations/try_operator_path_v_9_moved_in_loop.rs	E0382:14
+moves/mutations/try_operator_path_v_9_moved_on_branch.rs	E0382:12
+moves/mutations/try_operator_path_v_9_moved_on_diverging_branch.rs	ok	0	"Some(4) [4, 4]\n"
+moves/mutations/tuple_member_moved_reassigned_t_4_bound_by_ref.rs	E0382:4
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_after.rs	E0382:6
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_and_given_back.rs	E0382:4
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_and_given_back_in_loop.rs	E0382:5
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_before.rs	E0382:4 E0382:5
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_by_block_tail.rs	E0382:4 E0382:5
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_by_match.rs	E0382:5 E0382:7
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_in_loop.rs	E0382:9
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_on_branch.rs	E0382:5 E0382:7
+moves/mutations/tuple_member_moved_reassigned_t_4_moved_on_diverging_branch.rs	E0382:5
+moves/mutations/two_phase_holder_arg_v_4_bound_by_ref.rs	E0502:4 E0502:5
+moves/mutations/two_phase_holder_arg_v_4_moved_after.rs	E0502:4 E0382:6
+moves/mutations/two_phase_holder_arg_v_4_moved_and_given_back.rs	E0505:4 E0506:5
+moves/mutations/two_phase_holder_arg_v_4_moved_and_given_back_in_loop.rs	E0505:5 E0506:6 E0502:8
+moves/mutations/two_phase_holder_arg_v_4_moved_before.rs	E0505:4 E0502:5 E0382:5
+moves/mutations/two_phase_holder_arg_v_4_moved_by_block_tail.rs	E0505:4 E0502:5 E0382:5
+moves/mutations/two_phase_holder_arg_v_4_moved_by_match.rs	E0505:5 E0502:7 E0382:7
+moves/mutations/two_phase_holder_arg_v_4_moved_in_loop.rs	E0505:6 E0502:9 E0382:9
+moves/mutations/two_phase_holder_arg_v_4_moved_on_branch.rs	E0505:5 E0502:7 E0382:7
+moves/mutations/two_phase_holder_arg_v_4_moved_on_diverging_branch.rs	E0502:8
+moves/mutations/two_phase_holder_arg_v_5_bound_by_ref.rs	E0502:4
+moves/mutations/two_phase_holder_arg_v_5_moved_after.rs	E0502:4
+moves/mutations/two_phase_holder_arg_v_5_moved_and_given_back.rs	E0502:4
+moves/mutations/two_phase_holder_arg_v_5_moved_and_given_back_in_loop.rs	E0502:4
+moves/mutations/two_phase_holder_arg_v_5_moved_before.rs	E0502:4 E0382:6
+moves/mutations/two_phase_holder_arg_v_5_moved_by_block_tail.rs	E0502:4 E0382:6
+moves/mutations/two_phase_holder_arg_v_5_moved_by_match.rs	E0502:4 E0382:8
+moves/mutations/two_phase_holder_arg_v_5_moved_in_loop.rs	E0502:4 E0382:10
+moves/mutations/two_phase_holder_arg_v_5_moved_on_branch.rs	E0502:4 E0382:8
+moves/mutations/two_phase_holder_arg_v_5_moved_on_diverging_branch.rs	E0502:4
+moves/mutations/two_phase_len_v_3_bound_by_ref.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_len_v_3_moved_after.rs	E0382:5
+moves/mutations/two_phase_len_v_3_moved_and_given_back.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_len_v_3_moved_and_given_back_in_loop.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_len_v_3_moved_before.rs	E0382:4
+moves/mutations/two_phase_len_v_3_moved_by_block_tail.rs	E0382:4
+moves/mutations/two_phase_len_v_3_moved_by_match.rs	E0382:6
+moves/mutations/two_phase_len_v_3_moved_in_loop.rs	E0382:8
+moves/mutations/two_phase_len_v_3_moved_on_branch.rs	E0382:6
+moves/mutations/two_phase_len_v_3_moved_on_diverging_branch.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_len_v_5_bound_by_ref.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_len_v_5_moved_after.rs	E0382:7
+moves/mutations/two_phase_len_v_5_moved_and_given_back.rs	E0505:5 E0506:6
+moves/mutations/two_phase_len_v_5_moved_and_given_back_in_loop.rs	E0505:6 E0506:7
+moves/mutations/two_phase_len_v_5_moved_before.rs	E0505:5 E0382:6
+moves/mutations/two_phase_len_v_5_moved_by_block_tail.rs	E0505:5 E0382:6
+moves/mutations/two_phase_len_v_5_moved_by_match.rs	E0505:6 E0382:8
+moves/mutations/two_phase_len_v_5_moved_in_loop.rs	E0505:7 E0382:10
+moves/mutations/two_phase_len_v_5_moved_on_branch.rs	E0505:6 E0382:8
+moves/mutations/two_phase_len_v_5_moved_on_diverging_branch.rs	ok	0	"[1, 2, 2, 3]\n"
+moves/mutations/two_phase_mutable_arg_v_7_bound_by_ref.rs	E0499:4
+moves/mutations/two_phase_mutable_arg_v_7_moved_after.rs	E0499:4
+moves/mutations/two_phase_mutable_arg_v_7_moved_and_given_back.rs	E0499:4
+moves/mutations/two_phase_mutable_arg_v_7_moved_and_given_back_in_loop.rs	E0499:4
+moves/mutations/two_phase_mutable_arg_v_7_moved_before.rs	E0499:4 E0382:8
+moves/mutations/two_phase_mutable_arg_v_7_moved_by_block_tail.rs	E0499:4 E0382:8
+moves/mutations/two_phase_mutable_arg_v_7_moved_by_match.rs	E0499:4 E0382:10
+moves/mutations/two_phase_mutable_arg_v_7_moved_in_loop.rs	E0499:4 E0382:12
+moves/mutations/two_phase_mutable_arg_v_7_moved_on_branch.rs	E0499:4 E0382:10
+moves/mutations/two_phase_mutable_arg_v_7_moved_on_diverging_branch.rs	E0499:4
+moves/mutations/unwrap_local_reassigned_both_o_9_bound_by_ref.rs	ok	0	"ab Some(\"c\")\n"
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_after.rs	ok	0	"ab Some(\"c\")\n"
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_and_given_back.rs	ok	0	"ab Some(\"c\")\n"
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_and_given_back_in_loop.rs	ok	0	"ab Some(\"c\")\n"
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_before.rs	E0382:10
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_by_block_tail.rs	E0382:10
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_by_match.rs	E0382:12
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_in_loop.rs	E0382:14
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_on_branch.rs	E0382:12
+moves/mutations/unwrap_local_reassigned_both_o_9_moved_on_diverging_branch.rs	ok	0	"ab Some(\"c\")\n"
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_bound_by_ref.rs	E0382:7
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_after.rs	E0382:7
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_and_given_back.rs	E0382:7
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_and_given_back_in_loop.rs	E0382:11
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_before.rs	E0382:7 E0382:8
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_by_block_tail.rs	E0382:7 E0382:8
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_by_match.rs	E0382:8 E0382:10
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_in_loop.rs	E0382:12
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_on_branch.rs	E0382:8 E0382:10
+moves/mutations/unwrap_local_reassigned_in_branch_o_7_moved_on_diverging_branch.rs	E0382:11
+moves/mutations/use_while_mutably_borrowed_x_6_bound_by_ref.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_after.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_and_given_back.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_and_given_back_in_loop.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_before.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_by_block_tail.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_by_match.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_in_loop.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_on_branch.rs	E0503:4
+moves/mutations/use_while_mutably_borrowed_x_6_moved_on_diverging_branch.rs	E0503:4
+moves/mutations/while_let_borrow_stack_8_bound_by_ref.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_8_moved_after.rs	E0382:10
+moves/mutations/while_let_borrow_stack_8_moved_and_given_back.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_8_moved_and_given_back_in_loop.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_8_moved_before.rs	E0382:9
+moves/mutations/while_let_borrow_stack_8_moved_by_block_tail.rs	E0382:9
+moves/mutations/while_let_borrow_stack_8_moved_by_match.rs	E0382:11
+moves/mutations/while_let_borrow_stack_8_moved_in_loop.rs	E0382:13
+moves/mutations/while_let_borrow_stack_8_moved_on_branch.rs	E0382:11
+moves/mutations/while_let_borrow_stack_8_moved_on_diverging_branch.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_9_bound_by_ref.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_9_moved_after.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_9_moved_and_given_back.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_9_moved_and_given_back_in_loop.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_stack_9_moved_before.rs	E0382:10
+moves/mutations/while_let_borrow_stack_9_moved_by_block_tail.rs	E0382:10
+moves/mutations/while_let_borrow_stack_9_moved_by_match.rs	E0382:12
+moves/mutations/while_let_borrow_stack_9_moved_in_loop.rs	E0382:14
+moves/mutations/while_let_borrow_stack_9_moved_on_branch.rs	E0382:12
+moves/mutations/while_let_borrow_stack_9_moved_on_diverging_branch.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_bound_by_ref.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_after.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_and_given_back.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_and_given_back_in_loop.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_before.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_by_block_tail.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_by_match.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_in_loop.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_on_branch.rs	ok	0	"[6]\n"
+moves/mutations/while_let_borrow_total_8_moved_on_diverging_branch.rs	ok	0	"[6]\n"
+moves/mutations/while_let_conflict_total_11_bound_by_ref.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_after.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_and_given_back.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_and_given_back_in_loop.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_before.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_by_block_tail.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_by_match.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_in_loop.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_on_branch.rs	E0499:8
+moves/mutations/while_let_conflict_total_11_moved_on_diverging_branch.rs	E0499:8
+moves/mutations/word_count_top_12_bound_by_ref.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_12_moved_after.rs	E0382:14
+moves/mutations/word_count_top_12_moved_and_given_back.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_12_moved_and_given_back_in_loop.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_12_moved_before.rs	E0382:13
+moves/mutations/word_count_top_12_moved_by_block_tail.rs	E0382:13
+moves/mutations/word_count_top_12_moved_by_match.rs	E0382:15
+moves/mutations/word_count_top_12_moved_in_loop.rs	E0382:17
+moves/mutations/word_count_top_12_moved_on_branch.rs	E0382:15
+moves/mutations/word_count_top_12_moved_on_diverging_branch.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_16_bound_by_ref.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_16_moved_after.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_16_moved_and_given_back.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_16_moved_and_given_back_in_loop.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/mutations/word_count_top_16_moved_before.rs	E0382:17
+moves/mutations/word_count_top_16_moved_by_block_tail.rs	E0382:17
+moves/mutations/word_count_top_16_moved_by_match.rs	E0382:19
+moves/mutations/word_count_top_16_moved_in_loop.rs	E0382:21
+moves/mutations/word_count_top_16_moved_on_branch.rs	E0382:19
+moves/mutations/word_count_top_16_moved_on_diverging_branch.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+moves/drop_moved_not_reassigned.rs	ok	0	"bx\n"
+moves/drop_reassigned_after_move.rs	E0502:13

@@ -31,13 +31,18 @@ loop's element (E0500, E0501, E0524), `misc/` the cases written for
 `while` condition (E0590) and or-patterns' binding types, `drops/` the
 cases written for drop glue that follows a value's type and for a `Drop`
 value's drop as a use of its borrows, with `drops/mutations/` what
-`mutate.py drops` writes, and `closure-runtime/` the cases written for how
+`mutate.py drops` writes, `closure-runtime/` the cases written for how
 closures run: a copy of a `Copy` closure, a closure passed as
 `&mut impl FnMut`, closures reaching parts of a local a call is changing,
 and calls of a `let mut` local of type `impl Fn` or `fn`, with
 `closure-runtime/mutations/` what `mutate.py` writes from them
-(`mutate.py tests/borrowck/closure-runtime/mutations <cases>`). The harness
-is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
+(`mutate.py tests/borrowck/closure-runtime/mutations <cases>`), and
+`moves/` the cases written for what moves: partial moves of members and
+nested fields, patterns' by-value bindings, methods that take their value,
+block tails, closures' moves out of a capture, moves across branches and
+loops, and moves out of what can't be moved out of (E0382, E0505, E0507,
+E0508, E0509), with `moves/mutations` what `mutate.py moved` writes. The
+harness is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
 
 import json
