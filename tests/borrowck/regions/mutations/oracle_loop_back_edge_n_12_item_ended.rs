@@ -1,0 +1,19 @@
+fn main() {
+    let mut v = vec![1];
+    let r = &mut v;
+    let mut n = 0;
+    loop {
+        r.push(1);
+        n += v.len();
+        if n > 3 {
+            break;
+        }
+    }
+    let __v = vec![&n];
+    let __k = __v.iter().copied().next().unwrap();
+    __see(&__k);
+    println!("{n}");
+}
+
+fn __see<T>(_: &T) {}
+struct __Two<'a, 'b, A, B>(&'a A, &'b B);

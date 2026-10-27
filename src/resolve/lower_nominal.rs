@@ -31418,8 +31418,16 @@ impl<'a> Parser<'a> {
                 }
                 _ => None,
             };
+            let base = (operand.span, operand.ty.clone());
             operand.ty = *target;
             operand.span = span(start, operand.span.end());
+            // `*x` of a `&&T` is the `&T` it refers to.
+            self.part_of(
+                (base.0, &base.1),
+                operand.span,
+                &operand.ty,
+                borrows::PartOf::Deref,
+            );
             if had_place {
                 self.flow().mark_place(operand.span);
             }

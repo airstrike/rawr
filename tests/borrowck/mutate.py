@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write mutations of rawr's own programs into tests/borrowck/mutations.
 
-    python3 -I tests/borrowck/mutate.py [kept | closures | out sources...]
+    python3 -I tests/borrowck/mutate.py [kept | closures | regions | out sources...]
 
 With an output folder and sources, it mutates those programs into that
 folder instead (`tests/borrowck/patterns/mutations` from the pattern
@@ -11,7 +11,10 @@ statement, into a branch, and across a loop's back edge, and variants
 where the borrow ends first. With `kept`, the borrow is one a call's value
 keeps or a struct, an `Option` or a `Vec` holds, and the variants go to
 `kept-mutations`. With `closures`, the borrow is a closure's capture, or one
-a closure's call returns, and the variants go to `closures/mutations`.
+a closure's call returns, and the variants go to `closures/mutations`. With
+`regions`, the borrow is held at one region position of a value: an item a
+container gives, one lifetime of a type with two, or what an `Option`'s
+`map` returns, and the variants go to `regions/mutations`.
 rustc decides which are errors: run `record.py` on the folder afterwards.
 """
 
@@ -25,8 +28,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 KEPT = sys.argv[1:] == ["kept"]
 CLOSURES = sys.argv[1:] == ["closures"]
+REGIONS = sys.argv[1:] == ["regions"]
 OUT = os.path.join(
-    HERE, "kept-mutations" if KEPT else "closures/mutations" if CLOSURES else "mutations"
+    HERE,
+    "kept-mutations"
+    if KEPT
+    else "closures/mutations"
+    if CLOSURES
+    else "regions/mutations"
+    if REGIONS
+    else "mutations",
 )
 SOURCES = sorted(
     glob.glob(os.path.join(ROOT, "play/tests/fixtures/rust/*.rs"))
@@ -34,6 +45,7 @@ SOURCES = sorted(
     + glob.glob(os.path.join(HERE, "slice1/*.rs"))
     + (glob.glob(os.path.join(HERE, "slice2/*.rs")) if KEPT else [])
     + (glob.glob(os.path.join(HERE, "closures/*.rs")) if CLOSURES else [])
+    + (glob.glob(os.path.join(HERE, "regions/*.rs")) if REGIONS else [])
 )
 HELPERS = """
 fn __touch<T>(_: &mut T) {}
@@ -45,6 +57,10 @@ fn __keep<T>(x: &T) -> &T { x }
 fn __see<T>(_: &T) {}
 fn __c() -> bool { false }
 struct __Hold<'a, T>(&'a T);
+"""
+REGION_HELPERS = """
+fn __see<T>(_: &T) {}
+struct __Two<'a, 'b, A, B>(&'a A, &'b B);
 """
 DECLARATION = re.compile(r"^(\s*)let mut (\w+)\b[^=]*=.*;\s*$")
 PER_LOCAL = 2
@@ -158,6 +174,38 @@ def closure_variants(indent, name, statement):
     }
 
 
+def region_variants(indent, name, statement):
+    """A borrow held at one region position of a value, used past `statement`."""
+    i = indent
+    item = [
+        f"{i}let __v = vec![&{name}];",
+        f"{i}let __k = __v.iter().copied().next().unwrap();",
+    ]
+    return {
+        "item_across": item + [statement, f"{i}__see(&__k);"],
+        "item_ended": item + [f"{i}__see(&__k);", statement],
+        "lifetime_kept": [
+            f"{i}let __u = 0u8;",
+            f"{i}let __p = __Two(&{name}, &__u);",
+            f"{i}let __k = __p.0;",
+            statement,
+            f"{i}__see(&__k);",
+        ],
+        "lifetime_apart": [
+            f"{i}let __u = 0u8;",
+            f"{i}let __p = __Two(&__u, &{name});",
+            f"{i}let __k = __p.0;",
+            statement,
+            f"{i}__see(&__k);",
+        ],
+        "option_map_across": [
+            f"{i}let __k = Some(0).map(|_| &{name});",
+            statement,
+            f"{i}__see(&__k);",
+        ],
+    }
+
+
 def main():
     out, sources = OUT, SOURCES
     if len(sys.argv) > 2:
@@ -175,13 +223,24 @@ def main():
                 continue
             indent, name = declared.group(1), declared.group(2)
             for target in list(statements(lines, start, indent, name))[:PER_LOCAL]:
-                mutate = kept_variants if KEPT else closure_variants if CLOSURES else variants
+                mutate = (
+                    kept_variants
+                    if KEPT
+                    else closure_variants
+                    if CLOSURES
+                    else region_variants
+                    if REGIONS
+                    else variants
+                )
                 written = mutate(indent, name, lines[target])
                 for kind, replacement in written.items():
                     mutated = lines[:target] + replacement + lines[target + 1 :]
                     path = os.path.join(out, f"{stem}_{name}_{target + 1}_{kind}.rs")
                     with open(path, "w", encoding="utf-8") as file:
-                        file.write("\n".join(mutated) + "\n" + (KEPT_HELPERS if KEPT else HELPERS))
+                        helpers = (
+                            KEPT_HELPERS if KEPT else REGION_HELPERS if REGIONS else HELPERS
+                        )
+                        file.write("\n".join(mutated) + "\n" + helpers)
                     count += 1
     # As the repository's other Rust files are.
     written = sorted(glob.glob(os.path.join(out, "*.rs")))

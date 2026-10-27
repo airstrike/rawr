@@ -24,6 +24,8 @@ pub(super) enum PartOf {
     Member(usize),
     /// A crate struct's field, by its slot.
     Field(type_def::Id, usize),
+    /// What a reference or a box holds (`*r`).
+    Deref,
 }
 
 /// Where a part goes in a value made of parts (T127).
@@ -602,6 +604,11 @@ impl Parser<'_> {
         let Some(held) = self.flow().origins(base.0).map(<[(Path, Origin)]>::to_vec) else {
             return;
         };
+        if let PartOf::Deref = part {
+            let value = region::sub(&held, path(&[Step::Arg(0)]));
+            self.flow().set_origins(whole, value);
+            return;
+        }
         let mut at = Path::ROOT;
         let mut base_ty = self.inference.resolve(base.1);
         while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = base_ty {
