@@ -28,7 +28,7 @@ mod rust_meaning_tests;
 use super::borrowck::{
     record,
     record::{Matched, ScopeEnd},
-    Access as FactAccess, Projection as FactStep,
+    Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
 };
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
@@ -2709,6 +2709,15 @@ struct ScriptFunction {
     definition: item::Function,
     generated: ImmutableString,
 }
+
+/// A `for` loop's iterator, its element, and the positions where the
+/// element takes what the iterator holds: pairs of the element's position
+/// and the iterator's.
+type LoopElement = (
+    super::borrowck::Local,
+    super::borrowck::Local,
+    Vec<(FactPath, FactPath)>,
+);
 
 #[derive(Clone)]
 enum Nominal {
@@ -9693,8 +9702,9 @@ struct Parser<'a> {
     /// The hidden local holding the borrows of the `for` loop about to be
     /// read's iterator (`for x in &v`), used at its head each iteration.
     loop_iterator: Option<super::borrowck::Local>,
-    /// That iterator and the loop's element, which takes what it holds.
-    loop_element: Option<(super::borrowck::Local, super::borrowck::Local)>,
+    /// That iterator and the loop's element, which takes what it holds at
+    /// the positions `borrows::element_positions` gives.
+    loop_element: Option<LoopElement>,
     /// What each call keeps of its inputs, by where its `)` is, for its
     /// receiver's method call to read once its value is made.
     call_summaries: BTreeMap<Position, super::borrowck::signature::Summary>,
@@ -21642,7 +21652,10 @@ impl<'a> Parser<'a> {
                             .get(slot)
                             .cloned()
                             .unwrap_or_else(|| slot.to_string().into());
-                        let step = self.trace_enter(FactStep::Field(field));
+                        let step = self.trace_enter_at(
+                            FactStep::Field(field),
+                            borrows::TraceRegion::Field(definition.id(), None, slot),
+                        );
                         self.destructure_into(member, &path, ty, statements)?;
                         self.trace_leave(step);
                     }
@@ -21682,7 +21695,10 @@ impl<'a> Parser<'a> {
                 let mut destructure = || {
                     self.require_type(&Ty::Tuple(types.clone()), &target, *span)?;
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
-                        let step = self.trace_enter(FactStep::Field(index.to_string().into()));
+                        let step = self.trace_enter_at(
+                            FactStep::Field(index.to_string().into()),
+                            borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                        );
                         self.destructure_into(member, &format!("{path}[{index}]"), ty, statements)?;
                         self.trace_leave(step);
                     }
@@ -23087,8 +23103,16 @@ impl<'a> Parser<'a> {
                     .collect::<Vec<_>>();
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
-                for ((member, ty), field) in members.iter().zip(fields.iter()).zip(&item.fields) {
-                    let path = self.trace_enter(FactStep::Field(field.name.text.clone()));
+                for (slot, ((member, ty), field)) in members
+                    .iter()
+                    .zip(fields.iter())
+                    .zip(&item.fields)
+                    .enumerate()
+                {
+                    let path = self.trace_enter_at(
+                        FactStep::Field(field.name.text.clone()),
+                        borrows::TraceRegion::Field(*id, None, slot),
+                    );
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23130,7 +23154,10 @@ impl<'a> Parser<'a> {
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
                 for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
-                    let path = self.trace_enter(FactStep::Field(index.to_string().into()));
+                    let path = self.trace_enter_at(
+                        FactStep::Field(index.to_string().into()),
+                        borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                    );
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23494,8 +23521,20 @@ impl<'a> Parser<'a> {
         self.trace_test(FactAccess::Read, None);
         let (child, coverage) = match (payload, element) {
             (Some(payload), Some(element)) => {
-                let path = self.trace_enter(FactStep::Downcast(variant.name().into()));
-                self.trace_enter(FactStep::Field("0".into()));
+                // `Some`'s and `Ok`'s payload is the first argument, `Err`'s
+                // the second.
+                let payload_at = match variant {
+                    Prelude::Err => FactRegion::Arg(1),
+                    _ => FactRegion::Arg(0),
+                };
+                let path = self.trace_enter_at(
+                    FactStep::Downcast(variant.name().into()),
+                    borrows::TraceRegion::At(FactPath::of(&[payload_at])),
+                );
+                self.trace_enter_at(
+                    FactStep::Field("0".into()),
+                    borrows::TraceRegion::At(FactPath::ROOT),
+                );
                 let (child, coverage) = self.resolve_child_pattern(
                     payload,
                     element,
@@ -23710,7 +23749,10 @@ impl<'a> Parser<'a> {
         if item.variants.len() > 1 {
             self.trace_test(FactAccess::Read, None);
         }
-        let path = self.trace_enter(FactStep::Downcast(variant.name.text.clone()));
+        let path = self.trace_enter_at(
+            FactStep::Downcast(variant.name.text.clone()),
+            borrows::TraceRegion::At(FactPath::ROOT),
+        );
         let names = variant.fields.as_deref().unwrap_or_default();
         for (index, (child, expected)) in
             children.into_iter().zip(variant.payload.iter()).enumerate()
@@ -23718,7 +23760,14 @@ impl<'a> Parser<'a> {
             let field = names
                 .get(index)
                 .map_or_else(|| index.to_string().into(), |name| name.text.clone());
-            let field_path = self.trace_enter(FactStep::Field(field));
+            let field_path = self.trace_enter_at(
+                FactStep::Field(field),
+                borrows::TraceRegion::Field(
+                    definition.id(),
+                    Some(variant.name.text.clone()),
+                    index,
+                ),
+            );
             let (child, coverage) = self.resolve_child_pattern(
                 child,
                 &instantiate(&Ty::from_resolved(expected), &substitution),
@@ -24880,8 +24929,8 @@ impl<'a> Parser<'a> {
             if !value {
                 self.flow().loop_test();
             }
-            if let Some((iterator, element)) = self.loop_element.take() {
-                self.flow().flow(iterator, element);
+            if let Some((iterator, element, positions)) = self.loop_element.take() {
+                self.flow().flow(iterator, element, &positions);
             }
             self.push_loop(label, value, drop_depth);
         }
@@ -25485,8 +25534,9 @@ impl<'a> Parser<'a> {
         let iterator = self.flow().hold("<iterator>", lhs.span);
         if let Some(iterator) = iterator {
             let element = self.flow().local(&name, declaration);
+            let positions = self.element_positions(&lhs.ty);
             self.loop_iterator = Some(iterator);
-            self.loop_element = Some((iterator, element));
+            self.loop_element = Some((iterator, element, positions));
         }
         // A `Box<dyn Iterator>` is its iterator at runtime.
         if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
@@ -31159,8 +31209,14 @@ impl<'a> Parser<'a> {
                 let whole = span(start, operand.span.end());
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
-                self.flow()
-                    .borrow(operand.span.start(), whole, true, inner, reference);
+                self.flow().borrow(
+                    operand.span.start(),
+                    operand.span,
+                    whole,
+                    true,
+                    inner,
+                    reference,
+                );
                 self.flow().alias(operand.span.start(), start);
                 operand.ty = Ty::Reference {
                     mutable: true,
@@ -31174,8 +31230,14 @@ impl<'a> Parser<'a> {
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
-                self.flow()
-                    .borrow(operand.span.start(), whole, false, inner, reference);
+                self.flow().borrow(
+                    operand.span.start(),
+                    operand.span,
+                    whole,
+                    false,
+                    inner,
+                    reference,
+                );
             } else {
                 // `&String::from("a")`, `&(n + 1)`: a borrow of a temporary.
                 self.borrow_temporary(&operand, whole);
@@ -31246,8 +31308,16 @@ impl<'a> Parser<'a> {
                 }
                 _ => None,
             };
+            let base = (operand.span, operand.ty.clone());
             operand.ty = *target;
             operand.span = span(start, operand.span.end());
+            // `*x` of a `&&T` is the `&T` it refers to.
+            self.part_of(
+                (base.0, &base.1),
+                operand.span,
+                &operand.ty,
+                borrows::PartOf::Deref,
+            );
             if had_place {
                 self.flow().mark_place(operand.span);
             }
@@ -31415,7 +31485,12 @@ impl<'a> Parser<'a> {
                 let base = (value.span, value.ty.clone());
                 value = self.parse_index(value)?;
                 self.flow().index_end(value.span.start());
-                self.part_of((base.0, &base.1), value.span, &value.ty);
+                self.part_of(
+                    (base.0, &base.1),
+                    value.span,
+                    &value.ty,
+                    borrows::PartOf::Element,
+                );
                 continue;
             }
             // `make()(x)`, `(self.f)(x)`: a call of a function value.
@@ -32017,6 +32092,7 @@ impl<'a> Parser<'a> {
                     (value.span, &value.ty),
                     span(value.span.start(), end),
                     &members[index],
+                    borrows::PartOf::Member(index),
                 );
                 value = self.operator_expr(
                     source,
@@ -32355,9 +32431,15 @@ impl<'a> Parser<'a> {
                 }
                 (lvalue, _) => lvalue,
             };
+            let owner = definition.id();
             let helper = self.push_op(Op::Field { definition, slot });
             let expression_span = span(value.span.start(), member_span.end());
-            self.part_of((value.span, &value.ty), expression_span, &ty);
+            self.part_of(
+                (value.span, &value.ty),
+                expression_span,
+                &ty,
+                borrows::PartOf::Field(owner, slot),
+            );
             if through_reference && lvalue.is_none() && self.drops() {
                 self.borrowed.insert(expression_span);
             }
@@ -33144,7 +33226,16 @@ impl<'a> Parser<'a> {
                 .map(|member| self.inference.resolve(&member.ty))
                 .collect(),
         );
-        let parts: Vec<&ParsedExpr> = members.iter().collect();
+        let parts: Vec<_> = members
+            .iter()
+            .enumerate()
+            .map(|(index, member)| {
+                (
+                    member,
+                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                )
+            })
+            .collect();
         self.compose(span(open, end), &ty, &parts);
         let source = origin::Fragment::join(members.iter().map(ParsedExpr::rendered_source), ", ")
             .surrounded("[", "]");
@@ -34999,7 +35090,7 @@ impl<'a> Parser<'a> {
                 .flow()
                 .unmodeled("a borrow a closure's value keeps", call),
             (None, _) => {
-                let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+                let summary = super::borrowck::signature::Summary::unknown();
                 self.kept_by_call(call, &kept, None, &summary);
             }
         }
@@ -35566,7 +35657,11 @@ impl<'a> Parser<'a> {
             self.coerce_expr(expected, value)?;
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        let parts: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| (value, borrows::Slot::Field(definition.id(), None, slot)))
+            .collect();
         self.compose(span(expression.start(), end), &struct_ty, &parts);
         let source = origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source));
         Ok(Some(self.operator_expr(
@@ -35965,7 +36060,15 @@ impl<'a> Parser<'a> {
         for value in &mut elements {
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = elements.iter().collect();
+        let parts: Vec<_> = elements
+            .iter()
+            .map(|element| {
+                (
+                    element,
+                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(0)])),
+                )
+            })
+            .collect();
         let array_ty = Ty::Array {
             element: Box::new(element.clone()),
             length: None,
@@ -36130,7 +36233,15 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         };
-        self.compose(expression, &ty, &[&*value]);
+        let at = match variant {
+            Prelude::Err => FactRegion::Arg(1),
+            _ => FactRegion::Arg(0),
+        };
+        self.compose(
+            expression,
+            &ty,
+            &[(&*value, borrows::Slot::At(FactPath::of(&[at])))],
+        );
         let source = self.prelude_op(op, [value.rendered_source()]);
         let mut value = self.operator_expr(source, ty, expression);
         value.lvalue = place;
@@ -39046,7 +39157,9 @@ impl<'a> Parser<'a> {
         // A closure holds its captures' borrows. An async block's are left
         // to `cargo check`: its value is a future the facts don't follow.
         if !scope.asynchronous {
-            self.flow().set_origins(expression, closure.origins.clone());
+            let mut flow = self.flow();
+            flow.set_origins(expression, closure.origins.clone());
+            flow.set_closure_keeps(expression, closure.keeps.clone());
         }
         // `move` moves each captured place that is not `Copy` into the
         // closure as it is created, and copies the others: a field leaves
@@ -39483,7 +39596,7 @@ impl<'a> Parser<'a> {
                 .native_output(&name, arguments.len())
                 .unwrap_or(Ty::Unknown);
             let kept = self.inference.resolve(&output);
-            let summary = super::borrowck::signature::Summary::unknown(arguments.len());
+            let summary = super::borrowck::signature::Summary::unknown();
             self.kept_by_call(span(name_span.start(), end), &kept, None, &summary);
             output
         };
@@ -39683,11 +39796,21 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let parts: Vec<&ParsedExpr> = values
-            .values()
-            .map(|(value, _)| value)
-            .chain(base.as_ref())
-            .collect();
+        let mut parts = Vec::new();
+        for (name, (value, _)) in &values {
+            let slot = item
+                .fields
+                .iter()
+                .position(|field| field.name.text == *name);
+            parts.push((
+                value,
+                match slot {
+                    Some(slot) => borrows::Slot::Field(definition.id(), None, slot),
+                    None => borrows::Slot::At(FactPath::ROOT),
+                },
+            ));
+        }
+        parts.extend(base.iter().map(|base| (base, borrows::Slot::Whole)));
         self.compose(span(name_span.start(), end), &struct_ty, &parts);
         let declared_order = base.is_none()
             && order
@@ -42282,7 +42405,20 @@ impl<'a> Parser<'a> {
             )?;
             self.move_local(value)?;
         }
-        let parts: Vec<&ParsedExpr> = args.iter().collect();
+        let parts: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| {
+                (
+                    value,
+                    borrows::Slot::Field(
+                        definition.id(),
+                        Some(declaration.name.text.as_str()),
+                        slot,
+                    ),
+                )
+            })
+            .collect();
         self.compose(span(owner_span.start(), end), &enum_ty, &parts);
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
