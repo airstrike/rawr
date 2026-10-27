@@ -45,12 +45,73 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
         "ui/nll/issue-54556-temps-in-tail-diagnostic.rs",
         "a field holding `&T` of a type with `Drop` drops a copy of the value with its struct",
     ),
+    (
+        "closure-moves/move_copy_capture_copied.rs",
+        "a copy of a `move` closure shares the state it changes with the closure it copies",
+    ),
+    (
+        "closure-moves/mutations/move_copy_capture_copied_",
+        "a copy of a `move` closure shares the state it changes with the closure it copies",
+    ),
 ];
 
-/// The borrow errors this checker reports, with rustc's codes.
+/// Programs where rustc reports a use after move (E0382) that rawr's move
+/// check does not find yet, or finds as another error, each an open item,
+/// by the start of their path.
+const KNOWN_MOVE_GAPS: &[(&str, &str)] = &[
+    (
+        "closure-moves/body_block_moves_local_then_used.rs",
+        "a closure body's block that ends in a captured local does not move it",
+    ),
+    (
+        "closure-moves/body_moves_field_then_same.rs",
+        "a closure that is not `move` and moves a field out of a capture does not move the field",
+    ),
+    (
+        "ui/borrowck/copy-suggestion-region-vid.rs",
+        "a struct literal's field shorthand does not move the local it names",
+    ),
+    (
+        "ui/borrowck/derive-clone-implicit-bound.rs",
+        "a generic struct with a derived `Copy` is taken as `Copy` without its bound on `T`",
+    ),
+    (
+        "ui/borrowck/issue-41962.rs",
+        "an `if let` that binds a payload by value does not move it out of the local",
+    ),
+    (
+        "ui/nll/issue-53807.rs",
+        "an `if let` that binds a payload by value does not move it out of the local",
+    ),
+    (
+        "ui/borrowck/issue-83760.rs",
+        "a `while let` that binds a payload by value, and `Option::unwrap` of a local, do not move it",
+    ),
+    (
+        "ui/borrowck/move-in-pattern-mut.rs",
+        "a pattern that binds a payload or a variant's field by value does not move it out",
+    ),
+    (
+        "ui/borrowck/move-in-pattern.rs",
+        "a pattern that binds a payload or a variant's field by value does not move it out",
+    ),
+];
+
+/// Whether rustc's `errors` hold a use after move that rawr's move check
+/// does not follow yet for the program at `path`.
+fn known_move_gap(path: &str, errors: &[(String, usize)]) -> bool {
+    errors.iter().any(|(code, _)| code == "E0382")
+        && KNOWN_MOVE_GAPS
+            .iter()
+            .any(|(known, _)| path.starts_with(known))
+}
+
+/// The borrow errors this checker reports, and the lowering's use after
+/// move (E0382), with rustc's codes.
 pub(super) const BORROW_CODES: &[&str] = &[
     "E0106",
     "E0373",
+    "E0382",
     "E0499",
     "E0500",
     "E0501",
@@ -230,6 +291,8 @@ fn borrowck_differential() {
                     "both reject: same code and line"
                 } else if errors.iter().any(|(c, _)| same_code(code, c)) {
                     "both reject: same code, rustc's on another line"
+                } else if known_move_gap(&path, errors) {
+                    "rustc's use after move that the move check does not follow yet (known)"
                 } else {
                     failures.push(format!(
                         "{path}: rawr reports {code} at line {line}, rustc {errors:?}"
@@ -251,6 +314,8 @@ fn borrowck_differential() {
                     "rustc rejects for errors other than these borrow errors"
                 } else if unmodeled {
                     "miss outside what the checker models (left to cargo check)"
+                } else if known_move_gap(&path, errors) {
+                    "rustc's use after move that the move check does not follow yet (known)"
                 } else {
                     failures.push(format!("{path}: rawr accepts it, rustc reports {errors:?}"));
                     "miss within the model"

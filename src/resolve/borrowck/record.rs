@@ -163,6 +163,13 @@ pub(crate) struct Closure {
     /// Whether it changes what it captures (`FnMut`): a call borrows it
     /// `&mut`.
     pub(crate) mutable: bool,
+    /// Whether it is `Copy`: it captures nothing by `&mut` and nothing by
+    /// value that is not `Copy`, as rustc has it.
+    pub(crate) copy: bool,
+    /// The places it captures by value: each captured local's declaration,
+    /// the path below it, and whether the place is copied rather than
+    /// moved.
+    pub(crate) by_value: Vec<(Span, Vec<Projection>, bool)>,
 }
 
 /// A local a closure captures, as the lowering knows it: where it is
@@ -1238,7 +1245,8 @@ impl Recorder {
     ///
     /// `parameters` are where the closure's parameters are declared, and
     /// `tail` what its body's value holds (`None`: a value these facts do
-    /// not follow).
+    /// not follow). `copy_of` says whether the part of a captured local
+    /// (by its declaration) below a path is `Copy`, when the lowering knows.
     pub(crate) fn captures(
         &mut self,
         body: ClosureBody,
@@ -1247,6 +1255,7 @@ impl Recorder {
         tail: Option<Vec<Origin>>,
         moved: bool,
         span: Span,
+        copy_of: &dyn Fn(Span, &[Projection]) -> Option<bool>,
     ) -> Closure {
         // Each captured local, and the hidden local its body reads it by.
         let mut upvars = BTreeMap::<Local, (Local, Captured)>::new();
@@ -1326,6 +1335,8 @@ impl Recorder {
         // captured by reference, and the loans it is captured by.
         let mut origins = Vec::new();
         let mut by_local = BTreeMap::<Local, (bool, Vec<Origin>)>::new();
+        let mut copy_closure = true;
+        let mut by_value = Vec::new();
         for capture in merge(places) {
             let (_, captured) = upvars[&capture.local];
             let place = Place {
@@ -1339,13 +1350,17 @@ impl Recorder {
             }
             if capture.kind == CaptureKind::ByValue {
                 by_local.entry(local).or_insert((false, Vec::new())).0 = false;
-                let copy = capture.copy.unwrap_or_else(|| {
-                    self.unmodeled(
-                        "a part captured by value whose type these facts do not know",
-                        span,
-                    );
-                    true
-                });
+                let copy = copy_of(captured.declaration, &place.projection)
+                    .or(capture.copy)
+                    .unwrap_or_else(|| {
+                        self.unmodeled(
+                            "a part captured by value whose type these facts do not know",
+                            span,
+                        );
+                        true
+                    });
+                copy_closure &= copy;
+                by_value.push((captured.declaration, place.projection.clone(), copy));
                 self.push(Fact::Access {
                     place,
                     access: if copy { Access::Read } else { Access::Move },
@@ -1358,6 +1373,7 @@ impl Recorder {
                 continue;
             }
             let mutable = capture.kind == CaptureKind::Mutable;
+            copy_closure &= !mutable;
             let point = self.push(Fact::Access {
                 place: place.clone(),
                 access: if mutable {
@@ -1425,6 +1441,8 @@ impl Recorder {
             origins,
             keeps,
             mutable,
+            copy: copy_closure,
+            by_value,
         }
     }
 

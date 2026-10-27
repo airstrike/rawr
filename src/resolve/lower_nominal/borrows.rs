@@ -680,6 +680,45 @@ impl Parser<'_> {
         ) || self.flow().computed(span)
     }
 
+    /// The type of the part `path` below a value of type `ty`: a struct's
+    /// field, a tuple's member, or what a reference refers to. `None` for
+    /// a path these types don't follow.
+    pub(super) fn part_ty(&self, ty: &Ty, path: &[Projection]) -> Option<Ty> {
+        let mut ty = self.inference.resolve(ty);
+        for step in path {
+            ty = match (step, ty) {
+                (Projection::Deref, Ty::Reference { target, .. }) => *target,
+                (Projection::Field(member), Ty::Tuple(members)) => {
+                    members.get(member.parse::<usize>().ok()?)?.clone()
+                }
+                (Projection::Field(member), Ty::Script(id, arguments)) => {
+                    let Nominal::Struct { item, .. } = self.models.definition(id) else {
+                        return None;
+                    };
+                    let field = item
+                        .fields
+                        .iter()
+                        .find(|field| field.name.text == *member)?;
+                    let substitution = self.nominal_substitution(id, &arguments);
+                    instantiate(&Ty::from_resolved(&field.ty), &substitution)
+                }
+                _ => return None,
+            };
+            ty = self.inference.resolve(&ty);
+        }
+        Some(ty)
+    }
+
+    /// Whether the part `path` below a value of type `ty` is `Copy`, when
+    /// its type is known.
+    pub(super) fn part_copy(&self, ty: &Ty, path: &[Projection]) -> Option<bool> {
+        let ty = self.part_ty(ty, path)?;
+        if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
+            return None;
+        }
+        Some(!self.moves_by_value(&ty))
+    }
+
     /// The value spanning `whole`, of type `ty`, is a part of the one
     /// spanning `base` (a field, a member, an element): below no reference,
     /// it holds what that value holds. A part read through a reference

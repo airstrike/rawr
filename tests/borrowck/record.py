@@ -19,8 +19,10 @@ as rawr is), `slice1/` the cases written for borrows of locals, and
 `patterns/mutations/` what `mutate.py` writes from them, `closures/`
 the cases written for closures' captures and the borrows a closure's call
 returns, with `closures/mutations/` what `mutate.py closures` writes, and
-`signatures/` the cases written for a body checked against its own
-signature and for temporaries (E0515, E0716, E0106), with
+`closure-moves/` the cases written for what closures move and when a
+closure is `Copy`, with `closure-moves/mutations/` what `mutate.py moves`
+writes, and `signatures/` the cases written for a body checked against its
+own signature and for temporaries (E0515, E0716, E0106), with
 `signatures/mutations/` what `mutate.py temporaries` writes. The harness
 is `borrowck_differential` in rawr's lib tests (src/resolve/borrowck).
 """
