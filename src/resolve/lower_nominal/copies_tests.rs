@@ -243,6 +243,36 @@ fn closures_passed_by_mut_reference_copy_nothing() {
         }
         t.total() + u.total()",
     );
-    assert_eq!(through.0, 33000);
-    assert_eq!(through, named, "a copy stood in for a closure's borrow");
+    assert_eq!(
+        through,
+        (33000, 0),
+        "a copy stood in for a closure's borrow"
+    );
+    assert_eq!(named, (33000, 0));
+}
+
+/// A local a closure captured is shared, and a `&self` call on it, inside
+/// a closure or after one, is lent the value under its lock: a thousand
+/// reads copy no `Tally` (T178). Before, each read copied it.
+#[test]
+fn captured_locals_are_read_without_a_copy() {
+    for (body, expected) in [
+        (
+            "let mut t = Tally::new(); let mut sum = 0;
+            for n in 0..1000 { let mut add = |k| t.add(k); add(n); sum += t.total(); } sum",
+            166666500,
+        ),
+        (
+            "let mut t = Tally::new(); t.add(2); let show = || t.total();
+            let mut sum = 0; for _ in 0..1000 { sum += show(); } sum",
+            2000,
+        ),
+        (
+            "let mut t = Tally::new(); { let mut add = |k| t.add(k); add(5); }
+            let mut sum = 0; for _ in 0..1000 { sum += t.total(); } sum",
+            5000,
+        ),
+    ] {
+        assert_eq!(copies(body), (expected, 0), "{body}");
+    }
 }

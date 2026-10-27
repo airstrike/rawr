@@ -490,6 +490,21 @@ impl Engine {
             }
         }
 
+        if new_val.is_none()
+            && let Some(result) = self.lent_part_call(
+                global,
+                caches,
+                scope,
+                this_ptr.as_deref_mut(),
+                lhs,
+                expr,
+                rhs,
+                idx_values,
+            )?
+        {
+            return Ok(result);
+        }
+
         match (lhs, new_val) {
             // this.??? or this[???]
             (Expr::ThisPtr(var_pos), new_val) => {
@@ -538,6 +553,132 @@ impl Engine {
             }
         }
         .map(|(v, ..)| v)
+    }
+
+    /// `x[i].method(.., closure, ..)` (or `x[i][j]..`) of a local `x` a
+    /// closure captured, which is shared: the part is lent alone, a cell of
+    /// its own for the call, so a closure the call runs reaches the local's
+    /// other parts, as Rust's disjoint borrows of them allow (T178). The
+    /// part is moved into the cell and back, not copied. `None` for any
+    /// other chain, which is evaluated as before.
+    fn lent_part_call(
+        &self,
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+        scope: &mut Scope,
+        this_ptr: Option<&mut Dynamic>,
+        root: &Expr,
+        parent: &Expr,
+        rhs: &Expr,
+        idx_values: &mut FnArgsVec<Dynamic>,
+    ) -> RawrResultOf<Option<Dynamic>> {
+        if !matches!(parent, Expr::Index(..)) || !idx_values.iter().any(Dynamic::is_fnptr) {
+            return Ok(None);
+        }
+        // The index steps down to the method call: `[i]`, then `[j]`, ..
+        let mut steps = 0;
+        let mut node = rhs;
+        let call = loop {
+            match node {
+                Expr::Index(x, ..) => {
+                    steps += 1;
+                    node = &x.rhs;
+                }
+                Expr::Dot(x, ..) if matches!(x.rhs, Expr::MethodCall(..)) => {
+                    steps += 1;
+                    break node;
+                }
+                _ => return Ok(None),
+            }
+        };
+        let Expr::Dot(dot, ..) = call else {
+            return Ok(None);
+        };
+        if idx_values.len() < steps {
+            return Ok(None);
+        }
+        let indexes: FnArgsVec<Dynamic> = idx_values.iter().rev().take(steps).cloned().collect();
+        let mut shared = match root {
+            Expr::ThisPtr(..) => match this_ptr {
+                Some(this) if this.is_shared() => this.clone(),
+                _ => return Ok(None),
+            },
+            Expr::Variable(..) => match self.search_namespace(global, caches, scope, None, root)? {
+                Target::SharedValue { shared_value, .. } => shared_value,
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let pos = dot.lhs.start_position();
+        let op_pos = parent.position();
+        let race = || -> crate::RawrError { ERR::ErrorDataRace(String::new(), pos).into() };
+        let mut cell = {
+            let mut guard = shared.write_lock::<Dynamic>().ok_or_else(race)?;
+            let Some(part) =
+                self.part_at(global, caches, scope, &mut guard, &indexes, pos, op_pos)?
+            else {
+                return Ok(None);
+            };
+            if !part.is_shared() {
+                *part = part.take().into_shared();
+            }
+            part.clone()
+        };
+        idx_values.truncate(idx_values.len() - steps);
+        let result = Target::try_from(&mut cell).and_then(|mut target| {
+            self.eval_dot_index_chain_raw(
+                global,
+                caches,
+                Some(scope),
+                None,
+                root,
+                call,
+                &mut target,
+                &dot.rhs,
+                idx_values,
+                None,
+            )
+        });
+        drop(cell);
+        // The part is plain again where it is, once nothing else holds it.
+        if let Some(mut guard) = shared.write_lock::<Dynamic>()
+            && let Ok(Some(part)) =
+                self.part_at(global, caches, scope, &mut guard, &indexes, pos, op_pos)
+        {
+            part.unshare_if_unique();
+        }
+        result.map(|(value, _)| Some(value))
+    }
+
+    /// The part of `value` that `indexes` reach, itself, through elements
+    /// that are not shared; `None` for a part no index reaches in place.
+    fn part_at<'v>(
+        &self,
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+        scope: &mut Scope,
+        mut value: &'v mut Dynamic,
+        indexes: &[Dynamic],
+        pos: Position,
+        op_pos: Position,
+    ) -> RawrResultOf<Option<&'v mut Dynamic>> {
+        for (at, index) in indexes.iter().enumerate() {
+            if value.is_shared() {
+                return Ok(None);
+            }
+            let mut idx = index.clone();
+            match self.get_indexed_mut(
+                global, caches, scope, None, value, &mut idx, pos, op_pos, false, false,
+            )? {
+                Target::RefMut(part) => value = part,
+                _ => return Ok(None),
+            }
+            // The part lent is the last one, which may already be shared.
+            if at + 1 < indexes.len() && value.is_shared() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(value))
     }
 
     /// Evaluate a chain of indexes and store the results in a [`FnArgsVec`].

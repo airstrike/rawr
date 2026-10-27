@@ -1593,7 +1593,13 @@ impl Engine {
 
                 // A place a closure reaches through a shared handle is the
                 // place itself, held locked for the call, not a copy.
-                if held_place(first, &target) {
+                // A local a closure captured (shared) is lent locked for the
+                // call too, not copied, when no closure is passed beside it
+                // that could reach it while the call holds it (T178).
+                if held_place(first, &target)
+                    || matches!(target, crate::eval::Target::SharedValue { .. })
+                        && !arg_values.iter().any(Dynamic::is_fnptr)
+                {
                     is_ref_mut = true;
                     args.push(lent.insert(target).as_mut());
                 } else if target.is_shared() || target.is_temp_value() {
