@@ -1483,6 +1483,301 @@ pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes the future parameter fixture")
 }
 
+/// The item shapes upstream iced examples reach (T204):
+/// - `fixture::Rgb<S = Srgb, T = f32> { pub red: T, pub standard:
+///   PhantomData<S> }`, as palette's `Rgb`;
+/// - `fixture::inside(&(f64, f64), &[(f64, f64)]) -> Option<usize>`, as
+///   voronator's `from_tuple`;
+/// - `fixture::checksum(&[u8]) -> u64`, as image's `save_buffer` takes;
+/// - `async fn fixture::list() -> Result<(Listing, Vec<Entry>), Listing>`,
+///   as changelog's `Changelog::list`.
+pub fn native_shapes() -> api::Graph<api::Extracted> {
+    let option = sysroot_definition("70", identity::Namespace::Type, "core");
+    let result = sysroot_definition("71", identity::Namespace::Type, "core");
+    let vec = sysroot_definition("72", identity::Namespace::Type, "alloc");
+    let phantom = sysroot_definition("73", identity::Namespace::Type, "core");
+    let future = sysroot_definition("74", identity::Namespace::Type, "core");
+    let output = sysroot_definition("75", identity::Namespace::Type, "core");
+    let srgb = definition("76", identity::Namespace::Type);
+    let rgb = definition("77", identity::Namespace::Type);
+    let inside = definition("78", identity::Namespace::Value);
+    let checksum = definition("79", identity::Namespace::Value);
+    let listing = definition("7a", identity::Namespace::Type);
+    let entry = definition("7b", identity::Namespace::Type);
+    let list = definition("7c", identity::Namespace::Value);
+    let opaque = definition("7d", identity::Namespace::Type);
+    let pair = definition("7e", identity::Namespace::Type);
+    let of = |id: &identity::Definition, arguments: Vec<model::Type>| model::Type::Definition {
+        id: id.clone(),
+        arguments: arguments.into_iter().map(model::Argument::Type).collect(),
+    };
+    let primitive = |name: &str| model::Type::Primitive(name.into());
+    let shared = |ty: model::Type| model::Type::Reference {
+        lifetime: model::Lifetime::Erased,
+        mutability: model::Mutability::Shared,
+        ty: Box::new(ty),
+    };
+    let point = || model::Type::Tuple(Box::from([primitive("f64"), primitive("f64")]));
+    let sysroot = |id: &identity::Definition, segments: &[&str], kind: &str, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(segments),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Sysroot {
+                compiler_kind: kind.into(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let unit_struct = |id: &identity::Definition, name: &str, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(&["fixture", name]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Struct {
+                fields: model::FieldSet::new(model::FieldForm::Unit, Box::default(), true, false),
+                generics: generics(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let function = |id: &identity::Definition,
+                    name: &str,
+                    asynchronous: bool,
+                    inputs: Vec<model::Type>,
+                    output,
+                    at| {
+        model::Definition::new(
+            id.clone(),
+            path(&["fixture", name]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Function {
+                signature: model::Signature::new(
+                    model::Safety::Safe,
+                    false,
+                    asynchronous,
+                    "\"Rust\"".into(),
+                    false,
+                    Box::default(),
+                    model::Receiver::None,
+                    inputs.into_boxed_slice(),
+                    output,
+                ),
+                generics: generics(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let rgb_parameter = |index: u32| model::Type::Parameter {
+        owner: rgb.clone(),
+        index,
+    };
+    let rgb_generics = model::Generics::new(
+        Box::from([
+            model::Parameter::new(
+                rgb.clone(),
+                0,
+                "S".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Present(of(&srgb, Vec::new())),
+                },
+            ),
+            model::Parameter::new(
+                rgb.clone(),
+                1,
+                "T".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Present(primitive("f32")),
+                },
+            ),
+        ]),
+        Box::default(),
+    );
+    let listed = of(
+        &result,
+        vec![
+            model::Type::Tuple(Box::from([
+                of(&listing, Vec::new()),
+                of(&vec, vec![of(&entry, Vec::new())]),
+            ])),
+            of(&listing, Vec::new()),
+        ],
+    );
+    let mut definitions = vec![
+        sysroot(&option, &["core", "option", "Option"], "enum", 700),
+        sysroot(&result, &["core", "result", "Result"], "enum", 711),
+        sysroot(&vec, &["alloc", "vec", "Vec"], "struct", 722),
+        sysroot(&phantom, &["core", "marker", "PhantomData"], "struct", 733),
+        sysroot(&future, &["core", "future", "Future"], "trait", 744),
+        sysroot(
+            &output,
+            &["core", "future", "Future", "Output"],
+            "associated-type",
+            755,
+        ),
+        unit_struct(&srgb, "Srgb", 766),
+        model::Definition::new(
+            rgb.clone(),
+            path(&["fixture", "Rgb"]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Struct {
+                fields: model::FieldSet::new(
+                    model::FieldForm::Record,
+                    Box::from([
+                        model::Field::new(
+                            "red".into(),
+                            0,
+                            model::Visibility::Public,
+                            rgb_parameter(1),
+                            span(777, 780),
+                        ),
+                        model::Field::new(
+                            "standard".into(),
+                            1,
+                            model::Visibility::Public,
+                            of(&phantom, vec![rgb_parameter(0)]),
+                            span(781, 790),
+                        ),
+                    ]),
+                    true,
+                    false,
+                ),
+                generics: rgb_generics,
+            },
+            span(777, 799),
+            model::Origin::Source,
+        ),
+        function(
+            &inside,
+            "inside",
+            false,
+            vec![
+                shared(point()),
+                shared(model::Type::Slice(Box::new(point()))),
+            ],
+            of(&option, vec![primitive("usize")]),
+            800,
+        ),
+        function(
+            &checksum,
+            "checksum",
+            false,
+            vec![shared(model::Type::Slice(Box::new(primitive("u8"))))],
+            primitive("u64"),
+            811,
+        ),
+        unit_struct(&listing, "Listing", 822),
+        unit_struct(&entry, "Entry", 833),
+        // `Pair<T> { pub first: T }`: a parameter without a default leaves
+        // the struct unconstrained until a use names its argument.
+        model::Definition::new(
+            pair.clone(),
+            path(&["fixture", "Pair"]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Struct {
+                fields: model::FieldSet::new(
+                    model::FieldForm::Record,
+                    Box::from([model::Field::new(
+                        "first".into(),
+                        0,
+                        model::Visibility::Public,
+                        model::Type::Parameter {
+                            owner: pair.clone(),
+                            index: 0,
+                        },
+                        span(855, 860),
+                    )]),
+                    true,
+                    false,
+                ),
+                generics: type_generics(&pair, 0),
+            },
+            span(855, 866),
+            model::Origin::Source,
+        ),
+        function(
+            &list,
+            "list",
+            true,
+            Vec::new(),
+            model::Type::ImplTrait {
+                id: opaque,
+                bounds: Box::from([
+                    model::Predicate::Bound {
+                        ty: model::Type::Tuple(Box::default()),
+                        bound: model::Bound::Trait {
+                            trait_id: future.clone(),
+                            arguments: Box::default(),
+                            polarity: model::Polarity::Positive,
+                            binders: Box::default(),
+                        },
+                    },
+                    model::Predicate::ProjectionEquality {
+                        projection: model::Type::Projection {
+                            trait_id: future.clone(),
+                            associated: output.clone(),
+                            arguments: Box::default(),
+                        },
+                        ty: listed,
+                    },
+                ]),
+                captures: Box::default(),
+            },
+            844,
+        ),
+    ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
+    let export = |name: &str, id: &identity::Definition, at: u32| {
+        ledger::Path::Imported(ledger::Export::new(
+            identity::Export::new(
+                "fixture".into(),
+                Box::from([Box::<str>::from(name)]),
+                id.namespace(),
+            ),
+            id.clone(),
+            Box::default(),
+            Box::default(),
+            span(at, at + 1),
+        ))
+    };
+    let exports = vec![
+        export("Srgb", &srgb, 900),
+        export("Rgb", &rgb, 902),
+        export("inside", &inside, 904),
+        export("checksum", &checksum, 906),
+        export("Listing", &listing, 908),
+        export("Entry", &entry, 910),
+        export("list", &list, 912),
+        export("Pair", &pair, 914),
+    ];
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        definitions,
+        exports,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        usize::MAX,
+        &mut allocation,
+    )
+    .expect("native shapes fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes the native shapes fixture")
+}
+
 /// Return the generic free function from the family fixture as an installable
 /// facade, without the classifier-only primitive receiver method.
 pub fn representability_generic() -> api::Graph<api::Extracted> {

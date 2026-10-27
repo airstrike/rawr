@@ -1261,6 +1261,29 @@ fn selected_crate(
     found.ok_or_else(|| "selected rmeta was not force-loaded by the metadata probe".to_owned())
 }
 
+/// `adt` at the instance its path names as a type, as `Rgb` is `Rgb<Srgb,
+/// f32>`: each type parameter at its default and each lifetime at
+/// `'static`. `None` when a type or const parameter has no default.
+fn defaulted_instance<'tcx>(tcx: TyCtxt<'tcx>, adt: DefId) -> Option<Ty<'tcx>> {
+    let mut complete = true;
+    let arguments =
+        ty::GenericArgs::for_item(tcx, adt, |parameter, previous| match parameter.kind {
+            ty::GenericParamDefKind::Lifetime => tcx.lifetimes.re_static.into(),
+            ty::GenericParamDefKind::Type {
+                has_default: true, ..
+            } => tcx
+                .type_of(parameter.def_id)
+                .instantiate(tcx, previous)
+                .skip_norm_wip()
+                .into(),
+            _ => {
+                complete = false;
+                tcx.types.unit.into()
+            }
+        });
+    complete.then(|| tcx.type_of(adt).instantiate(tcx, arguments).skip_norm_wip())
+}
+
 fn extract<'tcx>(
     tcx: TyCtxt<'tcx>,
     invocation: &Invocation,
@@ -2332,13 +2355,20 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0
             });
             traits.dedup();
+            // A generic type whose every parameter has a default is reached
+            // at that instance, which its path names as a type: palette's
+            // `impl<S, T: Stimulus> Default for Rgb<S, T>` applies to
+            // `Rgb<Srgb, f32>`, though not to every `Rgb<S, T>`.
+            let defaulted = generic.then(|| defaulted_instance(tcx, adt)).flatten();
             for trait_id in traits {
                 self.edge(1)?;
-                let applies = tcx
-                    .infer_ctxt()
-                    .build(ty::TypingMode::non_body_analysis())
-                    .type_implements_trait(trait_id, [self_ty], param_env)
-                    .must_apply_modulo_regions();
+                let implements = |self_ty: ty::Ty<'tcx>| {
+                    tcx.infer_ctxt()
+                        .build(ty::TypingMode::non_body_analysis())
+                        .type_implements_trait(trait_id, [self_ty], param_env)
+                        .must_apply_modulo_regions()
+                };
+                let applies = implements(self_ty) || defaulted.is_some_and(implements);
                 if !applies {
                     continue;
                 }

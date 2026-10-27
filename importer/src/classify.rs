@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 32;
+const CLASSIFIER_VERSION: u32 = 33;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3810,7 +3810,12 @@ impl<P: api::Phase> Context<'_, P> {
         generics: &model::Generics,
     ) -> Result<representability::structure::Plan, Failure> {
         let parameters = self.parameters(generics)?;
-        let declaration_only = !parameters.is_empty();
+        // A struct whose every parameter has a default, as palette's
+        // `Rgb<S = Srgb, T = f32>`, is made and read at that instance,
+        // which its path names as a Rust type.
+        let declaration_only = parameters
+            .iter()
+            .any(|parameter| parameter.default().is_none());
         let mut admitted = Vec::new();
         self.retain_array::<representability::structure::Field>(fields.public_fields().len())?;
         admitted
@@ -3860,7 +3865,15 @@ impl<P: api::Phase> Context<'_, P> {
             constructible,
             declaration_only,
             self.implements_for_any(definition, "Copy"),
-            self.implements(definition, "Default"),
+            // A generic struct reached at its defaulted instance has the
+            // `Default` of an impl for any arguments, as palette's `impl<S,
+            // T: Stimulus> Default for Rgb<S, T>`: `cargo check` holds the
+            // instance to the impl's bounds.
+            if declaration_only {
+                self.implements(definition, "Default")
+            } else {
+                self.implements_for_any(definition, "Default")
+            },
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
             self.implements_for_any(definition, "PartialEq"),
@@ -4151,6 +4164,21 @@ impl<P: api::Phase> Context<'_, P> {
                     .and_then(|definition| option_element(definition, arguments))
                     .ok_or(Error::Cardinality)?;
                 Ok(Type::Option(Box::new(self.convert_value(element)?)))
+            }
+            // A `Result` of values, as changelog's `async fn list()` gives
+            // `Result<(Self, Vec<Contribution>), Error>`: Rawr's `Result`
+            // of the tuple and `Vec` it holds.
+            model::Type::Definition { id, arguments }
+                if let Some((ok, err)) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| result_elements(definition, arguments)) =>
+            {
+                Ok(Type::Result(
+                    Box::new(self.convert_value(ok)?),
+                    Box::new(self.convert_value(err)?),
+                ))
             }
             model::Type::Tuple(members) if members.len() >= 2 => {
                 let mut converted = Vec::new();
@@ -4519,6 +4547,11 @@ impl<P: api::Phase> Context<'_, P> {
                 definition_is_public(definition)?;
                 if is_string(definition) && arguments.is_empty() {
                     Type::Builtin(Builtin::String)
+                } else if is_phantom_data(definition) {
+                    // `PhantomData<T>` holds nothing, and Rawr's is the unit
+                    // type, as a script struct's is: palette's `Rgb` has
+                    // `standard: PhantomData<S>`.
+                    Type::Unit
                 } else if id.unit().crate_name() == "core"
                     && definition.display_path().eq(["core", "time", "Duration"])
                 {
@@ -4709,9 +4742,12 @@ impl<P: api::Phase> Context<'_, P> {
         let Some(output) = output else {
             return self.convert_value(ty);
         };
+        // What the future gives is a value the bridge gives Rawr, as a
+        // plain output is: changelog's `async fn list() -> Result<(Self,
+        // Vec<Contribution>), Error>` gives a tuple holding a `Vec`.
         Ok(representability::convert::Type::Nominal {
             definition: crate::surface::identity::Definition::future(),
-            arguments: Box::from([self.convert(&output)?]),
+            arguments: Box::from([self.convert_value(&output)?]),
         })
     }
 
@@ -5297,6 +5333,37 @@ impl<P: api::Phase> Context<'_, P> {
                 mutable: true,
                 ty: Box::new(string),
             });
+        }
+        // `&[T]` or `&(A, B)`, as voronator's `from_tuple(&(f64, f64),
+        // &(f64, f64), &[(f64, f64)])` and image's `save_buffer(path, &[u8],
+        // ..)` take: a shared borrow in script code, as rustc sees it (D568),
+        // which leaves the script's value in place. Rawr's arrays and tuples
+        // don't hold Rust's layout, so the bridge makes the Rust value it
+        // lends for the call.
+        if let model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty: target,
+            ..
+        } = ty
+        {
+            match target.as_ref() {
+                model::Type::Slice(element) => {
+                    return Ok(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Sequence {
+                            element: Box::new(self.convert_value(element)?),
+                            owned: false,
+                        }),
+                    });
+                }
+                model::Type::Tuple(members) if members.len() >= 2 => {
+                    return Ok(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(self.convert_value(target)?),
+                    });
+                }
+                _ => {}
+            }
         }
         // `&T` or `&mut T` of a value Rawr holds, leased from its slot for
         // the call (D558.5), as `render_stateful_widget`'s `&mut W::State`.
@@ -6273,6 +6340,14 @@ fn is_string(definition: &model::Definition) -> bool {
         && definition.display_path().last() == Some("String")
 }
 
+/// core's `marker::PhantomData<T>`.
+fn is_phantom_data(definition: &model::Definition) -> bool {
+    let unit = definition.id().unit();
+    unit.authority().sysroot().is_some()
+        && matches!(unit.crate_name(), "core" | "std")
+        && definition.display_path().last() == Some("PhantomData")
+}
+
 /// `T` of core's `ops::Range<T>`, which Rawr holds as a value when `T` is
 /// a float.
 fn range_element<'a>(
@@ -6872,6 +6947,97 @@ mod tests {
                 Type::Builtin(Builtin::I64)
             )
         );
+    }
+
+    /// T204: palette's `Rgb`, voronator's `from_tuple`, image's
+    /// `save_buffer` and changelog's `async fn list` are bound as Rust has
+    /// them.
+    #[test]
+    fn upstream_example_shapes_are_bound_as_rust_has_them() {
+        use super::representability::convert::{Builtin, Type};
+        let contract = crate::test_fixture::native_shapes()
+            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .expect("the native shapes graph classifies");
+        let named = |name: &str| {
+            contract
+                .outcomes()
+                .find(|outcome| outcome.name() == name)
+                .unwrap_or_else(|| panic!("`{name}` has an outcome"))
+                .representability()
+                .clone()
+        };
+        let point = || {
+            Type::Tuple(Box::from([
+                Type::Builtin(Builtin::F64),
+                Type::Builtin(Builtin::F64),
+            ]))
+        };
+        let shared = |ty: Type| Type::Borrowed {
+            mutable: false,
+            ty: Box::new(ty),
+        };
+
+        // A `PhantomData<S>` field is Rawr's unit, and a struct whose
+        // parameters all have defaults is made and read at that instance.
+        let Representability::Struct(rgb) = named("Rgb") else {
+            panic!("`Rgb` is a struct plan");
+        };
+        assert!(rgb.constructible());
+        assert!(!rgb.declaration_only());
+        assert!(rgb.constructor().is_some());
+        assert_eq!(rgb.fields().len(), 2);
+        assert_eq!(rgb.fields()[0].ty(), &Type::Parameter(1));
+        assert_eq!(rgb.fields()[1].ty(), &Type::Unit);
+        assert!(named("Rgb").is_demandable());
+
+        // `&(f64, f64)` and `&[(f64, f64)]` are shared borrows of a tuple
+        // and a slice.
+        let Representability::Function(inside) = named("inside") else {
+            panic!("`inside` is a function plan");
+        };
+        assert_eq!(
+            inside.signature().inputs(),
+            [
+                shared(point()),
+                shared(Type::Sequence {
+                    element: Box::new(point()),
+                    owned: false,
+                }),
+            ]
+        );
+
+        // `&[u8]` is a shared borrow of a slice of bytes.
+        let Representability::Function(checksum) = named("checksum") else {
+            panic!("`checksum` is a function plan");
+        };
+        assert_eq!(
+            checksum.signature().inputs(),
+            [shared(Type::Sequence {
+                element: Box::new(Type::Builtin(Builtin::U8)),
+                owned: false,
+            })]
+        );
+
+        // An async fn's future gives a `Result` of a tuple holding a `Vec`.
+        let Representability::Function(list) = named("list") else {
+            panic!("`list` is a function plan, not {:?}", named("list"));
+        };
+        let Type::Nominal {
+            definition,
+            arguments,
+        } = list.signature().output()
+        else {
+            panic!("`list` gives a future");
+        };
+        assert_eq!(*definition, crate::surface::identity::Definition::future());
+        let [Type::Result(ok, _)] = arguments.as_ref() else {
+            panic!("the future gives a `Result`: {arguments:?}");
+        };
+        assert!(matches!(
+            ok.as_ref(),
+            Type::Tuple(members)
+                if matches!(members.as_ref(), [Type::Nominal { .. }, Type::Sequence { owned: true, .. }])
+        ));
     }
 
     #[test]

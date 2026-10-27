@@ -1,0 +1,11 @@
+[package]
+name = "native-shapes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+shapes = { path = "shapes" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

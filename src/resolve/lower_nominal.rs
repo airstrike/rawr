@@ -40405,14 +40405,22 @@ impl<'a> Parser<'a> {
                 construction: name_span,
             });
         }
+        // A generic struct whose every parameter has a default, as palette's
+        // `Rgb<S = Srgb, T = f32>`, is made at that instance, which `Rgb`
+        // names as a type: the bridge's constructor makes that one.
+        let mut instance = Vec::new();
         if !definition.parameters().is_empty() {
-            return Err(Error::InvalidConstruction {
-                owner: path,
-                reason: "generic imported construction requires a sealed Phase 4 substitution"
-                    .into(),
-                construction: name_span,
-            });
+            self.default_host_arguments(&definition, owner.as_ref(), &mut instance);
+            if instance.len() != definition.parameters().len() {
+                return Err(Error::InvalidConstruction {
+                    owner: path,
+                    reason: "generic imported construction requires a sealed Phase 4 substitution"
+                        .into(),
+                    construction: name_span,
+                });
+            }
         }
+        let instance = instance.into_boxed_slice();
         let fields = fields.clone();
         let form = *form;
         let selected_owner = self.models.host.type_owner(&path).cloned();
@@ -40486,7 +40494,7 @@ impl<'a> Parser<'a> {
                                 Some(definition.clone()),
                                 owner.clone(),
                             ),
-                            arguments: Box::default(),
+                            arguments: instance.clone(),
                         };
                         self.coerce_expr(&ty, &mut base)?;
                         for field in &order {
@@ -40559,7 +40567,12 @@ impl<'a> Parser<'a> {
                 construction: span(name_span.start(), end),
             });
         }
-        let mut parameters = BTreeMap::new();
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(instance.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
         for (argument, field) in arguments.iter_mut().zip(&fields) {
             let expected = self.instantiate_host_type(
                 field.ty(),
@@ -40586,7 +40599,7 @@ impl<'a> Parser<'a> {
                 })?;
         let output = Ty::Host {
             proof: HostTyProof::new(definition.clone(), Some(definition.clone()), owner),
-            arguments: Box::default(),
+            arguments: instance,
         };
         let imported = ImportedOperation {
             kind: crate::host::structural::Kind::Constructor,
