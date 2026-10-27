@@ -401,6 +401,20 @@ impl Recorder {
         true
     }
 
+    /// A field of the local the use starting at `start` reads takes `held`
+    /// here, already placed at the local's positions (`p.y = &c`); another
+    /// place takes it as [`Recorder::store`] does.
+    pub(crate) fn store_field(&mut self, start: Position, held: &[(Path, Origin)]) -> bool {
+        let Some((_, place)) = self.mention_place(start) else {
+            return false;
+        };
+        if !matches!(place.projection[..], [Projection::Field(_)]) {
+            return self.store(start, held);
+        }
+        self.flow_into(place.local, held);
+        true
+    }
+
     /// The function returns `held` here: it flows into its output's region.
     /// A returned borrow of one of its own locals is rustc's E0515, which
     /// these facts leave to it.

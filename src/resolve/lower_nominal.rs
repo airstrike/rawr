@@ -21594,7 +21594,10 @@ impl<'a> Parser<'a> {
                             .get(slot)
                             .cloned()
                             .unwrap_or_else(|| slot.to_string().into());
-                        let step = self.trace_enter(FactStep::Field(field));
+                        let step = self.trace_enter_at(
+                            FactStep::Field(field),
+                            borrows::TraceRegion::Field(definition.id(), None, slot),
+                        );
                         self.destructure_into(member, &path, ty, statements)?;
                         self.trace_leave(step);
                     }
@@ -21634,7 +21637,10 @@ impl<'a> Parser<'a> {
                 let mut destructure = || {
                     self.require_type(&Ty::Tuple(types.clone()), &target, *span)?;
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
-                        let step = self.trace_enter(FactStep::Field(index.to_string().into()));
+                        let step = self.trace_enter_at(
+                            FactStep::Field(index.to_string().into()),
+                            borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                        );
                         self.destructure_into(member, &format!("{path}[{index}]"), ty, statements)?;
                         self.trace_leave(step);
                     }
@@ -23264,8 +23270,16 @@ impl<'a> Parser<'a> {
                     .collect::<Vec<_>>();
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
-                for ((member, ty), field) in members.iter().zip(fields.iter()).zip(&item.fields) {
-                    let path = self.trace_enter(FactStep::Field(field.name.text.clone()));
+                for (slot, ((member, ty), field)) in members
+                    .iter()
+                    .zip(fields.iter())
+                    .zip(&item.fields)
+                    .enumerate()
+                {
+                    let path = self.trace_enter_at(
+                        FactStep::Field(field.name.text.clone()),
+                        borrows::TraceRegion::Field(*id, None, slot),
+                    );
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23307,7 +23321,10 @@ impl<'a> Parser<'a> {
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
                 for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
-                    let path = self.trace_enter(FactStep::Field(index.to_string().into()));
+                    let path = self.trace_enter_at(
+                        FactStep::Field(index.to_string().into()),
+                        borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                    );
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
                         ty,
@@ -23670,8 +23687,20 @@ impl<'a> Parser<'a> {
         self.trace_test(FactAccess::Read, None);
         let (child, coverage) = match (payload, element) {
             (Some(payload), Some(element)) => {
-                let path = self.trace_enter(FactStep::Downcast(variant.name().into()));
-                self.trace_enter(FactStep::Field("0".into()));
+                // `Some`'s and `Ok`'s payload is the first argument, `Err`'s
+                // the second.
+                let payload_at = match variant {
+                    Prelude::Err => FactRegion::Arg(1),
+                    _ => FactRegion::Arg(0),
+                };
+                let path = self.trace_enter_at(
+                    FactStep::Downcast(variant.name().into()),
+                    borrows::TraceRegion::At(FactPath::of(&[payload_at])),
+                );
+                self.trace_enter_at(
+                    FactStep::Field("0".into()),
+                    borrows::TraceRegion::At(FactPath::ROOT),
+                );
                 let (child, coverage) = self.resolve_child_pattern(
                     payload,
                     element,
@@ -23879,7 +23908,10 @@ impl<'a> Parser<'a> {
         if item.variants.len() > 1 {
             self.trace_test(FactAccess::Read, None);
         }
-        let path = self.trace_enter(FactStep::Downcast(variant.name.text.clone()));
+        let path = self.trace_enter_at(
+            FactStep::Downcast(variant.name.text.clone()),
+            borrows::TraceRegion::At(FactPath::ROOT),
+        );
         let names = variant.fields.as_deref().unwrap_or_default();
         for (index, (child, expected)) in
             children.into_iter().zip(variant.payload.iter()).enumerate()
@@ -23887,7 +23919,14 @@ impl<'a> Parser<'a> {
             let field = names
                 .get(index)
                 .map_or_else(|| index.to_string().into(), |name| name.text.clone());
-            let field_path = self.trace_enter(FactStep::Field(field));
+            let field_path = self.trace_enter_at(
+                FactStep::Field(field),
+                borrows::TraceRegion::Field(
+                    definition.id(),
+                    Some(variant.name.text.clone()),
+                    index,
+                ),
+            );
             let (child, coverage) = self.resolve_child_pattern(
                 child,
                 &instantiate(&Ty::from_resolved(expected), &substitution),

@@ -12,11 +12,18 @@ regions/filter_copied_then_clear.rs	ok	0	"[4]\n"
 regions/for_copied_item_kept.rs	ok	0	"4\n"
 regions/for_ref_item_kept.rs	E0502:9
 regions/for_ref_item_source_changed.rs	E0506:9
+regions/if_let_next_item.rs	ok	0	"1\n"
+regions/if_let_next_item_source_changed.rs	E0506:5
+regions/if_let_some_tuple_apart.rs	ok	0	"1 3\n"
+regions/if_let_some_tuple_kept.rs	E0506:6
 regions/into_iter_owned_items.rs	E0506:6
 regions/iter_next_ended.rs	ok	0	"1\n2\n"
 regions/iter_next_keeps_container.rs	E0502:5
 regions/last_copied_source_changed.rs	E0506:6
+regions/map_closure_item_apart.rs	ok	0	"[1, 1]\n"
+regions/map_closure_item_kept.rs	E0506:5
 regions/map_get_copied_then_insert.rs	ok	0	"1\n"
+regions/map_get_key_value_apart.rs	ok	0	"1 3\n"
 regions/map_get_then_insert.rs	E0502:8
 regions/map_remove_keeps_value_only.rs	ok	0	"v k!\n"
 regions/map_remove_value_changed.rs	E0502:9
@@ -26,6 +33,7 @@ regions/max_of_copied_source_changed.rs	E0506:6
 regions/max_of_copied_then_clear.rs	ok	0	"4\n"
 regions/min_of_iter_keeps_container.rs	E0502:6
 regions/option_and_then_captured_kept.rs	E0506:5
+regions/option_as_ref_copied.rs	ok	0	"1 None\n"
 regions/option_copied_then_take.rs	ok	0	"Some(3) None\n"
 regions/option_map_captured_ended.rs	ok	0	"Some(7)\n8\n"
 regions/option_map_captured_kept.rs	E0506:5
@@ -35,6 +43,8 @@ regions/option_unwrap_or_else_keeps_both.rs	E0506:6
 regions/option_unwrap_or_else_receiver_kept.rs	E0506:6
 regions/pair_field_one_live.rs	ok	0	"1 3\n"
 regions/pair_field_other_live.rs	E0506:11
+regions/pair_field_store_apart.rs	ok	0	"1 4\n"
+regions/pair_field_store_kept.rs	E0506:13
 regions/pair_field_through_reference.rs	ok	0	"1 3\n"
 regions/pair_field_through_reference_other.rs	E0506:12
 regions/pair_fn_one_lifetime.rs	ok	0	"2 2\n"
@@ -42,6 +52,8 @@ regions/pair_fn_one_lifetime_kept.rs	E0506:15
 regions/pair_fn_takes_one_lifetime.rs	ok	0	"1 3\n"
 regions/pair_fn_takes_one_lifetime_kept.rs	E0506:15
 regions/pair_in_vec_field.rs	ok	0	"1 3\n"
+regions/pair_match_apart.rs	ok	0	"1 3\n"
+regions/pair_match_kept.rs	E0506:11
 regions/pair_method_elided_keeps_self.rs	E0506:17
 regions/pair_method_one_lifetime.rs	ok	0	"1 3\n"
 regions/pair_method_one_lifetime_kept.rs	E0506:17
@@ -50,6 +62,10 @@ regions/result_err_drops_ok.rs	ok	0	"None 2\n"
 regions/result_map_err_owned.rs	E0506:6
 regions/result_ok_keeps_ok.rs	E0506:6
 regions/rev_copied_next_then_clear.rs	ok	0	"4\n"
+regions/struct_method_store_apart.rs	ok	0	"1 4\n"
+regions/struct_method_store_kept.rs	E0506:18
+regions/tuple_let_pattern_apart.rs	ok	0	"1 3\n"
+regions/tuple_let_pattern_kept.rs	E0506:6
 regions/tuple_member_one_live.rs	ok	0	"1 3\n"
 regions/tuple_member_other_live.rs	E0506:6
 regions/vec_clone_source_changed.rs	E0506:5
@@ -57,8 +73,10 @@ regions/vec_clone_then_push.rs	ok	0	"[1]\n"
 regions/vec_element_through_reference.rs	ok	0	"1\n"
 regions/vec_first_copied_then_push.rs	ok	0	"1\n"
 regions/vec_first_then_push.rs	E0502:5
+regions/vec_of_pairs_push_apart.rs	ok	0	"1 3\n"
 regions/vec_pop_source_changed.rs	E0506:5
 regions/vec_pop_then_push.rs	ok	0	"1\n"
+regions/zip_items_apart.rs	ok	0	"1 3\n"
 regions/mutations/assign_after_last_use_x_5_item_across.rs	E0506:7
 regions/mutations/assign_after_last_use_x_5_item_ended.rs	ok	0	"3\n"
 regions/mutations/assign_after_last_use_x_5_lifetime_apart.rs	ok	0	"3\n"
@@ -424,6 +442,16 @@ regions/mutations/loop_borrow_outlives_iteration_keep_10_item_ended.rs	ok	0	"[1,
 regions/mutations/loop_borrow_outlives_iteration_keep_10_lifetime_apart.rs	ok	0	"[1, 0, 1, 2]\n"
 regions/mutations/loop_borrow_outlives_iteration_keep_10_lifetime_kept.rs	ok	0	"[1, 0, 1, 2]\n"
 regions/mutations/loop_borrow_outlives_iteration_keep_10_option_map_across.rs	ok	0	"[1, 0, 1, 2]\n"
+regions/mutations/map_closure_item_apart_v_5_item_across.rs	E0502:7
+regions/mutations/map_closure_item_apart_v_5_item_ended.rs	ok	0	"[1, 1]\n"
+regions/mutations/map_closure_item_apart_v_5_lifetime_apart.rs	ok	0	"[1, 1]\n"
+regions/mutations/map_closure_item_apart_v_5_lifetime_kept.rs	E0502:8
+regions/mutations/map_closure_item_apart_v_5_option_map_across.rs	E0502:6
+regions/mutations/map_closure_item_kept_a_5_item_across.rs	E0506:7
+regions/mutations/map_closure_item_kept_a_5_item_ended.rs	E0506:8
+regions/mutations/map_closure_item_kept_a_5_lifetime_apart.rs	E0506:8
+regions/mutations/map_closure_item_kept_a_5_lifetime_kept.rs	E0506:8
+regions/mutations/map_closure_item_kept_a_5_option_map_across.rs	E0506:6
 regions/mutations/map_get_copied_then_insert_m_6_item_across.rs	E0502:8
 regions/mutations/map_get_copied_then_insert_m_6_item_ended.rs	ok	0	"1\n"
 regions/mutations/map_get_copied_then_insert_m_6_lifetime_apart.rs	ok	0	"1\n"
@@ -434,6 +462,21 @@ regions/mutations/map_get_copied_then_insert_m_8_item_ended.rs	ok	0	"1\n"
 regions/mutations/map_get_copied_then_insert_m_8_lifetime_apart.rs	ok	0	"1\n"
 regions/mutations/map_get_copied_then_insert_m_8_lifetime_kept.rs	E0502:11
 regions/mutations/map_get_copied_then_insert_m_8_option_map_across.rs	E0502:9
+regions/mutations/map_get_key_value_apart_m_7_item_across.rs	E0502:9
+regions/mutations/map_get_key_value_apart_m_7_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_m_7_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_m_7_lifetime_kept.rs	E0502:10
+regions/mutations/map_get_key_value_apart_m_7_option_map_across.rs	E0502:8
+regions/mutations/map_get_key_value_apart_v_7_item_across.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_7_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_7_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_7_lifetime_kept.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_7_option_map_across.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_9_item_across.rs	E0506:11
+regions/mutations/map_get_key_value_apart_v_9_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_9_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/map_get_key_value_apart_v_9_lifetime_kept.rs	E0506:12
+regions/mutations/map_get_key_value_apart_v_9_option_map_across.rs	E0506:10
 regions/mutations/map_get_then_insert_m_6_item_across.rs	E0502:8 E0502:11
 regions/mutations/map_get_then_insert_m_6_item_ended.rs	E0502:11
 regions/mutations/map_get_then_insert_m_6_lifetime_apart.rs	E0502:12
@@ -554,6 +597,16 @@ regions/mutations/option_and_then_captured_kept_b_5_item_ended.rs	E0506:8
 regions/mutations/option_and_then_captured_kept_b_5_lifetime_apart.rs	E0506:8
 regions/mutations/option_and_then_captured_kept_b_5_lifetime_kept.rs	E0506:8
 regions/mutations/option_and_then_captured_kept_b_5_option_map_across.rs	E0506:6
+regions/mutations/option_as_ref_copied_o_5_item_across.rs	E0506:7
+regions/mutations/option_as_ref_copied_o_5_item_ended.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_5_lifetime_apart.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_5_lifetime_kept.rs	E0506:8
+regions/mutations/option_as_ref_copied_o_5_option_map_across.rs	E0506:6
+regions/mutations/option_as_ref_copied_o_6_item_across.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_6_item_ended.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_6_lifetime_apart.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_6_lifetime_kept.rs	ok	0	"1 None\n"
+regions/mutations/option_as_ref_copied_o_6_option_map_across.rs	ok	0	"1 None\n"
 regions/mutations/option_copied_then_take_o_5_item_across.rs	E0502:7
 regions/mutations/option_copied_then_take_o_5_item_ended.rs	ok	0	"Some(3) None\n"
 regions/mutations/option_copied_then_take_o_5_lifetime_apart.rs	ok	0	"Some(3) None\n"
@@ -644,6 +697,36 @@ regions/mutations/pair_field_other_live_b_12_item_ended.rs	E0506:11
 regions/mutations/pair_field_other_live_b_12_lifetime_apart.rs	E0506:11
 regions/mutations/pair_field_other_live_b_12_lifetime_kept.rs	E0506:11
 regions/mutations/pair_field_other_live_b_12_option_map_across.rs	E0506:11
+regions/mutations/pair_field_store_apart_c_11_item_across.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_11_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_11_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_11_lifetime_kept.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_11_option_map_across.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_13_item_across.rs	E0506:15
+regions/mutations/pair_field_store_apart_c_13_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_13_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_c_13_lifetime_kept.rs	E0506:16
+regions/mutations/pair_field_store_apart_c_13_option_map_across.rs	E0506:14
+regions/mutations/pair_field_store_apart_p_11_item_across.rs	E0506:13
+regions/mutations/pair_field_store_apart_p_11_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_p_11_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/pair_field_store_apart_p_11_lifetime_kept.rs	E0506:14
+regions/mutations/pair_field_store_apart_p_11_option_map_across.rs	E0506:12
+regions/mutations/pair_field_store_kept_c_11_item_across.rs	E0506:16
+regions/mutations/pair_field_store_kept_c_11_item_ended.rs	E0506:16
+regions/mutations/pair_field_store_kept_c_11_lifetime_apart.rs	E0506:17
+regions/mutations/pair_field_store_kept_c_11_lifetime_kept.rs	E0506:17
+regions/mutations/pair_field_store_kept_c_11_option_map_across.rs	E0506:15
+regions/mutations/pair_field_store_kept_c_13_item_across.rs	E0506:15
+regions/mutations/pair_field_store_kept_c_13_item_ended.rs	E0506:16
+regions/mutations/pair_field_store_kept_c_13_lifetime_apart.rs	E0506:16
+regions/mutations/pair_field_store_kept_c_13_lifetime_kept.rs	E0506:16
+regions/mutations/pair_field_store_kept_c_13_option_map_across.rs	E0506:14
+regions/mutations/pair_field_store_kept_p_11_item_across.rs	E0506:13 E0506:16
+regions/mutations/pair_field_store_kept_p_11_item_ended.rs	E0506:16
+regions/mutations/pair_field_store_kept_p_11_lifetime_apart.rs	E0506:17
+regions/mutations/pair_field_store_kept_p_11_lifetime_kept.rs	E0506:14 E0506:17
+regions/mutations/pair_field_store_kept_p_11_option_map_across.rs	E0506:12 E0506:15
 regions/mutations/pair_field_through_reference_b_12_item_across.rs	E0506:14
 regions/mutations/pair_field_through_reference_b_12_item_ended.rs	ok	0	"1 3\n"
 regions/mutations/pair_field_through_reference_b_12_lifetime_apart.rs	ok	0	"1 3\n"
@@ -704,6 +787,21 @@ regions/mutations/pair_in_vec_field_b_12_item_ended.rs	ok	0	"1 3\n"
 regions/mutations/pair_in_vec_field_b_12_lifetime_apart.rs	ok	0	"1 3\n"
 regions/mutations/pair_in_vec_field_b_12_lifetime_kept.rs	ok	0	"1 3\n"
 regions/mutations/pair_in_vec_field_b_12_option_map_across.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_11_item_across.rs	E0506:13
+regions/mutations/pair_match_apart_b_11_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_11_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_11_lifetime_kept.rs	E0506:14
+regions/mutations/pair_match_apart_b_11_option_map_across.rs	E0506:12
+regions/mutations/pair_match_apart_b_12_item_across.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_12_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_12_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_12_lifetime_kept.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_apart_b_12_option_map_across.rs	ok	0	"1 3\n"
+regions/mutations/pair_match_kept_b_11_item_across.rs	E0506:13
+regions/mutations/pair_match_kept_b_11_item_ended.rs	E0506:14
+regions/mutations/pair_match_kept_b_11_lifetime_apart.rs	E0506:14
+regions/mutations/pair_match_kept_b_11_lifetime_kept.rs	E0506:14
+regions/mutations/pair_match_kept_b_11_option_map_across.rs	E0506:12
 regions/mutations/pair_method_elided_keeps_self_a_17_item_across.rs	E0506:19
 regions/mutations/pair_method_elided_keeps_self_a_17_item_ended.rs	E0506:20
 regions/mutations/pair_method_elided_keeps_self_a_17_lifetime_apart.rs	E0506:20
@@ -799,11 +897,61 @@ regions/mutations/strings_best_21_item_ended.rs	ok	0	"ferris takes the lead from
 regions/mutations/strings_best_21_lifetime_apart.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
 regions/mutations/strings_best_21_lifetime_kept.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
 regions/mutations/strings_best_21_option_map_across.rs	ok	0	"ferris takes the lead from nobody\nskipping \"say \\\"hi\\\"\"\ndyno takes the lead from ferris\ndyno wins with 99\n[100, 121, 110, 111] starts with b'd' and has 2 vowels\n"
+regions/mutations/struct_method_store_apart_c_17_item_across.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_17_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_17_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_17_lifetime_kept.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_17_option_map_across.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_19_item_across.rs	E0506:21
+regions/mutations/struct_method_store_apart_c_19_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_19_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_c_19_lifetime_kept.rs	E0506:22
+regions/mutations/struct_method_store_apart_c_19_option_map_across.rs	E0506:20
+regions/mutations/struct_method_store_apart_p_17_item_across.rs	E0502:19
+regions/mutations/struct_method_store_apart_p_17_item_ended.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_p_17_lifetime_apart.rs	ok	0	"1 4\n"
+regions/mutations/struct_method_store_apart_p_17_lifetime_kept.rs	E0502:20
+regions/mutations/struct_method_store_apart_p_17_option_map_across.rs	E0502:18
+regions/mutations/struct_method_store_kept_c_17_item_across.rs	E0506:21
+regions/mutations/struct_method_store_kept_c_17_item_ended.rs	E0506:21
+regions/mutations/struct_method_store_kept_c_17_lifetime_apart.rs	E0506:22
+regions/mutations/struct_method_store_kept_c_17_lifetime_kept.rs	E0506:22
+regions/mutations/struct_method_store_kept_c_17_option_map_across.rs	E0506:20
+regions/mutations/struct_method_store_kept_c_18_item_across.rs	E0506:20
+regions/mutations/struct_method_store_kept_c_18_item_ended.rs	E0506:21
+regions/mutations/struct_method_store_kept_c_18_lifetime_apart.rs	E0506:21
+regions/mutations/struct_method_store_kept_c_18_lifetime_kept.rs	E0506:21
+regions/mutations/struct_method_store_kept_c_18_option_map_across.rs	E0506:19
+regions/mutations/struct_method_store_kept_p_17_item_across.rs	E0502:19 E0506:21
+regions/mutations/struct_method_store_kept_p_17_item_ended.rs	E0506:21
+regions/mutations/struct_method_store_kept_p_17_lifetime_apart.rs	E0506:22
+regions/mutations/struct_method_store_kept_p_17_lifetime_kept.rs	E0502:20 E0506:22
+regions/mutations/struct_method_store_kept_p_17_option_map_across.rs	E0502:18 E0506:20
+regions/mutations/struct_method_store_kept_p_19_item_across.rs	E0506:18
+regions/mutations/struct_method_store_kept_p_19_item_ended.rs	E0506:18
+regions/mutations/struct_method_store_kept_p_19_lifetime_apart.rs	E0506:18
+regions/mutations/struct_method_store_kept_p_19_lifetime_kept.rs	E0506:18
+regions/mutations/struct_method_store_kept_p_19_option_map_across.rs	E0506:18
 regions/mutations/try_operator_path_v_9_item_across.rs	E0502:11
 regions/mutations/try_operator_path_v_9_item_ended.rs	ok	0	"Some(4) [4, 4]\n"
 regions/mutations/try_operator_path_v_9_lifetime_apart.rs	ok	0	"Some(4) [4, 4]\n"
 regions/mutations/try_operator_path_v_9_lifetime_kept.rs	E0502:12
 regions/mutations/try_operator_path_v_9_option_map_across.rs	E0502:10
+regions/mutations/tuple_let_pattern_apart_b_6_item_across.rs	E0506:8
+regions/mutations/tuple_let_pattern_apart_b_6_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_6_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_6_lifetime_kept.rs	E0506:9
+regions/mutations/tuple_let_pattern_apart_b_6_option_map_across.rs	E0506:7
+regions/mutations/tuple_let_pattern_apart_b_7_item_across.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_7_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_7_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_7_lifetime_kept.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_apart_b_7_option_map_across.rs	ok	0	"1 3\n"
+regions/mutations/tuple_let_pattern_kept_b_6_item_across.rs	E0506:8
+regions/mutations/tuple_let_pattern_kept_b_6_item_ended.rs	E0506:9
+regions/mutations/tuple_let_pattern_kept_b_6_lifetime_apart.rs	E0506:9
+regions/mutations/tuple_let_pattern_kept_b_6_lifetime_kept.rs	E0506:9
+regions/mutations/tuple_let_pattern_kept_b_6_option_map_across.rs	E0506:7
 regions/mutations/tuple_member_one_live_b_6_item_across.rs	E0506:8
 regions/mutations/tuple_member_one_live_b_6_item_ended.rs	ok	0	"1 3\n"
 regions/mutations/tuple_member_one_live_b_6_lifetime_apart.rs	ok	0	"1 3\n"
@@ -879,6 +1027,21 @@ regions/mutations/vec_first_then_push_v_5_item_ended.rs	E0502:8
 regions/mutations/vec_first_then_push_v_5_lifetime_apart.rs	E0502:8
 regions/mutations/vec_first_then_push_v_5_lifetime_kept.rs	E0502:8
 regions/mutations/vec_first_then_push_v_5_option_map_across.rs	E0502:6
+regions/mutations/vec_of_pairs_push_apart_b_10_item_across.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_10_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_10_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_10_lifetime_kept.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_10_option_map_across.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_12_item_across.rs	E0506:14
+regions/mutations/vec_of_pairs_push_apart_b_12_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_12_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_b_12_lifetime_kept.rs	E0506:15
+regions/mutations/vec_of_pairs_push_apart_b_12_option_map_across.rs	E0506:13
+regions/mutations/vec_of_pairs_push_apart_v_10_item_across.rs	E0502:12
+regions/mutations/vec_of_pairs_push_apart_v_10_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_v_10_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/vec_of_pairs_push_apart_v_10_lifetime_kept.rs	E0502:13
+regions/mutations/vec_of_pairs_push_apart_v_10_option_map_across.rs	E0502:11
 regions/mutations/vec_pop_source_changed_a_5_item_across.rs	E0506:7
 regions/mutations/vec_pop_source_changed_a_5_item_ended.rs	E0506:8
 regions/mutations/vec_pop_source_changed_a_5_lifetime_apart.rs	E0506:8
@@ -919,3 +1082,13 @@ regions/mutations/word_count_top_16_item_ended.rs	ok	0	" the 4\n  on 2\n sat 2\n
 regions/mutations/word_count_top_16_lifetime_apart.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
 regions/mutations/word_count_top_16_lifetime_kept.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
 regions/mutations/word_count_top_16_option_map_across.rs	ok	0	" the 4\n  on 2\n sat 2\n8 distinct words\n"
+regions/mutations/zip_items_apart_b_7_item_across.rs	E0506:9
+regions/mutations/zip_items_apart_b_7_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_7_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_7_lifetime_kept.rs	E0506:10
+regions/mutations/zip_items_apart_b_7_option_map_across.rs	E0506:8
+regions/mutations/zip_items_apart_b_8_item_across.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_8_item_ended.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_8_lifetime_apart.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_8_lifetime_kept.rs	ok	0	"1 3\n"
+regions/mutations/zip_items_apart_b_8_option_map_across.rs	ok	0	"1 3\n"

@@ -67,6 +67,8 @@ fn is_reference(ty: &Ty) -> bool {
 #[derive(Default)]
 pub(super) struct PatternTrace {
     path: Vec<Projection>,
+    /// For each step of `path`, where it goes in what the value holds.
+    regions: Vec<TraceRegion>,
     parts: Vec<Part>,
     /// The `ref` or `ref mut` binding being resolved: its mutability.
     explicit: Option<bool>,
@@ -75,7 +77,20 @@ pub(super) struct PatternTrace {
 
 struct Part {
     path: Vec<Projection>,
+    regions: Vec<TraceRegion>,
     kind: PartKind,
+}
+
+/// Where a pattern's step goes in what the value it steps into holds
+/// (T127).
+#[derive(Clone)]
+pub(super) enum TraceRegion {
+    /// To a position: a tuple's member, a reference's target, a payload.
+    At(Path),
+    /// To a crate type's field by its slot, of a variant for an enum.
+    Field(type_def::Id, Option<ImmutableString>, usize),
+    /// Somewhere these facts don't place: all of the value.
+    Unknown,
 }
 
 enum PartKind {
@@ -139,11 +154,24 @@ impl Parser<'_> {
     /// The pattern being resolved steps below its part: the path's length
     /// before, for [`Parser::trace_leave`].
     pub(super) fn trace_enter(&self, step: Projection) -> usize {
+        let region = match step {
+            Projection::Deref | Projection::Index | Projection::ConstantIndex { .. } => {
+                TraceRegion::At(path(&[Step::Arg(0)]))
+            }
+            Projection::Field(_) | Projection::Downcast(_) => TraceRegion::Unknown,
+        };
+        self.trace_enter_at(step, region)
+    }
+
+    /// [`Parser::trace_enter`], with where the step goes in what the value
+    /// holds.
+    pub(super) fn trace_enter_at(&self, step: Projection, region: TraceRegion) -> usize {
         let mut trace = self.pattern_trace.borrow_mut();
         let Some(trace) = trace.as_mut() else {
             return 0;
         };
         trace.path.push(step);
+        trace.regions.push(region);
         trace.path.len() - 1
     }
 
@@ -159,6 +187,7 @@ impl Parser<'_> {
     pub(super) fn trace_leave(&self, length: usize) {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             trace.path.truncate(length);
+            trace.regions.truncate(length);
         }
     }
 
@@ -167,8 +196,10 @@ impl Parser<'_> {
     pub(super) fn trace_test(&self, access: Access, at: Option<Span>) {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             let path = trace.path.clone();
+            let regions = trace.regions.clone();
             trace.parts.push(Part {
                 path,
+                regions,
                 kind: PartKind::Test(access, at),
             });
         }
@@ -180,8 +211,10 @@ impl Parser<'_> {
         if let Some(trace) = self.pattern_trace.borrow_mut().as_mut() {
             let by_ref = trace.explicit.take().or(self.binding_mode.get());
             let path = trace.path.clone();
+            let regions = trace.regions.clone();
             trace.parts.push(Part {
                 path,
+                regions,
                 kind: PartKind::Bind {
                     name: name.clone(),
                     span,
@@ -277,7 +310,7 @@ impl Parser<'_> {
                     };
                     let holds = self.may_hold_borrow(&value);
                     let moves = self.moves_by_value(&ty);
-                    Some((part.path, name, span, by_ref, holds, moves))
+                    Some((part.path, part.regions, name, span, by_ref, holds, moves))
                 }
                 PartKind::Test(..) => None,
             })
@@ -289,7 +322,7 @@ impl Parser<'_> {
         // An or-pattern's alternatives bind one local: it is given its
         // value once, and takes each alternative's loans.
         let mut defined = std::collections::BTreeSet::new();
-        for (path, name, span, by_ref, holds, moves) in binds {
+        for (path, regions, name, span, by_ref, holds, moves) in binds {
             let declaration = declarations
                 .iter()
                 .find(|binding| binding.name == name)
@@ -303,31 +336,32 @@ impl Parser<'_> {
                 (Matched::Place(base), None) => {
                     let access = if moves { Access::Move } else { Access::Read };
                     flow.part(below(base, &path), access, span);
-                    // The whole of a local that holds borrows: its loans.
-                    if holds && path.is_empty() && base.projection.is_empty() {
-                        flow.take(into, &[(Path::ROOT, Origin::local(base.local))], define);
+                    // A part that holds borrows: what the place holds there.
+                    if holds {
+                        let held = vec![(Path::ROOT, record::place_origin(base))];
+                        flow.take(into, &self.walk(held, &regions), define);
                     }
                 }
                 // Below a reference made for the match, a binding by
-                // reference reborrows through it; the reference itself,
-                // bound whole, is its loans. A part holds all of them,
-                // wherever they are in it.
+                // reference reborrows through it, and holds all of it.
                 (Matched::Origins(origins), Some(_)) => {
                     flow.take(into, &region::collapse(origins), define);
                 }
-                (Matched::Origins(origins), None) if holds && path.is_empty() => {
-                    flow.take(into, origins, define);
+                // `&(x, _)`: a part copied out from below it.
+                (Matched::Origins(origins), None) if holds => {
+                    flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
                 (Matched::Origins(_), None) => {}
                 // `Some(v)` of `v.first()`: a part of a value holding
                 // borrows holds them, bound by value or by reference.
-                (Matched::Held(origins), None) if holds && path.is_empty() => {
-                    flow.take(into, origins, define);
+                (Matched::Held(origins), None) if holds => {
+                    flow.take(into, &self.walk(origins.clone(), &regions), define);
                 }
-                (Matched::Held(origins), by_ref) if holds || by_ref.is_some() => {
-                    flow.take(into, &region::collapse(origins), define);
+                (Matched::Held(origins), Some(_)) => {
+                    let part = self.walk(origins.clone(), &regions);
+                    flow.take(into, &region::collapse(&part), define);
                 }
-                (Matched::Held(_), _) => {}
+                (Matched::Held(_), None) => {}
                 (Matched::Value { made }, by_ref) => {
                     if *made && (by_ref.is_some() || holds) {
                         flow.unmodeled("a pattern binding a borrow its subject made", span);
@@ -335,6 +369,20 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    /// What a part `regions` below a value holding `held` holds.
+    fn walk(&self, mut held: Held, regions: &[TraceRegion]) -> Held {
+        for step in regions {
+            held = match step {
+                TraceRegion::At(at) => region::sub(&held, *at),
+                TraceRegion::Field(definition, variant, slot) => {
+                    self.field_held(&held, *definition, variant.as_deref(), *slot)
+                }
+                TraceRegion::Unknown => region::collapse(&held),
+            };
+        }
+        held
     }
 
     /// A match arm `name =>`, `name` declared at `declaration`, binds the
@@ -348,6 +396,7 @@ impl Parser<'_> {
         let mut trace = PatternTrace::default();
         trace.parts.push(Part {
             path: Vec::new(),
+            regions: Vec::new(),
             kind: PartKind::Bind {
                 name: name.clone(),
                 span: declaration,
@@ -372,6 +421,7 @@ impl Parser<'_> {
         if tests {
             trace.parts.push(Part {
                 path: derefs.clone(),
+                regions: Vec::new(),
                 kind: PartKind::Test(Access::Read, None),
             });
         }
@@ -383,6 +433,7 @@ impl Parser<'_> {
             }
             Some((name, span)) => trace.parts.push(Part {
                 path: Vec::new(),
+                regions: Vec::new(),
                 kind: PartKind::Bind {
                     name: name.clone(),
                     span,
@@ -408,6 +459,7 @@ impl Parser<'_> {
         if !compiled.tests.is_empty() {
             trace.parts.push(Part {
                 path: self.derefs(written),
+                regions: Vec::new(),
                 kind: PartKind::Test(Access::Read, None),
             });
         }
@@ -1165,12 +1217,36 @@ impl Parser<'_> {
         let stored = holds
             && !compound
             && self.may_hold_borrow(target_ty)
-            && origins.is_some_and(|origins| self.flow().store(target.start(), &origins));
+            && origins.is_some_and(|origins| self.store_borrows(target.start(), lvalue, &origins));
         // `s += &t` of a `String` makes a new value that holds no borrow.
         let holds = holds && self.may_hold_borrow(target_ty);
         if !stored {
             self.flow().escapes(replacement.span, start, holds);
         }
+    }
+
+    /// The place the use starting at `start` reads, the target `lvalue`,
+    /// takes `held`: a crate type's field of a local at the field's
+    /// positions in the local's type. Whether these facts follow it.
+    fn store_borrows(&self, start: Position, lvalue: &Lvalue, held: &[(Path, Origin)]) -> bool {
+        if let Lvalue::Field(field) = lvalue
+            && let Some(positions) = self.field_positions(field.definition.id(), None, field.slot)
+        {
+            let mut placed = Held::new();
+            let mut statics = Held::new();
+            for (field_at, at) in positions {
+                let part = region::sub(held, field_at);
+                match at {
+                    Some(at) => placed.extend(region::place(&part, at)),
+                    None => statics.extend(part),
+                }
+            }
+            if !statics.is_empty() {
+                self.flow().forever(&statics);
+            }
+            return self.flow().store_field(start, &placed);
+        }
+        self.flow().store(start, held)
     }
 
     /// Whether a value of type `ty` may hold a borrow: its loans then flow
