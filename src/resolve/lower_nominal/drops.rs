@@ -1065,13 +1065,7 @@ impl Parser<'_> {
         Some(match lvalue {
             Lvalue::Binding { binding, .. } => origin::Fragment::plain(binding.as_str()),
             Lvalue::Place { place, .. } => place.clone(),
-            Lvalue::Field(field) => {
-                let helper = self.push_op(Op::Field {
-                    definition: field.definition.clone(),
-                    slot: field.slot,
-                });
-                origin::Fragment::plain(format!("{helper}({})", field.binding))
-            }
+            Lvalue::Field(field) => field.place(),
             Lvalue::Nested(nested) => {
                 let nested = (**nested).clone();
                 let (read, place, _) = self.nested_parts(&nested);

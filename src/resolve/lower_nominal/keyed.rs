@@ -273,12 +273,8 @@ impl Parser<'_> {
     }
 
     /// The Rawr place a collection is changed through: a mutable local, an
-    /// element of one (`v[i]`, a map's entry), or a field (written back).
-    /// `None` for a field, which `keyed_mutation` copies out and back.
-    pub(super) fn keyed_place(
-        &mut self,
-        value: &ParsedExpr,
-    ) -> Result<Option<origin::Fragment>, Error> {
+    /// element of one (`v[i]`, a map's entry), or a field, each where it is.
+    pub(super) fn keyed_place(&mut self, value: &ParsedExpr) -> Result<origin::Fragment, Error> {
         self.mutable_use(value, value.span);
         if let Ty::Reference { mutable: false, .. } = self.inference.resolve(&value.ty) {
             return Err(Error::TypeMismatch {
@@ -290,15 +286,15 @@ impl Parser<'_> {
         match &value.lvalue {
             Some(Lvalue::Binding { binding, .. }) => {
                 self.require_mutable_binding(binding, value.span)?;
-                Ok(Some(origin::Fragment::plain(binding.to_string())))
+                Ok(origin::Fragment::plain(binding.to_string()))
             }
             Some(Lvalue::Place { binding, place, .. }) => {
                 self.require_mutable_binding(binding, value.span)?;
-                Ok(Some(place.clone()))
+                Ok(place.clone())
             }
             Some(Lvalue::Field(field)) => {
                 self.require_mutable_binding(&field.binding, value.span)?;
-                Ok(None)
+                Ok(field.place())
             }
             Some(Lvalue::Slice(_)) => {
                 Err(self.unsupported("changing a slice range other than by its methods"))
@@ -306,7 +302,7 @@ impl Parser<'_> {
             Some(Lvalue::Nested(nested)) => {
                 self.require_mutable_binding(&nested.binding, value.span)?;
                 let nested = (**nested).clone();
-                Ok(Some(self.nested_place(&nested)))
+                Ok(self.nested_place(&nested))
             }
             None => Err(self
                 .unsupported("changing a collection that is not a local, an element or a field")),
@@ -347,30 +343,10 @@ impl Parser<'_> {
             source.push_text(format!(" {result} }}"));
             return Ok(source);
         }
-        let place = self.keyed_place(value)?;
-        let arguments = origin::Fragment::join(arguments, ", ");
-        if let Some(mut source) = place {
-            source.push_text(format!(".{helper}("));
-            source.push(arguments);
-            source.push_text(")");
-            return Ok(source);
-        }
-        let Some(Lvalue::Field(field)) = &value.lvalue else {
-            unreachable!("a collection without a place is a field");
-        };
-        let setter = self.push_op(Op::SetField {
-            definition: field.definition.clone(),
-            slot: field.slot,
-        });
-        let (receiver, result) = (self.temporary("receiver"), self.temporary("result"));
-        let owner = &field.binding;
-        let mut source = origin::Fragment::plain(format!("{{ let {receiver} = "));
-        source.push(value.rendered_source());
-        source.push_text(format!("; let {result} = {receiver}.{helper}("));
-        source.push(arguments);
-        source.push_text(format!(
-            "); {owner} = {setter}({owner}, {receiver}); {result} }}"
-        ));
+        let mut source = self.keyed_place(value)?;
+        source.push_text(format!(".{helper}("));
+        source.push(origin::Fragment::join(arguments, ", "));
+        source.push_text(")");
         Ok(source)
     }
 
@@ -714,29 +690,7 @@ impl Parser<'_> {
         self.require_key(kind, &types[0], key.span)?;
         let key = key.rendered_source();
         let value_ty = types[1].clone();
-        let root = match self.keyed_place(&value)? {
-            Some(root) => root,
-            // A field's map: copied into a local before the statement and
-            // stored back after it (`with_field_entries`).
-            None => {
-                let Some(Lvalue::Field(field)) = &value.lvalue else {
-                    unreachable!("a collection without a place is a field");
-                };
-                let setter = self.push_op(Op::SetField {
-                    definition: field.definition.clone(),
-                    slot: field.slot,
-                });
-                let local = self.temporary("field");
-                let owner = &field.binding;
-                let mut read = origin::Fragment::plain(format!("let {local} = "));
-                read.push(value.rendered_source());
-                read.push_text("; ");
-                let store =
-                    origin::Fragment::plain(format!(" {owner} = {setter}({owner}, {local});"));
-                self.field_entries.push((read, store));
-                origin::Fragment::plain(local)
-            }
-        };
+        let root = self.keyed_place(&value)?;
         let root_binding = value
             .lvalue
             .as_ref()

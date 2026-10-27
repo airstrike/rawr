@@ -14,7 +14,7 @@
 //! scopes at each `.await`, so there a new borrow stays refused.
 
 use super::*;
-use crate::engine::{KEYWORD_SLOT_OF, KEYWORD_THROUGH};
+use crate::engine::{KEYWORD_LEND, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
 
 impl Parser<'_> {
     /// Whether the whole local `name` may be what a `&mut` local refers to:
@@ -289,6 +289,106 @@ impl Parser<'_> {
             origin::Fragment::plain(format!("{selector} = {source};")),
             replacement.span,
         ))
+    }
+
+    /// `f(&s)` to a script function's `&` parameter (`declared`, `expected`
+    /// at this call), of a value Rust moves: the whole local `s`, or
+    /// `self`, is lent (`KEYWORD_LEND`), so the call reads it where it is
+    /// and nothing is copied (D568). A part of a local, a local in an async
+    /// body, or a reference filling a type parameter, which the body may
+    /// move as a value, is passed as before.
+    pub(super) fn lend_argument(
+        &self,
+        declared: &type_ref::Type,
+        expected: &Ty,
+        argument: &mut ParsedExpr,
+    ) {
+        let (
+            type_ref::Type::Reference { mutable: false, .. },
+            Ty::Reference {
+                mutable: false,
+                target,
+            },
+        ) = (declared, self.inference.resolve(expected))
+        else {
+            return;
+        };
+        if !self.moves_by_value(&target) {
+            return;
+        }
+        if let Some((_, place)) = self.shared_borrow(argument) {
+            argument.source = origin::Fragment::call(KEYWORD_LEND, [place]);
+        }
+    }
+
+    /// The `&mut` arguments at `copied`, which the call copies in and back
+    /// out (`copied_call`): each that is a local of this body, or a chain
+    /// of fields below one, moves in, since what the call gives back is
+    /// stored there (D568). A parameter's place and `self`'s are read as
+    /// before, so a call that fails leaves the caller's values as they were.
+    pub(super) fn move_copied_in(&self, arguments: &mut [ParsedExpr], copied: &[usize]) {
+        for &index in copied {
+            let Some(argument) = arguments.get_mut(index) else {
+                continue;
+            };
+            if self.in_async_body() || !argument.prelude.is_empty() {
+                continue;
+            }
+            let (root, place) = match &argument.lvalue {
+                Some(Lvalue::Binding { binding, .. })
+                    if argument.source.as_str() == binding.as_str() =>
+                {
+                    (binding.clone(), argument.source.clone())
+                }
+                Some(Lvalue::Field(_) | Lvalue::Nested(_)) => {
+                    let Some(field) = fields_below_local(argument) else {
+                        continue;
+                    };
+                    field
+                }
+                _ => continue,
+            };
+            let own = self.bindings.get(root.as_str()).is_some_and(|binding| {
+                matches!(binding.kind, BindingKind::Local)
+                    && !self.parameter_declarations.contains(&binding.declaration)
+            }) && !root.starts_with("__rawr")
+                && !self.aliases.contains_key(root.as_str())
+                && !self.entry_aliases.contains_key(root.as_str())
+                && !self.cell_guards.contains_key(root.as_str());
+            if own {
+                argument.source = origin::Fragment::call(crate::engine::KEYWORD_MOVE, [place]);
+            }
+        }
+    }
+
+    /// What the `&` borrow `value` borrows where it is: the whole local,
+    /// `self`, or a chain of fields and members below one (each slot a
+    /// literal), and that place's text. `None` for any other value, one a
+    /// coercion changed, or one in an async body, whose locals move
+    /// between scopes.
+    pub(super) fn shared_borrow(
+        &self,
+        value: &ParsedExpr,
+    ) -> Option<(ImmutableString, origin::Fragment)> {
+        if self.in_async_body() || !value.prelude.is_empty() {
+            return None;
+        }
+        let (name, place) = self
+            .borrowed_fields
+            .get(&value.span)
+            .filter(|(_, place)| place.as_str() == value.source.as_str())
+            .cloned()
+            .unwrap_or_else(|| (value.source.as_str().into(), value.source.clone()));
+        let local = name.as_str() == KEYWORD_THIS
+            || is_valid_identifier(name.as_str())
+                && !name.starts_with("__rawr")
+                && self
+                    .bindings
+                    .get(name.as_str())
+                    .is_some_and(|binding| matches!(binding.kind, BindingKind::Local))
+                && !self.entry_aliases.contains_key(name.as_str())
+                && !self.cell_guards.contains_key(name.as_str());
+        local.then_some((name, place))
     }
 }
 

@@ -374,3 +374,142 @@ fn a_proxy_lends_its_state_to_script_functions_without_a_copy() {
     }
     assert_eq!((shown, after_update, COPIES.with(Cell::get)), (1005, 0, 0));
 }
+
+/// Script structs holding 100 native values in each `Vec`, for
+/// `struct_places`.
+const STATE: &str = "struct Inner { items: Vec<Tally>, count: i64 }
+    impl Inner {
+        fn bump(&mut self, n: i64) { self.count += n; }
+        fn total(&self) -> i64 { self.count }
+        fn with(&self, state: &State) -> i64 { self.count + view(state) }
+        fn absorb(&mut self, other: &mut Inner) { self.count += other.count; other.count = 0; }
+    }
+    struct State { inner: Inner, items: Vec<Tally>, count: i64 }
+    impl State {
+        fn show(&self) -> i64 { view(self) }
+        fn sizes(&self) -> i64 { lens(&self.items) + lens(&self.inner.items) }
+    }
+    fn set(state: &mut State, n: i64) { state.count = n; }
+    fn view(state: &State) -> i64 { state.count + state.items.len() as i64 + peek(state) }
+    fn peek(state: &State) -> i64 { state.inner.count }
+    fn two(a: &State, b: &Inner) -> i64 { a.count + b.count }
+    fn both(a: &mut State, b: &mut Inner) { a.count += 1; b.count += 1; }
+    fn pair(a: &mut Inner, b: &mut Inner) { a.count += b.count; b.count = 1; }
+    fn lens(items: &Vec<Tally>) -> i64 { items.len() as i64 }
+    fn filled() -> Vec<Tally> {
+        let mut items = Vec::new();
+        for _ in 0..100 { items.push(Tally::new()); }
+        items
+    }";
+
+/// What `work`, run a thousand times on a `State` made of `STATE`'s
+/// structs, adds to `sum`, and how many `Tally` values the run copied.
+fn struct_places(work: &str) -> (i64, usize) {
+    copies_with(
+        STATE,
+        &format!(
+            "let mut s = State {{ inner: Inner {{ items: filled(), count: 0 }}, items: filled(), count: 0 }};
+            let mut sum = 0;
+            for n in 0..1000 {{ {work} }}
+            sum"
+        ),
+    )
+}
+
+/// A field read, a field written directly or through `&mut`, a nested
+/// field, a method called on a field and a field's element reach the
+/// place itself: a thousand of each copy no `Tally` (T248, T143, T167).
+/// Before, each field read copied the struct, so its 100 values, once,
+/// and each write through `&mut` twice.
+#[test]
+fn struct_fields_are_reached_without_a_copy() {
+    for (work, expected) in [
+        ("sum += s.count; s.count = n;", 498501),
+        ("set(&mut s, n); sum += s.count;", 499500),
+        ("let r = &mut s; r.count = n; sum += r.count;", 499500),
+        (
+            "s.inner.count = n; sum += s.inner.count + s.inner.items.len() as i64;",
+            599500,
+        ),
+        ("s.inner.bump(1); sum += s.inner.total();", 500500),
+        ("s.items[0].add(n); sum += s.items[0].total();", 166666500),
+        (
+            "s.items.push(Tally::new()); sum += s.items.len() as i64;",
+            600500,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+    // The same reads, writes and borrows of locals copy nothing either.
+    let named = copies_with(
+        STATE,
+        "let items = filled();
+        let mut count = 0;
+        let mut sum = 0;
+        for n in 0..1000 {
+            sum += count;
+            count = n;
+            sum += count + items.len() as i64 + lens(&items);
+        }
+        sum",
+    );
+    assert_eq!(named, (498501 + 499500 + 200000, 0));
+}
+
+/// A struct or a field of one passed by `&` to a function, passed on from
+/// there, passed as `self`, to a method, or beside another, is lent: a
+/// thousand calls copy no `Tally` (T248). Before, each call copied the
+/// struct, and each field read inside it copied it again, three copies a
+/// call, and `&s.items` copied the field.
+#[test]
+fn structs_passed_by_reference_are_lent() {
+    for (work, expected) in [
+        ("s.count = n; sum += view(&s);", 599500),
+        ("s.count = n; sum += s.show();", 599500),
+        (
+            "let o = Inner { items: filled(), count: n }; sum += two(&s, &o);",
+            499500,
+        ),
+        (
+            "s.count = n; let o = Inner { items: filled(), count: 1 }; sum += o.with(&s);",
+            600500,
+        ),
+        ("s.inner.count = n; sum += two(&s, &s.inner);", 499500),
+        (
+            "sum += lens(&s.items) + lens(&s.inner.items) + s.sizes();",
+            400000,
+        ),
+        (
+            "let r = &s; sum += r.count + r.items.len() as i64 + view(r);",
+            200000,
+        ),
+        (
+            "let r = &s.inner; sum += r.count + lens(&r.items) + r.total();",
+            100000,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+}
+
+/// A local, or a field of one, passed to a `&mut` parameter after the
+/// first moves in and back out of the call: a thousand calls copy no
+/// `Tally` (T248). Before, each copied the value in, out of the callee
+/// and back into the place, three copies a call.
+#[test]
+fn locals_passed_by_mut_reference_move_in_and_out() {
+    for (work, expected) in [
+        (
+            "let mut o = Inner { items: filled(), count: n }; both(&mut s, &mut o);
+            pair(&mut o, &mut s.inner); sum += o.count + s.inner.count;",
+            502499,
+        ),
+        (
+            "let mut o = Inner { items: filled(), count: 0 }; s.inner.count = n;
+            o.absorb(&mut s.inner); sum += o.count + s.inner.count;",
+            499500,
+        ),
+    ] {
+        assert_eq!(struct_places(work), (expected, 0), "{work}");
+    }
+}

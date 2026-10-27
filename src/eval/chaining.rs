@@ -143,6 +143,21 @@ impl Engine {
                 arr.get_mut(arr_idx).unwrap().try_into()
             }
 
+            // A struct's field by its slot, as checked Rawr writes a field
+            // place (`s.a.b` is `s[0][1]`): the field itself, not a copy.
+            Dynamic(Union::Struct(value, ..)) => {
+                let index = idx
+                    .as_int()
+                    .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, idx_pos))?;
+                let fields = value.fields_mut();
+                let len = fields.len();
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|slot| fields.get_mut(slot))
+                    .ok_or_else(|| ERR::ErrorArrayBounds(len, index, idx_pos))?
+                    .try_into()
+            }
+
             Dynamic(Union::Blob(arr, ..)) => {
                 // val_blob[idx]
                 let index = idx
@@ -451,8 +466,46 @@ impl Engine {
         }
     }
 
-    /// Evaluate a dot/index chain.
+    /// Evaluate a dot/index chain. Once it ends, a local a method call in
+    /// it lent (`KEYWORD_LEND`) is plain again where nothing else holds it.
     pub(crate) fn eval_dot_index_chain(
+        &self,
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+        scope: &mut Scope,
+        mut this_ptr: Option<&mut Dynamic>,
+        expr: &Expr,
+        new_val: Option<(Dynamic, &OpAssignment)>,
+    ) -> RawrResult {
+        let result = self.eval_chain(
+            global,
+            caches,
+            scope,
+            this_ptr.as_deref_mut(),
+            expr,
+            new_val,
+        );
+        if let Expr::Index(x, ..) | Expr::Dot(x, ..) = expr {
+            Self::end_chain_loans(scope, &mut this_ptr, &x.rhs);
+        }
+        result
+    }
+
+    /// `end_loans` of each method call's arguments in a chain's `rhs`.
+    fn end_chain_loans(scope: &mut Scope, this_ptr: &mut Option<&mut Dynamic>, rhs: &Expr) {
+        match rhs {
+            Expr::MethodCall(x, ..) => {
+                Self::end_loans(scope, this_ptr.as_deref_mut(), x.args.iter())
+            }
+            Expr::Index(x, ..) | Expr::Dot(x, ..) => {
+                Self::end_chain_loans(scope, this_ptr, &x.lhs);
+                Self::end_chain_loans(scope, this_ptr, &x.rhs);
+            }
+            _ => {}
+        }
+    }
+
+    fn eval_chain(
         &self,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
@@ -646,12 +699,12 @@ impl Engine {
         result.map(|(value, _)| Some(value))
     }
 
-    /// The element of `value` that `indexes` reach, itself, through
-    /// arrays that are not shared (the element itself may be); `None` for
-    /// any other value or index.
+    /// The element or field of `value` that `indexes` reach, itself,
+    /// through arrays and structs that are not shared (the part itself may
+    /// be); `None` for any other value or index.
     fn part_at<'v>(mut value: &'v mut Dynamic, indexes: &[Dynamic]) -> Option<&'v mut Dynamic> {
         for index in indexes {
-            if !value.is_array() {
+            if !value.is_array() && !value.is::<crate::types::nominal::Struct>() {
                 return None;
             }
             let index = usize::try_from(index.as_int().ok()?).ok()?;
@@ -681,9 +734,8 @@ impl Engine {
                 );
 
                 for expr in &*x.args {
-                    let arg_value =
-                        self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
-                    idx_values.push(arg_value.0.flatten());
+                    let tp = this_ptr.as_deref_mut();
+                    idx_values.push(self.call_arg(global, caches, scope, tp, expr)?);
                 }
             }
 
@@ -708,8 +760,7 @@ impl Engine {
 
                         for expr in &*x.args {
                             let tp = this_ptr.as_deref_mut();
-                            let arg_value = self.get_arg_value(global, caches, scope, tp, expr)?;
-                            _arg_values.push(arg_value.0.flatten());
+                            _arg_values.push(self.call_arg(global, caches, scope, tp, expr)?);
                         }
                     }
                     (_, ChainType::Indexing) => {
