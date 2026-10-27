@@ -729,7 +729,7 @@ fn associated_counter_item(kind: item::Kind) -> item::Definition {
         item::Kind::AssociatedValue => item::Definition::associated_value("Counter::new", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap(),
         item::Kind::AssociatedFunction => item::Definition::associated_function("Counter::new", signature).unwrap(),
         item::Kind::Method => item::Definition::method("Counter::new", receiver::Mode::Shared, signature).unwrap(),
-        item::Kind::Value | item::Kind::Function | item::Kind::Operation | item::Kind::StreamOperation | item::Kind::IntrinsicFunction | item::Kind::IntrinsicMacro | item::Kind::IntrinsicMethod => panic!("expected associated item kind"),
+        item::Kind::Value | item::Kind::Function | item::Kind::Operation | item::Kind::StreamOperation | item::Kind::IntrinsicFunction | item::Kind::IntrinsicMacro | item::Kind::IntrinsicMethod | item::Kind::MacroRules => panic!("expected associated item kind"),
     }
 }
 

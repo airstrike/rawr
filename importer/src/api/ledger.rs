@@ -512,6 +512,11 @@ pub struct Index {
     names: Box<[Name]>,
 }
 
+/// The first segment of a path through a macro's `$crate`, after the root
+/// of the dependency the macro came from: `__rawr_crate_<name>_<id>`, the
+/// root of the crate defining the macro, which the driver finds.
+pub const CRATE_SEGMENT: &str = "__rawr_crate_";
+
 /// What a name index says about a Rust path below its root alias.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Lookup {
@@ -553,6 +558,14 @@ impl Index {
             return Lookup::Present;
         };
         let mut module = &*root.id;
+        // A macro's `$crate` names a crate the index does not hold: the
+        // driver resolves it on demand.
+        if path
+            .first()
+            .is_some_and(|segment| segment.starts_with(CRATE_SEGMENT))
+        {
+            return Lookup::ThroughCrate;
+        }
         for (position, segment) in path.iter().enumerate() {
             let children = self.children(module);
             let mut found = children.iter().filter(|name| &*name.name == *segment);

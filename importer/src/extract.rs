@@ -5369,6 +5369,7 @@ fn rejected_class(owner: &protocol::Owner, shape: &protocol::Shape) -> model::Re
         | protocol::Shape::Trait { .. }
         | protocol::Shape::AssociatedType { .. }
         | protocol::Shape::Sysroot { .. }
+        | protocol::Shape::MacroRules { .. }
         | protocol::Shape::UnnameablePrivate
         | protocol::Shape::Unknown { .. } => RejectedClass::Unavailable,
     }
@@ -5485,6 +5486,10 @@ fn shape(
         },
         protocol::Shape::Sysroot { compiler_kind } => model::Kind::Sysroot {
             compiler_kind: boxed("sysroot compiler kind", &compiler_kind, limits, allocation)?,
+        },
+        protocol::Shape::MacroRules { source, krate } => model::Kind::MacroRules {
+            source: boxed("macro_rules source", &source, limits, allocation)?,
+            krate: boxed("macro_rules crate", &krate, limits, allocation)?,
         },
         protocol::Shape::Unknown { compiler_kind } => {
             allocation.string(&compiler_kind)?;

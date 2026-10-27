@@ -51,6 +51,9 @@ pub enum Kind {
     /// `LocalKey::scope` returns a `TaskLocalFuture<T, F>`. A script
     /// future fills `F` with a type Rawr has no name for (D527).
     ScriptFutureType,
+    /// A `macro_rules!` macro: Rawr expands its source, so it has no native
+    /// operation (the facade plan carries the source).
+    MacroRules,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -146,8 +149,9 @@ mod tests {
             Kind::UnsupportedConstant,
             Kind::Extraction,
             Kind::ScriptFutureType,
+            Kind::MacroRules,
         ];
-        assert_eq!(kinds.len(), 43);
+        assert_eq!(kinds.len(), 44);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

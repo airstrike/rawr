@@ -5,6 +5,7 @@ mod cargo_env;
 pub(crate) mod cell;
 mod drops;
 mod error_object;
+mod expand;
 mod fmt_write;
 mod iterator;
 mod keyed;
@@ -2132,6 +2133,60 @@ fn write_method(
 /// The index of a free function's `&mut` parameter, which is its receiver
 /// `this` at runtime: the function changes the caller's place in place,
 /// and a call `f(&mut v, x)` is the method call `v.f(x)`.
+/// `source` lexed as checked Rawr reads Rust, through its EOF marker.
+pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> {
+    let inputs = [source];
+    let (mut stream, control) = engine.lex_raw(&inputs, None);
+    control.borrow_mut().rust = true;
+    let mut tokens = Vec::new();
+    loop {
+        let token = stream
+            .next()
+            .expect("token streams always produce their EOF marker");
+        let is_eof = token.0 == Token::EOF;
+        // `switch`, `debug`, `call` and kin are legacy keywords; in
+        // checked Rawr they are names, as in Rust (`RUST_NAMES`).
+        let token = match token {
+            (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
+                (Token::Identifier(Box::new(name.into())), position)
+            }
+            // After such a keyword the lexer reads `+`/`-` as unary; after
+            // the name they are binary.
+            (Token::UnaryPlus | Token::UnaryMinus, position)
+                if matches!(tokens.last(), Some((Token::Identifier(name), _))
+                    if crate::tokenizer::demangle_names(name).len() < name.len()) =>
+            {
+                let binary = if token.0 == Token::UnaryPlus {
+                    Token::Plus
+                } else {
+                    Token::Minus
+                };
+                (binary, position)
+            }
+            // Rust has no power operator: binary `**` is `*` then a
+            // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
+            // script lexer keeps `**`.
+            (Token::PowerOf | Token::PowerOfAssign, position) => {
+                let second = if token.0 == Token::PowerOf {
+                    Token::Multiply
+                } else {
+                    Token::MultiplyAssign
+                };
+                let mut next = position;
+                next.advance();
+                tokens.push((Token::Multiply, position));
+                (second, next)
+            }
+            token => token,
+        };
+        tokens.push(token);
+        if is_eof {
+            break;
+        }
+    }
+    tokens
+}
+
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(
@@ -9622,6 +9677,8 @@ struct Parser<'a> {
     /// passes down to each leaf, as Rust's `Formatter` does.
     debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
+    /// The `macro_rules!` expansions made so far (`expand`).
+    expansions: usize,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<ClosureOutput>>,
@@ -9903,55 +9960,7 @@ impl<'a> Parser<'a> {
         pattern_offset: usize,
         #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
     ) -> Self {
-        let inputs = [source];
-        let (mut stream, control) = engine.lex_raw(&inputs, None);
-        control.borrow_mut().rust = true;
-        let mut tokens = Vec::new();
-        loop {
-            let token = stream
-                .next()
-                .expect("token streams always produce their EOF marker");
-            let is_eof = token.0 == Token::EOF;
-            // `switch`, `debug`, `call` and kin are legacy keywords; in
-            // checked Rawr they are names, as in Rust (`RUST_NAMES`).
-            let token = match token {
-                (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
-                    (Token::Identifier(Box::new(name.into())), position)
-                }
-                // After such a keyword the lexer reads `+`/`-` as unary; after
-                // the name they are binary.
-                (Token::UnaryPlus | Token::UnaryMinus, position)
-                    if matches!(tokens.last(), Some((Token::Identifier(name), _))
-                        if crate::tokenizer::demangle_names(name).len() < name.len()) =>
-                {
-                    let binary = if token.0 == Token::UnaryPlus {
-                        Token::Plus
-                    } else {
-                        Token::Minus
-                    };
-                    (binary, position)
-                }
-                // Rust has no power operator: binary `**` is `*` then a
-                // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
-                // script lexer keeps `**`.
-                (Token::PowerOf | Token::PowerOfAssign, position) => {
-                    let second = if token.0 == Token::PowerOf {
-                        Token::Multiply
-                    } else {
-                        Token::MultiplyAssign
-                    };
-                    let mut next = position;
-                    next.advance();
-                    tokens.push((Token::Multiply, position));
-                    (second, next)
-                }
-                token => token,
-            };
-            tokens.push(token);
-            if is_eof {
-                break;
-            }
-        }
+        let mut tokens = lex_rust(engine, source);
         if models.imports_variants() {
             tokens = expand_imported_variants(&models, tokens);
         }
@@ -10011,6 +10020,7 @@ impl<'a> Parser<'a> {
             closure_hints: Vec::new(),
             debug_spec: None,
             closure_hint: None,
+            expansions: 0,
             closure_outputs: Vec::new(),
             closure_output: None,
             async_step: None,
@@ -18387,6 +18397,17 @@ impl<'a> Parser<'a> {
                 operation: name_span,
             });
         };
+        // A dependency's `macro_rules!` macro expands from its source. A
+        // facade's own macro of the name wins on the facade path (D594.3).
+        if !items
+            .iter()
+            .any(|item| item.kind() == crate::host::item::Kind::IntrinsicMacro)
+            && let Some(rules) = items
+                .iter()
+                .find_map(crate::host::item::Definition::macro_rules_source)
+        {
+            return self.expand_macro_rules(rules, name_span);
+        }
         if item.kind() != crate::host::item::Kind::IntrinsicMacro {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
@@ -42237,9 +42258,7 @@ impl<'a> Parser<'a> {
             let item_owner = self.models.item_owner(&path).cloned();
             let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
             let items = value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
-            return if items
-                .first()
-                .is_some_and(|item| item.kind() == crate::host::item::Kind::IntrinsicMacro)
+            return if items.first().is_some_and(|item| item.kind().is_macro())
                 && matches!(self.peek(), Token::Bang)
             {
                 self.parse_host_macro(
@@ -42479,7 +42498,7 @@ impl<'a> Parser<'a> {
             let error = if self.models.host.entry(&owner).is_some() {
                 Error::UnknownMember {
                     owner,
-                    member,
+                    member: member.clone(),
                     reference: member_span,
                 }
             } else {
@@ -42487,6 +42506,36 @@ impl<'a> Parser<'a> {
                     name: owner,
                     reference: owner_span,
                 }
+            };
+            // A crate's module path no binding names, as a macro's
+            // `$crate::module::function` is: the whole path is unresolved,
+            // so the importer is asked for all of it.
+            #[cfg(feature = "rust-import")]
+            let crate_path = segments.first().is_some_and(|(root, _)| {
+                matches!(
+                    self.models.host.entry(root),
+                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                ) && self.models.import(root).is_none()
+                    && self.models.get(root).is_none()
+                    && self.models.function(root).is_none()
+                    && !self.bindings.contains_key(root)
+            });
+            #[cfg(feature = "rust-import")]
+            let error = match error {
+                Error::UnknownType { name, .. }
+                    if crate_path
+                        && name
+                            .rsplit("::")
+                            .next()
+                            .and_then(|segment| segment.chars().next())
+                            .is_some_and(|first| first.is_lowercase() || first == '_') =>
+                {
+                    Error::UnknownImport {
+                        path: format!("{name}::{member}").into(),
+                        reference: span(owner_span.start(), member_span.end()),
+                    }
+                }
+                error => error,
             };
             #[cfg(feature = "rust-import")]
             let error = self.native_miss(native, error);
