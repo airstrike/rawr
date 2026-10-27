@@ -1444,7 +1444,7 @@ fn lower_with_context(
 
     for (index, op) in ops.into_iter().enumerate() {
         let sentinel: ImmutableString = format!("{SENTINEL}{index}").into();
-        let private: ImmutableString = op.private_name(&models, support_id).into();
+        let private: ImmutableString = op.private_name(support_id).into();
         rewrites.insert(sentinel, private.clone());
         register(&mut module, private, op, &models);
     }
@@ -2304,10 +2304,15 @@ fn write_copied_body(
     }
     output.declaration(source, declaration, "let __rawr_returned = {\n");
     let offset = output.body(source, span, &body.source, &body.locations);
+    // The parameters' final values move out, as the body's locals end.
+    let moved = copied
+        .iter()
+        .map(|name| format!("{}({name})", crate::engine::KEYWORD_MOVE))
+        .collect::<Vec<_>>();
     output.declaration(
         source,
         declaration,
-        &format!("\n}};\n[__rawr_returned, {}]", copied.join(", ")),
+        &format!("\n}};\n[__rawr_returned, {}]", moved.join(", ")),
     );
     offset
 }
@@ -3810,14 +3815,6 @@ enum Op {
         definition: type_def::Definition,
         item: item::Enum,
         variant: usize,
-    },
-    Field {
-        definition: type_def::Definition,
-        slot: usize,
-    },
-    SetField {
-        definition: type_def::Definition,
-        slot: usize,
     },
     Clone {
         definition: type_def::Definition,
@@ -5437,14 +5434,6 @@ enum ExecutableOp {
         item: item::Enum,
         variant: usize,
     },
-    Field {
-        definition: type_def::Definition,
-        slot: usize,
-    },
-    SetField {
-        definition: type_def::Definition,
-        slot: usize,
-    },
     Clone {
         definition: type_def::Definition,
     },
@@ -5784,8 +5773,6 @@ impl ExecutableOp {
             | Self::OpenStartup
             | Self::Struct { .. }
             | Self::Enum { .. }
-            | Self::Field { .. }
-            | Self::SetField { .. }
             | Self::Clone { .. }
             | Self::Debug { .. }
             | Self::Equal { .. }
@@ -5815,8 +5802,6 @@ impl ExecutableOp {
             | Self::Change { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
-            | Self::Field { .. }
-            | Self::SetField { .. }
             | Self::Clone { .. }
             | Self::Debug { .. }
             | Self::Equal { .. }
@@ -5848,8 +5833,6 @@ impl ExecutableOp {
             | Self::Change { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
-            | Self::Field { .. }
-            | Self::SetField { .. }
             | Self::Clone { .. }
             | Self::Debug { .. }
             | Self::Equal { .. }
@@ -5876,12 +5859,12 @@ impl ExecutableOp {
         }
     }
 
-    fn private_name(&self, models: &Models, support_id: u64) -> String {
+    fn private_name(&self, support_id: u64) -> String {
         let (definition, operation) = match self {
             Self::Witnessed(op) => {
                 return format!(
                     "{}.witnessed.{}",
-                    op.template.private_name(models, support_id),
+                    op.template.private_name(support_id),
                     op.witnesses
                 );
             }
@@ -5991,24 +5974,6 @@ impl ExecutableOp {
                 definition,
                 format!("variant.{}", item.variants[*variant].name.text),
             ),
-            Self::Field { definition, slot } => {
-                let Nominal::Struct { item, .. } = models.definition(definition.id()) else {
-                    unreachable!("field operations are resolved only for structs")
-                };
-                (
-                    definition,
-                    format!("field.{}", item.fields[*slot].name.text),
-                )
-            }
-            Self::SetField { definition, slot } => {
-                let Nominal::Struct { item, .. } = models.definition(definition.id()) else {
-                    unreachable!("field operations are resolved only for structs")
-                };
-                (
-                    definition,
-                    format!("set-field.{}", item.fields[*slot].name.text),
-                )
-            }
             Self::Clone { definition } => (definition, "clone".to_string()),
             Self::Debug { definition } => (definition, "debug".to_string()),
             Self::Equal { definition } => (definition, "equal".to_string()),
@@ -6095,20 +6060,8 @@ impl ExecutableOp {
                 .iter()
                 .map(|ty| Ty::from_resolved(ty).type_id(models))
                 .collect(),
-            Self::Field { .. } => vec![TypeId::of::<nominal::Struct>()],
             Self::Clone { definition } | Self::Debug { definition } => {
                 vec![models.definition(definition.id()).ty().type_id(models)]
-            }
-            Self::SetField {
-                definition, slot, ..
-            } => {
-                let Nominal::Struct { item, .. } = models.definition(definition.id()) else {
-                    unreachable!("field setters are resolved only for structs")
-                };
-                vec![
-                    TypeId::of::<nominal::Struct>(),
-                    Ty::from_resolved(&item.fields[*slot].ty).type_id(models),
-                ]
             }
             Self::Equal { definition } => {
                 let type_id = models.definition(definition.id()).ty().type_id(models);
@@ -6399,44 +6352,6 @@ impl ExecutableOp {
                 .map(Into::into)
                 .map_err(construction_invariant)
             }
-            Self::Field { definition, slot } => {
-                validate_dynamic(args[0], definition, models)?;
-                let value = args[0].read_lock::<nominal::Struct>().ok_or_else(|| {
-                    invariant("nominal field receiver type changed after resolution")
-                })?;
-                value
-                    .fields()
-                    .get(*slot)
-                    .cloned()
-                    .ok_or_else(|| invariant("resolved field slot is outside its schema"))
-            }
-            Self::SetField { definition, slot } => {
-                let Nominal::Struct { item, .. } = models.definition(definition.id()) else {
-                    return Err(invariant("resolved field owner changed before assignment"));
-                };
-                let expected = item
-                    .fields
-                    .get(*slot)
-                    .ok_or_else(|| invariant("resolved field slot is outside its schema"))?;
-                if !matches_runtime_type(args[1], &expected.ty, models) {
-                    return Err(invariant(
-                        "validated field assignment type proof changed before evaluation",
-                    ));
-                }
-                validate_dynamic(args[0], definition, models)?;
-                let mut receiver = args[0].take();
-                let Union::Struct(value, ..) = &mut receiver.0 else {
-                    return Err(invariant(
-                        "nominal field receiver type changed after resolution",
-                    ));
-                };
-                let field = value
-                    .fields_mut()
-                    .get_mut(*slot)
-                    .ok_or_else(|| invariant("resolved field slot is outside its schema"))?;
-                *field = args[1].take();
-                Ok(receiver)
-            }
             Self::Clone { definition } => {
                 validate_dynamic(args[0], definition, models)?;
                 Ok(args[0].clone())
@@ -6585,6 +6500,12 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
         // it is called on, and one with `&self` reads it where it is.
         ExecutableOp::Intrinsic { proof } if proof.mutates_receiver() => Some(true),
         ExecutableOp::Intrinsic { proof } if proof.borrows_receiver() => Some(false),
+        // A struct's own operations read the value where it is: a `clone`
+        // copies it once, as Rust's does.
+        ExecutableOp::Clone { .. }
+        | ExecutableOp::Debug { .. }
+        | ExecutableOp::Equal { .. }
+        | ExecutableOp::Validate { .. } => Some(false),
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
@@ -8414,6 +8335,14 @@ struct FieldLvalue {
     ty: Ty,
 }
 
+impl FieldLvalue {
+    /// The field itself, `binding[slot]`, which the runtime reads, assigns
+    /// and calls methods on where it is.
+    fn place(&self) -> origin::Fragment {
+        field_place(origin::Fragment::plain(self.binding.to_string()), self.slot)
+    }
+}
+
 #[derive(Clone)]
 enum Lvalue {
     Binding {
@@ -8450,8 +8379,8 @@ struct NestedLvalue {
 
 #[derive(Clone)]
 enum PlaceStep {
+    /// A struct's field, by its slot.
     Field {
-        definition: type_def::Definition,
         slot: usize,
     },
     Index(origin::Fragment),
@@ -8557,9 +8486,9 @@ impl Lvalue {
 
 enum Writeback {
     Direct,
-    Field(Box<FieldLvalue>),
     Owned,
-    /// A place the runtime changes in place: `v[0]`, a nested place's leaf.
+    /// A place the runtime changes in place: `v[0]`, a field `s[1]`, a
+    /// nested place's leaf.
     Place(origin::Fragment),
 }
 
@@ -10067,6 +9996,9 @@ struct Parser<'a> {
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
+    /// Each `&` borrow of a chain of fields below a local, by the borrow's
+    /// span: the local and the chain's place (`lend_argument`).
+    borrowed_fields: BTreeMap<Span, (ImmutableString, origin::Fragment)>,
     /// Moves an arm made out of a local its bindings shadow, deferred to
     /// after the match (`drops::Clears::InArm`): each flag's declaration
     /// and what runs once the match ends.
@@ -10243,6 +10175,7 @@ impl<'a> Parser<'a> {
             temporary_scopes: Vec::new(),
             temporary_shapes: BTreeMap::new(),
             borrowed: BTreeSet::new(),
+            borrowed_fields: BTreeMap::new(),
             deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
             imported,
@@ -11107,6 +11040,43 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Each parameter of a script struct type, or a reference to one, is
+    /// checked against this program's schema where the call enters, as a
+    /// method's receiver is: a value of an older schema is refused there,
+    /// since its fields are then read where they are. An enum is checked
+    /// where a `match` reads it, which lets another type fall through to
+    /// `_`.
+    fn validate_parameters(&mut self, definition: &item::Function) {
+        let receiver = this_parameter(definition);
+        for (index, parameter) in definition.parameters.iter().enumerate() {
+            let ty = match &parameter.ty {
+                type_ref::Type::Reference { target, .. } => &**target,
+                ty => ty,
+            };
+            let type_ref::Type::Path(path) = ty else {
+                continue;
+            };
+            let type_ref::Target::Script { definition: id, .. } = &path.target else {
+                continue;
+            };
+            let Nominal::Struct {
+                definition: model, ..
+            } = self.models.definition(*id)
+            else {
+                continue;
+            };
+            let helper = self.push_op(Op::Validate {
+                definition: model.clone(),
+            });
+            let name = if Some(index) == receiver {
+                "this"
+            } else {
+                parameter.name.text.as_str()
+            };
+            self.write_output(format!("{helper}({name});"), definition.body.span);
+        }
+    }
+
     fn parse_block_function_body(
         &mut self,
         definition: &item::Function,
@@ -11156,6 +11126,7 @@ impl<'a> Parser<'a> {
         if self.startup {
             self.return_blocked = Some("from a startup boot; use its tail");
         }
+        self.validate_parameters(definition);
         self.open_body_drops(
             definition
                 .parameters
@@ -14367,10 +14338,7 @@ impl<'a> Parser<'a> {
                     let nested = NestedLvalue {
                         binding: field.binding.clone(),
                         base: origin::Fragment::plain(field.binding.to_string()),
-                        steps: vec![PlaceStep::Field {
-                            definition: field.definition.clone(),
-                            slot: field.slot,
-                        }],
+                        steps: vec![PlaceStep::Field { slot: field.slot }],
                         ty: field.ty.clone(),
                     };
                     Some(self.nested_place(&nested))
@@ -15322,8 +15290,6 @@ impl<'a> Parser<'a> {
                 item,
                 variant,
             },
-            Op::Field { definition, slot } => ExecutableOp::Field { definition, slot },
-            Op::SetField { definition, slot } => ExecutableOp::SetField { definition, slot },
             Op::Clone { definition } => ExecutableOp::Clone { definition },
             Op::Debug { definition } => ExecutableOp::Debug { definition },
             Op::Equal { definition } => ExecutableOp::Equal { definition },
@@ -19706,14 +19672,8 @@ impl<'a> Parser<'a> {
             && let Some(lvalue) = receiver.lvalue.clone()
         {
             self.require_mutable_binding(lvalue.binding(), member_span)?;
-            let local = match &lvalue {
-                Lvalue::Binding { binding, .. } => Some(binding.as_str()),
-                Lvalue::Place { place, .. } => Some(place.as_str()),
-                _ => None,
-            };
-            if receiver.is_local() && local == Some(receiver.source.as_str()) {
+            if let Some(mut source) = in_place(&receiver) {
                 let (mut prelude, operands) = self.private_operands(&helper, arguments);
-                let mut source = receiver.source;
                 source.push_text(format!(".{helper}("));
                 source.push(origin::Fragment::join(operands, ", "));
                 source.push_text(")");
@@ -19762,10 +19722,21 @@ impl<'a> Parser<'a> {
         }
         // A `&self` receiver that is a local is lent where it is. It is
         // read after the arguments, which Rust's borrow of it keeps from
-        // changing it.
+        // changing it. A local's field or element is lent where it is too,
+        // as the receiver of a method call on that place.
+        let place = in_place(&receiver).filter(|_| self.host_witnesses.is_empty());
         let (prelude, source) = if shared && self.normalize_private_calls && receiver.is_local() {
             let (prelude, operands) = self.private_operands(&helper, arguments);
             let source = self.op_call(&helper, std::iter::once(receiver.source).chain(operands));
+            (prelude, source)
+        } else if shared
+            && self.normalize_private_calls
+            && let Some(mut source) = place
+        {
+            let (prelude, operands) = self.private_operands(&helper, arguments);
+            source.push_text(format!(".{helper}("));
+            source.push(origin::Fragment::join(operands, ", "));
+            source.push_text(")");
             (prelude, source)
         } else {
             self.private_call(&helper, std::iter::once(receiver).chain(arguments))
@@ -20013,16 +19984,10 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Field(field) => {
-                let helper = self.push_op(Op::SetField {
-                    definition: field.definition.clone(),
-                    slot: field.slot,
-                });
-                let mut rendered = origin::Fragment::plain(format!(
-                    "{} = {helper}({}, ",
-                    field.binding, field.binding
-                ));
+                let mut rendered = field.place();
+                rendered.push_text(" = ");
                 rendered.push(value);
-                rendered.push_text(");");
+                rendered.push_text(";");
                 rendered
             }
             Lvalue::Slice(_) => return Err(self.unsupported("changing a slice range in place")),
@@ -21265,6 +21230,38 @@ impl<'a> Parser<'a> {
         {
             return Err(self.unsupported("a closure that changes `self` kept in a local"));
         }
+        // `let r = &s;`, `let r = &s.a.b;` of a value Rust moves: `r` is the
+        // place, read where it is at each use, as Rust's shared borrow
+        // keeps it unchanged meanwhile (D568). A local shadowed ahead is
+        // copied as before.
+        if borrowed_value
+            && !borrowing
+            && !mutable
+            && annotation.is_none()
+            && let Ty::Reference {
+                mutable: false,
+                target,
+            } = self.inference.resolve(&value.ty)
+            && self.moves_by_value(&target)
+            && let Some((root, place)) = self.shared_borrow(&value)
+            && !self.root_shadowed_later(&root)
+        {
+            let rendered = self.with_field_entries(pending, origin::Fragment::default());
+            if !rendered.is_empty() {
+                self.write_output(rendered, value.span);
+            }
+            self.entry_aliases.remove(&name);
+            self.bound_value(&name, name_span, &value, value_start);
+            let lvalue = Lvalue::Place {
+                binding: root,
+                ty: Ty::Unknown,
+                place,
+            };
+            self.borrow_lvalue(name, name_span, value.ty, lvalue);
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         if let Ty::Reference {
             mutable: true,
             target,
@@ -22358,11 +22355,8 @@ impl<'a> Parser<'a> {
                 let mut destructure = || {
                     self.require_type(pattern_ty, &target, *span)?;
                     for (slot, (member, ty)) in members.iter().zip(fields.iter()).enumerate() {
-                        let helper = self.push_op(Op::Field {
-                            definition: definition.clone(),
-                            slot,
-                        });
-                        let path = format!("{helper}({path})");
+                        let path = field_place(origin::Fragment::plain(path), slot);
+                        let path = path.as_str();
                         let field = names
                             .get(slot)
                             .cloned()
@@ -22371,7 +22365,7 @@ impl<'a> Parser<'a> {
                             FactStep::Field(field),
                             borrows::TraceRegion::Field(definition.id(), None, slot),
                         );
-                        self.destructure_into(member, &path, ty, statements)?;
+                        self.destructure_into(member, path, ty, statements)?;
                         self.trace_leave(step);
                     }
                     Ok(())
@@ -22950,16 +22944,10 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Field(field) => {
-                let helper = self.push_op(Op::SetField {
-                    definition: field.definition,
-                    slot: field.slot,
-                });
-                let mut rendered = origin::Fragment::plain(format!(
-                    "{} = {helper}({}, ",
-                    field.binding, field.binding
-                ));
+                let mut rendered = field.place();
+                rendered.push_text(" = ");
                 rendered.push(replacement.rendered_source());
-                rendered.push_text(");");
+                rendered.push_text(";");
                 rendered
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
@@ -25994,7 +25982,7 @@ impl<'a> Parser<'a> {
         }
         let mut returned = value.surrounded("[", "");
         for name in &self.copy_out {
-            returned.push_text(format!(", {name}"));
+            returned.push_text(format!(", {}({name})", crate::engine::KEYWORD_MOVE));
         }
         returned.push_text("]");
         Some(returned)
@@ -26023,16 +26011,18 @@ impl<'a> Parser<'a> {
         if places.is_empty() {
             return Ok(call);
         }
+        // Each value moves out of the returned array, which ends here.
+        let moved = crate::engine::KEYWORD_MOVE;
         let returned = self.temporary("returned");
         let mut source = origin::Fragment::plain(format!("{{ let {returned} = "));
         source.push(call);
         source.push_text("; ");
         for (index, place) in places.iter().enumerate() {
-            let value = format!("{returned}[{}]", index + 1);
+            let value = format!("{moved}({returned}[{}])", index + 1);
             source.push(self.store_into(place, &value)?);
             source.push_text(" ");
         }
-        source.push_text(format!("{returned}[0] }})"));
+        source.push_text(format!("{moved}({returned}[0]) }})"));
         Ok(source.surrounded("(", ""))
     }
 
@@ -26064,23 +26054,9 @@ impl<'a> Parser<'a> {
             store.push_text(";");
             return Ok(store);
         }
-        Ok(match self.keyed_place(place)? {
-            Some(mut target) => {
-                target.push_text(format!(" = {value};"));
-                target
-            }
-            None => {
-                let Some(Lvalue::Field(field)) = &place.lvalue else {
-                    unreachable!("a place without a place text is a field");
-                };
-                let setter = self.push_op(Op::SetField {
-                    definition: field.definition.clone(),
-                    slot: field.slot,
-                });
-                let owner = &field.binding;
-                origin::Fragment::plain(format!("{owner} = {setter}({owner}, {value});"))
-            }
-        })
+        let mut target = self.keyed_place(place)?;
+        target.push_text(format!(" = {value};"));
+        Ok(target)
     }
 
     /// The `&mut` arguments at `indexes` of a call, each a `&mut` place
@@ -28278,13 +28254,10 @@ impl<'a> Parser<'a> {
                 }
             }
             Lvalue::Field(field) => {
-                let helper = self.push_op(Op::SetField {
-                    definition: field.definition,
-                    slot: field.slot,
-                });
-                source.push_text(format!("{} = {helper}({}, ", field.binding, field.binding));
+                source.push(field.place());
+                source.push_text(" = ");
                 source.push(replacement.rendered_source());
-                source.push_text("); }");
+                source.push_text("; }");
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
             Lvalue::Nested(nested) => {
@@ -29291,26 +29264,8 @@ impl<'a> Parser<'a> {
                     place.push(index.clone());
                     place.push_text("]");
                 }
-                PlaceStep::Field { definition, slot } => {
-                    let getter = self.push_op(Op::Field {
-                        definition: definition.clone(),
-                        slot: *slot,
-                    });
-                    let setter = self.push_op(Op::SetField {
-                        definition: definition.clone(),
-                        slot: *slot,
-                    });
-                    let local = self.temporary("field");
-                    read.push_text(format!("let {local} = {getter}("));
-                    read.push(place.clone());
-                    read.push_text("); ");
-                    let mut store = place.clone();
-                    store.push_text(format!(" = {setter}("));
-                    store.push(place.clone());
-                    store.push_text(format!(", {local}); "));
-                    stores.push(store);
-                    place = origin::Fragment::plain(local);
-                }
+                // The field itself, below the place before it (D568).
+                PlaceStep::Field { slot, .. } => place = field_place(place, *slot),
                 PlaceStep::Cell { release, native } => {
                     let reads = !(overwrite && index == leaf);
                     let (cell_read, cell_store, local) = match updates {
@@ -32038,6 +31993,10 @@ impl<'a> Parser<'a> {
                 target: Box::new(self.inference.resolve(&operand.ty)),
             };
             operand.span = span(start, operand.span.end());
+            // `&s.a.b`: the field chain a call may lend (`lend_argument`).
+            if let Some(field) = fields_below_local(&operand) {
+                self.borrowed_fields.insert(operand.span, field);
+            }
             operand.lvalue = None;
             return Ok(operand.retain_origin());
         }
@@ -33204,14 +33163,7 @@ impl<'a> Parser<'a> {
             let lvalue = match &value.lvalue {
                 // `v[0].cells`, `s.a.b`: a field below an element or a field.
                 Some(lvalue @ (Lvalue::Place { .. } | Lvalue::Field(_) | Lvalue::Nested(_))) => {
-                    Some(nested_step(
-                        lvalue,
-                        PlaceStep::Field {
-                            definition: definition.clone(),
-                            slot,
-                        },
-                        ty.clone(),
-                    ))
+                    Some(nested_step(lvalue, PlaceStep::Field { slot }, ty.clone()))
                 }
                 _ => variable_name(value.source.as_str()).map(|binding| {
                     Lvalue::Field(FieldLvalue {
@@ -33236,7 +33188,6 @@ impl<'a> Parser<'a> {
                 (lvalue, _) => lvalue,
             };
             let owner = definition.id();
-            let helper = self.push_op(Op::Field { definition, slot });
             let expression_span = span(value.span.start(), member_span.end());
             self.part_of(
                 (value.span, &value.ty),
@@ -33247,9 +33198,11 @@ impl<'a> Parser<'a> {
             if through_reference && lvalue.is_none() && self.drops() {
                 self.borrowed.insert(expression_span);
             }
+            // The field is read where it is, `s[slot]`: a chain of fields
+            // copies none of the values on the way (D568).
             value = ParsedExpr {
                 prelude: value.prelude,
-                source: origin::Fragment::call(&helper, [value.source]),
+                source: field_place(value.source, slot),
                 ty,
                 span: expression_span,
                 lvalue,
@@ -33333,6 +33286,16 @@ impl<'a> Parser<'a> {
                 span(member_span.start(), end),
                 &substitution,
             )?;
+            let receiver_root = in_place(&value).map(|place| {
+                let place = place.as_str();
+                place[..place.find('[').unwrap_or(place.len())].to_string()
+            });
+            self.lend_arguments(
+                &definition,
+                &mut args,
+                &substitution,
+                receiver_root.as_deref(),
+            );
             // rustc's E0040: `drop` runs where the value drops, not by name.
             if definition.trait_name().is_some_and(|name| name == "Drop") {
                 return Err(Error::Syntax {
@@ -33414,6 +33377,9 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(member_span.start(), end),
             );
+            let copied = method_copied(&definition, &self.models);
+            let places = self.mutable_arguments(&args, copied.iter().copied())?;
+            self.move_copied_in(&mut args, &copied);
             let arguments = origin::Fragment::join(
                 args.iter()
                     .map(ParsedExpr::rendered_source)
@@ -33421,27 +33387,7 @@ impl<'a> Parser<'a> {
                 ", ",
             );
             let method = method_name(definition.id());
-            let places = self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
             let source = match writeback {
-                Some(Writeback::Field(field)) => {
-                    let FieldLvalue {
-                        binding,
-                        definition,
-                        slot,
-                        ..
-                    } = *field;
-                    let setter = self.push_op(Op::SetField { definition, slot });
-                    let receiver = format!("{setter}_receiver");
-                    let result = format!("{setter}_result");
-                    let mut source = origin::Fragment::plain(format!("{{\nlet {receiver} = "));
-                    source.push(value.rendered_source());
-                    source.push_text(format!(";\nlet {result} = {receiver}.{method}("));
-                    source.push(arguments);
-                    source.push_text(format!(
-                        ");\n{binding} = {setter}({binding}, {receiver});\n{result}\n}}"
-                    ));
-                    source
-                }
                 Some(Writeback::Owned) => {
                     let receiver = self.temporary("receiver");
                     let mut source = origin::Fragment::plain(format!("({{\nlet {receiver} = "));
@@ -38093,16 +38039,10 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Field(field) => {
-                let helper = self.push_op(Op::SetField {
-                    definition: field.definition.clone(),
-                    slot: field.slot,
-                });
-                let mut rendered = origin::Fragment::plain(format!(
-                    "{} = {helper}({}, ",
-                    field.binding, field.binding
-                ));
+                let mut rendered = field.place();
+                rendered.push_text(" = ");
                 rendered.push(replacement);
-                rendered.push_text(");");
+                rendered.push_text(";");
                 rendered
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
@@ -40401,6 +40341,7 @@ impl<'a> Parser<'a> {
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;
+                self.lend_argument(&parameter.ty, &expected, argument);
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
@@ -40428,7 +40369,9 @@ impl<'a> Parser<'a> {
             {
                 self.shared_call_fns.insert(call);
             }
-            let places = self.mutable_arguments(&arguments, receiver.into_iter().chain(copied))?;
+            let places =
+                self.mutable_arguments(&arguments, receiver.into_iter().chain(copied.clone()))?;
+            self.move_copied_in(&mut arguments, &copied);
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
                 && index < arguments.len()
@@ -40693,11 +40636,10 @@ impl<'a> Parser<'a> {
             if let Some(temporary) = temporaries.get(field.name.text.as_str()) {
                 ordered.push(origin::Fragment::plain(temporary.clone()));
             } else if base.is_some() {
-                let helper = self.push_op(Op::Field {
-                    definition: definition.clone(),
+                ordered.push(field_place(
+                    origin::Fragment::plain(base_name.as_str()),
                     slot,
-                });
-                ordered.push(origin::Fragment::plain(format!("{helper}({base_name})")));
+                ));
             } else {
                 return Err(Error::InvalidConstruction {
                     owner: definition.name().into(),
@@ -41395,6 +41337,24 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Each argument of a script method's `&` parameter lent where it is
+    /// (`lend_argument`), unless it is the local `receiver_root` the call's
+    /// receiver is in, which the call holds while it runs.
+    fn lend_arguments(
+        &self,
+        definition: &method::Definition,
+        arguments: &mut [ParsedExpr],
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        receiver_root: Option<&str>,
+    ) {
+        for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
+            if receiver_root != Some(argument.source.as_str()) {
+                let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
+                self.lend_argument(&parameter.ty, &expected, argument);
+            }
+        }
+    }
+
     /// A generic impl's method at one call: fresh parameters, the owner's
     /// unified with the receiver's type arguments when there is a receiver.
     fn method_substitution(
@@ -41439,10 +41399,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Writeback, Error> {
         self.mutable_use(value, operation);
         let (name, writeback) = if let Some(Lvalue::Field(field)) = &value.lvalue {
-            (
-                field.binding.clone(),
-                Writeback::Field(Box::new(field.clone())),
-            )
+            (field.binding.clone(), Writeback::Place(field.place()))
         } else if let Some(Lvalue::Binding { binding, .. }) = &value.lvalue {
             (binding.clone(), Writeback::Direct)
         } else {
@@ -43214,6 +43171,7 @@ impl<'a> Parser<'a> {
                 span(owner_span.start(), end),
                 &substitution,
             )?;
+            self.lend_arguments(&definition, &mut arguments, &substitution, None);
             let opens_startup = is_tuple(definition.output())
                 && self.models.boot.as_ref() == Some(definition.key());
             let witnesses = self.witness_arguments(
@@ -43221,8 +43179,9 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(owner_span.start(), end),
             );
-            let places =
-                self.mutable_arguments(&arguments, method_copied(&definition, &self.models))?;
+            let copied = method_copied(&definition, &self.models);
+            let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+            self.move_copied_in(&mut arguments, &copied);
             let source = origin::Fragment::call(
                 method_name(definition.id()),
                 arguments
@@ -45949,15 +45908,32 @@ impl<'a> Parser<'a> {
         };
         let mut source = self.output.split_off(start);
         source.trim_end();
+        // A local the body ends with moves out to the caller, as in Rust,
+        // rather than being copied as the body's locals end.
+        let lvalue = variable_name(source.as_str())
+            .filter(|name| {
+                self.bindings
+                    .get(name.as_str())
+                    .is_some_and(|binding| matches!(binding.kind, BindingKind::Local))
+            })
+            .map(|binding| Lvalue::Binding {
+                binding,
+                ty: self.last_type.clone(),
+            });
+        let moves = lvalue.is_some();
         let mut value = ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
             ty: self.last_type.clone(),
             span,
-            lvalue: None,
+            lvalue,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
         };
+        if moves {
+            self.move_local(&mut value)?;
+        }
+        value.lvalue = None;
         self.allow_endpoint_projection = true;
         let result = self.coerce_expr(expected, &mut value);
         self.allow_endpoint_projection = false;
@@ -47769,10 +47745,7 @@ fn nested_step(lvalue: &Lvalue, step: PlaceStep, ty: Ty) -> Lvalue {
         Lvalue::Field(field) => NestedLvalue {
             binding: field.binding.clone(),
             base: origin::Fragment::plain(field.binding.to_string()),
-            steps: vec![PlaceStep::Field {
-                definition: field.definition.clone(),
-                slot: field.slot,
-            }],
+            steps: vec![PlaceStep::Field { slot: field.slot }],
             ty: field.ty.clone(),
         },
         Lvalue::Place { binding, place, .. } => NestedLvalue {
@@ -47788,6 +47761,116 @@ fn nested_step(lvalue: &Lvalue, step: PlaceStep, ty: Ty) -> Lvalue {
     nested.steps.push(step);
     nested.ty = ty;
     Lvalue::Nested(Box::new(nested))
+}
+
+/// The field at `slot` of the struct `base` is, as the runtime reaches it in
+/// place: `base[slot]`. A local or a chain of parts below one stays a chain,
+/// so `s.a.b` is the place `s[0][1]`; any other value is indexed as a
+/// temporary, `(base)[slot]`.
+fn field_place(base: origin::Fragment, slot: usize) -> origin::Fragment {
+    let mut place = if is_place_chain(base.as_str()) {
+        base
+    } else {
+        base.surrounded("(", ")")
+    };
+    place.push_text(format!("[{slot}]"));
+    place
+}
+
+/// The place `value` reads, as the runtime reaches it where it is: a local
+/// by its name, an element (`v[i]`), a field (`s[1]`), or a chain of fields,
+/// members and elements below a local. `None` for any other value, or for
+/// one read through a prelude.
+fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
+    if !value.prelude.is_empty() {
+        return None;
+    }
+    match value.lvalue.as_ref()? {
+        Lvalue::Binding { binding, .. } => {
+            (value.source.as_str() == binding.as_str()).then(|| value.source.clone())
+        }
+        Lvalue::Place { place, .. } => Some(place.clone()),
+        Lvalue::Field(field) => Some(field.place()),
+        Lvalue::Nested(nested) => {
+            let mut place = nested.base.clone();
+            for step in &nested.steps {
+                match step {
+                    PlaceStep::Field { slot } => place = field_place(place, *slot),
+                    PlaceStep::Index(index) => {
+                        place.push_text("[");
+                        place.push(index.clone());
+                        place.push_text("]");
+                    }
+                    PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
+                    _ => return None,
+                }
+            }
+            Some(place)
+        }
+        Lvalue::Slice(_) => None,
+    }
+}
+
+/// The local and the place of `value` when it is a chain of fields and
+/// members below a local (`s.a.0` is `s[0][0]`), each slot a literal.
+fn fields_below_local(value: &ParsedExpr) -> Option<(ImmutableString, origin::Fragment)> {
+    match value.lvalue.as_ref()? {
+        Lvalue::Field(field) => Some((field.binding.clone(), field.place())),
+        Lvalue::Nested(nested)
+            if nested
+                .steps
+                .iter()
+                .all(|step| matches!(step, PlaceStep::Field { .. } | PlaceStep::Member(_))) =>
+        {
+            let base = nested.base.as_str();
+            if !is_place_chain(base) {
+                return None;
+            }
+            let root = base.trim_start_matches('(');
+            let root = &root[..root
+                .find(|character: char| character != '_' && !character.is_alphanumeric())
+                .unwrap_or(root.len())];
+            Some((root.into(), in_place(value)?))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `source` is a local's name followed by indexes only:
+/// `s`, `this`, `s[0][i + 1]`, `(s)[0]`.
+fn is_place_chain(source: &str) -> bool {
+    // `(s)` reads as `s`.
+    let (name, rest) = match source.strip_prefix('(') {
+        Some(inner) => match inner.split_once(')') {
+            Some(parts) => parts,
+            None => return false,
+        },
+        None => source.split_at(
+            source
+                .find(|character: char| character != '_' && !character.is_alphanumeric())
+                .unwrap_or(source.len()),
+        ),
+    };
+    if name.is_empty()
+        || name.starts_with(|character: char| character.is_ascii_digit())
+        || variable_name(name).is_none()
+    {
+        return false;
+    }
+    let mut depth = 0usize;
+    for character in rest.chars() {
+        match character {
+            '[' => depth += 1,
+            ']' => match depth.checked_sub(1) {
+                Some(outer) => depth = outer,
+                None => return false,
+            },
+            '"' | '\'' => return false,
+            _ if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 fn variable_name(source: &str) -> Option<ImmutableString> {

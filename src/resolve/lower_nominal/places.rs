@@ -471,10 +471,7 @@ impl Parser<'_> {
                 let nested = NestedLvalue {
                     binding: field.binding.clone(),
                     base: origin::Fragment::plain(field.binding.to_string()),
-                    steps: vec![PlaceStep::Field {
-                        definition: field.definition.clone(),
-                        slot: field.slot,
-                    }],
+                    steps: vec![PlaceStep::Field { slot: field.slot }],
                     ty: field.ty.clone(),
                 };
                 (
@@ -924,10 +921,7 @@ impl Parser<'_> {
                 let nested = NestedLvalue {
                     binding: field.binding.clone(),
                     base: origin::Fragment::plain(field.binding.to_string()),
-                    steps: vec![PlaceStep::Field {
-                        definition: field.definition.clone(),
-                        slot: field.slot,
-                    }],
+                    steps: vec![PlaceStep::Field { slot: field.slot }],
                     ty: field.ty.clone(),
                 };
                 (
@@ -1409,11 +1403,7 @@ impl Parser<'_> {
                 (origin::Fragment::plain(binding.as_str()), &[][..], None)
             }
             Lvalue::Place { place, .. } => (place.clone(), &[][..], None),
-            Lvalue::Field(field) => (
-                origin::Fragment::plain(format!("{}[{}]", field.binding, field.slot)),
-                &[][..],
-                None,
-            ),
+            Lvalue::Field(field) => (field.place(), &[][..], None),
             Lvalue::Nested(nested) => (nested.base.clone(), &nested.steps[..], None),
             Lvalue::Slice(slice) => (slice.base.clone(), &[][..], Some(&**slice)),
         };
@@ -2184,10 +2174,7 @@ pub(super) fn as_nested(lvalue: &Lvalue) -> NestedLvalue {
         Lvalue::Field(field) => NestedLvalue {
             binding: field.binding.clone(),
             base: origin::Fragment::plain(field.binding.to_string()),
-            steps: vec![PlaceStep::Field {
-                definition: field.definition.clone(),
-                slot: field.slot,
-            }],
+            steps: vec![PlaceStep::Field { slot: field.slot }],
             ty: field.ty.clone(),
         },
         Lvalue::Nested(nested) => (**nested).clone(),
