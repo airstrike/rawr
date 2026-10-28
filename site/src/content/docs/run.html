@@ -42,7 +42,20 @@ fn main() {
 
 <h2 id="scripts">Scripts</h2>
 <p>A <code>.rs</code> file with a frontmatter block is a cargo script wherever it sits. rawr runs it as a file of its own, as cargo does. Inside a Cargo package it still doesn&rsquo;t use the package&rsquo;s <code>Cargo.toml</code>.</p>
-<p>rawr doesn&rsquo;t resolve a script&rsquo;s dependencies yet. A script whose frontmatter declares <code>[dependencies]</code> stops with an error that says so. A script with no dependencies runs.</p>
+<p>A script may declare dependencies in its frontmatter, as under <code>cargo -Zscript</code>. rawr-import runs it the way it runs a crate with dependencies, and the script prints what it prints under cargo.</p>
+<div class="block"><pre><code>#!/usr/bin/env -S cargo +nightly -Zscript
+---cargo
+[dependencies]
+itoa = "1"
+---
+// rawr
+fn main() {
+    let mut buffer = itoa::Buffer::new();
+    println!("{}", buffer.format(128u64));
+}</code></pre></div>
+<p>rawr expands the frontmatter as cargo does. The package takes its name from the file, and its edition is 2024 unless the frontmatter names one. Relative paths in it are the script&rsquo;s directory&rsquo;s. Cargo refuses some tables in a script&rsquo;s manifest, such as <code>[workspace]</code>, <code>[lib]</code> and <code>[build-dependencies]</code>, and rawr refuses them with cargo&rsquo;s message.</p>
+<p>Nothing is written beside the script. rawr keeps each script&rsquo;s manifest and lockfile in <code>scripts/&lt;name&gt;-&lt;digest&gt;</code> in rawr&rsquo;s home, which is <code>~/.cargo/rawr</code> unless <code>RAWR_HOME</code> says otherwise. The digest is of the script&rsquo;s path, so a script keeps its lockfile from run to run. A new dependency is locked when the frontmatter changes, and the dependencies already locked stay as they are.</p>
+<p>Your own <code>cargo</code> builds every script in one build directory, <code>scripts/build</code>. A crate that one script compiled is reused by the next script that needs it, and so are rawr&rsquo;s own crates. The first script pays for compiling rawr&rsquo;s crates, and a second script that shares its dependencies starts in seconds.</p>
 
 <h2 id="native-main">A native main</h2>
 <p>An app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of that module that native code can call gets a generated stub with the same signature. The stub runs the function in the interpreter.</p>

@@ -24,10 +24,14 @@ pub const DEBOUNCE: Duration = Duration::from_millis(300);
 const POLL: Duration = Duration::from_millis(25);
 
 /// The `Cargo.toml` of the crate `graph` loaded, when it is a Cargo crate
-/// of marked `.rs` files.
+/// of marked `.rs` files. A script's manifest is the one rawr expands
+/// from its frontmatter, and `cargo check` doesn't run beside a script.
 #[must_use]
 pub fn manifest(graph: &rawr::package::Graph) -> Option<PathBuf> {
     let package = graph.entry_package();
+    if package.is_script() {
+        return None;
+    }
     let manifest = package.root().join("Cargo.toml");
     manifest.is_file().then_some(manifest)
 }

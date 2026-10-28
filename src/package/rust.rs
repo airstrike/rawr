@@ -27,6 +27,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
+        script_project(entry)?;
         let app = app_crate(self, &environment, limits)?;
         request(entry, config, environment, app, limits).map(Some)
     }
@@ -47,6 +48,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
+        script_project(entry)?;
         let app = app_crate(self, &environment, limits)?;
         request_with_profile(
             entry,
@@ -81,6 +83,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
+        script_project(entry)?;
         let app = app_crate(self, &environment, limits)?;
         request_with_profile(
             entry,
@@ -214,6 +217,23 @@ fn app_crate_path<'a>(
     entry
         .is_native_path(&absolute)
         .then(|| std::iter::once(app).chain(absolute).collect())
+}
+
+/// A script's expanded manifest and its lockfile, in its directory in
+/// rawr's area: the project Cargo builds the script's runner in (D608
+/// point 6).
+fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
+    match entry.cargo() {
+        Some(cargo) if entry.is_script() => {
+            super::manifest::script::materialize(cargo).map_err(|reason| {
+                rawr_import::Error::Request {
+                    field: "script manifest",
+                    reason: reason.into_boxed_str(),
+                }
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The app's own crate as a Cargo path dependency. Rawr writes a

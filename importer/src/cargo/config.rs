@@ -811,7 +811,9 @@ impl Selected {
     }
 
     pub(crate) fn shares_cargo_unit(&self, other: &Self) -> bool {
-        self.package == other.package
+        // The package each names: its `package`, else its alias. Two
+        // dependencies with no `package` key are two packages.
+        self.package().unwrap_or(self.alias()) == other.package().unwrap_or(other.alias())
             && self.features == other.features
             && self.default_features == other.default_features
             && match (&self.source, &other.source) {
@@ -2106,5 +2108,29 @@ mod tests {
         let error = validate_config_authority(&document, Path::new("/fixture/config.toml"))
             .expect_err("inline build wrapper rejects");
         assert!(format!("{error}").contains("wrapper chain"));
+    }
+
+    /// Two registry dependencies with the same requirement and no
+    /// `package` key are two packages; one package under two aliases is
+    /// one unit.
+    #[test]
+    fn dependencies_share_a_unit_only_when_they_name_one_package() {
+        let limits = Limits::standard();
+        let seal = |dependency: Dependency| {
+            dependency
+                .seal(Path::new("/"), &mut RequestAllocation::new(&limits))
+                .unwrap()
+        };
+        let itoa = seal(Dependency::registry("itoa", "1", &limits).unwrap());
+        let semver = seal(Dependency::registry("semver", "1", &limits).unwrap());
+        assert!(!itoa.shares_cargo_unit(&semver));
+        let renamed = seal(
+            Dependency::registry("numbers", "1", &limits)
+                .unwrap()
+                .package("itoa")
+                .unwrap(),
+        );
+        assert!(itoa.shares_cargo_unit(&renamed));
+        assert!(renamed.shares_cargo_unit(&itoa));
     }
 }

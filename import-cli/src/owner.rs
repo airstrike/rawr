@@ -155,7 +155,10 @@ fn contents(target: &rawr::project::Target) -> Option<Vec<(PathBuf, Option<Vec<u
 
 /// Where the program is: the crate's root, or its single file.
 fn location(target: &rawr::project::Target) -> PathBuf {
-    project(target).map_or_else(|| target.source().path().to_path_buf(), Path::to_path_buf)
+    target.project().map_or_else(
+        || target.source().path().to_path_buf(),
+        |project| project.root().as_path().to_path_buf(),
+    )
 }
 
 /// How a [`session`] ended.
@@ -183,14 +186,16 @@ fn session(
     // restarts it only when this changed.
     let mut started_from = program.and_then(|_| contents(target));
     let source = fallback(target)?;
-    let target_path = project(target)
-        .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
-        .to_path_buf();
+    let root = project(target)
+        .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?;
+    // Where a save finds the program again: the crate's root, or a
+    // script's own file.
+    let target_path = location(target);
     // A host's window may listen on a socket under `target/rawr`; a killed
     // window cannot remove it, so its owner does, and `cargo clean` never
     // meets a stale one.
     let _socket = profile
-        .socket(&target_path)
+        .socket(&root)
         .map(rawr_import::process::remove_on_exit);
     // A `rawr mcp` that started this run hears what happens, and its death
     // ends the run (D537.3–4).
@@ -198,7 +203,7 @@ fn session(
     if rawr_cli::events::supervised() {
         rawr_import::progress::listen(rawr_cli::events::building);
     }
-    rawr_import::progress::begin(&target_path);
+    rawr_import::progress::begin(&root);
     let initial = initial_watched_program(target, graph, &target_path, lifecycle, profile, program);
     rawr_import::progress::finish(initial.is_ok());
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
@@ -730,7 +735,7 @@ fn open_lane(
             source.clone(),
         )
     })?;
-    Lane::for_program(project, lifecycle, program.cloned())
+    Lane::for_program(&project, lifecycle, program.cloned())
         .map_err(|error| framework(error, source.clone()))
 }
 
@@ -847,13 +852,25 @@ pub fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Repo
     let Some(root) = project(target) else {
         return Ok(());
     };
-    crate::project::same_build(root).map_err(|message| {
+    crate::project::same_build(&root).map_err(|message| {
         diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
     })
 }
 
-fn project(target: &rawr::project::Target) -> Option<&Path> {
-    target.project().map(|project| project.root().as_path())
+/// The program's package root, where Cargo builds its runner: the crate's
+/// root, or a script's directory in rawr's area (D608 point 6), created
+/// here on a script's first run. `None` for another single file.
+fn project(target: &rawr::project::Target) -> Option<PathBuf> {
+    if let Some(project) = target.project() {
+        return Some(project.root().as_path().to_path_buf());
+    }
+    if !rawr::project::frontmatter::is_script(target.source().text()) {
+        return None;
+    }
+    let root = rawr::package::Graph::root_of(target);
+    // A failure to create it is the lane's to report.
+    let _ = std::fs::create_dir_all(&root);
+    Some(root)
 }
 
 /// The program's entry source, for a diagnostic with nothing more precise.
