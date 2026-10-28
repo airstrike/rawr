@@ -10,6 +10,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The first program that reaches a crate reads its whole public API, so a later program that uses other items of it needs no nightly build either. Each program still gets exactly the part of the API it names.
 - A shared entry keeps the cfgs and generated files that the publishing project's build scripts gave. A later project whose build scripts give other results stops the run, naming the crate, and the entry is removed.
 - Entries unused for 30 days are removed when another is added, never while a run reads them. `rawr cache clean` removes those unused for an hour.
+- A crate's re-export of a std item is that item. `use iced::time::{Duration, Instant};` names std's `Duration` and `Instant`, and so do `time::Duration` after `use iced::time;` and `iced::time::Instant::now()`. Before, rawr refused the import as "a standard library definition".
+- A std type a crate re-exports under another name, as `iced::Never` is std's `Infallible`, is that type under the new name in types. So is `use std::time::Duration as Span;`. Calls through the new name, such as `Span::from_secs(1)`, aren't supported yet.
+- std's `Instant` crosses into and out of a crate by value, as `Duration` does. `time::every(milliseconds(10))`, which gives a `Subscription<Instant>`, has a binding, and `.map(Message::Tick)` hands each tick's `Instant` to the script.
+- `{:?}` of an `Instant` prints as Rust prints it, `Instant { tv_sec: .., tv_nsec: .. }`. Before, rawr printed `<timestamp>`.
+- Upstream iced's stopwatch, ferris, game_of_life, table and markdown get past their `iced::time` imports, and clock and the_matrix get past `time::every`. geometry gets past `use iced::Never`. Each still stops at a later gap.
 
 ## 0.3.11 (2026-10-28)
 

@@ -300,6 +300,28 @@ pub fn ticks(count: u32) -> Subscription<u32> {
     }
 }
 
+/// Time, as iced's `time`: std's `Duration` and `Instant` re-exported
+/// beside functions that take and give them.
+pub mod time {
+    pub use std::time::{Duration, Instant};
+
+    use super::Subscription;
+
+    /// `millis` milliseconds, as iced's `time::milliseconds`.
+    pub fn milliseconds(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// The first three ticks of a clock every `duration`, each the instant
+    /// it ticks at, as iced's `time::every`.
+    pub fn every(duration: Duration) -> Subscription<Instant> {
+        let start = Instant::now();
+        Subscription {
+            messages: (1..=3).map(|tick| start + duration * tick).collect(),
+        }
+    }
+}
+
 /// `program` with the subscription `subscription` of its state.
 struct WithSubscription<P, F> {
     program: P,

@@ -287,6 +287,40 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
+/// iced's stopwatch: the crate's `time` re-exports std's `Duration` and
+/// `Instant`, and the script imports them through it and writes
+/// `time::Duration` through the module. `time::every(milliseconds(10))`
+/// takes and gives std's types, and a variant's constructor maps each
+/// tick's `Instant`, which shows as Rust's `{:?}` shows it. The output is
+/// `cargo run`'s, apart from the instants' values, which differ between
+/// runs.
+#[test]
+fn std_types_a_crate_re_exports_cross_by_value() {
+    let (rawr, cargo) = both_printed("crossing-time", "time.rs", "Stop");
+    // `Instant { tv_sec: 7, tv_nsec: 8 }` with its values left out.
+    let instants = |text: &str| {
+        text.lines()
+            .map(|line| match (line.find("Instant { "), line.rfind(" })")) {
+                (Some(start), Some(end)) if start < end => {
+                    format!("{}Instant {{ .. }}{}", &line[..start], &line[end + 2..])
+                }
+                _ => line.to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(instants(&rawr), instants(&cargo));
+    let tick = "heard Tick(Instant { .. })";
+    assert_eq!(
+        instants(&rawr),
+        format!(
+            "title crossing::Stopwatch\nfonts 0\n{tick}\n{tick}\n{tick}\n\
+             1 view pad 0 <x Stop:0> '20 ms in 3 ticks'@16\n1 message Toggle(false)\n\
+             last view pad 0 <Stop:0> '20 ms in 3 ticks'@16"
+        )
+    );
+}
+
 /// iced's exit and events: `latest().and_then(..)` takes a script closure,
 /// or the generic crate function `close` as `and_then(window::close)` does,
 /// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's

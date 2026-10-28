@@ -18,6 +18,7 @@ const RENDERER_DOMAIN: &[u8] = b"rawr.identity.renderer/v1";
 const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
+const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
@@ -242,11 +243,18 @@ impl Definition {
         Self(Framed::new(FUTURE_DOMAIN).finish())
     }
 
-    /// Rust's `std::time::Duration`, which crosses by value as iced's
-    /// `time::Duration`. It lives in `core`, which no crate's facade declares.
+    /// Rust's `std::time::Duration`, which crosses by value as Rawr's own
+    /// `Duration`. It lives in `core`, which no crate's facade declares.
     #[must_use]
     pub fn duration() -> Self {
         Self(Framed::new(DURATION_DOMAIN).finish())
+    }
+
+    /// Rust's `std::time::Instant`, which crosses by value as Rawr's own
+    /// `Instant`. It lives in `std`, which no crate's facade declares.
+    #[must_use]
+    pub fn instant() -> Self {
+        Self(Framed::new(INSTANT_DOMAIN).finish())
     }
 
     /// A script value where a generic item is instantiated at a script type
@@ -290,12 +298,14 @@ impl Definition {
     }
 
     /// Whether these bytes name a type the iced facade declares for a Rust
-    /// value no imported crate declares: a future, a sipper or a duration.
+    /// value no imported crate declares: a future, a sipper, a duration or
+    /// an instant.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         *bytes == Self::future().0
             || *bytes == Self::sipper().0
             || *bytes == Self::duration().0
+            || *bytes == Self::instant().0
             || *bytes == Self::value().0
             || *bytes == Self::element().0
             || *bytes == Self::theme().0
