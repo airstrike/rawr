@@ -13,7 +13,7 @@ export interface Dashboard {
   running: boolean;
   /** The image the Worker deploys (PLAY_VERSION). */
   deployed: string;
-  /** The image the running container was started from, if recorded. */
+  /** The image the running bot reported since its container started, if it has reported. */
   started: string | null;
   /** The last daily purge of unvisited shares. */
   purge?: { day: number; stored: number; purged: number } | null;
@@ -191,7 +191,7 @@ ${cell("Channels", s ? n(s.channels) : "—", s && !s.channels_loaded ? '<span c
 <div class="rows" style="margin-top:16px">
 <div class="row"><span class="cap">Image</span><span>${version}</span></div>
 <div class="row"><span class="cap">Container</span><span>${d.running ? "running" : "stopped"}${
-    d.started ? ` · started from ${escape(d.started)}` : ""
+    d.started ? ` · reports ${escape(d.started)}` : ""
   }</span></div>
 <div class="row"><span class="cap">Booted</span><span>${when(s?.boot)}</span></div>
 <div class="row"><span class="cap">Ready</span><span>${when(s?.ready)}</span></div>

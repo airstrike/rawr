@@ -13,10 +13,11 @@
 // public endpoint and no secret. The bot also posts its boot events
 // (/events) and minute stats (/stats) there, which /bot shows as a dashboard.
 //
-// A Durable Object's container keeps the image it was started from: a deploy
-// does not replace it. The Durable Object records the PLAY_VERSION (and the
-// settings passed to the container) it started
-// and `ensure` (cron, /bot/health) restarts a container started from another.
+// A deploy's container rollout replaces a container on another image by
+// itself, so `ensure` (cron, /bot/health) never destroys one for its image:
+// that fought slow rollouts and killed renders under them. The Durable Object
+// records the settings it started the container with, and `ensure` restarts a
+// container on the deployed image whose settings changed.
 //
 // /play is a web playground: the Worker serves the site's static page with
 // each request's data written in (playpage.ts), keeps shares in this
@@ -98,10 +99,10 @@ const CONFIG_KEY = "play-channels";
 const CONFIG_MAX = 64 * 1024;
 const STATS_KEY = "play-stats";
 const EVENTS_KEY = "play-events";
-const STARTED_KEY = "play-started-version";
-/** Unix seconds of the last start, and the deployed value a stale image was last restarted for. */
+/** The settings the container was last started with. */
+const STARTED_KEY = "play-started-settings";
+/** Unix seconds of the last start. */
 const STARTED_AT_KEY = "play-started-at";
-const STALE_KEY = "play-stale-restart";
 const REPORT_MAX = 256 * 1024;
 const SHARE_PREFIX = "share:";
 const SEEN_PREFIX = "seen:";
@@ -444,17 +445,17 @@ export class PlayBot extends Container<Env> {
       servers: stats.servers ?? {},
       running: this.ctx.container?.running ?? false,
       deployed: this.env.PLAY_VERSION,
-      started: (await this.ctx.storage.get<string>(STARTED_KEY))?.split(" ")[0] ?? null,
+      started: await this.reportedImage(),
       purge: await this.purgeSummary(),
       now: Math.floor(now / 1000),
     };
   }
 
-  // Every start records what it started. That covers ensure's starts and the
-  // library's own, which a request to a stopped container makes (as after a
-  // rollout), so the next cron does not restart a bot on the deployed image.
+  // Every start records the settings it passed. That covers ensure's starts
+  // and the library's own, which a request to a stopped container makes. The
+  // image is whatever Cloudflare placed, which only the bot's report shows.
   override async onStart() {
-    await this.ctx.storage.put(STARTED_KEY, this.wanted());
+    await this.ctx.storage.put(STARTED_KEY, this.settings());
     await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
   }
 
@@ -471,48 +472,52 @@ export class PlayBot extends Container<Env> {
     throw error;
   }
 
-  /** Start the bot unless it is running from the deployed image; true once it runs. */
+  /** Start the bot unless it runs, restarting it for changed settings; true once it runs. */
   async ensure(): Promise<boolean> {
     // Cron and /bot/health may overlap: one at a time.
     this.ensuring ??= this.ensureOnce().finally(() => (this.ensuring = undefined));
     return this.ensuring;
   }
 
-  /** The image and the settings the container reads at start: a change to either restarts it. */
-  private wanted(): string {
+  /** The settings the container reads at start: a change restarts it. */
+  private settings(): string {
     const e = this.env;
     return (
-      `${e.PLAY_VERSION} workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},` +
+      `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},` +
       `animation=${e.PLAY_ANIMATION_TIME_MS},idle=${e.PLAY_IDLE_ANIMATION_TIME_MS},allowance=${e.PLAY_ANIMATION_ALLOWANCE_S}/${e.PLAY_ANIMATION_WINDOW_S}`
     );
   }
 
-  private async ensureOnce(): Promise<boolean> {
-    const deployed = this.wanted();
-    const started = await this.ctx.storage.get<string>(STARTED_KEY);
-    const container = this.ctx.container;
-    // A start can land before Cloudflare has the deploy's image: the bot it
-    // started then reports the old image. Restart it once for this deploy.
+  /** The image the bot reported since its container last started, or null before it reports. */
+  async reportedImage(): Promise<string | null> {
     const status = (await this.ctx.storage.get<Stats>(STATS_KEY))?.status;
     const startedAt = (await this.ctx.storage.get<number>(STARTED_AT_KEY)) ?? 0;
-    const stale =
-      started === deployed &&
-      status !== null &&
-      status !== undefined &&
-      status.boot >= startedAt &&
-      status.version !== this.env.PLAY_VERSION &&
-      (await this.ctx.storage.get<string>(STALE_KEY)) !== deployed;
-    if (container?.running && (started !== deployed || stale)) {
-      if (stale) await this.ctx.storage.put(STALE_KEY, deployed);
-      const running = stale ? `the bot reports ${status?.version}` : `running ${started ?? "an unrecorded image"}`;
-      await this.event("worker", "restart", `${running}; deployed ${deployed}`);
-      await container.destroy();
-      for (let i = 0; i < 40 && container.running; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+    return status && status.boot >= startedAt ? status.version : null;
+  }
+
+  /** /bot/health: whether the bot runs, and the image it reported running. */
+  async health(): Promise<{ running: boolean; image: string | null; deployed: string }> {
+    const running = await this.ensure();
+    return { running, image: running ? await this.reportedImage() : null, deployed: this.env.PLAY_VERSION };
+  }
+
+  private async ensureOnce(): Promise<boolean> {
+    const settings = this.settings();
+    const container = this.ctx.container;
+    // Only a settings change restarts a running bot, and only once it runs
+    // the deployed image: until then the rollout is still replacing it.
+    if (container?.running) {
+      const started = await this.ctx.storage.get<string>(STARTED_KEY);
+      if (started !== settings && (await this.reportedImage()) === this.env.PLAY_VERSION) {
+        await this.event("worker", "restart", `started with ${started ?? "unrecorded settings"}; deployed ${settings}`);
+        await container.destroy();
+        for (let i = 0; i < 40 && container.running; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
       }
     }
     if (!container?.running) {
-      await this.event("worker", "start", deployed);
+      await this.event("worker", "start", `${this.env.PLAY_VERSION} ${settings}`);
       try {
         await this.start();
       } catch (error) {
@@ -894,8 +899,8 @@ export default {
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);
     }
-    const running = await getContainer(env.PLAY_BOT).ensure();
-    return Response.json({ running }, { status: running ? 200 : 503 });
+    const health = await getContainer(env.PLAY_BOT).health();
+    return Response.json(health, { status: health.running ? 200 : 503 });
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
