@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 54;
+const CLASSIFIER_VERSION: u32 = 55;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4931,6 +4931,7 @@ impl<P: api::Phase> Context<'_, P> {
         )
         .with_borrowing(
             lifetime_parameters(generics),
+            covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         )
         .with_view(
@@ -5127,6 +5128,7 @@ impl<P: api::Phase> Context<'_, P> {
         )
         .with_borrowing(
             lifetime_parameters(generics),
+            covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         ))
     }
@@ -7701,6 +7703,15 @@ fn is_lifetime_parameter(parameter: &model::Parameter) -> bool {
 }
 
 /// How many lifetime parameters `generics` declares.
+/// Whether a type is covariant in each lifetime it declares, as rustc's
+/// variance says.
+fn covariant_lifetimes(generics: &model::Generics) -> bool {
+    generics
+        .parameters()
+        .filter(|parameter| is_lifetime_parameter(parameter))
+        .all(model::Parameter::covariant)
+}
+
 fn lifetime_parameters(generics: &model::Generics) -> u32 {
     u32::try_from(
         generics

@@ -175,7 +175,9 @@ fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
 }
 
 /// iced's text: a `Task<Result<Vec<Family>, Error>>` of a crate enum is
-/// mapped to a message on another thread, `and_then` takes the bounded
+/// mapped on another thread by `Result::ok`, which gives back a crate
+/// value through an arena of the call's own, and then by a variant, whose
+/// message is made where it is delivered. `and_then` takes the bounded
 /// generic `Task::done`, `listen_with` takes a closure where it takes a
 /// function pointer, and `pick(..)` takes a slice of the crate enum with
 /// `Family::to_string`, which borrows each option. The output is `cargo
@@ -185,7 +187,7 @@ fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
     let (rawr, cargo) = both_printed("crossing-fonts", "fonts.rs", "Mono");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("boot message FamiliesListed(Ok([Monospace, Serif]))\nheard Rescaled(2.0)")
+        rawr.contains("boot message FamiliesListed([Monospace, Serif])\nheard Rescaled(2.0)")
             && rawr.ends_with("last view pad 0 <Mono: *Mono|Serif> \"Mono at 2 in 7\""),
         "{rawr}"
     );
@@ -300,17 +302,22 @@ fn a_tooltip_with_a_crate_default_field_and_a_crate_style_runs() {
 /// iced's `text!`: a macro's `$crate::Alias::new(format!(..))`, where the
 /// alias passes its parameters on to a type, reaches the type's associated
 /// function, as a `text` function of the same name sits beside it, and a
-/// lazy iterator fills a column's `impl IntoIterator`. The output is
-/// `cargo run`'s.
+/// lazy iterator fills a column's `impl IntoIterator`, over a range as
+/// iced's text example's `column(sizes.map(..))` and over the state as its
+/// events example's `column(self.last.iter().map(..))`. The text is
+/// invariant in its lifetime, as iced's is, so each is made in the view's
+/// region and none at `'static`. The output is `cargo run`'s.
 #[test]
 fn a_macro_reaches_an_associated_function_through_an_alias() {
     let (rawr, cargo) = both_printed("crossing-text", "text.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 20 [Increment] count 0 of 3@50 pad 0 0+1@16 0+2@16 [Decrement]")
-            && rawr.contains(
-                "last view pad 20 [Increment] count 2 of 3@50 pad 0 2+1@16 2+2@16 [Decrement]"
-            ),
+        rawr.contains(
+            "1 view pad 20 [Increment] count 0 of 3@50 pad 0 0+1@16 0+2@16 pad 0 [Decrement]"
+        ) && rawr.contains(
+            "last view pad 20 [Increment] count 2 of 3@50 pad 0 2+1@16 2+2@16 \
+             pad 0 Increment@40 Increment@40 Increment@40 Decrement@40 [Decrement]"
+        ),
         "{rawr}"
     );
 }

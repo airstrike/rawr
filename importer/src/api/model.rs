@@ -358,6 +358,12 @@ pub struct Parameter {
     index: u32,
     name: Box<str>,
     kind: ParameterKind,
+    /// Whether the type that declares this lifetime is covariant (or
+    /// bivariant) in it, as rustc's variance says, so its value at
+    /// `'static` is one at any shorter lifetime. False for other owners
+    /// and parameters.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    covariant: bool,
 }
 
 /// The closed kinds of Rust generic parameters.
@@ -1701,6 +1707,19 @@ impl Generics {
 }
 
 impl Parameter {
+    /// The parameter, with whether its type is covariant in it.
+    #[must_use]
+    pub(crate) const fn with_covariant(mut self, covariant: bool) -> Self {
+        self.covariant = covariant;
+        self
+    }
+
+    /// Whether the type that declares this lifetime is covariant in it.
+    #[must_use]
+    pub const fn covariant(&self) -> bool {
+        self.covariant
+    }
+
     pub(crate) fn new(
         owner: identity::Definition,
         index: u32,
@@ -1712,6 +1731,7 @@ impl Parameter {
             index,
             name,
             kind,
+            covariant: false,
         }
     }
 

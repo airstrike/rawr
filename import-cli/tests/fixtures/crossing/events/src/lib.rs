@@ -481,11 +481,12 @@ pub mod widgets {
         }
     }
 
-    /// Text showing a value, at a size.
+    /// Text showing a value, at a size. It is invariant in `'a`, as iced's
+    /// `Text<'a>` is through its `Theme::Class<'a>`.
     pub struct Text<'a, Theme = crate::Theme> {
         text: String,
         size: u32,
-        look: std::marker::PhantomData<&'a Theme>,
+        look: std::marker::PhantomData<fn(&'a Theme) -> &'a Theme>,
     }
 
     /// Text showing `value`.

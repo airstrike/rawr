@@ -1,6 +1,8 @@
 // rawr
 // iced's text: `new` lists the font families, a `Task<Result<Vec<Family>,
-// Error>>` of a crate enum mapped to a message on another thread, and
+// Error>>` of a crate enum that `Result::ok` and then a variant map on
+// another thread, with `Task::done` between them, as iced's `font::list()
+// .map(Result::ok).and_then(Task::done).map(Message::FontsListed)`, and
 // reads the latest window through the bounded generic `Task::done` as
 // `and_then` takes it; `listen_with` takes a closure as its function
 // pointer, whose `Option` output crosses back; and `pick(..)` takes a
@@ -9,7 +11,7 @@
 
 use events::controls::{caption, listen_with, pick, Signal, Subscription};
 use events::widgets::{column, Widget};
-use events::{families, latest, Error, Family, Task};
+use events::{families, latest, Family, Task};
 
 struct Fonts {
     family: Family,
@@ -21,7 +23,7 @@ struct Fonts {
 #[derive(Debug, Clone)]
 enum Message {
     FamilyChanged(Family),
-    FamiliesListed(Result<Vec<Family>, Error>),
+    FamiliesListed(Vec<Family>),
     Rescaled(f32),
 }
 
@@ -35,7 +37,10 @@ impl Fonts {
                 scale: 1.0,
                 window: window.value().unwrap_or(0),
             },
-            families().map(Message::FamiliesListed),
+            families()
+                .map(Result::ok)
+                .and_then(Task::done)
+                .map(Message::FamiliesListed),
         )
     }
 
@@ -44,10 +49,8 @@ impl Fonts {
             Message::FamilyChanged(family) => {
                 self.family = family;
             }
-            Message::FamiliesListed(listed) => {
-                if let Ok(families) = listed {
-                    self.families = families;
-                }
+            Message::FamiliesListed(families) => {
+                self.families = families;
             }
             Message::Rescaled(scale) => {
                 self.scale = scale;
