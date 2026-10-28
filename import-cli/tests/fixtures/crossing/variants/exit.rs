@@ -1,12 +1,13 @@
 // rawr
 // iced's exit and events in the fixture's controls: `update` gives back a
-// task, and `latest().and_then(..)` takes a script closure on a
-// `Task<Option<u32>>`, whose `and_then` is a method of `impl<T>
+// task, and `latest().and_then(..)` takes a script closure, or the
+// generic crate function `close` as iced's `and_then(window::close)` does,
+// on a `Task<Option<u32>>`, whose `and_then` is a method of `impl<T>
 // Task<Option<T>>`, beside another of `impl<T, E> Task<Result<T, E>>`.
 
 use events::controls::{caption, toggle};
 use events::widgets::{column, Widget};
-use events::{latest, Task};
+use events::{close, latest, Task};
 
 #[derive(Default)]
 struct Exit {
@@ -25,7 +26,11 @@ impl Exit {
         match message {
             Message::Confirm(confirm) => {
                 self.show_confirm = confirm;
-                latest().and_then(|id| Task::done(Message::Closed(id)))
+                if confirm {
+                    latest().and_then(|id| Task::done(Message::Closed(id)))
+                } else {
+                    latest().and_then(close)
+                }
             }
             Message::Closed(id) => {
                 self.closed = id;

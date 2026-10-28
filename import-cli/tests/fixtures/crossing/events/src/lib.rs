@@ -151,6 +151,13 @@ pub fn latest() -> Task<Option<u32>> {
     Task(Some(Some(7)))
 }
 
+/// The work of closing the window `id`, as iced's `window::close`, which
+/// gives no message.
+pub fn close<T>(id: u32) -> Task<T> {
+    println!("close {id}");
+    Task(None)
+}
+
 impl<T> Task<Option<T>> {
     /// The work `f` gives for the value, when this work gives `Some`, as
     /// iced's `and_then` of a `Task<Option<T>>`.

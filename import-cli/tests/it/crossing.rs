@@ -256,19 +256,22 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
-/// iced's exit and events: `latest().and_then(..)` takes a script closure
+/// iced's exit and events: `latest().and_then(..)` takes a script closure,
+/// or the generic crate function `close` as `and_then(window::close)` does,
 /// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's
 /// type argument across `impl<T> Task<Option<T>>` and `impl<T, E>
-/// Task<Result<T, E>>`, and the receiver's instance picks the first. The
-/// crate delivers the message the task gives. The output is `cargo run`'s.
+/// Task<Result<T, E>>`, and the receiver's type picks the first, so
+/// `close` is `close::<Message>`. The crate delivers the message a task
+/// gives. The output is `cargo run`'s.
 #[test]
 fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
-    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit");
+    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit,Exit");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 message Confirm(true)")
             && rawr.contains("task message Closed(7)")
-            && rawr.contains("last view pad 0 <x Exit:0> \"7\""),
+            && rawr.contains("2 message Confirm(false)\nclose 7")
+            && rawr.contains("last view pad 0 <Exit:0> \"7\""),
         "{rawr}"
     );
 }

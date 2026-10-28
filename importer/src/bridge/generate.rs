@@ -6300,7 +6300,7 @@ fn render_adapter_body(
                 .map_err(|_| request::Error::Encoding)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
                     render_give_sipper(sipped, progress, "output", output)?;
-                } else if let Some(element) = facade_task_output(returned, facade) {
+                } else if let Some(element) = facade_task_output(returned, facade, profile) {
                     render_give_task(element, "output", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
@@ -6517,7 +6517,7 @@ fn render_adapter_body(
                     .map_err(|_| request::Error::Encoding)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 let element =
-                    facade_task_output(returned, facade).ok_or(request::Error::Drift {
+                    facade_task_output(returned, facade, profile).ok_or(request::Error::Drift {
                         field: "borrowed async method output",
                     })?;
                 render_give_task(element, "output", output)?;
@@ -6679,7 +6679,7 @@ fn render_adapter_body(
                 // A method that takes `self` by value may give a Rust
                 // future, as `Response::text` does.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
-                match facade_task_output(returned, facade) {
+                match facade_task_output(returned, facade, profile) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
                         render_give_task(element, "output", output)?;
                     }
@@ -7096,7 +7096,13 @@ fn lifetime_inputs(
             continue;
         }
         let ty = substituted(input, signature, substitutions)?;
-        if matches!(ty, convert::Type::Nominal { .. }) && carries_lifetime(&ty) {
+        // A native value, or a sequence of them, as `column(iterator)`
+        // takes a view's `Text`s.
+        let native = match &ty {
+            convert::Type::Sequence { element, .. } => element.as_ref(),
+            ty => ty,
+        };
+        if matches!(native, convert::Type::Nominal { .. }) && carries_lifetime(native) {
             return Ok(true);
         }
     }
@@ -9185,9 +9191,21 @@ fn render_slot(
         )
     };
     let values = if native {
+        // Each converted input is a `Result`, which the arena's closure
+        // gives back by `?`.
+        let values = values
+            .iter()
+            .map(|value| {
+                if value.starts_with('(') {
+                    format!("{value}?")
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>();
         format!(
             "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
-            in_arena(&format!("Ok([{}])", values.join(", ")))
+            in_arena(&format!("Ok::<_, Error>([{}])", values.join(", ")))
         )
     } else {
         let values = values
@@ -9510,11 +9528,8 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
             field: "generated static function item plan",
         });
     };
-    if !substitutions.is_empty()
-        || !constants.is_empty()
-        || !functions.is_empty()
-        || !mappers.is_empty()
-    {
+    // A generic function's turbofish names its instance's types.
+    if !constants.is_empty() || !functions.is_empty() || !mappers.is_empty() {
         return Err(request::Error::Drift {
             field: "generated nested static function item",
         });
@@ -10601,6 +10616,7 @@ fn render_give_sipper(
 fn facade_task_output<'a>(
     ty: &'a convert::Type,
     facade: Option<&crate::surface::facade::Plan>,
+    profile: &crate::profile::Proof,
 ) -> Option<&'a convert::Type> {
     let convert::Type::Nominal {
         definition,
@@ -10614,6 +10630,12 @@ fn facade_task_output<'a>(
     };
     if *definition == crate::surface::identity::Definition::future() {
         return Some(element);
+    }
+    // Only a host profile has a `Task` of its own to project iced's into.
+    // With the neutral one, iced's `Task` is a crate type as any other,
+    // which iced takes back from `update` (D601).
+    if !profile.has_generated_projections() {
+        return None;
     }
     facade?
         .facades()
