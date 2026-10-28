@@ -6,8 +6,15 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.3 (2026-10-28)
+
 - A `u64` or `usize` above `i64::MAX`, such as `u64::MAX`, crosses into and out of a crate's functions. Before, it stopped with "-1 is out of range for `u64`".
 - `std::process::id()` gives the process's id.
+- Upstream iced's `pick_list` example runs under `rawr run` without rawr-iced, as `cargo run` draws it.
+- A type alias that passes its parameters in order, such as iced's `Text`, gives the aliased type's associated functions, so `text!(..)` works.
+- A crate trait's method implemented for `&str` can be called on a rawr string.
+- A lazy iterator can go where a crate function takes an iterable, and a slice of script values where it takes a slice of a type parameter.
 
 ## 0.3.2 (2026-10-28)
 

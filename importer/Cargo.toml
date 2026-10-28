@@ -1,6 +1,6 @@
 [package]
 name = "rawr-import"
-version = "0.3.2"
+version = "0.3.3"
 rust-version = "1.91.0"
 edition = "2024"
 publish = false
