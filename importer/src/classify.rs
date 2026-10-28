@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 54;
+const CLASSIFIER_VERSION: u32 = 55;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -2066,8 +2066,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 continue;
             }
-            // A tuple, as `(u8, u8, u8)`, is a value Rawr holds.
-            let Ok(source) = self.convert_value(source) else {
+            // A tuple, as `(u8, u8, u8)`, is a value Rawr holds, and so is
+            // an array of a known length, as `Padding`'s `From<[u16; 2]>`
+            // takes.
+            let source = match source {
+                model::Type::Array { element, length } => {
+                    array_length(length).ok_or(()).and_then(|length| {
+                        let element = self.convert_value(element).map_err(|_| ())?;
+                        Ok(representability::convert::Type::Sequence {
+                            element: Box::new(element),
+                            owned: true,
+                            length: Some(length),
+                        })
+                    })
+                }
+                source => self.convert_value(source).map_err(|_| ()),
+            };
+            let Ok(source) = source else {
                 continue;
             };
             if names_other_parameter(&source, u32::MAX) {
@@ -5194,6 +5209,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(element),
                     owned: false,
+                    length: None,
                 })
             }
             model::Type::Definition { id, arguments }
@@ -5206,6 +5222,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(self.convert_value(element)?),
                     owned: true,
+                    length: None,
                 })
             }
             // A shared slice, as ratatui's `Layout::split` gives an
@@ -5224,6 +5241,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(element),
                     owned: false,
+                    length: None,
                 })
             }
             // An `Option` of a tuple, as pane_grid's `State::split` gives
@@ -5613,6 +5631,7 @@ impl<P: api::Phase> Context<'_, P> {
                     representability::convert::Type::Sequence {
                         element: Box::new(self.convert_value(item)?),
                         owned: true,
+                        length: None,
                     }
                 }
                 input if futures.is_empty() => self.convert_input(&rewrite(input))?,
@@ -5863,6 +5882,24 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
+                } else if let Some(element) = range_inclusive_element(definition, arguments) {
+                    // A range of a type parameter or of a float, as a
+                    // crate's `slider(range: RangeInclusive<T>, value: T,
+                    // ..)` takes: Rawr's integer or float range as `T` is
+                    // an integer or a float.
+                    let element = self.convert(element)?;
+                    if !matches!(
+                        element,
+                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                    ) {
+                        return Err(
+                            representability::reject::Kind::UnsupportedGenericArgument.into()
+                        );
+                    }
+                    Type::Nominal {
+                        definition: crate::surface::identity::Definition::range_inclusive(),
+                        arguments: Box::new([element]),
+                    }
                 } else if let Some(element) = range_element(definition, arguments) {
                     // A float range, as rand's `random_range(0.5..1.0)` takes,
                     // or the impl parameter a relation case binds.
@@ -5885,6 +5922,7 @@ impl<P: api::Phase> Context<'_, P> {
                         model::Type::Slice(element) => Type::Sequence {
                             element: Box::new(self.convert(element)?),
                             owned: false,
+                            length: None,
                         },
                         model::Type::Primitive(name) if &**name == "str" => {
                             Type::Builtin(Builtin::Text)
@@ -5906,6 +5944,7 @@ impl<P: api::Phase> Context<'_, P> {
                     Type::Sequence {
                         element: Box::new(self.convert(element)?),
                         owned: true,
+                        length: None,
                     }
                 } else {
                     definition_is_publishable_nominal(definition)?;
@@ -5945,6 +5984,7 @@ impl<P: api::Phase> Context<'_, P> {
                                     model::Type::Slice(element) => Type::Sequence {
                                         element: Box::new(self.convert(element)?),
                                         owned: false,
+                                        length: None,
                                     },
                                     _ => Type::Builtin(Builtin::Str),
                                 }),
@@ -6813,6 +6853,7 @@ impl<P: api::Phase> Context<'_, P> {
                 ty: Box::new(representability::convert::Type::Sequence {
                     element: Box::new(self.convert(element)?),
                     owned: true,
+                    length: None,
                 }),
             });
         }
@@ -6853,6 +6894,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ty: Box::new(representability::convert::Type::Sequence {
                             element: Box::new(self.convert_value(element)?),
                             owned: false,
+                            length: None,
                         }),
                     });
                 }
@@ -8095,6 +8137,19 @@ fn shared_slice_element<'a>(
     }
 }
 
+/// The length of an array type, when it is a literal, as the driver writes
+/// rustc's value (`2_usize`).
+fn array_length(length: &model::Const) -> Option<u32> {
+    let model::Const::Literal { value, .. } = length else {
+        return None;
+    };
+    value
+        .trim_end_matches("_usize")
+        .trim_end_matches("usize")
+        .parse()
+        .ok()
+}
+
 fn constant(value: &model::Const) -> Result<representability::convert::Constant, Failure> {
     let model::Const::Literal { ty, value } = value else {
         return Err(representability::reject::Kind::UnevaluatedConstant.into());
@@ -8218,23 +8273,36 @@ fn result_elements<'a>(
     }
 }
 
+/// Whether the type is core's `RangeInclusive` of a concrete integer:
+/// Rawr's `RangeInclusive<i64>`, converted to the integer type where the
+/// call takes it. A range of a type parameter is
+/// [`Definition::range_inclusive`](crate::surface::identity::Definition::range_inclusive)'s.
 fn is_i64_range(definition: &model::Definition, arguments: &[model::Argument]) -> bool {
+    matches!(
+        range_inclusive_element(definition, arguments),
+        Some(model::Type::Primitive(name)) if matches!(
+            name.as_ref(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+        )
+    )
+}
+
+/// `T` of core's `ops::RangeInclusive<T>`.
+fn range_inclusive_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
     let unit = definition.id().unit();
-    unit.authority().sysroot().is_some()
-        && unit.crate_name() == "core"
-        && definition.display_path().last() == Some("RangeInclusive")
-        && match arguments {
-            // Rawr's `RangeInclusive<i64>`, which a range of another integer
-            // type, or of a type parameter an integer fills, as iced's
-            // `slider(range: RangeInclusive<T>, value: T, ..)` takes, is
-            // converted to where the call takes it.
-            [model::Argument::Type(model::Type::Primitive(name))] => matches!(
-                name.as_ref(),
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
-            ),
-            [model::Argument::Type(model::Type::Parameter { .. })] => true,
-            _ => false,
-        }
+    if unit.authority().sysroot().is_none()
+        || unit.crate_name() != "core"
+        || definition.display_path().last() != Some("RangeInclusive")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Type(element)] => Some(element),
+        _ => None,
+    }
 }
 
 /// Classification failure that cannot expose a partial contract.
@@ -8804,6 +8872,7 @@ mod tests {
                 shared(Type::Sequence {
                     element: Box::new(point()),
                     owned: false,
+                    length: None,
                 }),
             ]
         );
@@ -8817,6 +8886,7 @@ mod tests {
             [shared(Type::Sequence {
                 element: Box::new(Type::Builtin(Builtin::U8)),
                 owned: false,
+                length: None,
             })]
         );
 
@@ -9163,6 +9233,7 @@ mod tests {
                     isize()
                 ]))),
                 owned: false,
+                length: None,
             }
         );
         assert!(plan.value().is_none());

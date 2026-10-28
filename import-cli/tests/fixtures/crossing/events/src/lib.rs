@@ -6,6 +6,7 @@
 use std::fmt::Debug;
 
 pub mod controls;
+pub mod conversions;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
@@ -70,8 +71,8 @@ where
 
 // ---- iced's shape: `run(update, view)` through traits over `Fn` ----
 
-/// A theme, as a GUI library's default one.
-#[derive(Default)]
+/// A theme, as a GUI library's default one, which clones as iced's does.
+#[derive(Default, Clone)]
 pub struct Theme;
 
 /// A renderer, as a GUI library's default one.
@@ -888,6 +889,9 @@ pub struct Color {
 }
 
 impl Color {
+    /// Black, as iced's `Color::BLACK`.
+    pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
+
     /// The color of `r`, `g` and `b`, as iced's `Color::from_rgb8`.
     pub fn rgb(r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b }

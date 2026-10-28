@@ -1462,6 +1462,7 @@ fn names_variable(source: &facade::Type) -> bool {
         }
         facade::Type::Option(element)
         | facade::Type::Array(element)
+        | facade::Type::FixedArray { element, .. }
         | facade::Type::Range(element) => names_variable(element),
         facade::Type::Result(ok, err) => names_variable(ok) || names_variable(err),
         facade::Type::FunctionItem { input, output } | facade::Type::Callable { input, output } => {
@@ -1496,7 +1497,11 @@ fn pattern(
                 .map(|member| pattern(member, nominal))
                 .collect::<Option<_>>()?,
         ),
-        facade::Type::Nominal { .. } if !names_variable(source) => Pattern::Type(nominal(source)?),
+        facade::Type::Nominal { .. } | facade::Type::FixedArray { .. }
+            if !names_variable(source) =>
+        {
+            Pattern::Type(nominal(source)?)
+        }
         _ => return None,
     })
 }
@@ -1529,6 +1534,13 @@ fn ty(
                 .map(|argument| ty(facade, argument, profile, installed))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice();
+            // core's `RangeInclusive<T>`: Rawr's range of `T`'s kind of
+            // number.
+            if identity == rawr_import::surface::identity::Definition::range_inclusive().as_bytes()
+                && let [element] = &*arguments
+            {
+                return Ok(host::type_ref::Type::range_inclusive_of(element.clone()));
+            }
             if let Some(ty) =
                 profile.semantic_type(facade, installed, identity, arguments.clone())?
             {
@@ -1568,6 +1580,10 @@ fn ty(
         facade::Type::Array(element) => {
             host::type_ref::Type::slice(ty(facade, element, profile, installed)?)
         }
+        facade::Type::FixedArray { element, length } => host::type_ref::Type::array(
+            ty(facade, element, profile, installed)?,
+            usize::try_from(*length).map_err(|_| Error::Shape)?,
+        ),
         facade::Type::Tuple(members) => host::type_ref::Type::tuple(
             members
                 .iter()

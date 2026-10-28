@@ -19,6 +19,7 @@ const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
 const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
+const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
@@ -250,6 +251,16 @@ impl Definition {
         Self(Framed::new(DURATION_DOMAIN).finish())
     }
 
+    /// Rust's `std::ops::RangeInclusive<T>` of a float or of a type
+    /// parameter, at its one argument `T`: Rawr's `RangeInclusive<f64>` or
+    /// `RangeInclusive<i64>` as `T` is a float or an integer, as a crate's
+    /// `slider(range: RangeInclusive<T>, value: T, ..)` takes either. It
+    /// lives in `core`, which no crate's facade declares.
+    #[must_use]
+    pub fn range_inclusive() -> Self {
+        Self(Framed::new(RANGE_INCLUSIVE_DOMAIN).finish())
+    }
+
     /// Rust's `std::time::Instant`, which crosses by value as Rawr's own
     /// `Instant`. It lives in `std`, which no crate's facade declares.
     #[must_use]
@@ -298,14 +309,15 @@ impl Definition {
     }
 
     /// Whether these bytes name a type the iced facade declares for a Rust
-    /// value no imported crate declares: a future, a sipper, a duration or
-    /// an instant.
+    /// value no imported crate declares: a future, a sipper, a duration, an
+    /// instant or an inclusive range.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         *bytes == Self::future().0
             || *bytes == Self::sipper().0
             || *bytes == Self::duration().0
             || *bytes == Self::instant().0
+            || *bytes == Self::range_inclusive().0
             || *bytes == Self::value().0
             || *bytes == Self::element().0
             || *bytes == Self::theme().0
@@ -1428,8 +1440,20 @@ impl Framed {
                 self.converted_type(ok);
                 self.converted_type(err);
             }
-            convert::Type::Sequence { element, owned } => {
-                self.byte(8);
+            convert::Type::Sequence {
+                element,
+                owned,
+                length,
+            } => {
+                // A Rust array has its own tag and its length; a `Vec` or a
+                // slice hashes as it did.
+                match length {
+                    Some(length) => {
+                        self.byte(15);
+                        self.0.update(length.to_le_bytes());
+                    }
+                    None => self.byte(8),
+                }
                 self.byte(u8::from(*owned));
                 self.converted_type(element);
             }

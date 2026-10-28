@@ -121,6 +121,10 @@ pub(crate) enum Shape {
     Iter(Box<Type>),
     /// Rust's `std::ops::Range<T>` of a float: a `Range<f64>` at runtime.
     Range(Box<Type>),
+    /// Rust's `std::ops::RangeInclusive<T>` of a type parameter `T`:
+    /// Rawr's `RangeInclusive<f64>` or `RangeInclusive<i64>` at runtime as
+    /// `T` is a float or an integer.
+    RangeInclusive(Box<Type>),
     /// Rust's `Result<T, E>`, Rawr's builtin generic enum.
     Result(Box<Type>, Box<Type>),
     Callable {
@@ -190,7 +194,8 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
-            | Shape::Range(element) => element.normalize_profile(profile),
+            | Shape::Range(element)
+            | Shape::RangeInclusive(element) => element.normalize_profile(profile),
             Shape::Result(ok, err) => ok
                 .normalize_profile(profile)
                 .saturating_add(err.normalize_profile(profile)),
@@ -236,7 +241,8 @@ impl Type {
                     target: element, ..
                 }
                 | Shape::Iter(element)
-                | Shape::Range(element) => contains(element),
+                | Shape::Range(element)
+                | Shape::RangeInclusive(element) => contains(element),
                 Shape::Result(ok, err) => contains(ok) || contains(err),
                 Shape::Callable { input, output } => contains(input) || contains(output),
                 #[cfg(feature = "rust-import")]
@@ -254,7 +260,9 @@ impl Type {
             Shape::Tuple(types) if types.iter().any(contains) => Some("tuple"),
             Shape::Array { element, .. } if contains(element) => Some("array"),
             Shape::Iter(element) if contains(element) => Some("iterator"),
-            Shape::Range(element) if contains(element) => Some("range"),
+            Shape::Range(element) | Shape::RangeInclusive(element) if contains(element) => {
+                Some("range")
+            }
             Shape::Option(element) if contains(element) => Some("option"),
             Shape::Reference { target, .. } if contains(target) => Some("reference"),
             Shape::Result(ok, err) if contains(ok) || contains(err) => Some("result"),
@@ -284,6 +292,7 @@ impl Type {
             | Shape::Option(_)
             | Shape::Iter(_)
             | Shape::Range(_)
+            | Shape::RangeInclusive(_)
             | Shape::Result(..)
             | Shape::Callable { .. }
             | Shape::Builtin(_)
@@ -317,7 +326,8 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
-            | Shape::Range(element) => element.retained_bytes(),
+            | Shape::Range(element)
+            | Shape::RangeInclusive(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_add(err.retained_bytes()?)),
@@ -374,6 +384,7 @@ impl Type {
             },
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
             Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
+            Shape::RangeInclusive(element) => Shape::RangeInclusive(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
                 Shape::Result(Box::new(ok.try_clone()?), Box::new(err.try_clone()?))
             }
@@ -473,6 +484,39 @@ impl Type {
     #[must_use]
     pub fn range(element: Self) -> Self {
         Self(Shape::Range(Box::new(element)))
+    }
+
+    /// Construct Rust's `RangeInclusive<element>` of a type parameter, a
+    /// Rawr float or integer range at runtime as the parameter is a float
+    /// or an integer.
+    #[must_use]
+    pub fn range_inclusive(element: Self) -> Self {
+        Self(Shape::RangeInclusive(Box::new(element)))
+    }
+
+    /// Rust's `RangeInclusive<element>` as Rawr holds it: its float range
+    /// for a float, its integer range for an integer, and a range of a
+    /// type parameter otherwise.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn range_inclusive_of(element: Self) -> Self {
+        match element.shape() {
+            Shape::Builtin(Builtin::F32 | Builtin::F64) => {
+                Self::builtin(Builtin::FloatInclusiveRange)
+            }
+            Shape::Builtin(
+                Builtin::I8
+                | Builtin::I16
+                | Builtin::I32
+                | Builtin::I64
+                | Builtin::Isize
+                | Builtin::U8
+                | Builtin::U16
+                | Builtin::U32
+                | Builtin::U64
+                | Builtin::Usize,
+            ) => Self::builtin(Builtin::InclusiveRange),
+            _ => Self::range_inclusive(element),
+        }
     }
 
     /// Construct Rust's `Result<ok, err>`, a Rawr result at runtime.
@@ -620,6 +664,9 @@ impl Type {
                 element.resolve(root, types, supports, parameters, _imported, item)?,
             )),
             Shape::Range(element) => Ok(Self::range(
+                element.resolve(root, types, supports, parameters, _imported, item)?,
+            )),
+            Shape::RangeInclusive(element) => Ok(Self::range_inclusive(
                 element.resolve(root, types, supports, parameters, _imported, item)?,
             )),
             Shape::Result(ok, err) => Ok(Self::result(
@@ -774,7 +821,8 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
-            | Shape::Range(element) => {
+            | Shape::Range(element)
+            | Shape::RangeInclusive(element) => {
                 element.resolve_imported(
                     root, types, supports, parameters, imported, item, allocation,
                 )?;
@@ -916,7 +964,8 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
-            | Shape::Range(element) => {
+            | Shape::Range(element)
+            | Shape::RangeInclusive(element) => {
                 element.collect_exports(exports);
             }
             Shape::Result(ok, err) => {
@@ -969,7 +1018,8 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
-            | Shape::Range(element) => {
+            | Shape::Range(element)
+            | Shape::RangeInclusive(element) => {
                 element.collect_support_exports(exports);
             }
             Shape::Result(ok, err) => {
@@ -1067,6 +1117,10 @@ impl crate::preview::digest::Write for Type {
             }
             Shape::Range(element) => {
                 writer.tag(0x2313);
+                element.write(writer)?;
+            }
+            Shape::RangeInclusive(element) => {
+                writer.tag(0x2316);
                 element.write(writer)?;
             }
             Shape::Result(ok, err) => {

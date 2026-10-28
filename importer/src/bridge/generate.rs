@@ -2678,18 +2678,20 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
 }
 
 /// What the protocol thread waits for: the parent's next frame, or a call
-/// from the program's native `main` into marked code (D501).
-enum Event {
+/// from the program's native `main` into marked code (D501). Its name is
+/// one no script type takes, since a script type's proxy is declared at the
+/// crate root beside it (`table`'s `Event`).
+enum __RawrProtocolEvent {
     Frame(std::io::Result<(u8, Vec<u8>)>),
     Call(__rawr_internal::island::Call),
 }
 
 /// The parent's next frame, answering the native calls that come first.
-fn next_frame(events: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<(u8, Vec<u8>)> {
+fn next_frame(events: &std::sync::mpsc::Receiver<__RawrProtocolEvent>) -> std::io::Result<(u8, Vec<u8>)> {
     loop {
         match events.recv() {
-            Ok(Event::Frame(frame)) => return frame,
-            Ok(Event::Call(call)) => call.answer(),
+            Ok(__RawrProtocolEvent::Frame(frame)) => return frame,
+            Ok(__RawrProtocolEvent::Call(call)) => call.answer(),
             Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
         }
     }
@@ -2742,7 +2744,7 @@ fn admitted() {
 /// restarts the program with it.
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
-    received: std::sync::mpsc::Receiver<Event>,
+    received: std::sync::mpsc::Receiver<__RawrProtocolEvent>,
     mut key: [u8; 32],
     mut live: Option<Live>,
 ) {
@@ -2881,13 +2883,13 @@ fn run_protocol(
     let mut prepared = false;
     let mut admitted = false;
     let mut first = Some(first);
-    let (events, received) = std::sync::mpsc::channel::<Event>();
+    let (events, received) = std::sync::mpsc::channel::<__RawrProtocolEvent>();
     let mut reader = stream.try_clone()?;
     let frames = events.clone();
     std::thread::spawn(move || loop {
         let frame = receive_frame(&mut reader);
         let end = frame.is_err();
-        if frames.send(Event::Frame(frame)).is_err() || end {
+        if frames.send(__RawrProtocolEvent::Frame(frame)).is_err() || end {
             break;
         }
     });
@@ -3077,7 +3079,7 @@ fn run_protocol(
                 }
                 let calls = events.clone();
                 let forward = move |call| {
-                    let _ = calls.send(Event::Call(call));
+                    let _ = calls.send(__RawrProtocolEvent::Call(call));
                 };
                 let started = match &mut program {
                     Some(program) => __rawr_profile::run(program, forward),
@@ -5847,6 +5849,7 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             convert::Type::Sequence {
                 element,
                 owned: true,
+                length: None,
             } => element,
             ty => ty,
         };
@@ -6995,7 +6998,14 @@ fn render_anchored_opening(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
-    if !functions.is_empty() || !mappers.is_empty() {
+    // A script closure, as `table::column(header, |event| ..)` takes with
+    // its `&str` header, is made by the call's own slot, outside this path.
+    if !functions.is_empty()
+        || !mappers.is_empty()
+        || signature.parameters().iter().any(|parameter| {
+            parameter.kind() == crate::classify::representability::signature::Kind::Callable
+        })
+    {
         return Ok(());
     }
     let mut call = Vec::new();
@@ -9077,6 +9087,17 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(|_| request::Error::Encoding)
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => {
+            output
+                .write_all(b"[")
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(element, facade, output)?;
+            write!(output, "; {length}]").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Sequence { element, .. } => {
             output
                 .write_all(b"Vec<")
@@ -9883,6 +9904,7 @@ fn render_take_input(
         && let convert::Type::Sequence {
             element,
             owned: true,
+            length: None,
         } = substituted(ty, signature, substitutions)?
         && let Some(family) = family_of(&element)
     {
@@ -9927,7 +9949,8 @@ fn render_take_input(
     let ty = if matches!(
         ty,
         convert::Type::Sequence { .. } | convert::Type::Option(_)
-    ) {
+    ) || range_inclusive_element(ty).is_some()
+    {
         deep = substituted(ty, signature, substitutions)?;
         &deep
     } else {
@@ -9938,10 +9961,17 @@ fn render_take_input(
         Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
         None => render_take(local, index, ty, &mut taken)?,
     }
-    let annotation = generic
+    // A crate type of no arguments is written out too: a trait's function
+    // the call reaches through one impl, as `Background::from(color)` of
+    // `impl From<Color> for Background`, takes the impl's type, which
+    // rustc can't infer beside the reflexive `From<Background>`.
+    let plain = matches!(ty, convert::Type::Nominal { arguments, .. } if arguments.is_empty())
+        && !is_value(ty)
+        && !is_future(ty);
+    let annotation = (generic || plain)
         .then(|| concrete_type(ty))
         .flatten()
-        .filter(|_| !is_value(ty));
+        .filter(|annotation| !is_value(ty) && annotation != "_");
     let Some(annotation) = annotation else {
         return output
             .write_all(&taken)
@@ -10233,6 +10263,17 @@ fn render_take(
         }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
+        // Rawr's float or integer range, as the range of the number the
+        // instance gives.
+        ty if range_inclusive_element(ty).is_some() => {
+            let mut converted = String::new();
+            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).
@@ -10240,6 +10281,7 @@ fn render_take(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_take(local, index, &owned, output);
         }
@@ -10448,6 +10490,31 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
+        // `RangeInclusive<i64>` as one of the integer the instance gives.
+        ty if let Some(element) = range_inclusive_element(ty) => match element {
+            convert::Type::Builtin(convert::Builtin::F64) => {
+                cast(output, "std::ops::RangeInclusive<f64>")
+            }
+            convert::Type::Builtin(convert::Builtin::F32) => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::RangeInclusive<f64>>().map(|range| (*range.start() as f32)..=(*range.end() as f32)).map_err(|_| Error::TypeMismatch)"
+            ),
+            convert::Type::Builtin(builtin)
+                if *builtin == convert::Builtin::I64 || builtin.is_narrow_integer() =>
+            {
+                write!(
+                    output,
+                    "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from::<{}>)",
+                    builtin.rust_name().unwrap_or_default()
+                )
+            }
+            _ => {
+                return Err(request::Error::Drift {
+                    field: "an inclusive range of a type that is not a number",
+                })
+            }
+        },
         convert::Type::Builtin(convert::Builtin::StaticStr) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| static_pins().pin(value)).map_err(|_| Error::TypeMismatch)"
@@ -10548,6 +10615,7 @@ fn render_from_dynamic(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_from_dynamic(&owned, value, depth, output);
         }
@@ -10578,14 +10646,23 @@ fn render_from_dynamic(
             }
             write!(output, ")) }})")
         }
-        // A Rawr array, as the `Vec` of its converted elements.
-        convert::Type::Sequence { element, .. } => {
+        // A Rawr array, as the `Vec` of its converted elements, or as the
+        // Rust array of its length.
+        convert::Type::Sequence {
+            element, length, ..
+        } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            let fixed = match length {
+                Some(length) => format!(
+                    ".and_then(|items| <[_; {length}]>::try_from(items).map_err(|_| Error::TypeMismatch))"
+                ),
+                None => String::new(),
+            };
             write!(
                 output,
-                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>())"
+                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>()){fixed}"
             )
         }
     }
@@ -10687,7 +10764,7 @@ fn render_to_dynamic(
             )
         }
         // A `Vec`'s elements are moved out, a slice's cloned.
-        convert::Type::Sequence { element, owned } => {
+        convert::Type::Sequence { element, owned, .. } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
@@ -10791,6 +10868,23 @@ fn std_time(ty: &convert::Type) -> Option<&'static str> {
         }
         convert::Type::Nominal { definition, .. } if *definition == Definition::instant() => {
             Some("std::time::Instant")
+        }
+        _ => None,
+    }
+}
+
+/// `T` of Rust's `RangeInclusive<T>` of a float or of a type parameter,
+/// which crosses by value as Rawr's float or integer range.
+fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::range_inclusive() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -10994,9 +11088,14 @@ fn substituted(
         },
         convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
-        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
             element: one(element)?,
             owned: *owned,
+            length: *length,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
@@ -12393,6 +12492,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         {
             "__rawr_internal::Value".to_owned()
         }
+        ty if let Some(element) = range_inclusive_element(ty) => {
+            format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
+        }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         ty if let Some(time) = std_time(ty) => time.to_owned(),
@@ -12439,6 +12541,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 format!("crate::{path}<{}>", arguments.join(", "))
             }
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => format!("[{}; {length}]", concrete_type(element)?),
         convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
         convert::Type::Tuple(members) => format!(
             "({},)",
@@ -12474,6 +12581,7 @@ fn script_slice(ty: &convert::Type) -> Option<&convert::Type> {
         convert::Type::Sequence {
             element,
             owned: false,
+            ..
         } if matches!(
             element.as_ref(),
             convert::Type::Script { .. } | convert::Type::Nominal { .. }
@@ -12491,6 +12599,7 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
         convert::Type::Sequence {
             element,
             owned: false,
+            ..
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
         // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
@@ -13232,6 +13341,7 @@ mod tests {
                 Type::Sequence {
                     element: Box::new(Type::Builtin(Builtin::U8)),
                     owned: false,
+                    length: None,
                 },
                 "int_from::<u8>",
             ),
@@ -13416,7 +13526,7 @@ mod tests {
         assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
         assert!(runner.contains("__rawr_profile::run(program, forward)"));
         assert!(runner.contains("__rawr_profile::publish(program)"));
-        assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
+        assert!(runner.contains("Ok(__RawrProtocolEvent::Call(call)) => call.answer(),"));
         // The process's main thread is kept for a native `main`, and the
         // protocol runs beside it. A marked `main` runs the protocol, and
         // then itself, on the main thread.
