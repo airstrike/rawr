@@ -10847,12 +10847,14 @@ impl<'a> Parser<'a> {
         if !open || matches!(ty, Ty::Infer(_)) || depth > 32 {
             return Ok(());
         }
-        let headers = self
-            .models
-            .host
-            .impl_headers(identity)
-            .cloned()
-            .collect::<Vec<_>>();
+        // One impl reached through several of a crate's paths is one impl,
+        // as iced's blanket `impl<T: core::Widget> Widget for T` is.
+        let mut headers = Vec::<crate::host::facade::ImplHeader>::new();
+        for header in self.models.host.impl_headers(identity) {
+            if !headers.contains(header) {
+                headers.push(header.clone());
+            }
+        }
         let mut named = Vec::new();
         let mut blanket = Vec::new();
         for (index, header) in headers.iter().enumerate() {
