@@ -88,6 +88,25 @@ pub struct Program {
     scripts: Box<[Script]>,
     #[cfg(feature = "rust-import")]
     native: Option<std::sync::Arc<native::Capture>>,
+    /// The generic functions compiled once per instantiation (D629).
+    instances: Instances,
+}
+
+/// An instance of a template: the name of the type each generic parameter
+/// takes, in order, and the instance's item key.
+pub(crate) type Instance = (Box<[ImmutableString]>, crate::item::Key);
+
+/// The generic functions that touch a crate's types, each compiled once per
+/// instantiation its checked callers use, as Rust monomorphises it (D629).
+/// A template's own body is never lowered; each call binds to its instance.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Instances {
+    /// Each template's instances: the name of the type each generic
+    /// parameter takes, in order, and the instance's item key.
+    pub(crate) templates: BTreeMap<crate::item::Key, Vec<Instance>>,
+    /// Each instance's generic parameters by name, as the types its body
+    /// reads them as.
+    pub(crate) types: BTreeMap<crate::item::Key, Box<[(ImmutableString, type_ref::Type)]>>,
 }
 
 pub(crate) struct Script {
@@ -447,6 +466,7 @@ fn resolve_with_evidence_and_namespace(
             text: statement_source,
         }]
         .into_boxed_slice(),
+        instances: Instances::default(),
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
     program.widgets = crate::widget::resolve(&program, host).map_err(LocatedError::into_error)?;
@@ -2339,6 +2359,7 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl { reference });
     }
     erase_trait_generics(&mut parsed, types, host);
+    let crate_bounded = crate_trait_generics(&mut parsed, host);
     let lifetimes = item::Lifetimes::of(&parsed);
     let (scope, generics) = generic_scope(
         parsed.generics,
@@ -2392,11 +2413,26 @@ fn resolve_function(
 
     let mut generics = generics;
     for generic in &mut generics {
-        generic.host = parameters
-            .iter()
-            .map(|parameter| &parameter.ty)
-            .chain(output.as_ref())
-            .any(|ty| names_in_host_type(ty, &generic.name.text, false));
+        if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+            generic.crate_bounds = bounds
+                .iter()
+                .map(|bound| {
+                    type_ref::resolve(
+                        opaque_bound(bound),
+                        types,
+                        host,
+                        #[cfg(feature = "rust-import")]
+                        native,
+                    )
+                })
+                .collect::<Result<_, _>>()?;
+        }
+        generic.host = crate_bounded.contains_key(&generic.name.text)
+            || parameters
+                .iter()
+                .map(|parameter| &parameter.ty)
+                .chain(output.as_ref())
+                .any(|ty| names_in_host_type(ty, &generic.name.text, false));
     }
 
     Ok(item::Function {
@@ -2442,6 +2478,59 @@ fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> boo
             })
         }
     }
+}
+
+/// The generic parameters bounded by a dependency's trait, written from
+/// the crate's root (`impl_Widget: iced::Widget<Message>` of a parameter's
+/// `impl Widget<Message>`), with those bounds taken off: rawr compiles the
+/// function once per instantiation its callers use (D629), and rustc
+/// proves the bound where the instance calls the crate.
+#[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
+fn crate_trait_generics(
+    function: &mut crate::item::Function,
+    host: &host::Registry,
+) -> BTreeMap<ImmutableString, Vec<crate::item::type_ref::Path>> {
+    #[allow(unused_mut)]
+    let mut bounded = BTreeMap::new();
+    #[cfg(feature = "rust-import")]
+    for generic in function.generics.iter_mut() {
+        let (crate_traits, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut generic.bounds)
+            .into_vec()
+            .into_iter()
+            .partition(|bound| {
+                let qualified = bound
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                bound.segments.len() > 1
+                    && matches!(host.entry(&qualified), Some(host::Entry::Module))
+            });
+        generic.bounds = kept.into_boxed_slice();
+        if !crate_traits.is_empty() {
+            bounded.insert(generic.name.text.clone(), crate_traits);
+        }
+    }
+    bounded
+}
+
+/// `impl Bound`, the opaque type a dependency's trait bound reads as.
+fn opaque_bound(bound: &crate::item::type_ref::Path) -> crate::item::type_ref::Type {
+    use crate::item::type_ref::{Argument, Path, Segment, Type, IMPL_TYPE};
+    let span = bound.span;
+    Type::Path(Path {
+        segments: Box::new([Segment {
+            name: crate::item::Name {
+                text: IMPL_TYPE.into(),
+                span,
+            },
+            arguments: Box::new([Argument::Type(Type::Path(bound.clone()))]),
+            span,
+        }]),
+        span,
+        global: false,
+    })
 }
 
 /// A generic parameter bounded by a facade trait (`W: Widget<Message>`, or
@@ -3771,6 +3860,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             trait_arguments: Box::default(),
             default: None,
             host: false,
+            crate_bounds: Box::default(),
         }])
     } else if operator && !matches!(name, "Neg" | "Not") {
         Box::new([item::Generic {
@@ -3784,6 +3874,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             trait_arguments: Box::default(),
             default: Some(this()),
             host: false,
+            crate_bounds: Box::default(),
         }])
     } else if matches!(name, "From" | "Into" | "FromIterator") {
         Box::new([item::Generic {
@@ -3797,6 +3888,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             trait_arguments: Box::default(),
             default: None,
             host: false,
+            crate_bounds: Box::default(),
         }])
     } else {
         Box::default()
@@ -4517,6 +4609,7 @@ fn generic_scope(
             trait_arguments: Box::default(),
             default: None,
             host: false,
+            crate_bounds: Box::default(),
         });
     }
     // `trait Add<Rhs = Self>`: a default may name `Self` and the earlier

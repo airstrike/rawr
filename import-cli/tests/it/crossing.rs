@@ -110,6 +110,37 @@ fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
     );
 }
 
+/// iced's `.boxed()`: a method of an extension trait no widget implements
+/// itself, which a blanket impl over the crate's own `Widget` gives every
+/// widget, on a button and on text of generic types. The output is `cargo
+/// run`'s.
+#[test]
+fn a_method_of_a_blanket_extension_trait_runs_on_generic_widgets() {
+    let (rawr, cargo) = both_printed("crossing-framed", "framed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 20 [Increment] [Decrement]\n1 message Increment")
+            && rawr.contains("3 view pad 20 [Increment] 2@50\n3 message Increment")
+            && rawr.ends_with("last view pad 20 [Increment] 3@50"),
+        "{rawr}"
+    );
+}
+
+/// iced's modal and toast helpers: an `impl Widget<Message>` parameter
+/// called with a button and with text, and a function generic over its
+/// message that builds a crate widget, each compiled once per
+/// instantiation its callers use (D629). The output is `cargo run`'s.
+#[test]
+fn generic_functions_over_crate_types_run_once_per_instantiation() {
+    let (rawr, cargo) = both_printed("crossing-instances", "instances.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 pad 5 [Increment] pad 7 0@50 [Decrement]")
+            && rawr.ends_with("last view pad 0 pad 5 [Increment] pad 7 2@50 [Decrement]"),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

@@ -322,6 +322,26 @@ pub mod widgets {
         }
     }
 
+    /// Methods every widget has through one blanket impl over the crate's
+    /// own `Widget`, as iced's `Widget` extends `core::Widget`. No widget
+    /// implements it itself.
+    pub trait Framed<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer>:
+        Widget<Message, Theme, Renderer>
+    {
+        /// The widget as an element, as iced's `Widget::boxed`.
+        fn framed<'a>(self) -> element::Element<'a, Message, Theme, Renderer>
+        where
+            Self: Sized + 'a,
+        {
+            Widget::boxed(self)
+        }
+    }
+
+    impl<T, Message, Theme, Renderer> Framed<Message, Theme, Renderer> for T where
+        T: Widget<Message, Theme, Renderer>
+    {
+    }
+
     pub mod element {
         /// Any widget, boxed.
         pub struct Element<'a, Message, Theme, Renderer>(

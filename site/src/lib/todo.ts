@@ -13,7 +13,7 @@ export interface Row {
 }
 
 export const UPDATED = "2026-10-28";
-export const VERSION = "0.3.10";
+export const VERSION = "0.3.11";
 export const EXAMPLES = { running: 7, total: 56, note: "Most others now stop further along" };
 
 export const LANES: Record<string, string> = {
@@ -45,6 +45,7 @@ export const ROWS: Row[] = [
   row("done", "Script impls of crate traits", 7, 4, "done", "0.3.8. impl canvas::Program"),
   row("done", "Host type parameters", 11, 2, "done", "0.3.9. 11 examples past it"),
   row("done", "Subscription", 11, 3, "done", "0.3.10. url_handler runs"),
+  row("done", "Widget extension trait", 11, 3, "done", "0.3.11. .boxed(), impl Widget"),
   row("bind", "Measure entry shapes", 11, 2, "now", "Per module, per item or lazy"),
   row("bind", "Macro $crate roots", 11, 2, "now", "column! without demand"),
   row("bind", "Crate-keyed entry", 13, 4, "next", "Extract once per crate"),
@@ -59,7 +60,6 @@ export const ROWS: Row[] = [
   row("gnar", "Qualified Self paths", 26, 1, "next", "<Self as T>::A"),
   row("gnar", "Higher-ranked bounds", 27, 2, "next", "for<'a> Fn(&'a T)"),
   row("gnar", "Impl for a reference", 28, 3, "next", "impl<T> For for &T. T320"),
-  row("now", "Widget extension trait", 11, 3, "now", "5 examples. T311"),
   row("now", "Time types", 14, 2, "now", "7 examples. T312, T338"),
   row("iced", "Generic script impls", 14, 4, "next", "custom_quad, component. T322–T324"),
   row("iced", "Struct literals, live edits", 18, 2, "next", "T325, T326"),
