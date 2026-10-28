@@ -41,19 +41,7 @@ edition = "2024"
 [dependencies]
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["advanced", "canvas", "image-without-codecs", "qr_code", "selector", "sipper", "svg"] }</code></pre>
 </div>
-<p>Two more files let <code>rawr run</code> and <code>cargo build</code> share one build of iced. <code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>.</p>
-<div class="block">
-  <div class="file"><b>rust-toolchain.toml</b></div>
-  <pre><code data-lang="toml">[toolchain]
-channel = "nightly-2026-07-11"
-components = ["rust-src", "rustfmt", "clippy"]</code></pre>
-</div>
-<div class="block">
-  <div class="file"><b>.cargo/config.toml</b></div>
-  <pre><code data-lang="toml">[build]
-target = "host-tuple"</code></pre>
-</div>
-<p>A crate of your own needs the same two files. Without them, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add.</p>
+<p><code>rawr run</code> and <code>cargo build</code> share one build of iced, with no other file. Your own <code>cargo</code> builds rawr&rsquo;s runner with the project&rsquo;s toolchain and config, in the project&rsquo;s <code>target/</code>. <a href="/docs/imports#project">Imports</a> explains it.</p>
 <p><code>src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>

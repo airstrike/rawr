@@ -1022,6 +1022,22 @@ impl Cargo {
     }
 }
 
+/// Run the runner build with the project's own Cargo: `cargo` on the
+/// command's `PATH`, the rustup proxy, which picks the toolchain from the
+/// command's directory as `cargo build` run there does (D609.1).
+pub(crate) fn project_cargo(command: &Command, limits: Limits) -> Result<Output> {
+    if !matches!(
+        command.kind,
+        CommandKind::Cargo(CargoAction::RunnerBuild(_))
+    ) {
+        return Err(Error::Request {
+            field: "project Cargo",
+            reason: "only the runner build runs on the project's Cargo".into(),
+        });
+    }
+    execute_production(Path::new("cargo"), command, limits)
+}
+
 fn execute_production(executable: &Path, command: &Command, limits: Limits) -> Result<Output> {
     #[cfg(test)]
     if let Some(output) = test_launch::execute(executable, command, limits) {

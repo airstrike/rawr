@@ -497,9 +497,6 @@ pub struct StmtBlock {
 }
 
 impl StmtBlock {
-    /// A [`StmtBlock`] that does not exist.
-    pub const NONE: Self = Self::empty(Position::NONE);
-
     /// Create a new [`StmtBlock`].
     #[inline(always)]
     #[must_use]
@@ -523,9 +520,9 @@ impl StmtBlock {
     /// Create an empty [`StmtBlock`].
     #[inline(always)]
     #[must_use]
-    pub const fn empty(pos: Position) -> Self {
+    pub fn empty(pos: Position) -> Self {
         Self {
-            block: StmtBlockContainer::new_const(),
+            block: StmtBlockContainer::new(),
             span: Span::new(pos, pos),
         }
     }
@@ -633,7 +630,7 @@ impl From<Stmt> for StmtBlock {
         match stmt {
             Stmt::Block(block) => *block,
             Stmt::Noop(pos) => Self {
-                block: StmtBlockContainer::new_const(),
+                block: StmtBlockContainer::new(),
                 span: Span::new(pos, pos),
             },
             _ => {

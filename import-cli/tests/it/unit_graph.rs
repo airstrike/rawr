@@ -1,9 +1,11 @@
 //! A plain project's runner must build the project's own units, so the
-//! project has one compiled copy of each dependency (D491). This compares
-//! Cargo's unit graphs of a project with one dependency and of a runner over
-//! it, as the importer generates it with no host profile, without building:
-//! every unit the project's `cargo build` compiles, its own crate aside, must
-//! be in the runner's graph with the same features, profile and dependencies.
+//! project has one compiled copy of each dependency (D491). The project's
+//! own Cargo builds both, with no added files and no `--target` (D609.1).
+//! This compares Cargo's unit graphs of a project with one dependency and of
+//! a runner over it, as the importer generates it with no host profile,
+//! without building: every unit the project's `cargo build` compiles, its own
+//! crate aside, must be in the runner's graph with the same features, profile
+//! and dependencies.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,7 +14,8 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// The pinned toolchain both builds use.
+/// One toolchain for both graphs. `--unit-graph` is unstable, so it is the
+/// importer's nightly; the graph is the same on any toolchain.
 fn cargo(directory: &Path, arguments: &[&str]) -> Vec<u8> {
     let output = Command::new("cargo")
         .arg(format!("+{}", rawr_import::cargo::toolchain::CHANNEL))
@@ -87,16 +90,11 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
     let _ = fs::remove_dir_all(&scratch);
     let project = scratch.join("app");
     let runner = scratch.join("runner");
-    for directory in [
-        project.join("src"),
-        project.join(".cargo"),
-        runner.join("src"),
-    ] {
+    for directory in [project.join("src"), runner.join("src")] {
         fs::create_dir_all(directory).unwrap();
     }
-    // A plain marked crate with one dependency and the two files a project
-    // that imports Rust needs. Its own `[workspace]` keeps it out of the
-    // repository's.
+    // A plain marked crate with one dependency and no other file. Its own
+    // `[workspace]` keeps it out of the repository's.
     fs::write(
         project.join("Cargo.toml"),
         format!(
@@ -105,21 +103,10 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
         ),
     )
     .unwrap();
-    fs::write(
-        project.join(".cargo/config.toml"),
-        rawr_import_cli::project::cargo_config(),
-    )
-    .unwrap();
-    fs::write(
-        project.join("rust-toolchain.toml"),
-        rawr_import_cli::project::toolchain(),
-    )
-    .unwrap();
     fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
     // The runner, as the importer generates it with no host profile: the
-    // rawr crate and the project's dependency, and the rawr crate's own
-    // opt-level. No rawr-iced and no iced.
-    let host = rawr_import::cargo::toolchain::HOST.trim();
+    // rawr crate and the project's dependency, the project's profile as it
+    // is, and the rawr crate's own opt-level. No rawr-iced and no iced.
     fs::write(
         runner.join("Cargo.toml"),
         format!(
@@ -128,25 +115,18 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
              [dependencies]\n\
              __rawr_internal = {{ package = \"rawr\", path = {root:?}, default-features = false, features = [{rawr_features}] }}\n\
              {dependency}\n\n\
-             [profile.dev]\nincremental = false\n\n\
-             [profile.dev.package]\nrawr-generated-runner = {{ incremental = true }}\n\n\
              [profile.dev.package.rawr]\ndebug = 0\nopt-level = 3\nstrip = false\n",
             root = root.display().to_string(),
         ),
     )
     .unwrap();
     fs::write(runner.join("src/main.rs"), runner_main).unwrap();
-    fs::write(
-        runner.join("rust-toolchain.toml"),
-        rawr_import_cli::project::toolchain(),
-    )
-    .unwrap();
 
     cargo(&project, &["generate-lockfile"]);
     // The runner's resolution starts from the project's lock.
     fs::copy(project.join("Cargo.lock"), runner.join("Cargo.lock")).unwrap();
     let template = keys(&unit_graph(&project, &[]));
-    let built = keys(&unit_graph(&runner, &["--target", host]));
+    let built = keys(&unit_graph(&runner, &[]));
     let runner_manifest = fs::read_to_string(runner.join("Cargo.toml")).unwrap();
     fs::remove_dir_all(&scratch).unwrap();
 
@@ -194,6 +174,18 @@ fn the_plain_runner_builds_the_projects_own_units() {
     compare(
         "plain",
         "itoa = \"1\"",
+        "\"rust-import\", \"std\", \"sync\"",
+        "fn main() {}\n",
+    );
+}
+
+/// T279: rawr asks smallvec for no features, so a project that takes
+/// smallvec with none keeps its one smallvec, and every crate above it.
+#[test]
+fn a_project_with_featureless_smallvec_keeps_its_smallvec() {
+    compare(
+        "smallvec",
+        "smallvec = { version = \"1\", default-features = false }",
         "\"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );

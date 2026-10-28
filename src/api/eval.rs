@@ -312,7 +312,7 @@ impl Engine {
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
         let mut has_this = false;
-        let arg_values = &mut FnArgsVec::new_const();
+        let arg_values = &mut FnArgsVec::new();
         args.parse(arg_values);
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
 

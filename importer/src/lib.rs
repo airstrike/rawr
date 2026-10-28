@@ -49,6 +49,9 @@ pub mod surface;
 #[doc(hidden)]
 pub mod test_fixture;
 
+#[cfg_attr(not(test), allow(dead_code))]
+mod xid;
+
 pub use contract::{Classified, Contract};
 pub use error::Error;
 pub use surface::{Demand, Sealed};

@@ -841,8 +841,8 @@ fn wait_for_window(mut lane: Lane, source: diagnostic::Source) -> Result<(), dia
     }
 }
 
-/// A project that builds as Rawr builds it, or the error naming the files
-/// it needs.
+/// A project that builds as Rawr builds it, or the error saying what to
+/// change.
 pub fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Report> {
     let Some(root) = project(target) else {
         return Ok(());

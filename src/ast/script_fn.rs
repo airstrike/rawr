@@ -46,7 +46,7 @@ impl ScriptFuncDef {
         Self {
             name: self.name.clone(),
             access: self.access,
-            body: StmtBlock::NONE,
+            body: StmtBlock::empty(crate::Position::NONE),
             this_type: self.this_type.clone(),
             params: self.params.clone(),
             #[cfg(feature = "metadata")]

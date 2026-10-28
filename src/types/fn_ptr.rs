@@ -233,7 +233,7 @@ impl FnPtr {
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
         let _ast = ast;
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let global = &mut engine.new_global_runtime_state();
@@ -269,7 +269,7 @@ impl FnPtr {
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
         let _ast = ast;
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let global = &mut engine.new_global_runtime_state();
@@ -308,7 +308,7 @@ impl FnPtr {
         context: &NativeCallContext,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         self.call_raw(context, None, arg_values).and_then(|result| {
@@ -336,7 +336,7 @@ impl FnPtr {
         this_ptr: &mut Dynamic,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         self.call_raw(context, Some(this_ptr), arg_values)

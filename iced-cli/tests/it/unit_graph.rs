@@ -83,11 +83,7 @@ fn the_runner_builds_the_templates_own_units() {
     let _ = fs::remove_dir_all(&scratch);
     let project = scratch.join("app");
     let runner = scratch.join("runner");
-    for directory in [
-        project.join("src"),
-        project.join(".cargo"),
-        runner.join("src"),
-    ] {
+    for directory in [project.join("src"), runner.join("src")] {
         fs::create_dir_all(directory).unwrap();
     }
     // The template, as `rawr new` writes it. Its own `[workspace]` keeps it
@@ -95,16 +91,6 @@ fn the_runner_builds_the_templates_own_units() {
     fs::write(
         project.join("Cargo.toml"),
         format!("{}\n[workspace]\n", rawr_iced_cli::new::manifest("app")),
-    )
-    .unwrap();
-    fs::write(
-        project.join(".cargo/config.toml"),
-        rawr_iced_cli::new::cargo_config(),
-    )
-    .unwrap();
-    fs::write(
-        project.join("rust-toolchain.toml"),
-        rawr_iced_cli::new::toolchain(),
     )
     .unwrap();
     fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -116,7 +102,6 @@ fn the_runner_builds_the_templates_own_units() {
     let iced = rawr_iced_cli::new::ICED_FEATURES
         .map(|feature| format!("\"{feature}\""))
         .join(", ");
-    let host = rawr_import::cargo::toolchain::HOST.trim();
     fs::write(
         runner.join("Cargo.toml"),
         format!(
@@ -126,8 +111,6 @@ fn the_runner_builds_the_templates_own_units() {
              __rawr_internal = {{ package = \"rawr\", path = {root:?}, default-features = false, features = [\"rust-import\", \"std\"] }}\n\
              __rawr_profile_host = {{ package = \"rawr-iced\", path = {iced_path:?}, default-features = false, features = [{widgets}] }}\n\
              iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{revision}\", default-features = true, features = [{iced}] }}\n\n\
-             [profile.dev]\nincremental = false\n\n\
-             [profile.dev.package]\nrawr-generated-runner = {{ incremental = true }}\n\n\
              [profile.dev.package.rawr]\ndebug = 0\nopt-level = 3\nstrip = false\n",
             root = root.display().to_string(),
             iced_path = root.join("iced").display().to_string(),
@@ -136,17 +119,12 @@ fn the_runner_builds_the_templates_own_units() {
     )
     .unwrap();
     fs::write(runner.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(
-        runner.join("rust-toolchain.toml"),
-        rawr_iced_cli::new::toolchain(),
-    )
-    .unwrap();
 
     cargo(&project, &["generate-lockfile"]);
     // The runner's resolution starts from the project's lock.
     fs::copy(project.join("Cargo.lock"), runner.join("Cargo.lock")).unwrap();
     let template = keys(&unit_graph(&project, &[]));
-    let built = keys(&unit_graph(&runner, &["--target", host]));
+    let built = keys(&unit_graph(&runner, &[]));
     fs::remove_dir_all(&scratch).unwrap();
 
     let shared = built

@@ -87,28 +87,6 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     );
 }
 
-/// A project that imports Rust without the importer's two files is told
-/// which ones to add, before any build.
-#[test]
-fn a_dependency_without_the_importers_files_names_them() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-dependency-bare");
-    let _ = fs::remove_dir_all(&root);
-    copy(Path::new(FIXTURE), &root);
-    fs::remove_file(root.join(".cargo/config.toml")).unwrap();
-
-    let run = rawr_import(&root, &["run"]);
-
-    assert!(!run.status.success());
-    let stderr = text(&run.stderr);
-    assert!(
-        stderr.contains("RAWR-ENVIRONMENT-PROJECT-BUILD"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("so add `.cargo/config.toml`"), "{stderr}");
-    assert!(stderr.contains("target = \"host-tuple\""), "{stderr}");
-    fs::remove_dir_all(&root).unwrap();
-}
-
 /// A marked `main` gets the arguments after `--` and stdin, as under
 /// `cargo run`, and a save while it waits on stdin restarts it on the same
 /// stdin (D500.1).

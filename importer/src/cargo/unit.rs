@@ -1297,7 +1297,15 @@ impl BuildGraph {
                 }
             }
         }
-        if selected.len() != metadata.selected.len() {
+        // Rawr's own crate is a build dependency of the harness, which has
+        // no build script, so the graph has no unit of it (D609.2).
+        let unbuilt = usize::from(
+            metadata
+                .selected
+                .contains_key(super::config::INTERNAL_ALIAS)
+                && !selected.contains_key(super::config::INTERNAL_ALIAS),
+        );
+        if selected.len() + unbuilt != metadata.selected.len() {
             return Err(Error::ResolutionDrift {
                 command: "build",
                 field: "complete selected unit set",

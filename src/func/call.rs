@@ -1079,7 +1079,7 @@ impl Engine {
         let mut first_arg = first_arg;
         let mut args_expr = args_expr;
         let mut num_args = usize::from(first_arg.is_some()) + args_expr.len();
-        let mut curry = FnArgsVec::new_const();
+        let mut curry = FnArgsVec::new();
         let mut fn_name = fn_name;
         let mut hashes = hashes;
         let redirected; // Handle call() - Redirect function call
@@ -1427,7 +1427,7 @@ impl Engine {
                     vec![root]
                 };
                 if let Expr::Index(chain, ..) = place {
-                    let mut steps = crate::FnArgsVec::new_const();
+                    let mut steps = crate::FnArgsVec::new();
                     self.eval_dot_index_chain_arguments(
                         global, caches, scope, this_ptr, place, &chain.rhs, &mut steps,
                     )?;
@@ -2118,7 +2118,7 @@ pub(crate) fn lent_local(expr: &Expr) -> Option<&Expr> {
 /// What `__rawr_lend` lends: a local or `this`, and the field slots below
 /// it (`x[0][1]`, each a literal). `None` for any other expression.
 fn lent_place(expr: &Expr) -> Option<(&Expr, crate::StaticVec<usize>)> {
-    let mut slots = crate::StaticVec::new_const();
+    let mut slots = crate::StaticVec::new();
     let (root, mut steps) = match expr {
         Expr::Index(chain, ..) => (&chain.lhs, Some(&chain.rhs)),
         root => (root, None),

@@ -53,9 +53,9 @@ impl Caches {
     /// Create an empty [`Caches`].
     #[inline(always)]
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            fn_resolution: StaticVec::new_const(),
+            fn_resolution: StaticVec::new(),
         }
     }
     /// Get the number of function resolution cache(s) in the stack.

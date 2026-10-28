@@ -520,7 +520,7 @@ impl Engine {
             expr => unreachable!("Expr::Index or Expr::Dot expected but gets {:?}", expr),
         };
 
-        let idx_values = &mut FnArgsVec::new_const();
+        let idx_values = &mut FnArgsVec::new();
 
         match (rhs, ChainType::from(expr)) {
             // Short-circuit for simple property access: {expr}.prop
@@ -746,7 +746,7 @@ impl Engine {
             {
                 let BinaryExpr { lhs, rhs, .. } = &**x;
 
-                let mut _arg_values = FnArgsVec::new_const();
+                let mut _arg_values = FnArgsVec::new();
 
                 // Evaluate in left-to-right order
                 match (lhs, chain_type) {

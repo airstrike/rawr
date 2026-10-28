@@ -38,6 +38,9 @@ const HARNESS_SOURCE: &str = "#![forbid(unsafe_code)]\n\
 const HARNESS_PACKAGE: &str = "rawr-resolution-harness";
 const HARNESS_VERSION: &str = "0.0.0";
 const HARNESS_EDITION: &str = "2024";
+/// The harness table that holds Rawr's own crate, which the generated
+/// runner moves to its `[dependencies]`.
+pub(crate) const BUILD_DEPENDENCIES: &str = "build-dependencies";
 const PROFILE_DEFAULT: &str = "dev";
 /// The Cargo JSON accounting target: the figure a Cargo document is
 /// measured against and warned past. It is distinct from the physical child
@@ -4055,6 +4058,7 @@ fn render_manifest_accounted(
     }
 
     let mut dependencies = Table::new();
+    let mut build_dependencies = Table::new();
     for (index, dependency) in request.dependencies.iter().enumerate() {
         if request.dependencies[..index]
             .iter()
@@ -4111,12 +4115,26 @@ fn render_manifest_accounted(
             }
             specification.insert("features", Value::Array(features));
         }
-        dependencies.insert(
+        // Rawr's own crate is a build dependency of the harness, which has
+        // no build script: Cargo resolves, locks and fetches it but builds
+        // no unit of it. Only the runner, which the project's Cargo builds,
+        // links it (D609.2).
+        let table = if dependency.alias() == config::INTERNAL_ALIAS {
+            &mut build_dependencies
+        } else {
+            &mut dependencies
+        };
+        table.insert(
             dependency.alias(),
             Item::Value(Value::InlineTable(specification)),
         );
     }
     document["dependencies"] = Item::Table(dependencies);
+    if !build_dependencies.is_empty() {
+        allocation.items(1)?;
+        allocation.string(BUILD_DEPENDENCIES)?;
+        document[BUILD_DEPENDENCIES] = Item::Table(build_dependencies);
+    }
     if let Some(internal) = internal {
         internal.apply_profile_budgeted(&mut document, &request.profile, allocation)?;
     }
@@ -5721,6 +5739,14 @@ mod universe_placement_tests {
             )
         };
         let (plain, plain_key) = render("");
+        // Rawr's own crate is a build dependency, which the harness never
+        // builds (D609.2); the project's crates are its dependencies.
+        let table = |name: &str| plain.get(name).and_then(Item::as_table);
+        assert!(table(BUILD_DEPENDENCIES)
+            .is_some_and(|table| table.contains_key(config::INTERNAL_ALIAS)));
+        assert!(table("dependencies").is_some_and(|table| {
+            table.contains_key("catalog") && !table.contains_key(config::INTERNAL_ALIAS)
+        }));
         let packages = plain["profile"]["dev"]["package"]
             .as_table()
             .expect("rawr override table");

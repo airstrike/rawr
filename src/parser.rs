@@ -1136,7 +1136,7 @@ impl Engine {
         let mut expressions = FnArgsVec::<BinaryExpr>::new();
         let mut cases = StraightHashMap::<CaseBlocksList>::default();
         let mut ranges = StaticVec::<RangeCase>::new();
-        let mut enum_cases = StaticVec::<EnumCase>::new_const();
+        let mut enum_cases = StaticVec::<EnumCase>::new();
         let mut def_case = None;
         let mut def_case_pos = Position::NONE;
 
@@ -1166,20 +1166,18 @@ impl Engine {
                         return Err(PERR::WrongSwitchCaseCondition.into_err(if_pos));
                     }
 
-                    (StaticVec::new_const(), None, true)
+                    (StaticVec::new(), None, true)
                 }
                 _ if def_case.is_some() => {
                     return Err(PERR::WrongSwitchDefaultCase.into_err(def_case_pos))
                 }
 
-                (Token::Identifier(..), ..) => (
-                    StaticVec::new_const(),
-                    Some(self.parse_enum_case(state)?),
-                    false,
-                ),
+                (Token::Identifier(..), ..) => {
+                    (StaticVec::new(), Some(self.parse_enum_case(state)?), false)
+                }
 
                 _ => {
-                    let mut case_expr_list = StaticVec::new_const();
+                    let mut case_expr_list = StaticVec::new();
 
                     loop {
                         let filter = state.expr_filter;
@@ -1301,7 +1299,7 @@ impl Engine {
 
                     cases
                         .entry(hash)
-                        .or_insert(CaseBlocksList::new_const())
+                        .or_insert(CaseBlocksList::new())
                         .push(index);
                 }
             }
@@ -1389,7 +1387,7 @@ impl Engine {
             )
         };
 
-        let mut bindings = StaticVec::new_const();
+        let mut bindings = StaticVec::new();
 
         match state.input.peek().unwrap() {
             (Token::Unit, ..) => {
@@ -1673,7 +1671,7 @@ impl Engine {
 
             // Identifier
             Token::Identifier(..) => {
-                let ns = crate::ast::Namespace::NONE;
+                let ns = crate::ast::Namespace::default();
 
                 let s = match state.input.next().unwrap() {
                     (Token::Identifier(s), ..) => s,
@@ -1737,7 +1735,7 @@ impl Engine {
 
             // Reserved keyword or symbol
             Token::Reserved(..) => {
-                let ns = crate::ast::Namespace::NONE;
+                let ns = crate::ast::Namespace::default();
 
                 let s = match state.input.next().unwrap() {
                     (Token::Reserved(s), ..) => s,
@@ -2003,7 +2001,7 @@ impl Engine {
 
                     // Call negative function
                     expr => Ok(FnCallExpr {
-                        namespace: crate::ast::Namespace::NONE,
+                        namespace: crate::ast::Namespace::default(),
                         name: self.get_interned_string("-"),
                         hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "-", 1)),
                         args: IntoIterator::into_iter([expr]).collect(),
@@ -2024,7 +2022,7 @@ impl Engine {
 
                     // Call plus function
                     expr => Ok(FnCallExpr {
-                        namespace: crate::ast::Namespace::NONE,
+                        namespace: crate::ast::Namespace::default(),
                         name: self.get_interned_string("+"),
                         hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "+", 1)),
                         args: IntoIterator::into_iter([expr]).collect(),
@@ -2040,7 +2038,7 @@ impl Engine {
                 let pos = eat_token(state.input, &Token::Bang);
 
                 Ok(FnCallExpr {
-                    namespace: crate::ast::Namespace::NONE,
+                    namespace: crate::ast::Namespace::default(),
                     name: self.get_interned_string("!"),
                     hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "!", 1)),
                     args: {
@@ -2415,7 +2413,7 @@ impl Engine {
             let native_only = !is_valid_function_name(&op);
 
             let mut op_base = FnCallExpr {
-                namespace: crate::ast::Namespace::NONE,
+                namespace: crate::ast::Namespace::default(),
                 name: self.get_interned_string(&op),
                 hashes: FnCallHashes::from_native_only(hash),
                 args: IntoIterator::into_iter([root, rhs]).collect(),
@@ -2496,7 +2494,7 @@ impl Engine {
                     } else {
                         // Put a `!` call in front
                         let not_base = FnCallExpr {
-                            namespace: crate::ast::Namespace::NONE,
+                            namespace: crate::ast::Namespace::default(),
                             name: self.get_interned_string(OP_NOT),
                             hashes: FnCallHashes::from_native_only(calc_fn_hash(None, OP_NOT, 1)),
                             args: IntoIterator::into_iter([fn_call]).collect(),
@@ -2612,7 +2610,7 @@ impl Engine {
                     tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_IDENT));
 
                     inputs.push(Expr::Variable(
-                        (None, name, crate::ast::Namespace::NONE, 0).into(),
+                        (None, name, crate::ast::Namespace::default(), 0).into(),
                         None,
                         pos,
                     ));
@@ -2849,7 +2847,7 @@ impl Engine {
         settings.flags |= ParseSettingFlags::BREAKABLE;
 
         let body = self.parse_block(state, settings, false)?.into();
-        let branch = StmtBlock::NONE;
+        let branch = StmtBlock::empty(crate::Position::NONE);
 
         Ok(Stmt::While(
             FlowControl { expr, body, branch }.into(),
@@ -2887,7 +2885,7 @@ impl Engine {
         let expr = self.parse_expr(state, settings)?.ensure_bool_expr()?;
         ensure_not_assignment(state.input)?;
 
-        let branch = StmtBlock::NONE;
+        let branch = StmtBlock::empty(crate::Position::NONE);
 
         Ok(Stmt::Do(
             FlowControl { expr, body, branch }.into(),
@@ -2978,7 +2976,7 @@ impl Engine {
 
         state.stack.rewind(prev_stack_len);
 
-        let branch = StmtBlock::NONE;
+        let branch = StmtBlock::empty(crate::Position::NONE);
 
         Ok(Stmt::For(
             Box::new((loop_var, counter_var, FlowControl { expr, body, branch })),
@@ -3322,7 +3320,7 @@ impl Engine {
 
         #[cfg(feature = "metadata")]
         let comments = {
-            let mut comments = StaticVec::<SmartString>::new_const();
+            let mut comments = StaticVec::<SmartString>::new();
             let mut comments_pos = Position::NONE;
             let mut buf = SmartString::new_const();
 
@@ -3697,7 +3695,7 @@ impl Engine {
             (.., pos) => return Err(PERR::FnMissingParams(name.into()).into_err(*pos)),
         };
 
-        let mut params = StaticVec::<(ImmutableString, _)>::new_const();
+        let mut params = StaticVec::<(ImmutableString, _)>::new();
 
         if !no_params {
             let sep_err = format!("to separate the parameters of function '{name}'");
@@ -3799,7 +3797,7 @@ impl Engine {
         );
 
         let expr = FnCallExpr {
-            namespace: crate::ast::Namespace::NONE,
+            namespace: crate::ast::Namespace::default(),
             name: self.get_interned_string(crate::engine::KEYWORD_FN_PTR_CURRY),
             hashes: FnCallHashes::from_native_only(calc_fn_hash(
                 None,
@@ -3855,7 +3853,7 @@ impl Engine {
             new_state.global_imports.extend(state.imports.clone());
         }
 
-        let mut params_list = StaticVec::<ImmutableString>::new_const();
+        let mut params_list = StaticVec::<ImmutableString>::new();
 
         // Parse parameters
         if !skip_parameters
@@ -4027,7 +4025,7 @@ impl Engine {
             (token, pos) => return Err(LexError::UnexpectedInput(token.to_string()).into_err(*pos)),
         }
 
-        let mut statements = StmtBlockContainer::new_const();
+        let mut statements = StmtBlockContainer::new();
         statements.push(Stmt::Expr(expr.into()));
 
         Ok(self.optimize_into_ast(
@@ -4044,7 +4042,7 @@ impl Engine {
         state: &mut ParseState,
         process_settings: impl FnOnce(&mut ParseSettings),
     ) -> ParseResult<(StmtBlockContainer, Vec<Shared<ScriptFuncDef>>)> {
-        let mut statements = StmtBlockContainer::new_const();
+        let mut statements = StmtBlockContainer::new();
 
         let mut settings = ParseSettings {
             level: 0,

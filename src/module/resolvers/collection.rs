@@ -44,8 +44,8 @@ impl ModuleResolversCollection {
     /// ```
     #[inline(always)]
     #[must_use]
-    pub const fn new() -> Self {
-        Self(StaticVec::new_const())
+    pub fn new() -> Self {
+        Self(StaticVec::new())
     }
     /// Append a [module resolver][ModuleResolver] to the end.
     #[inline(always)]
