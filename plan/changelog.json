@@ -1,0 +1,283 @@
+{
+  "$schema": "schema/changelog.schema.json",
+  "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
+  "tracked_from": "0.3.12",
+  "unreleased": {
+    "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+    "entries": [
+      {"text":"A boot function that returns the state and a task, as iced's `new() -> (Self, Task<Message>)`, runs as `application(Example::new, ..)` takes it.","issues":[300]},
+      {"text":"A message made from a crate value on another thread, as `Task::map(Message::InformationReceived)` on iced's executor, is made where it is delivered. iced's system_information runs with no rawr-iced.","issues":[300]},
+      {"text":"A `Vec` inside a crate type's arguments, a function-pointer parameter such as `event::listen_with`'s, a bounded generic associated function such as `Task::done` passed as a callable, an `Option` or `Result` of crate values, and a slice of crate values such as `pick_list` takes all cross. iced's text passes `rawr check`.","issues":[300]}
+    ]
+  },
+  "releases": [
+    {
+      "version": "0.3.12",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A crate's re-export of a std item is that item. `use iced::time::{Duration, Instant};` names std's `Duration` and `Instant`, and so do `time::Duration` after `use iced::time;` and `iced::time::Instant::now()`. Before, rawr refused the import as \"a standard library definition\".","issues":[312]},
+        {"text":"A std type a crate re-exports under another name, as `iced::Never` is std's `Infallible`, is that type under the new name in types. So is `use std::time::Duration as Span;`. Calls through the new name, such as `Span::from_secs(1)`, aren't supported yet.","issues":[312],"refs":[344]},
+        {"text":"std's `Instant` crosses into and out of a crate by value, as `Duration` does. `time::every(milliseconds(10))`, which gives a `Subscription<Instant>`, has a binding, and `.map(Message::Tick)` hands each tick's `Instant` to the script.","issues":[338]},
+        {"text":"`{:?}` of an `Instant` prints as Rust prints it, `Instant { tv_sec: .., tv_nsec: .. }`. Before, rawr printed `<timestamp>`.","issues":[338]},
+        {"text":"Upstream iced's stopwatch, ferris, game_of_life, table and markdown get past their `iced::time` imports, and clock and the_matrix get past `time::every`. geometry gets past `use iced::Never`. Each still stops at a later gap.","issues":[312,338]}
+      ]
+    },
+    {
+      "version": "0.3.11",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A method that a crate's extension trait gives every type through a blanket impl, such as iced's `.boxed()` on a `Container`, `Text` or `Scrollable`, is found. Before, rawr said \"no method named `boxed`\". The blanket impl applies through the type's own impl of the trait its where-clause names, which fixes the trait's arguments. Upstream iced's multi_window, scrollable and system_information get past it.","issues":[]},
+        {"text":"A generic function whose signature names a crate's type or trait runs under `rawr run`. This covers a parameter written `impl Widget<Message>`, and a helper generic over its message that builds a crate widget. rawr compiles it once per instantiation its callers use, as Rust does, and each call runs its own instance. Before, `impl Widget<Message>` in a parameter was \"unknown type `Widget`\", and a crate call inside a generic function failed with \"not one exact concrete surface type\". A type the argument leaves open, such as a widget's renderer, is fixed by the trait's defaults and the crate's impls. Upstream iced's modal and toast get past it. Other generic functions are still compiled once, as before.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.10",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"Upstream iced's `url_handler` example runs under `rawr run` without rawr-iced. Its window matches `cargo run`'s.","issues":[]},
+        {"text":"`iced::application(..).subscription(App::subscription)` works. The subscription takes `&P::State` and gives a `Subscription<P::Message>`, where `P` is the opaque program `application(..)` gives. Before, rawr said \"it takes a callable rawr can't make\". A crate method's callable now reads an associated type of a type parameter as a type the call infers, wherever the callable's inputs or output name it.","issues":[]},
+        {"text":"A method of a generic impl takes a script function as a slot, as a crate function does. A script state it lends by reference is shared, not copied.","issues":[]},
+        {"text":"A call on one opaque program that gives another, as `.subscription(..)` does, is compiled where it is made, and so are the calls on the program it gives, such as `.run()`.","issues":[]},
+        {"text":"A crate method whose impl puts its own parameter inside the type, as iced's `impl<T> Task<Option<T>>` does for `and_then`, now has a binding. When the crate overloads the method by the receiver's type argument, as `Task<Option<T>>` and `Task<Result<T, E>>` do, the receiver picks the form.","issues":[]},
+        {"text":"A generic crate function can be passed as a value, as in `window::latest().and_then(window::close)`. Its type arguments are inferred from where it goes. Before, rawr said it \"must be monomorphic\".","issues":[]},
+        {"text":"A `&str` that a widget keeps through its lifetime, as `text(url)` keeps the `&String` it is given, is pinned in the view's region. Before, the runner's build failed with E0597.","issues":[]},
+        {"text":"iced's `Task` is a crate type like any other when no host profile runs, so `update` can give back `Task::none()`. Before, the runner's build failed in `into_task`.","issues":[]},
+        {"text":"The events and exit examples get past `.subscription(..)` and `and_then(window::close)`. events stops where its runner builds `column(..)` of `text!` widgets, and exit at `padding([10, 20])`. arc and delineate stop at `.theme(Theme::Dark)`, and clock and the_matrix at `time::every`.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.9",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A crate imports when one of its methods takes a callable parameter that no script closure fits. Examples are tokio's `MappedMutexGuard::map` and cosmic text's `with_buffer_mut`, and warp's `Ws::on_upgrade`, whose closure gives a future. Before, the whole import failed with \"unknown type parameter\". Such a method has no binding.","issues":[]},
+        {"text":"A trait method on a function's opaque `impl Trait` may name a type parameter the function also names, as warp's `form<T>()` and `Filter::untuple_one<T>` both name `T`. Before, the import failed with \"duplicate type parameter `T`\".","issues":[]},
+        {"text":"A method that gives an opaque type, such as image's `Reader::into_decoder`, now imports. So does a member of a function's opaque type that names that type again, such as warp's `Filter::and`. Before, the import failed with \"requires missing module\".","issues":[]},
+        {"text":"Upstream iced's bezier_tool, vectorial_text, layout, sierpinski_triangle, solar_system, tour, component, changelog, websocket, geometry and loupe now get past these imports, and so do markdown and screenshot. Each still stops at a later gap.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.8",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A script type can implement a crate's trait, such as `impl canvas::Program<Message> for Arc`. Before, rawr stopped at the impl's header with \"an `impl` of a trait path that names no crate or std trait\". The runner writes the impl for the type's proxy, and native code calls the script's functions back, as iced calls `draw` while it lays out. Each call runs the current generation's function, so an edit to its body takes effect at the next call.","issues":[]},
+        {"text":"A crate's values that native code lends such a function, such as `&Renderer`, `&Theme` and `&Event`, are lent for the call alone and reached by their methods and `match`es. Values it gives by value, such as `Rectangle`, read as their types. A script state it lends `&mut` is changed in place.","issues":[]},
+        {"text":"A script's `impl From<Shade> for iced::Color` now reaches the runner, so a crate function that takes `impl Into<Color>` takes a script value. Before, `rawr check` passed and the runner's build failed in rustc.","issues":[]},
+        {"text":"`Canvas::new(self)` and `canvas(self)` take a shared borrow of a script value where a crate's generic parameter goes. The proxy shares the value, so nothing is copied.","issues":[]},
+        {"text":"A view whose widget leaves a type parameter open, such as `canvas(self)`'s `Message`, no longer stops with \"more than one impl of the crate's fits\" when the crate reaches one impl by several paths.","issues":[]},
+        {"text":"Upstream iced's arc, bezier_tool, clock, sandpiles, vectorial_text, layout, multitouch, sierpinski_triangle, solar_system and the_matrix now get past the headers of their `canvas::Program` impls, and lazy past its `From` impl. Each still stops at a later gap. custom_quad and custom_widget get past `impl widget::Meta`, and stop at their `Widget` impls, which are generic over a renderer bounded by a crate's trait.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.7",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"Upstream iced's `slider` example runs under `rawr run` without rawr-iced again. Its `text(self.value)` was read as the `text!` macro, because the `text` function had no binding.","issues":[]},
+        {"text":"A crate type whose only public name is an alias that passes its parameters on is named through that alias, with the alias's defaults. iced's `widget::Text` is such an alias while `iced::advanced` is off. Functions that give such a type, such as `text(..)`, now have bindings.","issues":[]},
+        {"text":"A crate constant whose value isn't a scalar, such as iced's `Font::MONOSPACE` or `Theme::ALL`, is read by its path where the runner runs. Before, rawr said \"the importer couldn't extract it\".","issues":[]},
+        {"text":"A call of a name that a `use` imports as a crate module, such as iced's `combo_box(..)`, says why rawr has no binding for the function of that name. Before, it said \"unknown function\".","issues":[]},
+        {"text":"A crate's type alias whose target type has no other public name now crosses, such as iced's `Element`, `widget::Text`, `canvas::Cache` and `canvas::Frame`. Before, `use iced::Element` stopped with \"unsupported Rust declaration (UnnameableType)\". Generated code writes the type through the alias.","issues":[]},
+        {"text":"A type alias of an associated type, such as iced's `canvas::Geometry`, is the type it names at its defaults. Before, it stopped with \"(Projection)\". It is written without arguments.","issues":[]},
+        {"text":"`#[derive(Default)]` works on a struct with a field of a generic crate type whose `Default` impl is generic, such as `canvas::Cache`.","issues":[]},
+        {"text":"Eleven upstream iced examples now get past these aliases: arc, bezier_tool, clock, sandpiles, vectorial_text, layout, tour, todos, multitouch, sierpinski_triangle and solar_system. Each still stops at a later gap.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.6",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A project that shares a crate with rawr at fewer features, as iced shares ahash, runs again with the shared copy. Before, the runner's build stopped with \"cannot update the lock file because --locked was passed\". The runner's lockfile is now what cargo resolves without rawr, with the project's versions kept.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.5",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A project whose watched folders include two names where one is the other followed by `-`, such as `target/rawr` and `target/rawr-home`, no longer fails with \"invalid stored baseline\" on its next run.","issues":[]},
+        {"text":"rawr's own crates compile once per machine, not once per project. The first `rawr run` on a toolchain compiles them into `runtime/` in rawr's home, and every project's runner links that copy. A second new project compiled no rawr crate and ran in about 13 s. Before, each project spent about 85 s compiling rawr. A script with dependencies reuses the same copy.","issues":[]},
+        {"text":"The copy is keyed by rawr's version, sources and lockfile, the compiler's `rustc -vV`, and the runtime's features and profile. Nothing about a project is in the key, so projects with different dependencies share it. Copies unused for a day go, apart from the three used last.","issues":[]},
+        {"text":"A runner that can't link the shared copy, such as one whose crates link a native library that rawr's do, compiles rawr in the project as before, and rawr says so once. iced apps on rawr-iced still compile rawr in the project.","issues":[]},
+        {"text":"`RAWR_RUNTIME_OPT_LEVEL` compiles the `rawr` crate at a lower opt-level, such as `0`, for a faster first compile and slower scripts. The default stays 3.","issues":[]},
+        {"text":"A project that shares a crate with rawr at fewer features, as iced shares ahash, runs again with the shared copy. Before, the runner's build stopped with \"cannot update the lock file because --locked was passed\". The runner's lockfile is now what cargo resolves without rawr, with the project's versions kept.","issues":[]},
+        {"text":"A native stream is bound through rawr's own `host::stream::Source` trait, not `futures_core::Stream`, so a project's copy of `futures-core` never has to be rawr's.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.4",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"`std::process::id()` in the browser playground stops with \"no pids on this platform\", as Rust's std does there, instead of crashing the page.","issues":[]},
+        {"text":"A script with its own `[profile.*]` or features no longer makes the next script rebuild rawr's crates. Every script builds in one directory, and a script's run used to remove rawr's crates another script had built under another profile. The same holds for projects that share a `CARGO_TARGET_DIR`.","issues":[]},
+        {"text":"`rawr check` and `rawr run` run `cargo check` on a script, as they do on a crate, so a script gets rustc's errors, such as an overflowing literal rawr accepts. rustc refuses a frontmatter block outside `cargo -Zscript`, so rawr checks a copy with the block blanked, and the errors name the script's own lines. It works on a stable toolchain.","issues":[]},
+        {"text":"A script with dependencies, run without rawr-import installed, is told it uses \"Rust dependencies in its frontmatter\". Before, the message named a `Cargo.toml` the script doesn't have.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.3",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A `u64` or `usize` above `i64::MAX`, such as `u64::MAX`, crosses into and out of a crate's functions. Before, it stopped with \"-1 is out of range for `u64`\".","issues":[]},
+        {"text":"`std::process::id()` gives the process's id.","issues":[]},
+        {"text":"Upstream iced's `pick_list` example runs under `rawr run` without rawr-iced, as `cargo run` draws it.","issues":[]},
+        {"text":"A type alias that passes its parameters in order, such as iced's `Text`, gives the aliased type's associated functions, so `text!(..)` works.","issues":[]},
+        {"text":"A crate trait's method implemented for `&str` can be called on a rawr string.","issues":[]},
+        {"text":"A lazy iterator can go where a crate function takes an iterable, and a slice of script values where it takes a slice of a type parameter.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.2",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A cargo script that declares dependencies in its frontmatter runs under `rawr run`, and prints what it prints under `cargo -Zscript`. Its manifest and lockfile live in `scripts/` in rawr's home, keyed by the script's path, and nothing is written beside the script.","issues":[]},
+        {"text":"Every script builds in one build directory with your own `cargo`, so a crate one script compiled is reused by the next. A second script that shares a dependency started in about 10 seconds where the first took 100.","issues":[]},
+        {"text":"What cargo refuses in a script's manifest, such as `[workspace]` or `[lib]`, is refused with cargo's message at its line.","issues":[]},
+        {"text":"A crate or script with two dependencies that share a version requirement, such as `itoa = \"1\"` and `semver = \"1\"`, runs. Before, rawr dropped the second and stopped with \"selected package name changed\".","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.1",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A path dependency inside the project's workspace compiles once for `cargo build` and `rawr run` together. Before, the runner compiled its own copy.","issues":[]},
+        {"text":"rawr's nightly build, which reads a project's dependencies, is a check build. It writes only the metadata rawr reads, so it does no code generation for the project's crates.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.3.0",
+      "date": "2026-10-28",
+      "lede": "This milestone starts shared bindings: rawr builds bindings, and the project's own cargo builds everything.",
+      "entries": [
+        {"text":"A crate with Cargo dependencies runs under `rawr run` with no `rust-toolchain.toml` and no `.cargo/config.toml`. The project's own `cargo` builds rawr's runner with the project's toolchain, config and profiles, in the project's `target/`. Rust 1.95 or newer is enough.","issues":[]},
+        {"text":"`cargo build` after `rawr run` recompiles nothing. `rawr run` after `cargo build` compiles only rawr's own crates and the runner.","issues":[]},
+        {"text":"An older toolchain stops `rawr run` with a message that says to update it.","issues":[]},
+        {"text":"rawr's nightly build, which reads a project's dependencies, runs in `target/rawr` and no longer compiles rawr's own crates. A project's first `rawr run` through rawr-import takes about half as long.","issues":[]},
+        {"text":"`rawr new --template iced` writes only `Cargo.toml` and `src/main.rs`.","issues":[]},
+        {"text":"rawr asks smallvec for no features, so a project that uses smallvec without features keeps its one copy.","issues":[]},
+        {"text":"`rawr run` no longer deletes the project's own binary when the runner takes the project's crate name.","issues":[]},
+        {"text":"rawr-import's runner no longer builds a second `unicode-ident`, which made a project's proc macros build twice.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.9",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"Upstream iced's `checkbox`, `slider` and `tooltip` examples run under `rawr run` without rawr-iced, with iced's own titles and theme.","issues":[]},
+        {"text":"An `Option` of a closure, and a crate's function passed where a closure or function type goes, such as `.style(checkbox::primary)`, work.","issues":[]},
+        {"text":"A crate function that returns `impl Trait`, such as `iced::application(..)`, runs, and its value takes the trait's methods.","issues":[]},
+        {"text":"A number literal passed to an `impl Into<T>` parameter takes the type `T`, as in Rust.","issues":[]},
+        {"text":"A struct that derives `Default` may hold a field of a crate's type.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.8",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"The `// rawr` marker may follow a shebang line and a cargo-script frontmatter block. rawr parses such a file with its lines and columns kept.","issues":[]},
+        {"text":"A `.rs` file with frontmatter is a script wherever it sits, as cargo reads it. A script that declares dependencies stops with an error saying rawr doesn't resolve them yet.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.7",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"Upstream iced's `counter` example runs under `rawr run` without rawr-iced, through generated bindings only. It has iced's own title and theme, and a save applies at the next event with the count kept.","issues":[]},
+        {"text":"A type that only a trait's default parameters and a crate's impls decide, such as the renderer behind `impl Widget<Message>`, is worked out from the crate's own impls.","issues":[]},
+        {"text":"A crate's type alias that is the only name of its type, such as `iced::Renderer`, works.","issues":[]},
+        {"text":"Generated code names crate types through the crate's own aliases, so iced's `text(..)` works.","issues":[]},
+        {"text":"A trait that a dependency's macro reaches through `$crate` is in scope.","issues":[]},
+        {"text":"A string literal passed to a crate's generic parameter is a `&'static str`, as in Rust.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.6",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"Reading or writing a struct's field no longer copies the struct.","issues":[]},
+        {"text":"Passing `&s` or `&mut s` to a function lends the value instead of copying it.","issues":[]},
+        {"text":"A method called on a field or an element reaches it in place.","issues":[]},
+        {"text":"A script that calls `view(&state)` 2,000 times on a 20,000-element state runs about 6 times faster.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.5",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"A script struct or enum can stand where a crate expects a generic type, such as an app's state and message passed to iced's `application`.","issues":[]},
+        {"text":"A script type crossing into a crate keeps its own name, so a crate that reads `type_name` sees the app's type.","issues":[]},
+        {"text":"A script function or a closure that captures nothing can be passed where a crate takes `impl Fn`, including views that borrow their state. After a save, it calls the edited code.","issues":[]},
+        {"text":"A string a view borrows from its state isn't copied.","issues":[]},
+        {"text":"A crate trait whose only impl is for functions, such as iced's `ViewFn`, takes a script function.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.4",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"A crate method that takes an `impl Fn(..) + 'a` closure, such as iced's `Button::style`, takes a script closure.","issues":[]},
+        {"text":"An enum variant a crate re-exports with `pub use`, such as `iced::Center`, works in expressions and patterns.","issues":[]},
+        {"text":"A crate's type aliases work, with default type parameters filled in, as in `iced::Element` and `iced::Result`.","issues":[]},
+        {"text":"A default method of a crate's generic trait, such as `Widget::boxed`, is found through a type's own impl.","issues":[]},
+        {"text":"A crate module and a function with the same name both resolve.","issues":[]},
+        {"text":"The release's smoke test retries a fresh bot that drops a connection or runs out of render time.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.3",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"A dependency's `macro_rules!` macros expand from the crate's own source.","issues":[]},
+        {"text":"`$crate` paths inside such a macro reach the crate that defines it, including hidden items.","issues":[]},
+        {"text":"A path to a method or function is a function value wherever Rust accepts one, as in `iced::run(Counter::update, Counter::view)`.","issues":[]},
+        {"text":"A call written as `Type::method(&mut x, ..)` changes `x` as `x.method(..)` does.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.2",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"The importer binds futures and `Result`s whose output holds tuples and `Vec`s.","issues":[]},
+        {"text":"`&(A, B)`, `&[T]` and `&[u8]` arguments to native calls work, and the script's value stays usable after the call.","issues":[]},
+        {"text":"A struct field of type `PhantomData<T>` works.","issues":[]},
+        {"text":"A crate's struct whose type parameters all have defaults can be built and read.","issues":[]},
+        {"text":"When rawr has no binding for an imported item, the error says why.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.1",
+      "date": "2026-10-27",
+      "entries": [
+        {"text":"Functions from a crate are `Copy`, as they are in Rust.","issues":[]},
+        {"text":"A closure inside a tuple or array is `Copy` unless it captures something that isn't.","issues":[]},
+        {"text":"iced's `styling` example passes `rawr check` again.","issues":[]},
+        {"text":"`scripts/bump-version.sh` sets every rawr crate to the next version.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-10-26",
+      "lede": "rawr checks borrows and moves with its own checker. It follows stable rustc's non-lexical lifetimes over each function's control flow.",
+      "entries": [
+        {"text":"A borrow ends at its last use, through branches, loops, `break`, `continue`, `return` and `?`.","issues":[]},
+        {"text":"Conflicts report rustc's own error codes: E0499, E0502, E0503, E0505, E0506, E0597, E0500, E0501, E0524, E0373, E0382, E0507, E0508, E0509, E0515, E0716, E0106, E0621 and E0590.","issues":[]},
+        {"text":"A call's result keeps the borrows its signature says it keeps, including elided and written lifetimes.","issues":[]},
+        {"text":"Structs, collections, `Option`s, iterators and closures hold the borrows they're made of.","issues":[]},
+        {"text":"Patterns borrow, read and move only the parts they bind or test.","issues":[]},
+        {"text":"Moves follow control flow, and a partly moved value's other parts stay usable.","issues":[]},
+        {"text":"A value with its own `Drop` impl counts as using its borrows when it is dropped.","issues":[]},
+        {"text":"Temporaries live as long as rustc keeps them.","issues":[]},
+        {"text":"A function body is checked against its own signature.","issues":[]},
+        {"text":"A borrow the checker doesn't cover yet runs, and the background `cargo check` reports any error.","issues":[]},
+        {"text":"A `&mut` variable can be given a new borrow, and a closure can use a `&mut` value, with no copy.","issues":[]},
+        {"text":"Method calls on native values, `format!` arguments and pattern bindings reach the value without copying it.","issues":[]},
+        {"text":"The checker matches rustc 1.96 on 11,409 test programs, with no programs wrongly refused.","issues":[]},
+        {"text":"The checker adds 2–5% CPU time to a run.","issues":[]}
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-10-26",
+      "entries": [
+        {"text":"First release under rawr's own version numbers. Every rawr crate is 0.1.0.","issues":[]}
+      ]
+    }
+  ]
+}

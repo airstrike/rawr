@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "change.schema.json",
+  "title": "A change to the work plan",
+  "description": "`node plan/plan.mjs apply <file>` checks every change against this schema and against GitHub, then applies them in order. Each change names the issue it refers to, or says \"new\". plan.mjs writes back each issue it creates and marks each applied change, so a rerun resumes.",
+  "type": "object",
+  "required": ["changes"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/add" },
+          { "$ref": "#/$defs/close" },
+          { "$ref": "#/$defs/edit" },
+          { "$ref": "#/$defs/row" },
+          { "$ref": "#/$defs/add-row" },
+          { "$ref": "#/$defs/remove-row" },
+          { "$ref": "#/$defs/group" },
+          { "$ref": "#/$defs/add-group" },
+          { "$ref": "#/$defs/remove-group" },
+          { "$ref": "#/$defs/meta" },
+          { "$ref": "#/$defs/changelog" },
+          { "$ref": "#/$defs/entry" },
+          { "$ref": "#/$defs/note" },
+          { "$ref": "#/$defs/release" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "applied": { "type": "boolean", "description": "Set by plan.mjs once the change is applied. A rerun skips it." },
+    "title": { "type": "string", "minLength": 3, "maxLength": 120, "description": "The issue's short title, without the T number." },
+    "labels": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/label" } },
+    "decisions": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/decision" } },
+    "gantt": { "oneOf": [{ "type": "null" }, { "$ref": "defs.schema.json#/$defs/rowRef" }] },
+    "add": {
+      "type": "object",
+      "description": "Add a TODO item and its issue. Without \"t\", the item takes the next number and goes at the end of its category. With \"t\", it adopts a line already in TODO.md that names no issue, keeping its wording.",
+      "required": ["op", "issue"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "add" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issueRef" },
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "category": { "type": "string", "minLength": 1, "description": "A heading of TODO.md." },
+        "text": { "$ref": "defs.schema.json#/$defs/text", "description": "The item's full text, as TODO.md holds it." },
+        "title": { "$ref": "#/$defs/title" },
+        "labels": { "$ref": "#/$defs/labels" },
+        "decisions": { "$ref": "#/$defs/decisions" },
+        "gantt": { "$ref": "#/$defs/gantt" },
+        "release": { "$ref": "defs.schema.json#/$defs/version", "description": "Only when adopting a done line: the release that shipped it." }
+      }
+    },
+    "close": {
+      "type": "object",
+      "description": "Close an item as done: tick it in TODO.md with its commit, comment the commit on the issue and close it as completed.",
+      "required": ["op", "t", "issue", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "close" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issue" },
+        "commit": { "$ref": "defs.schema.json#/$defs/commit" },
+        "note": { "$ref": "defs.schema.json#/$defs/text", "description": "Added after \"Done in <commit>.\", such as the decision: \"(D640)\"." }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "description": "Change an item's title, text, labels, decisions or chart row. Give only what changes.",
+      "required": ["op", "t", "issue"],
+      "minProperties": 4,
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "edit" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issue" },
+        "title": { "$ref": "#/$defs/title" },
+        "text": { "$ref": "defs.schema.json#/$defs/text" },
+        "labels": { "$ref": "#/$defs/labels" },
+        "decisions": { "$ref": "#/$defs/decisions" },
+        "gantt": { "$ref": "#/$defs/gantt" }
+      }
+    },
+    "rowFields": {
+      "name": { "$ref": "defs.schema.json#/$defs/text" },
+      "start": { "type": "number", "minimum": 0 },
+      "size": { "type": "number", "minimum": 0.5 },
+      "state": { "$ref": "defs.schema.json#/$defs/state" },
+      "note": { "type": "string" },
+      "issues": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" } }
+    },
+    "row": {
+      "type": "object",
+      "description": "Change a chart row. \"issues\" replaces the row's list; each must be an item's issue.",
+      "required": ["op", "group", "row"],
+      "minProperties": 4,
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "row" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "group": { "$ref": "defs.schema.json#/$defs/id" },
+        "row": { "$ref": "defs.schema.json#/$defs/id" },
+        "name": { "$ref": "#/$defs/rowFields/name" },
+        "start": { "$ref": "#/$defs/rowFields/start" },
+        "size": { "$ref": "#/$defs/rowFields/size" },
+        "state": { "$ref": "#/$defs/rowFields/state" },
+        "note": { "$ref": "#/$defs/rowFields/note" },
+        "issues": { "$ref": "#/$defs/rowFields/issues" }
+      }
+    },
+    "add-row": {
+      "type": "object",
+      "description": "Add a row to a group, after the row \"after\" names or at the end.",
+      "required": ["op", "group", "row"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "add-row" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "group": { "$ref": "defs.schema.json#/$defs/id" },
+        "after": { "$ref": "defs.schema.json#/$defs/id" },
+        "row": { "$ref": "gantt.schema.json#/$defs/row" }
+      }
+    },
+    "remove-row": {
+      "type": "object",
+      "required": ["op", "group", "row"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "remove-row" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "group": { "$ref": "defs.schema.json#/$defs/id" },
+        "row": { "$ref": "defs.schema.json#/$defs/id" }
+      }
+    },
+    "group": {
+      "type": "object",
+      "description": "Change a group's title, subtitle or whether it starts open.",
+      "required": ["op", "id"],
+      "minProperties": 3,
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "group" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "id": { "$ref": "defs.schema.json#/$defs/id" },
+        "title": { "$ref": "defs.schema.json#/$defs/text" },
+        "subtitle": { "type": "string" },
+        "open": { "type": "boolean" }
+      }
+    },
+    "add-group": {
+      "type": "object",
+      "required": ["op", "group"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "add-group" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "after": { "$ref": "defs.schema.json#/$defs/id" },
+        "group": { "$ref": "gantt.schema.json#/$defs/group" }
+      }
+    },
+    "remove-group": {
+      "type": "object",
+      "description": "Remove a group that has no rows left.",
+      "required": ["op", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "remove-group" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "id": { "$ref": "defs.schema.json#/$defs/id" }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "description": "Change the chart's header: the examples figure. The version and date follow releases and edits on their own, but can be set.",
+      "required": ["op"],
+      "minProperties": 2,
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "meta" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "updated": { "$ref": "defs.schema.json#/$defs/date" },
+        "version": { "$ref": "defs.schema.json#/$defs/version" },
+        "examples": { "$ref": "gantt.schema.json#/$defs/examples" }
+      }
+    },
+    "changelog": {
+      "type": "object",
+      "description": "Add an entry under Unreleased. \"new\" in issues adds a TODO item for work no item covers, in \"category\", with the entry's text.",
+      "required": ["op", "text", "issues"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "changelog" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "text": { "$ref": "defs.schema.json#/$defs/text" },
+        "issues": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issueRef" } },
+        "refs": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" }, "description": "Issues the entry advances but doesn't finish." },
+        "category": { "type": "string", "minLength": 1 },
+        "title": { "$ref": "#/$defs/title" }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "description": "Change or remove an entry under Unreleased, by its position there from 0. Give only what changes.",
+      "required": ["op", "index"],
+      "minProperties": 3,
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "entry" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "index": { "type": "integer", "minimum": 0 },
+        "text": { "$ref": "defs.schema.json#/$defs/text" },
+        "issues": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" } },
+        "refs": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" } },
+        "remove": { "type": "boolean" }
+      }
+    },
+    "note": {
+      "type": "object",
+      "description": "Add a standing note under Unreleased, or remove one with \"remove\": true.",
+      "required": ["op", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "note" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "text": { "$ref": "defs.schema.json#/$defs/text" },
+        "remove": { "type": "boolean" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "description": "Release the Unreleased entries: bump every crate with scripts/bump-version.sh, move the entries into a section, and close or comment each entry's issue with \"Shipped in x.y.z\". With \"bump\": false the crates must already be at the version.",
+      "required": ["op"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "release" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "version": { "$ref": "defs.schema.json#/$defs/version", "description": "Defaults to the next patch version." },
+        "date": { "$ref": "defs.schema.json#/$defs/date", "description": "Defaults to today." },
+        "lede": { "$ref": "defs.schema.json#/$defs/text", "description": "A paragraph under the heading, as a milestone has." },
+        "bump": { "type": "boolean" }
+      }
+    }
+  }
+}

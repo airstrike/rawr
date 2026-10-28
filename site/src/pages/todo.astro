@@ -1,8 +1,10 @@
 ---
 // /todo: the work plan as a Gantt chart. Nothing links here and robots skip
-// it. The groups are in src/lib/todo.ts. Bar length is complexity, not time.
-// Each group folds, and the chart rescales to the groups that are open.
-import { EXAMPLES, GROUPS, UPDATED, VERSION, type Row } from "../lib/todo.ts";
+// it. The groups come from plan/gantt.json through src/lib/todo.ts. Bar length
+// is complexity, not time. Each group folds, and the chart rescales to the
+// groups that are open. Each row links its GitHub issues; a row with many
+// folds them behind a count. All of it works without JavaScript.
+import { EXAMPLES, GROUPS, REPO, UPDATED, VERSION, issueUrl, noteParts, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
 const open = GROUPS.filter((g) => g.open).flatMap((g) => g.rows);
@@ -15,6 +17,11 @@ const sum = (state: Row["state"]) => rows.filter((r) => r.state === state).reduc
 const counts = { done: sum("done"), now: sum("now"), next: sum("next") };
 const all = counts.done + counts.now + counts.next;
 const label = { done: "Done", now: "In progress", next: "Next" };
+const hover = (i: Row["issues"][number]) => `${i.title}${i.state === "closed" ? " (closed)" : ""}`;
+const count = (r: Row) => {
+  const open = r.issues.filter((i) => i.state === "open").length;
+  return `${r.issues.length} issues${open ? `, ${open} open` : ""}`;
+};
 const tally = (g: (typeof GROUPS)[number]) => {
   const n = (s: Row["state"]) => g.rows.filter((r) => r.state === s).length;
   return [n("done") && `${n("done")} done`, n("now") && `${n("now")} in progress`, n("next") && `${n("next")} next`]
@@ -93,8 +100,8 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .scale span { position: absolute; transform: translateX(-50%); }
   .scale span:first-child { transform: none; }
   .scale span:last-child { transform: translateX(-100%); }
-  details { margin-top: 22px; }
-  summary {
+  details.group { margin-top: 22px; }
+  .group > summary {
     list-style: none; cursor: pointer;
     display: grid; grid-template-columns: var(--name) 1fr auto; column-gap: 20px; align-items: baseline;
     border-top: 2px solid var(--rule); padding: 9px 0 7px;
@@ -104,11 +111,21 @@ const tally = (g: (typeof GROUPS)[number]) => {
   summary .s { font-size: 13px; font-weight: 500; }
   summary .c { font-size: 12px; color: var(--quiet); display: inline-flex; gap: 14px; align-items: baseline; }
   summary .c::after { content: "+"; font-size: 18px; font-weight: 400; line-height: 0; color: var(--ink); width: 10px; text-align: center; }
-  details[open] summary .c::after { content: "−"; }
+  details.group[open] > summary .c::after { content: "−"; }
   summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
   .name { font-weight: 600; }
   .note { color: var(--quiet); font-size: 13px; }
+  .note a, .refs a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
+  .note a:hover, .refs a:hover { border-bottom-color: currentColor; }
+  .refs { display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--ink); }
+  .refs a.closed { color: var(--quiet); }
+  details.refs { display: block; }
+  details.refs > summary { list-style: none; cursor: pointer; color: var(--quiet); }
+  details.refs > summary::after { content: " +"; }
+  details.refs[open] > summary::after { content: " −"; }
+  details.refs > span { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  footer a { color: inherit; }
   .track {
     position: relative; height: 14px;
     background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / var(--cols)));
@@ -136,7 +153,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
     .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
     .axis .pad-l { display: none; }
     .note { display: block; font-size: 12px; }
-    summary { grid-template-columns: 1fr auto; }
+    .group > summary { grid-template-columns: 1fr auto; }
     summary .s { grid-column: 1; grid-row: 2; }
     summary .c { grid-column: 2; grid-row: 1 / span 2; }
   }
@@ -172,15 +189,24 @@ const tally = (g: (typeof GROUPS)[number]) => {
 </div>
 
 {GROUPS.map((g) => (
-  <details open={g.open} id={g.id}>
+  <details class="group" open={g.open} id={g.id}>
     <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
     {g.rows.map((r) => (
-      <div class="row" data-start={r.start} data-size={r.size}>
-        <span class="name">{r.name}</span>
+      <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
+        <div>
+          <span class="name">{r.name}</span>
+          {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
+          {r.issues.length > 4 && (
+            <details class="refs">
+              <summary>{count(r)}</summary>
+              <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
+            </details>
+          )}
+        </div>
         <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
           <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
         </div>
-        <span class="note">{r.note}</span>
+        <span class="note">{noteParts(r).map((p) => (p.issue ? <a href={issueUrl(p.issue)}>{p.text}</a> : p.text))}</span>
       </div>
     ))}
   </details>
@@ -188,7 +214,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
 
 <footer>
   <p>{EXAMPLES.running} of {EXAMPLES.total} upstream iced examples run under rawr run with no rawr-iced. {EXAMPLES.note}.</p>
-  <p>rawr.airstrike.fyi</p>
+  <p><a href={`https://github.com/${REPO}/issues`}>Issues</a> · rawr.airstrike.fyi</p>
 </footer>
 
 <script is:inline>
@@ -197,7 +223,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
     const rows = [...document.querySelectorAll(".row")];
     const scale = document.getElementById("scale");
     const fit = () => {
-      const open = rows.filter((r) => r.closest("details").open);
+      const open = rows.filter((r) => r.closest("details.group").open);
       const use = open.length ? open : rows;
       const lo = Math.floor(Math.min(...use.map((r) => +r.dataset.start)) / 5) * 5;
       const hi = Math.ceil(Math.max(...use.map((r) => +r.dataset.start + +r.dataset.size)) / 5) * 5;
@@ -217,7 +243,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
         }),
       );
     };
-    for (const d of document.querySelectorAll("details")) d.addEventListener("toggle", fit);
+    for (const d of document.querySelectorAll("details.group")) d.addEventListener("toggle", fit);
     fit();
   })();
 </script>
