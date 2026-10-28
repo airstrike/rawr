@@ -383,8 +383,9 @@ static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec:
 /// An arena for one call on a thread that has none, as iced's executor
 /// calls `Task::map`'s function: the native values the call takes and gives
 /// move through it, and it ends with the call. A call that only moves its
-/// values, as `Result::ok` does, needs nothing of the owner's arena. A handle
-/// that outlives the call is stale, as one of a past program is.
+/// values, as `Result::ok` does, needs nothing of the owner's arena. A value
+/// the call keeps past its end, in a script value it gives, can't reach the
+/// owner's arena, so the call fails there and says so.
 #[allow(dead_code)]
 struct CallArena(Option<[u8; 32]>);
 
@@ -424,8 +425,20 @@ impl Drop for CallArena {
         let Some(epoch) = self.0 else {
             return;
         };
-        let arena = NATIVE_ARENA.with(|cell| cell.borrow_mut().take());
-        drop(arena);
+        // What the call let go of is freed; what is left, a handle still
+        // holds.
+        let kept = NATIVE_ARENA.with(|cell| {
+            let mut arena = cell.borrow_mut().take()?;
+            arena.release_dropped();
+            let slot = arena.slots.iter().find(|slot| slot.value.is_some())?;
+            Some(
+                slot.debug
+                    .zip(slot.value.as_deref())
+                    .and_then(|(debug, value)| debug(value))
+                    .map(|text| format!(", {text},"))
+                    .unwrap_or_default(),
+            )
+        });
         CALL_EPOCHS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -434,6 +447,13 @@ impl Drop for CallArena {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|(released, ..)| *released != epoch);
+        if let Some(kept) = kept
+            && !std::thread::panicking()
+        {
+            panic!(
+                "rawr: a script function native code called on a thread with no arena kept a native value it was given{kept} past the call, which Rawr can't hand to the owner's thread"
+            );
+        }
     }
 }
 
@@ -9499,11 +9519,11 @@ fn render_slot(
                 String::new()
             };
             // On a thread with no arena, as iced's executor runs
-            // `Task::map`'s function, native values move in and out
-            // through an arena of the call's own (`CallArena`). An output
-            // that holds script values is made where it is used instead
-            // (`deferred`), or can't be.
-            let call_arena = if (native || native_output) && !holds_script(&returned) {
+            // `Task::map`'s function and iced's `listen_with`, native
+            // values move in and out through an arena of the call's own
+            // (`CallArena`). A script value made of native inputs is made
+            // where it is used instead (`deferred`), when it can be.
+            let call_arena = if native || native_output {
                 "let _arena = CallArena::enter();\n        "
             } else {
                 ""
@@ -10270,7 +10290,7 @@ fn render_callable_closure(
         format!("({converted})")
     };
     // An arena of the call's own on a thread with none (`CallArena`).
-    let call_arena = if (native_inputs || native_output) && !holds_script(&returned) {
+    let call_arena = if native_inputs || native_output {
         "let _arena = CallArena::enter();\n            "
     } else {
         ""
@@ -10869,24 +10889,6 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 
 /// Whether converting `ty` takes a native value out of the arena: a crate
 /// value, alone or inside a tuple, as iced's boot `(State, Task<Message>)`.
-/// Whether a value of `ty` holds a script value anywhere, as a crate's
-/// `Task<Message>` holds the script's messages.
-fn holds_script(ty: &convert::Type) -> bool {
-    match ty {
-        convert::Type::Script { .. } => true,
-        convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => {
-            arguments.iter().any(holds_script)
-        }
-        convert::Type::Option(element)
-        | convert::Type::Range(element)
-        | convert::Type::Sequence { element, .. }
-        | convert::Type::Borrowed { ty: element, .. } => holds_script(element),
-        convert::Type::Result(ok, err) => holds_script(ok) || holds_script(err),
-        convert::Type::ProfileMessage { payload, .. } => holds_script(payload),
-        _ => false,
-    }
-}
-
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
