@@ -141,6 +141,22 @@ fn generic_functions_over_crate_types_run_once_per_instantiation() {
     );
 }
 
+/// iced's text, system_information and multi_window: `new` gives the
+/// state and its first task, `(Self, Task<Message>)`, which
+/// `application(..)` takes through `BootFn` and the tuple's `IntoBoot`.
+/// The task's message arrives first, and `update` calls `Self::new()`
+/// again. The output is `cargo run`'s.
+#[test]
+fn a_boot_function_giving_the_state_and_a_task_runs() {
+    let (rawr, cargo) = both_printed("crossing-boot", "boot.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("boot message Loaded(7)\n1 view pad 0 <x Refresh:0> \"7\"")
+            && rawr.contains("1 message Refresh(false)\ntask message Loaded(7)"),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

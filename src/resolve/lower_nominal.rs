@@ -1429,9 +1429,11 @@ fn imported_surface_type(
             converted
         }
         // A tuple of Rust's own types is that tuple, as Freya's
-        // `background((35, 35, 35))` takes `(u8, u8, u8)`.
+        // `background((35, 35, 35))` takes `(u8, u8, u8)`, and so is one
+        // holding a crate value (`instance_surface_type`).
         Ty::Tuple(members)
-            if instance_surface_type(inference, models, ty).is_some_and(|ty| !is_erased(&ty)) =>
+            if instance_surface_type(inference, models, ty)
+                .is_some_and(|ty| !is_erased(&ty) || holds_crate_value(&ty)) =>
         {
             let mut converted = imported.entries(members.len())?;
             for member in members.iter() {
@@ -1633,12 +1635,19 @@ fn instance_surface_type(
                 _ => return None,
             }),
         },
+        // A tuple of Rust's own types is that tuple. So is one that holds
+        // a crate value beside script values, as iced's `new` gives
+        // `(Self, Task<Message>)`: native code takes the crate value as
+        // itself and each script value as its proxy, where a `rawr::Value`
+        // would carry a handle it can't use.
         Ty::Tuple(members)
             if let Some(converted) = members
                 .iter()
                 .map(|member| instance_surface_type(inference, models, member))
                 .collect::<Option<Box<[_]>>>()
-                .filter(|converted| !converted.iter().any(is_erased)) =>
+                .filter(|converted| {
+                    !converted.iter().any(is_erased) || converted.iter().any(holds_crate_value)
+                }) =>
         {
             Type::Tuple(converted)
         }
@@ -1700,6 +1709,30 @@ fn holds_value(ty: &rawr_import::classify::representability::convert::Type) -> b
         Type::Result(ok, err) => holds_value(ok) || holds_value(err),
         Type::ProfileMessage { payload, .. } => holds_value(payload),
         Type::Inferred
+        | Type::Unit
+        | Type::Builtin(_)
+        | Type::FunctionItem { .. }
+        | Type::Parameter(_) => false,
+    }
+}
+
+/// Whether an instance type holds a crate's own value, which native code
+/// holds as itself and a `rawr::Value` could only carry as a handle.
+#[cfg(feature = "rust-import")]
+fn holds_crate_value(ty: &rawr_import::classify::representability::convert::Type) -> bool {
+    use rawr_import::classify::representability::convert::Type;
+    match ty {
+        Type::Nominal { definition, .. } => {
+            *definition != rawr_import::surface::identity::Definition::value()
+        }
+        Type::Tuple(members) => members.iter().any(holds_crate_value),
+        Type::Option(element) | Type::Sequence { element, .. } => holds_crate_value(element),
+        Type::Result(ok, err) => holds_crate_value(ok) || holds_crate_value(err),
+        Type::Script { .. }
+        | Type::Borrowed { .. }
+        | Type::Range(_)
+        | Type::ProfileMessage { .. }
+        | Type::Inferred
         | Type::Unit
         | Type::Builtin(_)
         | Type::FunctionItem { .. }
@@ -3361,6 +3394,23 @@ fn exact_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
     match ty {
         type_ref::Type::Unit(_) | type_ref::Type::Path(_) => Some(Ty::from_resolved(ty)),
         type_ref::Type::Tuple { .. } | type_ref::Type::Reference { .. } => None,
+    }
+}
+
+/// A symbolic callable's output where an imported item takes it: an owned
+/// value, or a tuple of owned values, as iced's `new` gives its state and
+/// first task, `(Self, Task<Message>)`, which the generated runner carries
+/// as the tuple it is.
+fn owned_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
+    match ty {
+        type_ref::Type::Tuple { members, .. }
+            if members
+                .iter()
+                .all(|member| owned_symbolic_type(member).is_some()) =>
+        {
+            Some(Ty::from_resolved(ty))
+        }
+        ty => exact_symbolic_type(ty),
     }
 }
 
@@ -18093,9 +18143,12 @@ impl<'a> Parser<'a> {
         .retain_origin()
     }
 
+    /// A script function passed as a callable: `imported` when an imported
+    /// item takes it, whose output may be a tuple (`owned_symbolic_type`).
     fn symbolic_function(
         &mut self,
         function: &ScriptFunction,
+        imported: bool,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
         let inputs = function
@@ -18116,7 +18169,13 @@ impl<'a> Parser<'a> {
             .definition
             .output
             .as_ref()
-            .map_or(Some(Ty::Unit), exact_symbolic_type)
+            .map_or(Some(Ty::Unit), |output| {
+                if imported {
+                    owned_symbolic_type(output)
+                } else {
+                    exact_symbolic_type(output)
+                }
+            })
             .ok_or_else(|| Error::InvalidMethodCall {
                 owner: "<module>".into(),
                 method: function.definition.name.text.clone(),
@@ -18176,6 +18235,7 @@ impl<'a> Parser<'a> {
     fn symbolic_associated(
         &mut self,
         definition: &method::Definition,
+        imported: bool,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
         // Any number of inputs, as a hand-written `Default`'s `State::default`
@@ -18193,13 +18253,17 @@ impl<'a> Parser<'a> {
                 })
             })
             .collect::<Result<Box<[_]>, _>>()?;
-        let output =
-            exact_symbolic_type(definition.output()).ok_or_else(|| Error::InvalidMethodCall {
-                owner: definition.owner_name().into(),
-                method: definition.name().into(),
-                reason: "symbolic callable output must be one owned, runtime-supported type".into(),
-                call: expression,
-            })?;
+        let output = if imported {
+            owned_symbolic_type(definition.output())
+        } else {
+            exact_symbolic_type(definition.output())
+        };
+        let output = output.ok_or_else(|| Error::InvalidMethodCall {
+            owner: definition.owner_name().into(),
+            method: definition.name().into(),
+            reason: "symbolic callable output must be one owned, runtime-supported type".into(),
+            call: expression,
+        })?;
         let owner = definition.owner_identity().clone();
         let value = crate::item::Value::new(
             definition.key().clone(),
@@ -36845,7 +36909,7 @@ impl<'a> Parser<'a> {
             if inputs.is_empty() && !nullary {
                 return Ok(());
             }
-            let symbolic = self.symbolic_function(&function, value.span)?;
+            let symbolic = self.symbolic_function(&function, nullary, value.span)?;
             value.source = symbolic.source;
             value.prelude = symbolic.prelude;
             value.ty = symbolic.ty;
@@ -36865,7 +36929,7 @@ impl<'a> Parser<'a> {
             if inputs.is_empty() && !nullary {
                 return Ok(());
             }
-            let symbolic = self.symbolic_associated(&definition, value.span)?;
+            let symbolic = self.symbolic_associated(&definition, nullary, value.span)?;
             value.source = symbolic.source;
             value.prelude = symbolic.prelude;
             value.ty = symbolic.ty;
@@ -44213,7 +44277,7 @@ impl<'a> Parser<'a> {
                 {
                     return self.associated_value(&definition, expression);
                 }
-                return self.symbolic_associated(&definition, expression);
+                return self.symbolic_associated(&definition, false, expression);
             } else {
                 self.parse_borrowing_arguments("associated function arguments")?
             };

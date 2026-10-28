@@ -9264,9 +9264,7 @@ fn render_slot(
             let rust = concrete_type(&returned).ok_or(drift("a slot's output"))?;
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
-            let native_output = matches!(returned, convert::Type::Nominal { .. })
-                && !is_value(&returned)
-                && !is_duration(&returned);
+            let native_output = holds_native(&returned);
             let converted = if native_output {
                 in_arena(&converted)
             } else {
@@ -9928,7 +9926,7 @@ fn render_callable_closure(
         ty => !by_value(ty),
     };
     let native_inputs = inputs.iter().any(native);
-    let native_output = !by_value(&returned);
+    let native_output = !by_value(&returned) || holds_native(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
@@ -10587,6 +10585,20 @@ fn is_future(ty: &convert::Type) -> bool {
 fn is_facade_value(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
         if FACADE_VALUES.with_borrow(|values| values.contains(definition.as_bytes())))
+}
+
+/// Whether converting `ty` takes a native value out of the arena: a crate
+/// value, alone or inside a tuple, as iced's boot `(State, Task<Message>)`.
+fn holds_native(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
+        convert::Type::Tuple(members) => members.iter().any(holds_native),
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
+            holds_native(element)
+        }
+        convert::Type::Result(ok, err) => holds_native(ok) || holds_native(err),
+        _ => false,
+    }
 }
 
 /// Rust's `std::time::Duration`, which crosses by value.
