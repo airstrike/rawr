@@ -6,6 +6,7 @@ mod build;
 #[cfg(all(test, feature = "test-fixtures"))]
 pub(crate) use build::fixture_build;
 pub mod manifest;
+pub mod mirror;
 pub(crate) mod overlay;
 
 pub use build::Error as BuildError;
