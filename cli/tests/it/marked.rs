@@ -427,6 +427,51 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert!(text.contains("src/main.rs:16"), "{text}");
 }
 
+/// A script gets `cargo check` too, though rustc refuses its frontmatter
+/// outside `cargo -Zscript`: rustc's error names the script's own line.
+#[test]
+fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-script-rustc");
+    let work = fs::canonicalize(sandbox.work()).unwrap();
+    let script = work.join("wide.rs");
+    fs::write(
+        &script,
+        "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\n\
+         fn main() {\n    let x: u8 = 300;\n    println!(\"{x}\");\n}\n",
+    )
+    .unwrap();
+    let bin = Path::new(&cargo).parent().unwrap();
+
+    let output = Command::new(sandbox.path.join("bin/rawr"))
+        .args(["check", "wide.rs"])
+        .current_dir(&work)
+        .env("PATH", bin)
+        .env("CARGO", &cargo)
+        .env("RAWR_HOME", sandbox.path.join("home"))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(stdout(&output), format!("Checked {}\n", script.display()));
+    let text = stderr(&output);
+    assert!(
+        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("{}:8:17", script.display())),
+        "{text}"
+    );
+    assert_eq!(
+        fs::read_dir(&work).unwrap().count(),
+        1,
+        "nothing beside the script"
+    );
+}
+
 /// The background check of `rawr run`, with a stand-in cargo that takes
 /// a second: a save stops the running check, saves close together start
 /// one new check, and only that check is reported.

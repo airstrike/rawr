@@ -186,10 +186,11 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
     let edition = string("edition").unwrap_or_else(|| EDITION.to_owned());
     let base = script.parent().unwrap_or(Path::new("/"));
     let dependencies = super::cargo::dependencies(&padded, base, table, None)?;
-    let expanded = expand(script, &text[range], &name, &edition).map_err(|message| Error {
-        message: message.into(),
-        span: span(None),
-    })?;
+    let expanded =
+        expand(script, &text[range], &name, &edition, script).map_err(|message| Error {
+            message: message.into(),
+            span: span(None),
+        })?;
     Ok(Some(Cargo {
         path: directory(script).join("Cargo.toml"),
         text: expanded,
@@ -202,10 +203,16 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
 }
 
 /// The frontmatter `manifest` of `script` as cargo expands it: its package
-/// named and given an edition, one binary target that is the script, a
-/// workspace of its own, and each relative path made the script
-/// directory's.
-fn expand(script: &Path, manifest: &str, name: &str, edition: &str) -> Result<String, String> {
+/// named and given an edition, one binary target at `bin` (the script, or
+/// the copy `cargo check` reads), a workspace of its own, and each relative
+/// path made the script directory's.
+fn expand(
+    script: &Path,
+    manifest: &str,
+    name: &str,
+    edition: &str,
+    bin: &Path,
+) -> Result<String, String> {
     let mut document = manifest
         .parse::<DocumentMut>()
         .map_err(|error| error.to_string())?;
@@ -241,14 +248,11 @@ fn expand(script: &Path, manifest: &str, name: &str, edition: &str) -> Result<St
     if let Some(replace) = table.get_mut("replace").and_then(Item::as_table_like_mut) {
         absolute_entries(replace, base);
     }
-    let mut bin = Table::new();
-    bin.insert("name", toml_edit::value(name));
-    bin.insert(
-        "path",
-        toml_edit::value(script.to_string_lossy().into_owned()),
-    );
+    let mut target = Table::new();
+    target.insert("name", toml_edit::value(name));
+    target.insert("path", toml_edit::value(bin.to_string_lossy().into_owned()));
     let mut bins = toml_edit::ArrayOfTables::new();
-    bins.push(bin);
+    bins.push(target);
     table.insert("bin", Item::ArrayOfTables(bins));
     table.insert("workspace", Item::Table(Table::new()));
     Ok(format!(
@@ -291,32 +295,11 @@ fn absolute_entries(entries: &mut dyn TableLike, base: &Path) {
 /// does for a script it runs. The lockfile stays in the script's directory.
 #[cfg(feature = "rust-import")]
 pub(crate) fn materialize(cargo: &Cargo) -> Result<(), String> {
-    use std::fs;
-    let io =
-        |path: &Path, error: std::io::Error| format!("cannot write `{}`: {error}", path.display());
     let directory = cargo
         .path
         .parent()
         .ok_or("a script's manifest has no directory")?;
-    let area = directory
-        .parent()
-        .ok_or("a script's directory has no area")?;
-    // One build directory for every script, so a crate one script compiled
-    // is fresh for the next (D608 point 6).
-    let config = area.join(".cargo/config.toml");
-    let text = "# Written by Rawr: scripts share one Cargo build directory.\n\
-                [build]\nbuild-dir = \"build\"\n";
-    let write = |path: &Path, text: &str| -> Result<bool, String> {
-        if fs::read_to_string(path).ok().as_deref() == Some(text) {
-            return Ok(false);
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| io(parent, error))?;
-        }
-        fs::write(path, text).map_err(|error| io(path, error))?;
-        Ok(true)
-    };
-    write(&config, text)?;
+    share_build_directory(directory)?;
     let changed = write(&cargo.path, &cargo.text)?;
     if !changed && directory.join("Cargo.lock").is_file() {
         return Ok(());
@@ -336,6 +319,105 @@ pub(crate) fn materialize(cargo: &Cargo) -> Result<(), String> {
         "cargo could not lock the script's dependencies:\n{}",
         String::from_utf8_lossy(&output.stderr).trim_end()
     ))
+}
+
+/// Give the area that holds the script directory `directory` its Cargo
+/// config: one build directory for every script, so a crate one script
+/// compiled is fresh for the next (D608 point 6).
+fn share_build_directory(directory: &Path) -> Result<(), String> {
+    let area = directory
+        .parent()
+        .ok_or("a script's directory has no area")?;
+    write(
+        &area.join(".cargo/config.toml"),
+        "# Written by Rawr: scripts share one Cargo build directory.\n\
+         [build]\nbuild-dir = \"build\"\n",
+    )
+    .map(drop)
+}
+
+/// Write `text` to `path` unless it holds it already. Whether it wrote.
+fn write(path: &Path, text: &str) -> Result<bool, String> {
+    use std::fs;
+    let io =
+        |path: &Path, error: std::io::Error| format!("cannot write `{}`: {error}", path.display());
+    if fs::read_to_string(path).ok().as_deref() == Some(text) {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| io(parent, error))?;
+    }
+    fs::write(path, text).map_err(|error| io(path, error))?;
+    Ok(true)
+}
+
+/// How `cargo check` checks a script: as a package of its own in the
+/// script's directory, whose binary is a copy of the script with the
+/// frontmatter blanked, since rustc refuses a frontmatter block outside a
+/// nightly `cargo -Zscript`. Lines and columns stay the script's, and rustc
+/// names the script in its diagnostics through [`ScriptCheck::remap`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptCheck {
+    /// The package's `Cargo.toml`, in `check/` of the script's directory.
+    pub manifest: PathBuf,
+    /// The binary target's name, for `cargo rustc --bin`.
+    pub bin: String,
+    /// rustc's `--remap-path-prefix` that names the script for its copy.
+    pub remap: std::ffi::OsString,
+}
+
+/// Write the package `cargo check` checks the script at `script` as, from
+/// its text now: see [`ScriptCheck`]. It locks what the script's own
+/// lockfile locks, so the check builds the versions the runner builds.
+pub fn script_check(script: &Path) -> Result<ScriptCheck, String> {
+    use std::fs;
+    let script = fs::canonicalize(script).unwrap_or_else(|_| script.to_path_buf());
+    let text = fs::read_to_string(&script)
+        .map_err(|error| format!("cannot read `{}`: {error}", script.display()))?;
+    let lead = frontmatter::read(&text).map_err(|malformed| malformed.message)?;
+    let (Some(block), Some(cargo)) = (
+        lead.frontmatter,
+        cargo(&script, &text).map_err(|error| error.message.to_string())?,
+    ) else {
+        return Err(format!("`{}` has no frontmatter", script.display()));
+    };
+    let directory = directory(&script);
+    let file = script.file_name().ok_or("a script has no file name")?;
+    let copy = directory.join("source").join(file);
+    let manifest = directory.join("check/Cargo.toml");
+    let edition = cargo.edition.as_deref().unwrap_or(EDITION);
+    let expanded = expand(
+        &script,
+        &text[block.manifest.clone()],
+        &cargo.package,
+        edition,
+        &copy,
+    )?;
+    share_build_directory(&directory)?;
+    write(&manifest, &expanded)?;
+    if let Ok(lock) = fs::read_to_string(directory.join("Cargo.lock")) {
+        write(&directory.join("check/Cargo.lock"), &lock)?;
+    }
+    let blanked = text
+        .char_indices()
+        .map(|(at, character)| {
+            if (block.open.start..lead.source).contains(&at) && character != '\n' {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    write(&copy, &blanked)?;
+    let mut remap = std::ffi::OsString::from("--remap-path-prefix=");
+    remap.push(copy.parent().unwrap_or(&directory));
+    remap.push("=");
+    remap.push(script.parent().unwrap_or(Path::new("/")));
+    Ok(ScriptCheck {
+        manifest,
+        bin: cargo.package,
+        remap,
+    })
 }
 
 #[cfg(test)]
