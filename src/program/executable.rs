@@ -79,6 +79,9 @@ pub(crate) struct Callable {
     /// A free function's signature as written, for typed handles.
     signature: Option<super::signatures::Signature>,
     locations: Option<Locations>,
+    /// A trait impl's function for a builtin or a crate's type, which other
+    /// functions call as a helper too: its source evidence is theirs.
+    helper: bool,
 }
 
 pub(crate) struct Evidence<'a> {
@@ -299,6 +302,7 @@ impl Executable {
                     application: None,
                     signature: None,
                     locations: None,
+                    helper: false,
                 },
             );
         }
@@ -776,6 +780,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                         )),
                         signature: Some(super::signatures::Signature::from_resolved(function)),
                         locations: None,
+                        helper: false,
                     },
                 );
             }
@@ -816,6 +821,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                             application: None,
                             signature: None,
                             locations: None,
+                            helper: false,
                         },
                     );
                 }
@@ -862,6 +868,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 )),
                 signature: None,
                 locations: None,
+                helper: false,
             },
         );
     }
@@ -898,6 +905,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 application: None,
                 signature: None,
                 locations: None,
+                helper: true,
             },
         );
     }
@@ -932,6 +940,16 @@ fn retain_locations(
         };
         if callable.source != location.source {
             continue;
+        }
+        if callable.helper {
+            helpers
+                .entry(sources.key(location.source.index()))
+                .or_default()
+                .push(Location {
+                    generated: location.generated,
+                    original: location.original,
+                    nesting: location.nesting,
+                });
         }
         grouped
             .entry(key)
