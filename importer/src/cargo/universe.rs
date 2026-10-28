@@ -2377,7 +2377,7 @@ fn unit_reachability_rooted(
         let kinds = json_array(target.get("kind"), "Cargo unit target kinds")?;
         if package.key.name.as_ref() == root
             && package.key.source.is_empty()
-            && mode == "build"
+            && matches!(mode, "build" | "check")
             && kinds.iter().any(|kind| {
                 kind.as_str()
                     .is_some_and(|kind| matches!(kind, "lib" | "rlib"))

@@ -5,7 +5,8 @@
 //! a runner over it, as the importer generates it with no host profile,
 //! without building: every unit the project's `cargo build` compiles, its own
 //! crate aside, must be in the runner's graph with the same features, profile
-//! and dependencies.
+//! and dependencies. Cargo names a path package by its path under the
+//! workspace root, so the keys do too.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -41,14 +42,24 @@ fn unit_graph(directory: &Path, extra: &[&str]) -> Value {
 }
 
 /// Each unit's identity: its own fields and, recursively, its
-/// dependencies', as Cargo's `-C metadata` folds them in.
-fn keys(graph: &Value) -> Vec<(String, String)> {
+/// dependencies', as Cargo's `-C metadata` folds them in. A path package
+/// under `workspace` counts by its path relative to it, as Cargo hashes it.
+fn keys(graph: &Value, workspace: &Path) -> Vec<(String, String)> {
     let units = graph["units"].as_array().expect("units");
-    fn local(unit: &Value) -> String {
+    let local = |unit: &Value| -> String {
         let mut profile = unit["profile"].clone();
         profile.as_object_mut().expect("profile").remove("name");
+        let package = unit["pkg_id"].as_str().expect("pkg_id");
+        let package = package
+            .strip_prefix("path+file://")
+            .and_then(|path| path.split_once('#'))
+            .and_then(|(path, fragment)| {
+                let relative = Path::new(path).strip_prefix(workspace).ok()?;
+                Some(format!("path:{}#{fragment}", relative.display()))
+            })
+            .unwrap_or_else(|| package.to_owned());
         serde_json::json!([
-            unit["pkg_id"],
+            package,
             unit["target"]["name"],
             unit["target"]["kind"],
             unit["mode"],
@@ -57,8 +68,13 @@ fn keys(graph: &Value) -> Vec<(String, String)> {
             profile,
         ])
         .to_string()
-    }
-    fn key(index: usize, units: &[Value], memo: &mut BTreeMap<usize, String>) -> String {
+    };
+    fn key(
+        index: usize,
+        units: &[Value],
+        local: &dyn Fn(&Value) -> String,
+        memo: &mut BTreeMap<usize, String>,
+    ) -> String {
         if let Some(key) = memo.get(&index) {
             return key.clone();
         }
@@ -66,7 +82,10 @@ fn keys(graph: &Value) -> Vec<(String, String)> {
             .as_array()
             .expect("dependencies")
             .iter()
-            .map(|dependency| key(dependency["index"].as_u64().unwrap() as usize, units, memo))
+            .map(|dependency| {
+                let index = dependency["index"].as_u64().unwrap() as usize;
+                key(index, units, local, memo)
+            })
             .collect::<Vec<_>>();
         dependencies.sort();
         let key = format!("{}<{}>", local(&units[index]), dependencies.join(","));
@@ -75,15 +94,22 @@ fn keys(graph: &Value) -> Vec<(String, String)> {
     }
     let mut memo = BTreeMap::new();
     (0..units.len())
-        .map(|index| (key(index, units, &mut memo), local(&units[index])))
+        .map(|index| (key(index, units, &local, &mut memo), local(&units[index])))
         .collect()
 }
 
 /// Compares a plain project that depends on `dependency` (a manifest line)
 /// with a runner that links the rawr crate with `rawr_features` beside the
 /// same line, and whose `src/main.rs` is `runner_main`. Every unit the
-/// project builds, its own crate aside, must be the runner's.
-fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str) {
+/// project builds, its own crate aside, must be the runner's. `{project}` in
+/// `dependency` is the project's directory, which holds `files` too.
+fn compare(
+    name: &str,
+    dependency: &str,
+    files: &[(&str, &str)],
+    rawr_features: &str,
+    runner_main: &str,
+) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let root = fs::canonicalize(root).expect("the repository root");
     let scratch = root.join(format!("target/unit-graph-{name}-{}", std::process::id()));
@@ -93,6 +119,12 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
     for directory in [project.join("src"), runner.join("src")] {
         fs::create_dir_all(directory).unwrap();
     }
+    for (path, text) in files {
+        let path = project.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let dependency = dependency.replace("{project}", &project.display().to_string());
     // A plain marked crate with one dependency and no other file. Its own
     // `[workspace]` keeps it out of the repository's.
     fs::write(
@@ -107,9 +139,12 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
     // The runner, as the importer generates it with no host profile: the
     // rawr crate and the project's dependency, the project's profile as it
     // is, and the rawr crate's own opt-level. No rawr-iced and no iced.
+    // The runner's build places the project's path packages under its root
+    // as they lie under the project's (T277).
+    let manifest = |text: String| rawr_import::runner::mirror::mirror(&project, &runner, &text);
     fs::write(
         runner.join("Cargo.toml"),
-        format!(
+        manifest(format!(
             "[workspace]\nresolver = \"3\"\n\n\
              [package]\nname = \"rawr-generated-runner\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
              [dependencies]\n\
@@ -117,7 +152,7 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
              {dependency}\n\n\
              [profile.dev.package.rawr]\ndebug = 0\nopt-level = 3\nstrip = false\n",
             root = root.display().to_string(),
-        ),
+        )),
     )
     .unwrap();
     fs::write(runner.join("src/main.rs"), runner_main).unwrap();
@@ -125,8 +160,8 @@ fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str)
     cargo(&project, &["generate-lockfile"]);
     // The runner's resolution starts from the project's lock.
     fs::copy(project.join("Cargo.lock"), runner.join("Cargo.lock")).unwrap();
-    let template = keys(&unit_graph(&project, &[]));
-    let built = keys(&unit_graph(&runner, &[]));
+    let template = keys(&unit_graph(&project, &[]), &project);
+    let built = keys(&unit_graph(&runner, &[]), &runner);
     let runner_manifest = fs::read_to_string(runner.join("Cargo.toml")).unwrap();
     fs::remove_dir_all(&scratch).unwrap();
 
@@ -174,6 +209,7 @@ fn the_plain_runner_builds_the_projects_own_units() {
     compare(
         "plain",
         "itoa = \"1\"",
+        &[],
         "\"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
@@ -186,6 +222,7 @@ fn a_project_with_featureless_smallvec_keeps_its_smallvec() {
     compare(
         "smallvec",
         "smallvec = { version = \"1\", default-features = false }",
+        &[],
         "\"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
@@ -200,8 +237,30 @@ fn a_runner_that_instantiates_tokio_at_rawr_types_builds_the_projects_tokio() {
     compare(
         "tokio",
         "tokio = { version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"time\", \"sync\"] }",
+        &[],
         "\"rust-import\", \"std\", \"sync\"",
         RUNNER_WITH_TOKIO,
+    );
+}
+
+/// T277: the project's path dependency keeps its one unit. The harness names
+/// it by its absolute path, and Cargo hashes a path package by its path under
+/// the workspace root, so the runner reaches it under its own root at the
+/// same relative path.
+#[test]
+fn a_project_s_path_dependency_is_the_runner_s() {
+    compare(
+        "path",
+        "events = { path = \"{project}/events\" }",
+        &[
+            (
+                "events/Cargo.toml",
+                "[package]\nname = \"events\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            ("events/src/lib.rs", "pub fn count() -> u32 {\n    1\n}\n"),
+        ],
+        "\"rust-import\", \"std\", \"sync\"",
+        "fn main() {}\n",
     );
 }
 

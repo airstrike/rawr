@@ -281,12 +281,24 @@ fn compile<B>(
         .generated
         .carrier()
         .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
+    // The project's path packages keep their paths under the workspace root,
+    // so Cargo hashes them as the project's `cargo build` does (T277).
+    let workspace = rawr_location::workspace_root(context.project());
+    let mirrored = manifest
+        .files
+        .iter()
+        .find(|file| file.path() == "Cargo.toml")
+        .and_then(|file| std::str::from_utf8(file.bytes()).ok())
+        .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
     crate::bridge::generate::sync_sources(
         &work,
         manifest
             .files
             .iter()
-            .map(|file| (file.path(), file.bytes()))
+            .map(|file| match (&mirrored, file.path()) {
+                (Some(mirrored), "Cargo.toml") => (file.path(), mirrored.as_bytes()),
+                _ => (file.path(), file.bytes()),
+            })
             .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
     )
     .map_err(|source| node::Error::Io {

@@ -1175,7 +1175,7 @@ impl BuildGraph {
             }
             let mode = value_string(unit, "mode")
                 .ok_or_else(|| schema("Cargo unit graph", "root unit mode is absent"))?;
-            if !["build", "run-custom-build"].contains(&mode) {
+            if !["build", "check", "run-custom-build"].contains(&mode) {
                 return Err(Error::ResolutionDrift {
                     command: "build",
                     field: "root unit mode",
@@ -2249,7 +2249,7 @@ fn unit_masks(
         for (index, unit) in units.iter().enumerate() {
             let mode = value_string(unit, "mode")
                 .ok_or_else(|| schema("Cargo unit graph", "unit mode is absent"))?;
-            if mode != "build" || is_std(unit, no_build_std)? {
+            if !matches!(mode, "build" | "check") || is_std(unit, no_build_std)? {
                 continue;
             }
             flags[index] |= RETAINED_UNIT;
@@ -2389,7 +2389,7 @@ fn prepare_owned_graph(
                     ));
                 }
             }
-            "build" if !compiler_shipped => {
+            "build" | "check" if !compiler_shipped => {
                 if masks.extraction(index)
                     && (unit.platform.as_deref() != Some(selected_target)
                         || !unit
@@ -2439,7 +2439,7 @@ fn prepare_owned_graph(
                     extraction_dependencies,
                 });
             }
-            "build" | "run-custom-build" => {}
+            "build" | "check" | "run-custom-build" => {}
             mode => {
                 return Err(schema(
                     "Cargo unit graph",
