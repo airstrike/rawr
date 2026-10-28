@@ -449,7 +449,8 @@ fn cfg(tokens: &[Token<'_>], cursor: &mut usize) -> Option<bool> {
 fn tokens(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
-    let mut index = 0;
+    // Rust starts after a shebang line and a frontmatter block.
+    let mut index = crate::project::frontmatter::read(text).map_or(0, |lead| lead.source);
     while index < bytes.len() {
         let byte = bytes[index];
         match byte {

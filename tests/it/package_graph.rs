@@ -439,6 +439,56 @@ fn cyclic_public_reexports_are_rejected_before_lowering() {
     assert!(report.message().contains("cyclic public re-export"));
 }
 
+#[test]
+fn a_script_is_its_own_package_wherever_it_sits() {
+    let project = Project::new("script-in-src");
+    project.write("Cargo.toml", "[package]\nname = \"script-in-src\"\n\n[dependencies]\nrand = \"0.9\"\n");
+    let main = project.path().join("src/main.rs");
+    fs::create_dir_all(main.parent().unwrap()).unwrap();
+    fs::write(&main, "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\nfn main() {}\n").unwrap();
+    let target = rawr::project::Target::discover(&main).unwrap();
+
+    let graph = Graph::load(&Engine::new(), &target).unwrap();
+
+    assert_eq!(Graph::root_of(&target), fs::canonicalize(project.path().join("src")).unwrap());
+    assert_eq!(graph.entry_package().name(), "main");
+    assert!(!graph.declares_rust_import());
+}
+
+#[test]
+fn a_script_that_declares_dependencies_is_refused_until_they_resolve() {
+    let project = Project::new("script-dependencies");
+    let script = project.path().join("tool.rs");
+    fs::write(&script, "---cargo\n[dependencies]\nrand = \"0.9\"\n---\n// rawr\nfn main() {}\n").unwrap();
+    let target = rawr::project::Target::discover(&script).unwrap();
+
+    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let report = error.report().unwrap();
+
+    assert!(report.message().contains("declares dependencies"), "{report}");
+    assert_eq!(report.labels()[0].span().start(), Position::new(2, 2));
+}
+
+#[test]
+fn a_script_s_parse_errors_keep_the_file_s_lines_and_columns() {
+    let project = Project::new("script-positions");
+    let script = project.path().join("tool.rs");
+    fs::write(&script, "#!/usr/bin/env rawr\n---cargo\n---\n// rawr\nfn main() {}\nstruct 1;\n").unwrap();
+    let target = rawr::project::Target::discover(&script).unwrap();
+
+    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let report = error.report().unwrap();
+
+    assert_eq!(error.category(), Category::Parse);
+    assert_eq!(report.labels()[0].span().start(), Position::new(6, 8), "{report}");
+
+    fs::write(&script, "---cargo\n[package]\n// rawr\nfn main() {}\n").unwrap();
+    let target = rawr::project::Target::discover(&script).unwrap();
+    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let report = error.report().unwrap();
+    assert!(report.message().contains("unclosed frontmatter"), "{report}");
+}
+
 #[cfg(feature = "rust-import")]
 #[test]
 fn a_crate_without_dependencies_produces_no_import_request() {

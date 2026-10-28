@@ -1,6 +1,7 @@
 //! Canonical Rawr source and project discovery.
 
 mod error;
+pub mod frontmatter;
 pub mod marker;
 pub mod root;
 pub mod source;
@@ -55,25 +56,24 @@ impl Project {
         &self.source
     }
 
-    fn load(path: PathBuf) -> Result<Self, Error> {
-        let root = root::Directory::from_canonical(path);
-        let source_path = match entry(root.as_path())? {
-            Entry::Found(path) => path,
-            Entry::Unmarked(entry) => {
-                return Err(Error::Unmarked {
-                    root: root.as_path().to_path_buf(),
-                    entry,
-                });
-            }
-            Entry::None => {
-                return Err(Error::MissingSource {
-                    root: root.as_path().to_path_buf(),
-                    expected: root.as_path().join(SOURCE_DIRECTORY).join(RUST_ROOTS[0]),
-                });
-            }
-        };
-        let source = source::File::load_project(source_path, &root)?;
+    fn load(root: PathBuf, source: PathBuf) -> Result<Self, Error> {
+        let root = root::Directory::from_canonical(root);
+        let source = source::File::load_project(source, &root)?;
         Ok(Self { root, source })
+    }
+}
+
+/// The program of the Cargo package at `root`: the package's crate, or the
+/// script its crate root is.
+fn load_directory(root: PathBuf) -> Result<Target, Error> {
+    match entry(&root)? {
+        Entry::Found(source) => Project::load(root, source).map(Target::Project),
+        Entry::Script(source) => source::File::load_explicit(source).map(Target::File),
+        Entry::Unmarked(entry) => Err(Error::Unmarked { root, entry }),
+        Entry::None => Err(Error::MissingSource {
+            expected: root.join(SOURCE_DIRECTORY).join(RUST_ROOTS[0]),
+            root,
+        }),
     }
 }
 
@@ -129,7 +129,7 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
         let Some(parent) = path.parent() else {
             return Err(Error::UnsupportedInput { path });
         };
-        return Project::load(parent.to_path_buf()).map(Target::Project);
+        return load_directory(parent.to_path_buf());
     }
     if name == Some(OsStr::new(LEGACY_CONFIG)) || path.extension() == Some(OsStr::new("rawr")) {
         return Err(Error::Legacy { path });
@@ -141,10 +141,8 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
 }
 
 fn discover_directory(start: PathBuf) -> Result<Target, Error> {
-    match entry(&start)? {
-        Entry::Found(_) => return Project::load(start).map(Target::Project),
-        Entry::Unmarked(entry) => return Err(Error::Unmarked { root: start, entry }),
-        Entry::None => {}
+    if !matches!(entry(&start)?, Entry::None) {
+        return load_directory(start);
     }
 
     let mut candidates = Vec::new();
@@ -152,7 +150,7 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
     let mut current = start.clone();
 
     loop {
-        if matches!(entry(&current)?, Entry::Found(_)) {
+        if matches!(entry(&current)?, Entry::Found(_) | Entry::Script(_)) {
             candidates.push(current.clone());
         }
         if legacy.is_none() {
@@ -179,16 +177,21 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
 enum Entry {
     /// A Cargo package's marked crate root.
     Found(PathBuf),
+    /// A marked crate root with a frontmatter block: a cargo script, which
+    /// is one wherever it sits (D608 point 6), so it is not the package's.
+    Script(PathBuf),
     /// A Cargo package's crate root without the `// rawr` marker.
     Unmarked(PathBuf),
     None,
 }
 
 /// The entry of the crate at `root`: the first of `src/main.rs` and
-/// `src/lib.rs` that exists, when its first line is the `// rawr` marker or
-/// its `mod` tree reaches a file that starts with it. A marked root is
-/// read only to its first line; an unmarked one is read whole, with the
-/// native modules it declares, until a marked module turns up.
+/// `src/lib.rs` that exists, when its first line of Rust is the `// rawr`
+/// marker or its `mod` tree reaches a file that starts with it. A root
+/// that starts with the marker is read only to its first line, and one
+/// that may start with a shebang or frontmatter is read whole. An unmarked
+/// one is read whole, with the native modules it declares, until a marked
+/// module turns up.
 fn entry(root: &Path) -> Result<Entry, Error> {
     if !path_exists(&root.join(CARGO_NAME), Resource::Manifest)? {
         return Ok(Entry::None);
@@ -199,16 +202,19 @@ fn entry(root: &Path) -> Result<Entry, Error> {
         if !path_exists(&path, Resource::Source)? {
             continue;
         }
-        return match marker::file_is_marked(&path) {
-            Ok(true) => Ok(Entry::Found(path)),
-            Ok(false) if reaches_marked(&path)? => Ok(Entry::Found(path)),
-            Ok(false) => Ok(Entry::Unmarked(path)),
-            Err(source) => Err(Error::Unreadable {
-                resource: Resource::Source,
-                path,
-                source,
-            }),
-        };
+        let marking = marker::file_marking(&path).map_err(|source| Error::Unreadable {
+            resource: Resource::Source,
+            path: path.clone(),
+            source,
+        })?;
+        if !marking.marked && !reaches_marked(&path)? {
+            return Ok(Entry::Unmarked(path));
+        }
+        return Ok(if marking.script {
+            Entry::Script(path)
+        } else {
+            Entry::Found(path)
+        });
     }
     Ok(Entry::None)
 }
@@ -277,7 +283,7 @@ fn finish_search(
         });
     }
     if candidates.len() == 1 {
-        return Project::load(candidates[0].clone()).map(Target::Project);
+        return load_directory(candidates[0].clone());
     }
     Err(Error::Ambiguous {
         start,

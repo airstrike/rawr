@@ -119,6 +119,44 @@ fn explicit_cargo_toml_selects_its_exact_crate() {
 }
 
 #[test]
+fn the_marker_follows_a_shebang_and_frontmatter() {
+    let temp = Temp::new("lead");
+    temp.file("tool/Cargo.toml", "[package]\nname = \"tool\"\n");
+    temp.file("tool/src/main.rs", "#!/usr/bin/env rawr\n// rawr\nfn main() {}\n");
+
+    let discovered = project(Target::discover(temp.path().join("tool")).unwrap());
+
+    assert!(discovered.source().text().starts_with("#!"));
+}
+
+#[test]
+fn a_frontmatter_crate_root_is_a_script_not_the_package() {
+    let temp = Temp::new("script-root");
+    temp.file("tool/Cargo.toml", "[package]\nname = \"tool\"\n\n[dependencies]\nrand = \"0.9\"\n");
+    let main = temp.file("tool/src/main.rs", "---cargo\n---\n// rawr\nfn main() {}\n");
+    let nested = temp.directory("tool/src/deep");
+
+    for start in [temp.path().join("tool"), temp.path().join("tool/Cargo.toml"), nested] {
+        let Target::File(file) = Target::discover(&start).unwrap() else {
+            panic!("a script was folded into its package from `{}`", start.display());
+        };
+        assert_eq!(file.path(), fs::canonicalize(&main).unwrap());
+    }
+}
+
+#[test]
+fn an_unmarked_frontmatter_crate_root_is_unmarked() {
+    let temp = Temp::new("unmarked-script");
+    temp.file("tool/Cargo.toml", "[package]\nname = \"tool\"\n");
+    // A blank line after the block: the marker is not the first line of Rust.
+    temp.file("tool/src/main.rs", "---cargo\n---\n\n// rawr\nfn main() {}\n");
+
+    let error = Target::discover(temp.path().join("tool")).unwrap_err();
+
+    assert!(matches!(error, project::Error::Unmarked { .. }), "{error}");
+}
+
+#[test]
 fn an_unmarked_crate_is_not_a_rawr_project() {
     let temp = Temp::new("unmarked");
     temp.file("plain/Cargo.toml", "[package]\nname = \"plain\"\n");

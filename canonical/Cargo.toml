@@ -1,6 +1,6 @@
 [package]
 name = "rawr-canonical"
-version = "0.2.7"
+version = "0.2.8"
 rust-version = "1.91.0"
 edition = "2024"
 publish = false

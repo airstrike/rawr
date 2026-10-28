@@ -326,6 +326,35 @@ fn an_unmarked_crate_root_is_not_a_rawr_program() {
     assert!(text.contains("add `// rawr` as the first line"), "{text}");
 }
 
+/// A cargo script is marked on its first line of Rust, after its shebang
+/// and frontmatter, and runs while it declares no dependencies.
+#[test]
+fn a_cargo_script_runs_with_the_marker_after_its_frontmatter() {
+    let sandbox = Sandbox::new("marked-script");
+    let work = sandbox.work();
+    fs::write(
+        work.join("tool.rs"),
+        "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\n\
+         fn main() {\n    println!(\"script\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        work.join("deps.rs"),
+        "---cargo\n[dependencies]\nrand = \"0.9\"\n---\n// rawr\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let run = sandbox.rawr(&["run", "tool.rs"]);
+    let refused = sandbox.rawr(&["run", "deps.rs"]);
+
+    assert_success(&run);
+    assert_eq!(stdout(&run), "script\n");
+    assert_eq!(refused.status.code(), Some(1));
+    let text = stderr(&refused);
+    assert!(text.contains("declares dependencies"), "{text}");
+    assert!(text.contains("deps.rs:2:2"), "{text}");
+}
+
 /// A live session loads again on each save through remembering cells:
 /// only the saved file is parsed again.
 #[test]

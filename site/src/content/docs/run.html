@@ -21,6 +21,17 @@
 
 <h2 id="marker">The <code>// rawr</code> marker</h2>
 <p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust.</p>
+<p>The marker is the first line of the file&rsquo;s Rust. A shebang line and a cargo-script frontmatter block may come before it:</p>
+<div class="block"><pre><code>#!/usr/bin/env -S cargo +nightly -Zscript
+---cargo
+[package]
+edition = "2024"
+---
+// rawr
+fn main() {
+    println!("hello");
+}</code></pre></div>
+<p>The marker must be the line right after the frontmatter. A blank line between them leaves the file unmarked. A file whose frontmatter cargo rejects isn&rsquo;t marked, and <code>rawr run</code> reports cargo&rsquo;s error.</p>
 <ul>
   <li>The crate root may be marked or native. A crate with a native root runs when a module it declares is marked. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code>.</li>
   <li>Marked code may call native modules.</li>
@@ -28,6 +39,10 @@
   <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
   <li>A path dependency is compiled natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</li>
 </ul>
+
+<h2 id="scripts">Scripts</h2>
+<p>A <code>.rs</code> file with a frontmatter block is a cargo script wherever it sits. rawr runs it as a file of its own, as cargo does. Inside a Cargo package it still doesn&rsquo;t use the package&rsquo;s <code>Cargo.toml</code>.</p>
+<p>rawr doesn&rsquo;t resolve a script&rsquo;s dependencies yet. A script whose frontmatter declares <code>[dependencies]</code> stops with an error that says so. A script with no dependencies runs.</p>
 
 <h2 id="native-main">A native main</h2>
 <p>An app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of that module that native code can call gets a generated stub with the same signature. The stub runs the function in the interpreter.</p>
