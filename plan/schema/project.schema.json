@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.schema.json",
+  "title": "The plan's repository, Project, labels and categories",
+  "description": "Labels, categories and keywords are written by hand. `node plan/plan.mjs setup` creates what they name on GitHub and writes the ids.",
+  "type": "object",
+  "required": ["repo", "project", "labels", "categories", "keywords"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+    "repoId": { "type": "string" },
+    "project": {
+      "type": "object",
+      "required": ["owner", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "number": { "type": "integer" },
+        "id": { "type": "string" },
+        "url": { "type": "string" }
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "color", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "color": { "type": "string", "pattern": "^[0-9a-f]{6}$" },
+          "description": { "type": "string", "maxLength": 100 },
+          "id": { "type": "string" }
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "description": "Each TODO.md heading and the label its items get.",
+      "additionalProperties": { "type": "string" }
+    },
+    "keywords": {
+      "type": "array",
+      "description": "Labels an item also gets when its text matches the pattern (case-insensitive).",
+      "items": {
+        "type": "object",
+        "required": ["label", "pattern"],
+        "additionalProperties": false,
+        "properties": { "label": { "type": "string" }, "pattern": { "type": "string" } }
+      }
+    },
+    "fields": {
+      "type": "object",
+      "description": "The Project's fields, by role.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "options": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

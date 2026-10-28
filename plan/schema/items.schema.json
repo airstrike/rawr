@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "items.schema.json",
+  "title": "Work plan items",
+  "description": "One record per TODO item and its GitHub issue. plan.mjs writes it; change it with a change file.",
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["t", "issue", "title", "state", "category", "labels", "gantt", "decisions", "commit", "release"],
+      "additionalProperties": false,
+      "properties": {
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issue" },
+        "title": { "type": "string", "pattern": "^T[0-9]{3,}: \\S", "maxLength": 256, "description": "The issue's title, exactly." },
+        "state": { "enum": ["open", "closed"], "description": "The issue's state. A closed item is ticked in TODO.md." },
+        "category": { "type": "string", "minLength": 1, "description": "The TODO.md heading the item sits under." },
+        "labels": { "type": "array", "items": { "$ref": "defs.schema.json#/$defs/label" }, "uniqueItems": true },
+        "gantt": {
+          "description": "The chart row the item belongs to, or null. That row lists the issue.",
+          "oneOf": [{ "type": "null" }, { "$ref": "defs.schema.json#/$defs/rowRef" }]
+        },
+        "decisions": { "type": "array", "items": { "$ref": "defs.schema.json#/$defs/decision" }, "uniqueItems": true },
+        "commit": {
+          "description": "The commit that closed the item, or null.",
+          "oneOf": [{ "type": "null" }, { "$ref": "defs.schema.json#/$defs/commit" }]
+        },
+        "release": {
+          "description": "The release that shipped the item, or null.",
+          "oneOf": [{ "type": "null" }, { "$ref": "defs.schema.json#/$defs/version" }]
+        }
+      }
+    }
+  }
+}
