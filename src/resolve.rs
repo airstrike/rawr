@@ -1243,6 +1243,16 @@ fn resolve_imports(
                     },
                 );
             }
+            // A std type imported under another name, as iced's `Never` is
+            // std's `Infallible`, names Rawr's type for that std path.
+            if matches!(binding.target, item::Import::Module)
+                && let Some(builtin) = renamed_std_type(&binding.qualified, &binding.name.text)
+            {
+                types.insert(
+                    binding.name.text.clone(),
+                    type_ref::Target::Alias(type_ref::Alias::builtin(builtin, binding.name.span)),
+                );
+            }
             if matches!(binding.target, item::Import::Alias) {
                 match host.entry(&binding.qualified) {
                     Some(host::Entry::Builtin(builtin)) => {
@@ -1752,6 +1762,17 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         _ => return None,
     };
     (module.is_empty() || module == expected).then_some(error)
+}
+
+/// The Rawr type the std type path `qualified` names when a `use` binds
+/// it as `name`, another name than its own, as iced's `Never` is std's
+/// `convert::Infallible`.
+pub(crate) fn renamed_std_type(qualified: &str, name: &str) -> Option<&'static str> {
+    let path = qualified
+        .strip_prefix("std::")
+        .or_else(|| qualified.strip_prefix("core::"))?;
+    let ty = std_parse_error(qualified).or_else(|| std_time(qualified))?;
+    (path.contains("::") && ty != name).then_some(ty)
 }
 
 /// `std::time::Duration` and `Instant` as a type path is written: bare

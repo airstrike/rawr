@@ -44566,6 +44566,15 @@ impl<'a> Parser<'a> {
                 }
                 _ => name.clone(),
             };
+            // std's `Duration` and `Instant`, in full or through a crate's
+            // re-export of them, as `time::Duration` after `use iced::time`.
+            let path = crate::resolve::std_reexport(&path, &self.models.host);
+            if let Some(time) = crate::resolve::std_time(&path) {
+                return Ok(Ty::Time(match time {
+                    "Duration" => Time::Duration,
+                    _ => Time::Instant,
+                }));
+            }
             // A crate's alias of a builtin, as iced's `markdown::Uri` is
             // `String`.
             if let Some(crate::host::Entry::Builtin(builtin)) = self.models.host.entry(&path)

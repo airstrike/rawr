@@ -1083,6 +1083,14 @@ fn build(
             .builtin_alias(path, builtin)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
+    // A crate's re-export of a std item, as iced's `time::Duration`.
+    for (path, std) in facade.std_reexports() {
+        match builder.std_alias(path, std) {
+            // A path the crate also declares something at keeps that.
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(source) => return Err(entry_error(facade.root(), path, source.into())),
+        }
+    }
     // A crate's type alias, as `pub type Result = std::result::Result<(),
     // Error>;`.
     for alias in facade.type_aliases() {
