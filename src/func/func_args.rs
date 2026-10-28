@@ -65,7 +65,10 @@ impl<T: Variant + Clone> FuncArgs for Vec<T> {
     }
 }
 
-impl<T: Variant + Clone, const N: usize> FuncArgs for SmallVec<[T; N]> {
+impl<A: smallvec::Array> FuncArgs for SmallVec<A>
+where
+    A::Item: Variant + Clone,
+{
     #[inline]
     fn parse<ARGS: Extend<Dynamic>>(self, args: &mut ARGS) {
         args.extend(self.into_iter().map(Dynamic::from));

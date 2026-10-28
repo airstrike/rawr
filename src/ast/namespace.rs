@@ -62,11 +62,6 @@ impl fmt::Display for Namespace {
 }
 
 impl Namespace {
-    /// Constant for no namespace.
-    pub const NONE: Self = Self {
-        index: None,
-        path: StaticVec::new_const(),
-    };
     /// Is this [`Namespace`] empty?
     #[inline(always)]
     #[must_use]

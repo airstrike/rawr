@@ -199,6 +199,18 @@ fn the_plain_runner_builds_the_projects_own_units() {
     );
 }
 
+/// T279: rawr asks smallvec for no features, so a project that takes
+/// smallvec with none keeps its one smallvec, and every crate above it.
+#[test]
+fn a_project_with_featureless_smallvec_keeps_its_smallvec() {
+    compare(
+        "smallvec",
+        "smallvec = { version = \"1\", default-features = false }",
+        "\"rust-import\", \"std\", \"sync\"",
+        "fn main() {}\n",
+    );
+}
+
 /// D513.7's first check: a runner that instantiates tokio's generics at
 /// rawr's own types (a channel of `rawr::Value`, a spawned script future)
 /// still builds the project's tokio unit. A monomorphization is not a unit,

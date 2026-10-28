@@ -168,7 +168,7 @@ impl Engine {
         fn_name: impl AsRef<str>,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = FnArgsVec::new_const();
+        let mut arg_values = FnArgsVec::new();
         args.parse(&mut arg_values);
 
         self._call_fn(

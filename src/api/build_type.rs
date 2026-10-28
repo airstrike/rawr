@@ -109,7 +109,7 @@ impl<'a, T: Variant + Clone> TypeBuilder<'a, T> {
     fn new(engine: &'a mut Engine) -> Self {
         Self {
             engine,
-            hashes: StaticVec::new_const(),
+            hashes: StaticVec::new(),
             _marker: PhantomData,
         }
     }

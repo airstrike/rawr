@@ -1277,14 +1277,14 @@ impl Module {
             namespace,
             access: fn_def.access,
             num_params,
-            param_types: FnArgsVec::new_const(),
+            param_types: FnArgsVec::new(),
             output_type: None,
             #[cfg(feature = "metadata")]
             params_info: fn_def.params.iter().map(Into::into).collect(),
             #[cfg(feature = "metadata")]
             return_type: <_>::default(),
             #[cfg(feature = "metadata")]
-            comments: crate::StaticVec::new_const(),
+            comments: crate::StaticVec::new(),
         };
 
         self.functions

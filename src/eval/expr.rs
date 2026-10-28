@@ -324,7 +324,7 @@ impl Engine {
             return Self::held_path(&held.flatten_clone());
         }
         if held.is_int() {
-            return Some((held.clone(), crate::StaticVec::new_const()));
+            return Some((held.clone(), crate::StaticVec::new()));
         }
         Self::path_parts(&held.as_array_ref().ok()?)
     }

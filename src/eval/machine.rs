@@ -700,7 +700,7 @@ fn variable(name: &ImmutableString) -> Expr {
 
 fn variable_at(name: &ImmutableString, position: Position) -> Expr {
     Expr::Variable(
-        (None, name.clone(), crate::ast::Namespace::NONE, 0).into(),
+        (None, name.clone(), crate::ast::Namespace::default(), 0).into(),
         None,
         position,
     )

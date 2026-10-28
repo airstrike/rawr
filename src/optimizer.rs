@@ -518,7 +518,7 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
                 let mut expr1 = x.expr.take();
                 optimize_expr(&mut expr1, state, false);
 
-                let mut v = StaticVec::new_const();
+                let mut v = StaticVec::new();
                 v.push(expr1);
                 v.push(expr2);
 
@@ -575,11 +575,13 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
                             // switch const { case if condition => stmt, _ => def } => if condition { stmt } else { def }
                             optimize_expr(&mut b.lhs, state, false);
 
-                            let branch = def_case.map_or(StmtBlock::NONE, |index| {
-                                let mut def_stmt = Stmt::Expr(expressions[index].rhs.take().into());
-                                optimize_stmt(&mut def_stmt, state, true);
-                                def_stmt.into()
-                            });
+                            let branch =
+                                def_case.map_or(StmtBlock::empty(crate::Position::NONE), |index| {
+                                    let mut def_stmt =
+                                        Stmt::Expr(expressions[index].rhs.take().into());
+                                    optimize_stmt(&mut def_stmt, state, true);
+                                    def_stmt.into()
+                                });
                             let body = Stmt::Expr(b.rhs.take().into()).into();
                             let expr = b.lhs.take();
 
@@ -632,11 +634,13 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
                             // switch const { range if condition => stmt, _ => def } => if condition { stmt } else { def }
                             optimize_expr(&mut expr, state, false);
 
-                            let branch = def_case.map_or(StmtBlock::NONE, |index| {
-                                let mut def_stmt = Stmt::Expr(expressions[index].rhs.take().into());
-                                optimize_stmt(&mut def_stmt, state, true);
-                                def_stmt.into()
-                            });
+                            let branch =
+                                def_case.map_or(StmtBlock::empty(crate::Position::NONE), |index| {
+                                    let mut def_stmt =
+                                        Stmt::Expr(expressions[index].rhs.take().into());
+                                    optimize_stmt(&mut def_stmt, state, true);
+                                    def_stmt.into()
+                                });
 
                             let body = Stmt::Expr(expressions[r.index()].rhs.take().into()).into();
 

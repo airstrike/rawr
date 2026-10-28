@@ -556,7 +556,7 @@ impl Expr {
             {
                 Self::FnCall(
                     FnCallExpr {
-                        namespace: super::Namespace::NONE,
+                        namespace: super::Namespace::default(),
                         name: KEYWORD_FN_PTR.into(),
                         hashes: FnCallHashes::from_hash(calc_fn_hash(None, f.fn_name(), 1)),
                         args: once(Self::StringConstant(f.fn_name().into(), pos)).collect(),

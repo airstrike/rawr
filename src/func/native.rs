@@ -296,7 +296,7 @@ impl<'a> NativeCallContext<'a> {
         fn_name: impl AsRef<str>,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
@@ -327,7 +327,7 @@ impl<'a> NativeCallContext<'a> {
         this_ptr: &mut Dynamic,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
@@ -361,7 +361,7 @@ impl<'a> NativeCallContext<'a> {
         fn_name: impl AsRef<str>,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
@@ -396,7 +396,7 @@ impl<'a> NativeCallContext<'a> {
         object: &mut Dynamic,
         args: impl FuncArgs,
     ) -> RawrResultOf<T> {
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();

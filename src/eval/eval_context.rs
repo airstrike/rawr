@@ -226,7 +226,7 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     ) -> RawrResultOf<T> {
         let engine = self.engine();
 
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
@@ -274,7 +274,7 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     ) -> RawrResultOf<T> {
         let engine = self.engine();
 
-        let mut arg_values = StaticVec::new_const();
+        let mut arg_values = StaticVec::new();
         args.parse(&mut arg_values);
 
         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
