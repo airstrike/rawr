@@ -205,3 +205,122 @@ pub mod base {
 
     pub use helpers::*;
 }
+
+/// Functions whose callable parameter is a named type parameter that no
+/// script closure fills, as tokio's `MappedMutexGuard::map` (`F:
+/// FnOnce(&mut T) -> &mut U`) and cosmic-text's `with_buffer_mut` (`F:
+/// FnOnce(&mut Borrowed<Buffer>) -> T`) take, or whose closure gives a
+/// future parameter, as warp's `Ws::on_upgrade` takes, beside the items a
+/// script reaches.
+pub mod guard {
+    pub struct Guard<'a, T> {
+        value: &'a mut T,
+    }
+
+    impl<'a, T> Guard<'a, T> {
+        pub fn new(value: &'a mut T) -> Self {
+            Guard { value }
+        }
+
+        pub fn map<U, F>(this: Self, f: F) -> Guard<'a, U>
+        where
+            F: FnOnce(&mut T) -> &mut U,
+        {
+            Guard {
+                value: f(this.value),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Buffer {
+        pub lines: u32,
+    }
+
+    impl Buffer {
+        pub fn new(lines: u32) -> Self {
+            Buffer { lines }
+        }
+
+        pub fn lines(&self) -> u32 {
+            self.lines
+        }
+
+        /// A closure that gives a future, as warp's `Ws::on_upgrade` takes.
+        pub fn on_upgrade<F, U>(self, func: F) -> u32
+        where
+            F: FnOnce(Buffer) -> U + Send + 'static,
+            U: std::future::Future<Output = ()> + Send + 'static,
+        {
+            drop(func(self));
+            self.lines
+        }
+    }
+
+    pub struct Borrowed<'a, E> {
+        inner: &'a mut E,
+    }
+
+    impl<'a, E> Borrowed<'a, E> {
+        pub fn with_buffer_mut<F: FnOnce(&mut Borrowed<Buffer>) -> T, T>(&mut self, f: F) -> T {
+            let _ = &self.inner;
+            let mut buffer = Buffer::default();
+            f(&mut Borrowed { inner: &mut buffer })
+        }
+    }
+}
+
+/// A function generic over `T` that gives an opaque `impl Trait` whose
+/// trait has a method generic over its own `T`, as warp's `form<T>()`
+/// gives an `impl Filter` with `untuple_one<T>`.
+pub mod form {
+    pub trait Filter {
+        fn value(self) -> u32;
+
+        fn label<T: std::fmt::Display>(self, prefix: T) -> String
+        where
+            Self: Sized,
+        {
+            format!("{prefix} {}", self.value())
+        }
+
+        /// A type that holds `Self`, as warp's `Filter::and` gives
+        /// `And<Self, F>`.
+        fn and(self, more: u32) -> And<Self>
+        where
+            Self: Sized,
+        {
+            And(self, more)
+        }
+    }
+
+    pub struct And<F>(F, u32);
+
+    impl<F: Filter> Filter for And<F> {
+        fn value(self) -> u32 {
+            self.0.value() + self.1
+        }
+    }
+
+    /// A type whose method gives an opaque type, as image's
+    /// `Reader::into_decoder` gives `impl ImageDecoder`.
+    pub struct Source(pub u32);
+
+    impl Source {
+        pub fn filter(self) -> impl Filter {
+            Plain(self.0)
+        }
+    }
+
+    struct Plain(u32);
+
+    impl Filter for Plain {
+        fn value(self) -> u32 {
+            self.0
+        }
+    }
+
+    pub fn form<T: Into<u32>>(value: T) -> impl Filter {
+        Plain(value.into())
+    }
+}
