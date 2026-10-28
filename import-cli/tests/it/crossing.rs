@@ -256,6 +256,23 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
+/// iced's exit and events: `latest().and_then(..)` takes a script closure
+/// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's
+/// type argument across `impl<T> Task<Option<T>>` and `impl<T, E>
+/// Task<Result<T, E>>`, and the receiver's instance picks the first. The
+/// crate delivers the message the task gives. The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
+    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Confirm(true)")
+            && rawr.contains("task message Closed(7)")
+            && rawr.contains("last view pad 0 <x Exit:0> \"7\""),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,

@@ -4523,6 +4523,17 @@ impl<P: api::Phase> Context<'_, P> {
                     Err(reject::Kind::GenericImplementation)
                 }
             };
+            // A parameter inside an argument the impl fixes, as `T` of
+            // iced's `impl<T> Task<Option<T>>`, is the type's too: the
+            // receiver's instance gives it.
+            let mut nested = Vec::new();
+            for argument in &arguments {
+                if let model::Argument::Type(ty) = argument
+                    && !matches!(ty, model::Type::Parameter { .. })
+                {
+                    named_parameters(ty, implementation.id(), &mut nested);
+                }
+            }
             let mut own = parameters.iter();
             let mut fixed = false;
             for argument in arguments {
@@ -4537,14 +4548,18 @@ impl<P: api::Phase> Context<'_, P> {
                         {
                             break;
                         }
-                        infer(parameter)?;
+                        if !nested.contains(&parameter.index()) {
+                            infer(parameter)?;
+                        }
                     },
                     model::Argument::Type(_) => fixed = true,
                     _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
             }
             for parameter in own {
-                infer(parameter)?;
+                if !nested.contains(&parameter.index()) {
+                    infer(parameter)?;
+                }
             }
             if !implementation.relevance().any(|relevant| relevant == id)
                 || !implementation.retains_associated_owner(definition)
@@ -7803,6 +7818,37 @@ struct Projected {
     associated: api::identity::Definition,
     name: String,
     synthetic: u32,
+}
+
+/// The indices of `owner`'s type parameters `ty` names, wherever they are
+/// inside it, added to `found` once each.
+fn named_parameters(ty: &model::Type, owner: &api::identity::Definition, found: &mut Vec<u32>) {
+    match ty {
+        model::Type::Parameter {
+            owner: named,
+            index,
+        } => {
+            if named == owner && !found.contains(index) {
+                found.push(*index);
+            }
+        }
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            for argument in arguments.iter() {
+                if let model::Argument::Type(ty) = argument {
+                    named_parameters(ty, owner, found);
+                }
+            }
+        }
+        model::Type::Tuple(members) => {
+            for member in members.iter() {
+                named_parameters(member, owner, found);
+            }
+        }
+        model::Type::Reference { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. } => named_parameters(ty, owner, found),
+        _ => {}
+    }
 }
 
 /// `ty` with each projection of `projected` written as its synthetic

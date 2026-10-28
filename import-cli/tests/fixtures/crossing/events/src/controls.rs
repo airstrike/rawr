@@ -255,8 +255,9 @@ pub trait Program {
     type Message: Debug;
     /// The state the program starts from.
     fn boot(&self) -> Self::State;
-    /// Change the state for the message.
-    fn update(&self, state: &mut Self::State, message: Self::Message);
+    /// Change the state for the message, and give the message the work it
+    /// asks for gives, if any.
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message>;
     /// The labels showing the state, and the message a press on `label`
     /// sends.
     fn view(
@@ -317,8 +318,8 @@ where
         self.program.boot()
     }
 
-    fn update(&self, state: &mut Self::State, message: Self::Message) {
-        self.program.update(state, message);
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message> {
+        self.program.update(state, message)
     }
 
     fn view(
@@ -392,8 +393,8 @@ where
             self.boot.boot()
         }
 
-        fn update(&self, state: &mut State, message: Message) {
-            let _task = self.update.update(state, message);
+        fn update(&self, state: &mut State, message: Message) -> Option<Message> {
+            self.update.update(state, message).0
         }
 
         fn view(&self, state: &State, label: &str, labels: &mut Vec<String>) -> Option<Message> {
@@ -448,9 +449,17 @@ impl<P: Program> Application<P> {
         let presses = std::env::var("EVENTS_PRESS").unwrap_or_default();
         let mut state = self.program.boot();
         // Each message the booted state listens for, before any press.
+        // A message the work an update asks for gives, delivered after it.
+        let deliver = |state: &mut P::State, message: P::Message| {
+            let mut next = self.program.update(state, message);
+            while let Some(message) = next {
+                println!("task message {message:?}");
+                next = self.program.update(state, message);
+            }
+        };
         for message in self.program.subscription(&state).messages {
             println!("heard {message:?}");
-            self.program.update(&mut state, message);
+            deliver(&mut state, message);
         }
         for (event, label) in presses
             .split(',')
@@ -462,7 +471,7 @@ impl<P: Program> Application<P> {
             println!("{} view {}", event + 1, labels.join(" "));
             if let Some(message) = pressed {
                 println!("{} message {message:?}", event + 1);
-                self.program.update(&mut state, message);
+                deliver(&mut state, message);
             }
         }
         let mut labels = Vec::new();
