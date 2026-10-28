@@ -748,6 +748,26 @@ fn language_std_time_in_plain_programs() {
     assert_eq!(value, 3750 + 10 + 750 * 10000);
 }
 
+#[test]
+fn language_std_types_imported_under_another_name() {
+    // `use .. as ..` of a std type, as iced re-exports `Infallible` as
+    // `Never`: the new name is the std type in signatures and fields.
+    let value = run(r#"
+        use std::convert::Infallible as Never;
+        use std::time::Duration as Span;
+        struct Lap { span: Span }
+        fn checked(millis: u64) -> Result<Span, Never> {
+            Ok(std::time::Duration::from_millis(millis))
+        }
+        pub fn run() -> i64 {
+            let lap = Lap { span: checked(1500).unwrap() };
+            lap.span.as_millis() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 1500);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

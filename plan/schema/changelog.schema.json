@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "changelog.schema.json",
+  "title": "The changelog",
+  "description": "plan.mjs writes CHANGELOG.md from it. Every entry from tracked_from on names its issues.",
+  "type": "object",
+  "required": ["intro", "tracked_from", "unreleased", "releases"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "intro": { "type": "array", "items": { "$ref": "defs.schema.json#/$defs/text" }, "description": "Paragraphs under the title." },
+    "tracked_from": {
+      "$ref": "defs.schema.json#/$defs/version",
+      "description": "The first release whose entries must name issues. Older entries came before the issues existed."
+    },
+    "unreleased": {
+      "type": "object",
+      "required": ["notes", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "notes": { "type": "array", "items": { "$ref": "defs.schema.json#/$defs/text" }, "description": "Standing notes. They stay when a release takes the entries." },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+      }
+    },
+    "releases": { "type": "array", "items": { "$ref": "#/$defs/release" }, "description": "Newest first." }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["text", "issues"],
+      "additionalProperties": false,
+      "properties": {
+        "text": { "$ref": "defs.schema.json#/$defs/text" },
+        "issues": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" }, "description": "The issues the entry ships. A release closes them." },
+        "refs": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" }, "description": "Issues the entry advances but doesn't finish. They stay open." }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["version", "date", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "defs.schema.json#/$defs/version" },
+        "date": { "$ref": "defs.schema.json#/$defs/date" },
+        "lede": { "$ref": "defs.schema.json#/$defs/text" },
+        "entries": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entry" } }
+      }
+    }
+  }
+}

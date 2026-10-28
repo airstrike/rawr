@@ -1,0 +1,139 @@
+{
+  "$schema": "schema/gantt.schema.json",
+  "updated": "2026-10-28",
+  "version": "0.3.12",
+  "examples": {"running":7,"total":56,"note":"Most others now stop further along"},
+  "groups": [
+    {
+      "id": "v000",
+      "title": "0.0.0",
+      "subtitle": "Before rawr's own version numbers",
+      "open": false,
+      "rows": [
+        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[]},
+        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[]},
+        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[]},
+        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[]},
+        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[]},
+        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[]},
+        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[]},
+        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[]}
+      ]
+    },
+    {
+      "id": "v010",
+      "title": "0.1.0",
+      "subtitle": "First release under rawr's own numbers",
+      "open": false,
+      "rows": [
+        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[]},
+        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[]},
+        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[]}
+      ]
+    },
+    {
+      "id": "v020",
+      "title": "0.2.0",
+      "subtitle": "rawr checks borrows",
+      "open": false,
+      "rows": [
+        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[]},
+        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[]},
+        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[]},
+        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"0.2.9. Optional callables","issues":[]}
+      ]
+    },
+    {
+      "id": "shipped",
+      "title": "0.3",
+      "subtitle": "Shipped",
+      "open": true,
+      "rows": [
+        {"id":"runner-on-your-own-cargo","name":"Runner on your own cargo","start":26,"size":3,"state":"done","note":"0.3.0–0.3.1. No added files, check build","issues":[273,277,278,279]},
+        {"id":"scripts-with-dependencies","name":"Scripts with dependencies","start":29,"size":3,"state":"done","note":"0.3.2–0.3.4","issues":[269,295,296,297,298,299]},
+        {"id":"runtime-once-per-machine","name":"Runtime once per machine","start":32,"size":4,"state":"done","note":"0.3.5–0.3.6. Second project in 13 s","issues":[280,301,302,315]},
+        {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321]},
+        {"id":"pick-list-svg","name":"pick_list, svg","start":26,"size":2,"state":"done","note":"No glue","issues":[284]},
+        {"id":"aliases-and-names","name":"Aliases and names","start":30,"size":3,"state":"done","note":"0.3.7. slider runs again","issues":[307,308]},
+        {"id":"script-impls-of-crate-traits","name":"Script impls of crate traits","start":33,"size":4,"state":"done","note":"0.3.8. impl canvas::Program","issues":[310]},
+        {"id":"host-type-parameters","name":"Host type parameters","start":37,"size":2,"state":"done","note":"0.3.9. 11 examples past it","issues":[313]},
+        {"id":"subscription","name":"Subscription","start":37,"size":3,"state":"done","note":"0.3.10. url_handler runs","issues":[309]},
+        {"id":"widget-extension-trait","name":"Widget extension trait","start":37,"size":3,"state":"done","note":"0.3.11. .boxed(), impl Widget","issues":[311]}
+      ]
+    },
+    {
+      "id": "bind",
+      "title": "Shared bindings",
+      "subtitle": "Built once per machine",
+      "open": true,
+      "rows": [
+        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[]},
+        {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281]},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
+        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"next","note":"Atomic, with leases. T271","issues":[271]},
+        {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"next","note":"Kept across reinstalls. T272","issues":[272]},
+        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"next","note":"T252, T254, T276","issues":[252,254,276]},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[]},
+        {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"next","note":"Names the crate. T275","issues":[275]}
+      ]
+    },
+    {
+      "id": "gnar",
+      "title": "The gnarly snippet",
+      "subtitle": "After shared bindings",
+      "open": true,
+      "rows": [
+        {"id":"raw-identifiers","name":"Raw identifiers","start":51,"size":1,"state":"next","note":"r#for","issues":[320]},
+        {"id":"equality-in-bounds","name":"Equality in bounds","start":51,"size":2,"state":"next","note":"Iterator<Item = Self::For>","issues":[320]},
+        {"id":"qualified-self-paths","name":"Qualified Self paths","start":52,"size":1,"state":"next","note":"<Self as T>::A","issues":[320]},
+        {"id":"higher-ranked-bounds","name":"Higher-ranked bounds","start":53,"size":2,"state":"next","note":"for<'a> Fn(&'a T)","issues":[320]},
+        {"id":"impl-for-a-reference","name":"Impl for a reference","start":54,"size":3,"state":"next","note":"impl<T> For for &T. T320","issues":[320]}
+      ]
+    },
+    {
+      "id": "now",
+      "title": "No glue",
+      "subtitle": "Running now",
+      "open": true,
+      "rows": [
+        {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. T312, T338","issues":[312,338]},
+        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"now","note":"text, system_information, multi_window. T300","issues":[300]},
+        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"now","note":"Float ranges, padding, &Vec, From in Some. T336, T340, T345","issues":[336,340,345]}
+      ]
+    },
+    {
+      "id": "iced",
+      "title": "No glue",
+      "subtitle": "Next",
+      "open": true,
+      "rows": [
+        {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"next","note":"custom_quad, component. T322–T324, T341","issues":[322,323,324,341]},
+        {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"T325, T326","issues":[325,326]},
+        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"T317–T319, T327","issues":[317,318,319,327]},
+        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. T335–T340","issues":[335,336,337,339,340,338]},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. T314, T283, T328, T334","issues":[283,314,328,334,345]}
+      ]
+    },
+    {
+      "id": "play",
+      "title": "Playground",
+      "subtitle": "Without rawr-iced",
+      "open": true,
+      "rows": [
+        {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
+        {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
+      ]
+    },
+    {
+      "id": "end",
+      "title": "rawr-iced",
+      "subtitle": "Retired",
+      "open": true,
+      "rows": [
+        {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"next","note":"","issues":[203]},
+        {"id":"delete-rawr-iced","name":"Delete rawr-iced","start":65,"size":1,"state":"next","note":"A no-op by then","issues":[169,306]}
+      ]
+    }
+  ]
+}

@@ -1345,6 +1345,9 @@ struct Facade<'contract> {
     /// The methods the traits the program names give Rawr's string through
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
+    /// The root's re-exports of std items, as iced's `time::Duration`:
+    /// each path and the std path it names (`std::time::Duration`).
+    std_reexports: Vec<(Box<str>, Box<str>)>,
 }
 
 struct Entry<'contract> {
@@ -1513,6 +1516,7 @@ fn install(
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        std_reexports: Vec::new(),
                     },
                 );
                 index
@@ -1543,6 +1547,7 @@ fn install(
                             macros: Vec::new(),
                             trait_identities: Vec::new(),
                             text_members: Vec::new(),
+                            std_reexports: Vec::new(),
                         },
                     );
                     index
@@ -1600,6 +1605,7 @@ fn install(
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        std_reexports: Vec::new(),
                     },
                 );
                 index
@@ -1627,6 +1633,46 @@ fn install(
             definition,
             outcome,
         });
+    }
+    // A crate's re-export of a std item is that item, so the program names
+    // it by its std path (`iced::time::Duration` is `std::time::Duration`).
+    for rawr_import::surface::facade::StdReexport {
+        root,
+        path: relative,
+        std,
+    } in rawr_import::surface::facade::std_reexports(contract.raw_graph())?
+    {
+        allocation.retain(1, relative.len() + std.len())?;
+        let index = match facades.binary_search_by(|facade| facade.root.cmp(&root)) {
+            Ok(index) => index,
+            Err(index) => {
+                let Some(root) = contract
+                    .outcomes()
+                    .map(|outcome| outcome.export().root_alias())
+                    .find(|alias| *alias == &*root)
+                else {
+                    continue;
+                };
+                facades.try_reserve(1).map_err(|_| Error::Allocation)?;
+                facades.insert(
+                    index,
+                    Facade {
+                        root,
+                        entries: Vec::new(),
+                        traits: Vec::new(),
+                        variants: Vec::new(),
+                        macros: Vec::new(),
+                        trait_identities: Vec::new(),
+                        text_members: Vec::new(),
+                        std_reexports: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        let reexports = &mut facades[index].std_reexports;
+        reexports.try_reserve(1).map_err(|_| Error::Allocation)?;
+        reexports.push((relative, std));
     }
 
     let shape_count = facades
@@ -2136,6 +2182,13 @@ fn build(
         let target = format!("{}::{variant}", owner.relative);
         allocation.retain(1, target.len())?;
         builder.variant_alias(path.as_ref(), &target)?;
+    }
+    for (path, std) in &facade.std_reexports {
+        match builder.std_alias(path.as_ref(), std.as_ref()) {
+            // A path the crate also declares something at keeps that.
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     // A dependency's `macro_rules!` macros, which Rawr expands: `$crate`
     // reads as the defining crate's root through this root.
@@ -2657,7 +2710,8 @@ impl Types {
                     converted.push(Self::convert_charged(argument, parameters)?);
                 }
                 // A program with no host profile: a Rust future is the
-                // core's future (D513.3), and std's `Duration` Rawr's own.
+                // core's future (D513.3), and std's `Duration` and `Instant`
+                // Rawr's own.
                 if *definition == rawr_import::surface::identity::Definition::future() {
                     let future =
                         crate::future::facade::definition()?.export_type("future::Future")?;
@@ -2668,6 +2722,13 @@ impl Types {
                 {
                     return Ok(host::type_ref::Type::builtin(
                         host::type_ref::Builtin::Duration,
+                    ));
+                }
+                if *definition == rawr_import::surface::identity::Definition::instant()
+                    && converted.is_empty()
+                {
+                    return Ok(host::type_ref::Type::builtin(
+                        host::type_ref::Builtin::Instant,
                     ));
                 }
                 host::type_ref::Type::imported_boxed(
