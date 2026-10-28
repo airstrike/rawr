@@ -702,6 +702,7 @@ impl Definition {
         root: &host::path::Path,
         modules: &[host::path::Path],
         types: &[host::type_def::Definition],
+        aliases: &[host::path::Path],
         supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
         allocation: &mut A,
@@ -710,6 +711,10 @@ impl Definition {
         let path = host::path::Path::qualify_imported(root, relative, allocation)?;
         let parent = path.parent().unwrap_or_else(|| root.clone());
         let parent_is_root = &parent == root;
+        // An alias that passes its parameters on to a type has that type's
+        // associated functions, as iced's `widget::Text::new`.
+        let alias_function = matches!(self.kind, Kind::AssociatedFunction | Kind::AssociatedValue)
+            && aliases.contains(&parent);
 
         match self.kind {
             Kind::Value
@@ -741,9 +746,10 @@ impl Definition {
             | Kind::AssociatedFunction
             | Kind::Method
             | Kind::IntrinsicMethod => {
-                if types
-                    .binary_search_by(|definition| definition.path_ref().cmp(&parent))
-                    .is_err()
+                if !alias_function
+                    && types
+                        .binary_search_by(|definition| definition.path_ref().cmp(&parent))
+                        .is_err()
                 {
                     return Err(host::Error::InvalidAssociatedOwner {
                         item: path.to_string().into(),

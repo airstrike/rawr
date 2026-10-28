@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 17;
+const SCHEMA: u32 = 18;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -825,6 +825,25 @@ impl Plan {
                     aliases.insert(position, alias);
                 }
                 facade.type_aliases = aliases.into_boxed_slice();
+                // An alias that passes its parameters on to a type has that
+                // type's members (`classify`), as `widget::Text::new`.
+                for associated in outcome
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                {
+                    let associated_path = format!("{relative}::{}", associated.name());
+                    if let Some(item) = item(&associated_path, associated)?.filter(|item| {
+                        matches!(
+                            item.kind,
+                            ItemKind::AssociatedFunction | ItemKind::AssociatedConstant
+                        )
+                    }) {
+                        let mut items = std::mem::take(&mut facade.items).into_vec();
+                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                        items.push(item);
+                        facade.items = items.into_boxed_slice();
+                    }
+                }
                 continue;
             }
             // A re-exported variant, as `pub use Alignment::Center;`, is its

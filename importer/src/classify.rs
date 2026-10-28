@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 46;
+const CLASSIFIER_VERSION: u32 = 47;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3640,8 +3640,20 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     None => None,
                 };
+                // An alias that passes its parameters on to a type, as
+                // iced's `widget::Text<'a, Theme = crate::Theme>` is
+                // `core::widget::Text<'a, Theme>`, stays an alias, with its
+                // defaults, and has that type's members: `$crate::Text::new`
+                // in `text!` is `core::widget::Text::new`.
+                let passed_on = aliased
+                    .is_none()
+                    .then(|| self.passed_on_target(definition))
+                    .flatten()
+                    .map(|target| export.retargeted(target.id().clone()));
                 let implementations = if variant.is_some() {
                     Box::default()
+                } else if let Some(passed_on) = &passed_on {
+                    self.implementations(passed_on, definitions)?
                 } else {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
@@ -3672,6 +3684,50 @@ impl<P: api::Phase> Context<'_, P> {
             return None;
         };
         if !arguments.is_empty() {
+            return None;
+        }
+        let target = self
+            .graph
+            .definitions()
+            .nth(self.graph.definition_index(id)?)?;
+        matches!(
+            target.kind(),
+            model::Kind::Struct { .. } | model::Kind::Enum { .. }
+        )
+        .then_some(target)
+    }
+
+    /// The struct or enum a generic alias names with each of its own type
+    /// parameters, in order, and nothing else, as `pub type Text<'a, Theme =
+    /// crate::Theme> = core::widget::Text<'a, Theme>;` does.
+    fn passed_on_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
+        let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
+            return None;
+        };
+        let model::Type::Definition { id, arguments } = ty else {
+            return None;
+        };
+        if generics.predicates().len() != 0 {
+            return None;
+        }
+        let parameters = generics
+            .parameters()
+            .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+            .collect::<Vec<_>>();
+        let types = arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(ty),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if parameters.is_empty()
+            || parameters.len() != types.len()
+            || !parameters.iter().zip(&types).all(|(parameter, ty)| {
+                matches!(ty, model::Type::Parameter { owner, index }
+                    if owner == parameter.owner() && *index == parameter.index())
+            })
+        {
             return None;
         }
         let target = self

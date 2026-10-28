@@ -1242,7 +1242,7 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let resolved = subscription_function()
-            .resolve_imported(&root, &[], &types, &[], &imported, &mut allocation)
+            .resolve_imported(&root, &[], &types, &[], &[], &imported, &mut allocation)
             .expect("registered output resolves inside the imported facade");
 
         assert_eq!(resolved.path(), "iced::listen");
@@ -1262,7 +1262,7 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let error = subscription_function()
-            .resolve_imported(&root, &[], &[], &[], &imported, &mut allocation)
+            .resolve_imported(&root, &[], &[], &[], &[], &imported, &mut allocation)
             .expect_err("missing registered type must be rejected");
 
         assert_eq!(

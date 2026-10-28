@@ -112,7 +112,7 @@ fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
 
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
-/// both programs' stdout.
+/// both programs' stdout without the process id.
 fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
     let root = root(name);
     fs::copy(
@@ -134,7 +134,12 @@ fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
         let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&run.stderr);
         assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        // Without the process id, which differs between the two.
         stdout
+            .lines()
+            .filter(|line| !line.starts_with("pid "))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let mut rawr = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     rawr.arg("run")
@@ -188,6 +193,21 @@ fn a_tooltip_with_a_crate_default_field_and_a_crate_style_runs() {
         rawr.contains("1 view pad 0 [Top:9] <Delay:0>")
             && rawr.contains("2 view pad 0 [Bottom:9] <x Delay:0>")
             && rawr.contains("last view pad 0 [Top:9] <Delay:0>"),
+        "{rawr}"
+    );
+}
+
+/// iced's `text!`: a macro's `$crate::Alias::new(format!(..))`, where the
+/// alias passes its parameters on to a type, reaches the type's associated
+/// function, as a `text` function of the same name sits beside it. The
+/// output is `cargo run`'s.
+#[test]
+fn a_macro_reaches_an_associated_function_through_an_alias() {
+    let (rawr, cargo) = both_printed("crossing-text", "text.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 20 [Increment] count 0 of 3@50 [Decrement]")
+            && rawr.contains("last view pad 20 [Increment] count 2 of 3@50 [Decrement]"),
         "{rawr}"
     );
 }

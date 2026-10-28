@@ -1871,8 +1871,13 @@ fn build(
             path.push_str(&owner);
             path.push_str("::");
             path.push_str(associated.name());
+            // An alias that passes its parameters on to a type has that
+            // type's associated functions, as `widget::Text::new`; its
+            // methods are reached through the type's values.
+            let alias = matches!(entry.outcome.representability(), Representability::Value(_));
             if let Some(item) = imported_item(&types, &path, associated, allocation)?
                 .filter(|_| names_declared(associated, declared))
+                .filter(|item| !alias || item.receiver().is_none())
             {
                 builder.item(item)?;
             }
