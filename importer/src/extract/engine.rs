@@ -9,10 +9,13 @@
 //! depends on what else the walk reached is the engine's: which units run,
 //! in which order, and how their values combine.
 //!
-//! So the driver answers units from the compiler and records them, once,
-//! for the whole crate, and the same engine replays any program's demand
-//! from the recorded units with no compiler at all. The two produce the
-//! same body, because they are the same walk over the same answers.
+//! So the driver answers units from the compiler and records them in the
+//! crate's table, which grows with each demand the crate meets, and the
+//! same engine replays any demand whose units the table holds with no
+//! compiler at all. The two produce the same body, because they are the
+//! same walk over the same answers. Walking the whole crate up front cost
+//! the iced counter's first run about 18 s in a debug build, so units are recorded as demand reaches
+//! them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;

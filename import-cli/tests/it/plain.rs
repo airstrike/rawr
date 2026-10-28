@@ -105,50 +105,72 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     );
 }
 
-/// A crate's bindings are shared per machine: a second project that uses
-/// another part of the same dependency reads them from rawr's home, with
-/// no nightly build and no probe (D609.4).
+/// A crate's bindings are shared per machine: a second project with the
+/// same program reads them from rawr's home, with no nightly build and no
+/// probe, and its next run takes the resolution back with no Cargo. A
+/// program that uses other items of the crate reads those once with the
+/// nightly, and the entry keeps them for the next project (D609.4).
 #[test]
 fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
-    let first = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-first");
-    let second = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-second");
-    for root in [&first, &second] {
+    let projects = ["first", "second", "other", "other-again"]
+        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shared-{name}")));
+    for root in &projects {
         let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
     }
-    fs::write(
-        second.join("src/main.rs"),
-        "// rawr\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let requirement = VersionReq::parse(\">=1.2.0, <2\").unwrap();\n    println!(\"{}\", requirement.matches(&Version::parse(\"1.4.0\").unwrap()));\n}\n",
-    )
-    .unwrap();
-
-    let run = rawr_import(&first, &["run"]);
-    assert!(run.status.success(), "{}", text(&run.stderr));
+    let [first, second, other, other_again] = &projects;
+    let requirement = "// rawr\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let requirement = VersionReq::parse(\">=1.2.0, <2\").unwrap();\n    println!(\"{}\", requirement.matches(&Version::parse(\"1.4.0\").unwrap()));\n}\n";
+    for root in [other, other_again] {
+        fs::write(root.join("src/main.rs"), requirement).unwrap();
+    }
+    let expected = "parsed: 1.2.3\nmajor: 1\nwidest: 18446744073709551615.0.9223372036854775808\n";
+    let run = |root: &Path, stdout: &str| {
+        let run = rawr_import(root, &["run"]);
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), stdout);
+    };
+    let nightly = |root: &Path| {
+        let probed = fs::read_dir(root.join("target/rawr/extraction"))
+            .map(|entries| entries.count())
+            .unwrap_or_default();
+        root.join("target/rawr/build").exists() || probed != 0
+    };
     let bindings = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home/bindings");
-    let published = fs::read_dir(&bindings)
-        .unwrap()
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            let meta = fs::read_to_string(path.join("meta.json")).ok()?;
-            meta.contains("\"crate_name\":\"semver\"").then_some(path)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(published.len(), 1, "{published:?}");
+    let semver = || {
+        let published = fs::read_dir(&bindings)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                let meta = fs::read_to_string(path.join("meta.json")).ok()?;
+                meta.contains("\"crate_name\":\"semver\"").then_some(path)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(published.len(), 1, "{published:?}");
+        fs::metadata(published[0].join("table.json")).unwrap().len()
+    };
 
-    let run = rawr_import(&second, &["run"]);
-    assert!(
-        run.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        text(&run.stdout),
-        text(&run.stderr)
-    );
-    assert_eq!(text(&run.stdout), "true\n");
-    // No nightly build directory, and no probe's tables.
-    assert!(!second.join("target/rawr/build").exists());
-    let probed = fs::read_dir(second.join("target/rawr/extraction"))
-        .map(|entries| entries.count())
-        .unwrap_or_default();
-    assert_eq!(probed, 0);
+    run(first, expected);
+    let recorded = semver();
+
+    // The same program in a second project: no nightly build, and a run
+    // after it takes its resolution back.
+    run(second, expected);
+    assert!(!nightly(second));
+    run(second, expected);
+    assert!(second.join("target/rawr/shared/remembered.json").is_file());
+
+    // Other items of the crate are read once with the nightly, and the
+    // entry grows to keep them.
+    run(other, "true\n");
+    assert!(nightly(other));
+    assert!(semver() > recorded);
+    run(other_again, "true\n");
+    assert!(!nightly(other_again));
 }
 
 /// A marked `main` gets the arguments after `--` and stdin, as under

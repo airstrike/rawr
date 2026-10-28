@@ -1061,8 +1061,9 @@ type Extracted = (Vec<Sysroot>, Vec<ExternalCrate>, Vec<u8>);
 /// The selected crate's body for the invocation's demand, its sysroot and
 /// external crates. The walk is the engine's (`engine.rs`). A table that
 /// recorded every unit the demand needs replays it with no compiler work;
-/// otherwise the compiler answers, and what it answered is recorded, with
-/// the whole crate's units the first time, so a later demand replays.
+/// otherwise the compiler answers, and what it answered joins the table, so
+/// the table grows with each demand a crate meets. The whole crate is never
+/// walked on the way to a program's window.
 #[allow(
     clippy::too_many_arguments,
     reason = "the extraction joins the session, the crate and its recorded table"
@@ -1136,24 +1137,6 @@ fn extract<'tcx>(
         let mut kept = kept.flatten().unwrap_or_default();
         if invocation.demand.is_empty() {
             memo.whole = true;
-        } else if !kept.whole {
-            // The whole crate, once: a crate whose whole walk fails keeps
-            // the units it answered and is walked again on a later miss.
-            let whole = {
-                let mut record = engine::Record {
-                    live: &mut builder,
-                    memo: &mut memo,
-                };
-                engine::Engine::new(
-                    &mut record,
-                    root.clone(),
-                    aliases.clone(),
-                    session.to_owned(),
-                )
-                .run(&[])
-                .is_ok()
-            };
-            memo.whole = whole;
         }
         kept.absorb(&memo);
         tables.store(key, &root, &kept);
