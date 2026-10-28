@@ -109,6 +109,11 @@ pub(crate) struct Generic {
     /// parameter's runtime type as a hidden witness, which its host
     /// operations instantiate their proofs with.
     pub host: bool,
+    /// Each bound naming a dependency's trait, as the opaque type `impl
+    /// Trait<..>` is (`impl iced::Widget<Message>`). rawr compiles the
+    /// function per instantiation (D629), and the trait's defaults and the
+    /// crate's impls fix what a caller's type leaves open (D604).
+    pub crate_bounds: Box<[type_ref::Type]>,
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

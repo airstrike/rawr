@@ -183,6 +183,15 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         {
             continue;
         }
+        // A template compiled per instantiation is lowered as its
+        // instances only (D629).
+        if shell
+            .key
+            .as_ref()
+            .is_some_and(|key| program.instances.templates.contains_key(key))
+        {
+            continue;
+        }
         let body_source = body_source(
             definition
                 .body
@@ -316,6 +325,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
     host: &crate::host::Registry,
     allocation: &mut A,
 ) -> Result<(), super::ImportedFailure> {
+    let instancing = instance_templates(program);
     #[derive(Clone, Copy)]
     enum Pending {
         Function(usize),
@@ -329,6 +339,10 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         .filter(|(_, shell)| {
             matches!(&shell.kind, item::Kind::Function(definition)
                 if opaque(definition.output.as_ref()))
+                && !shell
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| program.instances.templates.contains_key(key))
         })
         .map(|(index, _)| Pending::Function(index))
         .chain(
@@ -340,7 +354,32 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                 .map(|(index, _)| Pending::Method(index)),
         )
         .collect::<Vec<_>>();
-    while !pending.is_empty() {
+    // Generic functions compiled per instantiation (D629) take part round
+    // by round: a call's types may come from a revealed output, and an
+    // instance's own output may be opaque.
+    let mut instance_rounds = 0;
+    loop {
+        let added = if instancing && instance_rounds < MAX_INSTANCE_ROUNDS {
+            instance_rounds += 1;
+            instance_round(engine, program, host, allocation)?
+        } else {
+            Vec::new()
+        };
+        // An instance comes before its callers, so a round that reveals
+        // nothing reports the instance's own failure first.
+        for &index in added.iter().rev() {
+            if let item::Kind::Function(definition) = &program.items[index].kind
+                && opaque(definition.output.as_ref())
+            {
+                pending.insert(0, Pending::Function(index));
+            }
+        }
+        if pending.is_empty() {
+            if added.is_empty() {
+                break;
+            }
+            continue;
+        }
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
         let compiler_host = host
@@ -454,8 +493,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                 }
             }
         }
-        // A round that reveals nothing has no other reveal to wait for.
-        if revealed.is_empty() {
+        // A round that reveals nothing and adds no instance has no other
+        // reveal to wait for.
+        if revealed.is_empty() && added.is_empty() {
             return Err(first_failure.expect("an unrevealed round keeps its failure"));
         }
         for (next, output) in revealed {
@@ -640,6 +680,327 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
         }
         _ => return None,
     })
+}
+
+/// Whether rawr compiles `function` once per instantiation its callers use:
+/// a generic parameter of its touches a crate's types, by its signature
+/// naming it inside a crate type or by a bound naming a crate's trait
+/// (D629).
+#[cfg(feature = "rust-import")]
+fn instanced(function: &item::Function) -> bool {
+    function.generics.iter().any(|generic| generic.host)
+}
+
+/// The names of `types`, which key an instance, when each is a type a
+/// signature can name.
+#[cfg(feature = "rust-import")]
+fn instance_names(types: &[Ty], models: &Models) -> Option<Vec<ImmutableString>> {
+    types
+        .iter()
+        .map(|ty| {
+            named_type(ty, models, Span::NONE)?;
+            Some(ty.name(models).to_string().into())
+        })
+        .collect()
+}
+
+/// `ty` with each generic parameter `types` names replaced by its type.
+#[cfg(feature = "rust-import")]
+fn substitute_parameters(
+    ty: &type_ref::Type,
+    types: &[(ImmutableString, type_ref::Type)],
+) -> type_ref::Type {
+    match ty {
+        type_ref::Type::Path(path) if matches!(path.target, type_ref::Target::Parameter) => {
+            if let Some((_, replaced)) = types.iter().find(|(name, _)| *name == path.name) {
+                return replaced.clone();
+            }
+            ty.clone()
+        }
+        type_ref::Type::Path(path) => type_ref::Type::Path(type_ref::Path {
+            arguments: path
+                .arguments
+                .iter()
+                .map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => {
+                        type_ref::Argument::Type(substitute_parameters(ty, types))
+                    }
+                    lifetime @ type_ref::Argument::Lifetime(_) => lifetime.clone(),
+                })
+                .collect(),
+            ..path.clone()
+        }),
+        type_ref::Type::Reference {
+            mutable,
+            lifetime,
+            target,
+            span,
+        } => type_ref::Type::Reference {
+            mutable: *mutable,
+            lifetime: *lifetime,
+            target: Box::new(substitute_parameters(target, types)),
+            span: *span,
+        },
+        type_ref::Type::Tuple { members, span } => type_ref::Type::Tuple {
+            members: members
+                .iter()
+                .map(|member| substitute_parameters(member, types))
+                .collect(),
+            span: *span,
+        },
+        type_ref::Type::Unit(span) => type_ref::Type::Unit(*span),
+    }
+}
+
+/// The calls of generic functions compiled per instantiation that a body
+/// makes, with the types each gives, resolved once the body is read.
+#[cfg(feature = "rust-import")]
+fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty>)> {
+    std::mem::take(&mut parser.instance_calls)
+        .into_iter()
+        .map(|(key, types)| {
+            let types = types
+                .iter()
+                .map(|ty| parser.inference.resolve(ty))
+                .collect();
+            (key, types)
+        })
+        .collect()
+}
+
+/// Compiles each generic function that touches a crate's types once per
+/// instantiation its checked callers use, as Rust monomorphises it (D629).
+/// Every body but the templates' is read for its calls, round by round
+/// beside `reveal`'s, as an instance's own calls may need instances in turn
+/// and a call's types may come from a revealed output. Each instance is a
+/// function item of its own, whose signature names the types its template's
+/// parameters take and whose body reads them as those types. Each call
+/// binds to its instance (`bind_instance`), and a template's own body is
+/// never lowered.
+/// Lists each template (`instanced`), and whether there is one.
+#[cfg(feature = "rust-import")]
+fn instance_templates(program: &mut Program) -> bool {
+    let templates = program
+        .items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) if instanced(definition) => shell.key.clone(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for template in &templates {
+        program
+            .instances
+            .templates
+            .entry(template.clone())
+            .or_default();
+    }
+    !templates.is_empty()
+}
+
+/// Polymorphic recursion would make instances without end.
+#[cfg(feature = "rust-import")]
+const MAX_INSTANCE_ROUNDS: usize = 32;
+
+/// One round of `monomorphize`: the indices of the instance items added.
+#[cfg(feature = "rust-import")]
+fn instance_round<A: crate::host::ImportAllocation>(
+    engine: &Engine,
+    program: &mut Program,
+    host: &crate::host::Registry,
+    allocation: &mut A,
+) -> Result<Vec<usize>, super::ImportedFailure> {
+    let templates = program
+        .instances
+        .templates
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    {
+        let runtime =
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+        let compiler_host = host
+            .clone_for_import(allocation)
+            .map_err(super::ImportedFailure::Surface)?;
+        let models = Models::new(program, runtime, compiler_host);
+        let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
+        for shell in program.items.iter() {
+            let item::Kind::Function(definition) = &shell.kind else {
+                continue;
+            };
+            let Some(key) = shell.key.clone() else {
+                continue;
+            };
+            if templates.contains(&key) {
+                continue;
+            }
+            let body_source = body_source(
+                definition
+                    .body
+                    .text
+                    .as_deref()
+                    .unwrap_or_else(|| program.source.text_at(shell.source)),
+                &definition.body,
+            );
+            let mut uses = Vec::new();
+            let mut dependencies = BTreeSet::new();
+            let mut allocation_failure = None;
+            let mut parser = Parser::for_function(
+                engine,
+                &body_source,
+                models.for_source(shell.source),
+                definition,
+                key,
+                0,
+                0,
+                false,
+                Some(ImportedContext {
+                    native: None,
+                    allocation,
+                    failure: &mut allocation_failure,
+                    source: shell.source,
+                    uses: &mut uses,
+                    dependencies: &mut dependencies,
+                }),
+            );
+            parser.symbolic_only = true;
+            parser.collecting_instances = true;
+            // A body that fails here fails again where it is lowered.
+            let _ = parser.parse_function_body(definition);
+            found.extend(take_instance_calls(&mut parser));
+            drop(parser);
+            if let Some(error) = allocation_failure {
+                return Err(super::ImportedFailure::Surface(error));
+            }
+        }
+        for definition in program.methods.iter() {
+            let body_source = source_span(
+                definition
+                    .body_text()
+                    .unwrap_or_else(|| program.source.text_at(definition.source())),
+                definition.body(),
+            );
+            let mut uses = Vec::new();
+            let mut dependencies = BTreeSet::new();
+            let mut allocation_failure = None;
+            let parser = Parser::for_method(
+                engine,
+                &body_source,
+                models.for_source(definition.source()),
+                definition,
+                0,
+                0,
+                false,
+                Some(ImportedContext {
+                    native: None,
+                    allocation,
+                    failure: &mut allocation_failure,
+                    source: definition.source(),
+                    uses: &mut uses,
+                    dependencies: &mut dependencies,
+                }),
+            );
+            if let Ok(mut parser) = parser {
+                parser.symbolic_only = true;
+                parser.collecting_instances = true;
+                let _ = parser.parse_method_body(definition);
+                found.extend(take_instance_calls(&mut parser));
+            }
+            if let Some(error) = allocation_failure {
+                return Err(super::ImportedFailure::Surface(error));
+            }
+        }
+        let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
+        for (template, types) in found {
+            let Some(names) = instance_names(&types, &models) else {
+                continue;
+            };
+            let Some(instances) = program.instances.templates.get(&template) else {
+                continue;
+            };
+            let known = instances
+                .iter()
+                .any(|(written, _)| written.as_ref() == names.as_slice())
+                || added
+                    .iter()
+                    .any(|(key, written, _)| *key == template && *written == names);
+            if !known {
+                added.push((template, names, types));
+            }
+        }
+        if added.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut items = std::mem::take(&mut program.items).into_vec();
+        let first = items.len();
+        let next = items
+            .iter()
+            .map(|shell| shell.id.index())
+            .max()
+            .map_or(0, |index| index + 1);
+        for (offset, (template, names, types)) in added.into_iter().enumerate() {
+            let shell = items
+                .iter()
+                .find(|shell| shell.key.as_ref() == Some(&template))
+                .expect("a template is a function item")
+                .clone();
+            let item::Kind::Function(definition) = &shell.kind else {
+                unreachable!("templates are function items");
+            };
+            let instances = program
+                .instances
+                .templates
+                .get_mut(&template)
+                .expect("each template is listed");
+            let name: ImmutableString =
+                format!("{}#{}", definition.name.text, instances.len() + 1).into();
+            let key = crate::item::Key::new(
+                template.package().into(),
+                template.modules().to_vec().into_boxed_slice(),
+                name.clone(),
+                crate::item::Kind::Function,
+            );
+            instances.push((names.into_boxed_slice(), key.clone()));
+            let span = definition.name.span;
+            let substituted = definition
+                .generics
+                .iter()
+                .zip(&types)
+                .map(|(generic, ty)| {
+                    let named = named_type(ty, &models, span)
+                        .expect("an instance's types are each one a signature names");
+                    (generic.name.text.clone(), named)
+                })
+                .collect::<Box<[_]>>();
+            let mut instance = definition.clone();
+            instance.name.text = name;
+            instance.generics = Box::default();
+            for parameter in instance.parameters.iter_mut() {
+                parameter.ty = substitute_parameters(&parameter.ty, &substituted);
+            }
+            instance.output = instance
+                .output
+                .as_ref()
+                .map(|output| substitute_parameters(output, &substituted));
+            instance.lifetimes.bounds = instance
+                .lifetimes
+                .bounds
+                .iter()
+                .filter(|(bounded, _)| !substituted.iter().any(|(name, _)| name == bounded))
+                .cloned()
+                .collect();
+            program.instances.types.insert(key.clone(), substituted);
+            items.push(item::Shell {
+                id: crate::item::Id::from_index(next + offset),
+                key: Some(key),
+                kind: item::Kind::Function(instance),
+                ..shell
+            });
+        }
+        let indices = (first..items.len()).collect();
+        program.items = items.into_boxed_slice();
+        Ok(indices)
+    }
 }
 
 #[cfg(feature = "rust-import")]
@@ -1527,6 +1888,15 @@ fn lower_with_context(
         if program.application.is_some()
             && shell.source == program.source.entry()
             && definition.name.text == "main"
+        {
+            continue;
+        }
+        // A template compiled per instantiation is lowered as its
+        // instances only (D629).
+        if shell
+            .key
+            .as_ref()
+            .is_some_and(|key| program.instances.templates.contains_key(key))
         {
             continue;
         }
@@ -3077,6 +3447,8 @@ struct Tables {
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
     boot: Option<crate::item::Key>,
+    /// The generic functions compiled per instantiation (D629).
+    instances: crate::resolve::Instances,
 }
 
 impl std::ops::Deref for Models {
@@ -3634,6 +4006,7 @@ impl Models {
                 .as_ref()
                 .and_then(super::application::Entry::boot)
                 .cloned(),
+            instances: program.instances.clone(),
         };
         Self {
             context: program.source.entry(),
@@ -10219,6 +10592,13 @@ struct Parser<'a> {
     /// In an impl of a generic trait, its parameters' arguments: `T` is
     /// `i64` in `impl Convert<i64> for C`'s methods and default bodies.
     trait_parameters: BTreeMap<ImmutableString, Ty>,
+    /// Each call of a generic function compiled per instantiation (D629):
+    /// its key and the type each generic parameter takes.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    instance_calls: Vec<(crate::item::Key, Vec<Ty>)>,
+    /// Whether this body is read only for those calls (`monomorphize`).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    collecting_instances: bool,
     /// The trait arguments of the impl this method belongs to, as text.
     impl_instance: String,
     /// User trait bounds a generic use requires of its inferred types.
@@ -10444,6 +10824,8 @@ impl<'a> Parser<'a> {
             pending_instances: Vec::new(),
             literal_kinds: Vec::new(),
             trait_parameters: BTreeMap::new(),
+            instance_calls: Vec::new(),
+            collecting_instances: false,
             impl_instance: String::new(),
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
@@ -10652,6 +11034,19 @@ impl<'a> Parser<'a> {
         parser.host_witnesses = host_witnesses(&definition.generics);
         parser.generic_trait_arguments = generic_trait_arguments(&definition.generics);
         parser.inference.equalities = generic_equalities(&definition.generics);
+        // An instance's body reads each of its template's generic
+        // parameters as the type this instance gives it (D629).
+        let types = parser
+            .callable
+            .as_ref()
+            .and_then(|key| parser.models.instances.types.get(key).cloned());
+        if let Some(types) = types {
+            for (name, ty) in types.iter() {
+                parser
+                    .trait_parameters
+                    .insert(name.clone(), Ty::from_resolved(ty));
+            }
+        }
 
         let receiver = this_parameter(definition);
         parser.copy_out = copied_parameters(&definition.parameters, receiver)
@@ -11022,6 +11417,19 @@ impl<'a> Parser<'a> {
     /// method lookup and other inference are as before.
     #[cfg(feature = "rust-import")]
     fn fix_opaque(&mut self, written: &type_ref::Type, hidden: &Ty) -> Result<(), Error> {
+        self.fix_opaque_in(written, hidden, &BTreeMap::new())
+    }
+
+    /// `fix_opaque` with the generic parameters `written` names at the
+    /// types `substitution` gives them, as a generic function's bound
+    /// `impl Widget<Message>` is at a call (D629).
+    #[cfg(feature = "rust-import")]
+    fn fix_opaque_in(
+        &mut self,
+        written: &type_ref::Type,
+        hidden: &Ty,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+    ) -> Result<(), Error> {
         let Some(trait_name) = written.opaque_trait() else {
             return Ok(());
         };
@@ -11044,7 +11452,9 @@ impl<'a> Parser<'a> {
             .arguments
             .iter()
             .filter_map(|argument| match argument {
-                type_ref::Argument::Type(ty) => Some(Ty::from_resolved(ty)),
+                type_ref::Argument::Type(ty) => {
+                    Some(instantiate(&Ty::from_resolved(ty), substitution))
+                }
                 type_ref::Argument::Lifetime(_) => None,
             })
             .collect::<Vec<_>>();
@@ -40858,6 +41268,10 @@ impl<'a> Parser<'a> {
                 self.move_local(argument)?;
                 self.lend_argument(&parameter.ty, &expected, argument);
             }
+            // A generic function compiled per instantiation is its
+            // instance for the types this call gives it (D629).
+            #[cfg(feature = "rust-import")]
+            let function = self.bind_instance(function, &substitution, call)?;
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
             opens_startup = function.definition.output.as_ref().is_some_and(is_tuple)
@@ -40985,6 +41399,73 @@ impl<'a> Parser<'a> {
             evaluation: crate::host::usage::Evaluation::Required,
         }
         .retain_origin())
+    }
+
+    /// `function`'s instance for the types `substitution` gives its generic
+    /// parameters, when rawr compiles it per instantiation (D629). Each such
+    /// call is recorded, so the instances its callers use are known.
+    #[cfg(feature = "rust-import")]
+    fn bind_instance(
+        &mut self,
+        function: ScriptFunction,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        call: Span,
+    ) -> Result<ScriptFunction, Error> {
+        if !instanced(&function.definition) {
+            return Ok(function);
+        }
+        // A type a crate trait's bound leaves open, as the renderer of an
+        // argument `Container<Column<Element<Message, Theme, _>>>` for
+        // `impl Widget<Message>`, is what that trait's defaults and the
+        // crate's impls fix (D604). One that stays open has no instance.
+        for generic in function.definition.generics.iter() {
+            for bound in generic.crate_bounds.iter() {
+                let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
+            }
+        }
+        let types = function
+            .definition
+            .generics
+            .iter()
+            .map(|generic| substitution[&generic.name.text].clone())
+            .collect::<Vec<_>>();
+        self.instance_calls
+            .push((function.key.clone(), types.clone()));
+        let Some(instances) = self.models.instances.templates.get(&function.key) else {
+            return Ok(function);
+        };
+        let resolved = types
+            .iter()
+            .map(|ty| self.inference.resolve(ty))
+            .collect::<Vec<_>>();
+        let instance = instance_names(&resolved, &self.models)
+            .and_then(|names| {
+                instances
+                    .iter()
+                    .find(|(written, _)| written.as_ref() == names.as_slice())
+                    .map(|(_, key)| key.clone())
+            })
+            .and_then(|key| self.models.functions_by_key.get(&key).cloned());
+        // While calls are collected, a call with no instance yet reads
+        // on with its template's signature.
+        if instance.is_none() && self.collecting_instances {
+            return Ok(function);
+        }
+        instance.ok_or_else(|| Error::InvalidMethodCall {
+            owner: "<module>".into(),
+            method: function.definition.name.text.clone(),
+            reason: format!(
+                "rawr compiles this generic function once per instantiation its callers \
+                 use, and the types this call gives it ({}) aren't all known here",
+                resolved
+                    .iter()
+                    .map(|ty| ty.name(&self.models).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .into(),
+            call,
+        })
     }
 
     fn parse_struct(
