@@ -258,21 +258,22 @@ fn debug_map_objects(binary: &Path) -> Option<std::collections::HashSet<String>>
 /// After a successful runner build in `shared` that began at `started`, keep
 /// what this build's Cargo messages (JSON) name and remove what they supersede:
 /// a unit of a crate this build used under another hash (an earlier
-/// install's `rawr_iced`), the
-/// runner's own outputs this build did not write (each incremental build
-/// leaves a new set of codegen objects beside the binary), and incremental
-/// state of the runner's this build did not touch. `record` lists the
-/// runner's incremental directories, since the project's own binary may
-/// share the runner's crate name. Crates this build did not use are kept,
-/// and so is every crate that is not Rawr's, since `cargo build` shares the
-/// directory. Best effort; the caller holds the build lock.
+/// install's `rawr_iced`) that no other workspace building in `shared` last
+/// used, the runner's own outputs this build did not write (each incremental
+/// build leaves a new set of codegen objects beside the binary), and
+/// incremental state of the runner's this build did not touch. `work` is the
+/// runner's workspace, where `incremental-directories` lists the runner's
+/// incremental directories, since the project's own binary may share the
+/// runner's crate name. Crates this build did not use are kept, and so is
+/// every crate that is not Rawr's, since `cargo build` shares the directory.
+/// Best effort; the caller holds the build lock.
 pub(crate) fn prune_superseded(
     shared: &Path,
     messages: &[u8],
     started: std::time::SystemTime,
-    record: &Path,
+    work: &Path,
 ) {
-    let owned = |krate: &str| krate == "rawr" || krate.starts_with("rawr_");
+    let record = &work.join("incremental-directories");
     let mut live = std::collections::BTreeSet::new();
     let mut crates = std::collections::BTreeSet::new();
     let mut name = |path: &str| {
@@ -335,6 +336,7 @@ pub(crate) fn prune_superseded(
     if live.is_empty() {
         return;
     }
+    let others = shared_units(shared, work, &live);
     let runner = runner.as_str();
     let before = |path: &Path| {
         fs::metadata(path)
@@ -380,10 +382,14 @@ pub(crate) fn prune_superseded(
                 let Some(file) = file.to_str() else { continue };
                 let stale = if let Some((krate, hash)) = unit_key(file) {
                     // The build directory is the project's: only Rawr's own
-                    // crates are Rawr's to remove.
+                    // crates are Rawr's to remove. Another workspace's unit,
+                    // or one a build that is still running wrote, stays.
+                    let key = format!("{krate}-{hash}");
                     let superseded = owned(&krate)
                         && crates.contains(&krate)
-                        && !live.contains(&format!("{krate}-{hash}"));
+                        && !live.contains(&key)
+                        && !others.contains(&key)
+                        && before(&entry.path());
                     if krate == runner {
                         // A binary unit's messages name its uplifted copy, not
                         // its hash. A unit of this name that is not the
@@ -414,6 +420,54 @@ pub(crate) fn prune_superseded(
             }
         }
     }
+}
+
+/// Whether `krate` is one of Rawr's crates, whose units are Rawr's to remove.
+fn owned(krate: &str) -> bool {
+    krate == "rawr" || krate.starts_with("rawr_")
+}
+
+/// Record the Rawr units in `live` as the ones the workspace `work` last used
+/// in `shared`, and return those every other workspace there last recorded.
+/// Workspaces share a build directory (every script builds in rawr's, and
+/// projects may share a `CARGO_TARGET_DIR`), and another profile or feature
+/// set gives Rawr's crates another hash: such a unit is another workspace's,
+/// not superseded. The record of a workspace that is gone goes too.
+fn shared_units(shared: &Path, work: &Path, live: &BTreeSet<String>) -> BTreeSet<String> {
+    use sha2::{Digest as _, Sha256};
+    let records = shared.join("rawr-units");
+    let digest = Sha256::digest(work.as_os_str().as_encoded_bytes());
+    let name = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut others = BTreeSet::new();
+    for entry in fs::read_dir(&records).into_iter().flatten().flatten() {
+        if entry.file_name().to_str() == Some(name.as_str()) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let mut lines = text.lines();
+        if lines
+            .next()
+            .is_some_and(|workspace| Path::new(workspace).join("Cargo.toml").is_file())
+        {
+            others.extend(lines.map(str::to_owned));
+        } else {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    let mut text = format!("{}\n", work.to_string_lossy());
+    for key in live {
+        if key.rsplit_once('-').is_some_and(|(krate, _)| owned(krate)) {
+            text.push_str(key);
+            text.push('\n');
+        }
+    }
+    let _ = fs::create_dir_all(&records).and_then(|()| fs::write(records.join(name), text));
+    others
 }
 
 /// Remove the runner's incremental directories that `record` lists and this
@@ -569,13 +623,23 @@ mod tests {
             .join("\n")
         };
         // A fresh runner build keeps the runner's outputs it did not rewrite.
-        super::prune_superseded(&shared, runner_fresh(true).as_bytes(), started, &record);
+        super::prune_superseded(
+            &shared,
+            runner_fresh(true).as_bytes(),
+            started,
+            project.path(),
+        );
         assert!(old_objects.exists() && old_incremental.exists() && other_runner.exists());
         assert!(
             !iced_old.exists() && !iced_host.exists(),
             "superseded rawr_iced units"
         );
-        super::prune_superseded(&shared, runner_fresh(false).as_bytes(), started, &record);
+        super::prune_superseded(
+            &shared,
+            runner_fresh(false).as_bytes(),
+            started,
+            project.path(),
+        );
         for kept in [
             &iced,
             &serde,
@@ -620,6 +684,50 @@ mod tests {
             Some("libc".to_owned())
         );
         assert_eq!(super::unit_key("invoked.timestamp"), None);
+    }
+
+    /// Two scripts build in one directory, one under a profile of its own,
+    /// so `rawr` has a unit of each hash, and neither prunes the other's.
+    #[test]
+    fn prune_keeps_the_units_another_workspace_last_used() {
+        let project = crate::store::TestProject::new("rawr-deps-workspaces");
+        let shared = project.path().join("build");
+        let deps = shared.join("debug/deps");
+        fs::create_dir_all(&deps).unwrap();
+        fs::create_dir_all(shared.join("debug/.fingerprint")).unwrap();
+        let (first, second) = (project.path().join("a"), project.path().join("b"));
+        for work in [&first, &second] {
+            fs::create_dir_all(work).unwrap();
+            fs::write(work.join("Cargo.toml"), b"").unwrap();
+        }
+        let unit = |digit: char| {
+            let path = deps.join(format!(
+                "librawr-{}.rlib",
+                std::iter::repeat_n(digit, 16).collect::<String>()
+            ));
+            fs::write(&path, b"").unwrap();
+            path
+        };
+        let (a, b, old) = (unit('a'), unit('b'), unit('c'));
+        let used = |path: &std::path::Path| {
+            format!(
+                r#"{{"reason":"compiler-artifact","target":{{"name":"rawr","kind":["lib"]}},"fresh":true,"filenames":["{}"]}}"#,
+                path.display()
+            )
+        };
+        let started = || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::time::SystemTime::now()
+        };
+        super::prune_superseded(&shared, used(&a).as_bytes(), started(), &first);
+        assert!(a.exists() && !b.exists() && !old.exists());
+        let b = unit('b');
+        super::prune_superseded(&shared, used(&b).as_bytes(), started(), &second);
+        assert!(a.exists() && b.exists(), "each script's unit stays");
+        // A workspace that is gone keeps nothing.
+        fs::remove_dir_all(&first).unwrap();
+        super::prune_superseded(&shared, used(&b).as_bytes(), started(), &second);
+        assert!(!a.exists() && b.exists());
     }
 
     #[test]
