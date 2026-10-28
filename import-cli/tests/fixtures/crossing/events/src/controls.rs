@@ -75,6 +75,12 @@ impl<'a> IntoLabel<'a> for &'a str {
     }
 }
 
+impl<'a> IntoLabel<'a> for &'a String {
+    fn into_label(self) -> &'a str {
+        self
+    }
+}
+
 impl<'a, Message, Theme> Toggle<'a, Message, Theme> {
     /// The toggle with `label`, which it borrows.
     pub fn label(mut self, label: impl IntoLabel<'a>) -> Self {
@@ -608,6 +614,41 @@ macro_rules! controls_caption {
 }
 
 pub use crate::controls_caption as caption;
+
+/// Text a widget borrows, as iced's `Text<'a>` borrows what `text(impl
+/// IntoFragment<'a>)` takes.
+pub struct Quote<'a, Theme> {
+    text: &'a str,
+    size: u32,
+    theme: std::marker::PhantomData<Theme>,
+}
+
+/// A quote of `text`, which it borrows.
+pub fn quote<'a, Theme>(text: impl IntoLabel<'a>) -> Quote<'a, Theme> {
+    Quote {
+        text: text.into_label(),
+        size: 16,
+        theme: std::marker::PhantomData,
+    }
+}
+
+impl<Theme> Quote<'_, Theme> {
+    /// The quote at `size`.
+    pub fn size(mut self, size: u32) -> Self {
+        self.size = size;
+        self
+    }
+}
+
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Quote<'_, Theme> {
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push(format!("'{}'@{}", self.text, self.size));
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
+    }
+}
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
     for caption_core::Caption<'_, Theme>

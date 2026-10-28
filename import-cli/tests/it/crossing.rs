@@ -240,16 +240,18 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
 /// `Subscription<P::Message>`, both read through the opaque program's
 /// bounds. The call gives another opaque program, whose `fonts` and `run`
 /// are compiled where it was made, and the crate calls the subscription
-/// back with the booted state. The output is `cargo run`'s.
+/// back with the booted state. As url_handler's `text(url)` does, the view
+/// gives a widget that borrows a string of the state through an `impl
+/// IntoLabel<'a>` its output keeps. The output is `cargo run`'s.
 #[test]
 fn an_opaque_program_takes_a_subscription_of_its_state() {
     let (rawr, cargo) = both_printed("crossing-subscription", "subscription.rs", "Listen");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("heard Ticked(3)")
-            && rawr.contains("1 view pad 0 <Listen:0> \"6\"")
+            && rawr.contains("1 view pad 0 <Listen:0> 'tick 3 of 6'@48")
             && rawr.contains("1 message Toggled(true)")
-            && rawr.contains("last view pad 0 <x Listen:0> \"6\""),
+            && rawr.contains("last view pad 0 <x Listen:0> 'tick 3 of 6'@48"),
         "{rawr}"
     );
 }

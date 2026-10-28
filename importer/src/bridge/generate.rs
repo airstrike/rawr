@@ -6154,7 +6154,13 @@ fn render_adapter_body(
             }
             let crossed = Crossed { slots, crossings };
             let opens = instance_opens(signature, substitutions);
-            if opens && replay.is_none() {
+            // A `&str` the output borrows through a lifetime its type only
+            // carries, as iced's `text(url)` gives a `Text<'a>` of an `impl
+            // IntoFragment<'a>`: pinned in a slot's region, as an opening's
+            // strings are, and out of any region for the runner's life.
+            let pins = !opens && replay.is_none() && lends_str_to_output(signature, substitutions)?;
+            let _pins = PinnedStrings::enter(pins);
+            if (opens || pins) && replay.is_none() {
                 render_anchored_opening(
                     plan,
                     signature,
@@ -9982,7 +9988,9 @@ fn render_take(
 ) -> Result<(), request::Error> {
     // A `&'static str` input pins the string taken from Rawr for as long as
     // the runner lives, as a string literal's is.
-    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr)) {
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr))
+        || (PINNED_STRINGS.get() && matches!(ty, convert::Type::Builtin(convert::Builtin::Str)))
+    {
         return writeln!(
             output,
             "    let argument_{local} = static_pins().pin(take_primitive::<ImmutableString>(arguments, {index})?);"
@@ -11078,6 +11086,44 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter takes its `&str` arguments pinned for the
+    /// runner's life, as its output borrows them (`lends_str_to_output`).
+    static PINNED_STRINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes an adapter's `&str` arguments pinned for the runner's life while
+/// it lives, when `pinned`.
+struct PinnedStrings(bool);
+
+impl PinnedStrings {
+    fn enter(pinned: bool) -> Self {
+        Self(PINNED_STRINGS.replace(pinned))
+    }
+}
+
+impl Drop for PinnedStrings {
+    fn drop(&mut self) {
+        PINNED_STRINGS.set(self.0);
+    }
+}
+
+/// Whether the call's output carries a lifetime and an input lends it a
+/// `&str` through a type parameter the output doesn't name, as iced's
+/// `text(impl IntoFragment<'a>) -> Text<'a>` does: the output may borrow
+/// the string.
+fn lends_str_to_output(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<bool, request::Error> {
+    if !signature
+        .inputs()
+        .iter()
+        .any(|input| lends_str(input, signature, substitutions))
+    {
+        return Ok(false);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    Ok(matches!(returned, convert::Type::Nominal { .. }) && carries_lifetime(&returned))
 }
 
 /// Takes an adapter's arguments that carry a lifetime from the region its

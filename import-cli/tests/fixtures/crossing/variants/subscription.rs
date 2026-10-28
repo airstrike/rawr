@@ -3,14 +3,17 @@
 // `impl Program` that `application(..)` gives takes a subscription of its
 // state, whose input is `&P::State` and whose output is a
 // `Subscription<P::Message>`, and gives another opaque program of the same
-// state and message that `fonts` and `run` take.
+// state and message that `fonts` and `run` take. As url_handler's
+// `text(url)` does, `quote(..)` borrows a string of the state through an
+// `impl IntoLabel<'a>` its output keeps.
 
-use events::controls::{caption, ticks, toggle, Subscription};
+use events::controls::{quote, ticks, toggle, Subscription};
 use events::widgets::{column, Widget};
 
 #[derive(Debug, Default)]
 struct Events {
     heard: u32,
+    last: Option<String>,
     enabled: bool,
 }
 
@@ -25,6 +28,7 @@ impl Events {
         match message {
             Message::Ticked(tick) => {
                 self.heard += tick;
+                self.last = Some(format!("tick {tick} of {}", self.heard));
             }
             Message::Toggled(enabled) => {
                 self.enabled = enabled;
@@ -44,7 +48,11 @@ impl Events {
         let toggle = toggle(self.enabled)
             .label("Listen")
             .on_toggle(Message::Toggled);
-        column![toggle, caption(self.heard)]
+        let last = match &self.last {
+            Some(last) => quote(last),
+            None => quote("Nothing heard yet!"),
+        };
+        column![toggle, last.size(48)]
     }
 }
 
