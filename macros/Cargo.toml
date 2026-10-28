@@ -1,6 +1,6 @@
 [package]
 name = "rawr-macros"
-version = "0.3.7"
+version = "0.3.8"
 rust-version = "1.95.0"
 edition = "2024"
 description = "Rawr's attributes for cargo builds: #[rawr::preview] and #[rawr::widget] leave the item as written apart from dead-code warnings"
