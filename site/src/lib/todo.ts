@@ -13,8 +13,8 @@ export interface Row {
 }
 
 export const UPDATED = "2026-10-28";
-export const VERSION = "0.3.8";
-export const EXAMPLES = { running: 6, total: 56, note: "13 more get past their impl headers" };
+export const VERSION = "0.3.9";
+export const EXAMPLES = { running: 6, total: 56, note: "Most others now stop further along" };
 
 export const LANES: Record<string, string> = {
   done: "Shipped",
@@ -43,6 +43,7 @@ export const ROWS: Row[] = [
   row("done", "First five examples", 0, 4, "done", "counter, checkbox, tooltip, pick_list, svg"),
   row("done", "Aliases and names", 4, 3, "done", "0.3.7. slider runs again"),
   row("done", "Script impls of crate traits", 7, 4, "done", "0.3.8. impl canvas::Program"),
+  row("done", "Host type parameters", 11, 2, "done", "0.3.9. 11 examples past it"),
   row("bind", "Measure entry shapes", 11, 2, "now", "Per module, per item or lazy"),
   row("bind", "Macro $crate roots", 11, 2, "now", "column! without demand"),
   row("bind", "Crate-keyed entry", 13, 4, "next", "Extract once per crate"),
@@ -57,7 +58,6 @@ export const ROWS: Row[] = [
   row("gnar", "Qualified Self paths", 26, 1, "next", "<Self as T>::A"),
   row("gnar", "Higher-ranked bounds", 27, 2, "next", "for<'a> Fn(&'a T)"),
   row("gnar", "Impl for a reference", 28, 3, "next", "impl<T> For for &T. T320"),
-  row("now", "Host type parameters", 11, 2, "now", "8 examples. T313"),
   row("now", "Subscription", 11, 3, "now", "6 examples. T309"),
   row("now", "Widget extension trait", 11, 3, "now", "5 examples. T311"),
   row("iced", "Time types", 14, 2, "next", "4 examples. T312"),
