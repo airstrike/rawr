@@ -400,3 +400,17 @@ fn workspace_slots_admit_growth_even_with_allocator_surplus() {
         .items(0)
         .expect("an exceedance never latches the account");
 }
+
+#[test]
+fn watched_paths_are_in_the_order_the_stored_entry_reads() {
+    // A path's own order puts `a/rawr/…` before `a/rawr-home/…`, and text
+    // order puts it after, because `-` sorts before `/`.
+    let fixture = Fixture::new();
+    let near = fixture.file("a/rawr/member/Cargo.toml", "[package]\nname='near'\n");
+    let far = fixture.file("a/rawr-home/Cargo.toml", "[package]\nname='far'\n");
+    let image = image(&[near, far]);
+    let Entry::Workspace { paths, .. } = &image.entry else {
+        panic!("workspace entry")
+    };
+    assert!(paths.windows(2).all(|pair| pair[0] < pair[1]), "{paths:?}");
+}

@@ -425,7 +425,14 @@ fn scan(
             ancestors(&mut candidates, &manifest, account)?;
         }
     }
-    watched.values.sort_unstable();
+    // In the bytes' order, as the stored entry reads them back: a path's
+    // own order compares components, so `a/rawr/x` comes before
+    // `a/rawr-home` there and after it as text.
+    watched.values.sort_unstable_by(|left, right| {
+        left.as_os_str()
+            .as_encoded_bytes()
+            .cmp(right.as_os_str().as_encoded_bytes())
+    });
     let mut paths = Slots::new();
     for path in watched.values {
         let text = path
