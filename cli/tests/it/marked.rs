@@ -327,7 +327,9 @@ fn an_unmarked_crate_root_is_not_a_rawr_program() {
 }
 
 /// A cargo script is marked on its first line of Rust, after its shebang
-/// and frontmatter, and runs while it declares no dependencies.
+/// and frontmatter. One with no dependencies runs on the base language,
+/// and one that declares dependencies goes to rawr-import, as a crate with
+/// dependencies does.
 #[test]
 fn a_cargo_script_runs_with_the_marker_after_its_frontmatter() {
     let sandbox = Sandbox::new("marked-script");
@@ -345,14 +347,19 @@ fn a_cargo_script_runs_with_the_marker_after_its_frontmatter() {
     .unwrap();
 
     let run = sandbox.rawr(&["run", "tool.rs"]);
-    let refused = sandbox.rawr(&["run", "deps.rs"]);
+    let handed = sandbox.rawr(&["run", "deps.rs"]);
 
     assert_success(&run);
     assert_eq!(stdout(&run), "script\n");
-    assert_eq!(refused.status.code(), Some(1));
-    let text = stderr(&refused);
-    assert!(text.contains("declares dependencies"), "{text}");
-    assert!(text.contains("deps.rs:2:2"), "{text}");
+    assert_eq!(handed.status.code(), Some(1));
+    let text = stderr(&handed);
+    assert!(
+        text.contains("which rawr-import serves, and it is not installed"),
+        "{text}"
+    );
+    // Nothing of either script's is kept beside it.
+    assert!(!work.join("target").exists());
+    assert!(!work.join("Cargo.lock").exists());
 }
 
 /// A live session loads again on each save through remembering cells:

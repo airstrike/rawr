@@ -450,23 +450,38 @@ fn a_script_is_its_own_package_wherever_it_sits() {
 
     let graph = Graph::load(&Engine::new(), &target).unwrap();
 
-    assert_eq!(Graph::root_of(&target), fs::canonicalize(project.path().join("src")).unwrap());
+    // Its package lives in rawr's area for scripts, never beside it.
+    let root = Graph::root_of(&target);
+    assert_eq!(graph.entry_package().root(), root);
+    assert!(graph.entry_package().is_script());
+    assert_eq!(root.parent().and_then(Path::file_name), Some("scripts".as_ref()), "{}", root.display());
+    assert!(!root.starts_with(project.path()), "{}", root.display());
     assert_eq!(graph.entry_package().name(), "main");
     assert!(!graph.declares_rust_import());
 }
 
 #[test]
-fn a_script_that_declares_dependencies_is_refused_until_they_resolve() {
+fn a_script_s_dependencies_are_its_frontmatter_s() {
     let project = Project::new("script-dependencies");
     let script = project.path().join("tool.rs");
     fs::write(&script, "---cargo\n[dependencies]\nrand = \"0.9\"\n---\n// rawr\nfn main() {}\n").unwrap();
     let target = rawr::project::Target::discover(&script).unwrap();
 
+    let graph = Graph::load(&Engine::new(), &target).unwrap();
+
+    assert!(graph.declares_rust_import());
+    assert_eq!(graph.entry_package().name(), "tool");
+    let (manifest, text) = graph.entry_package().cargo_manifest().unwrap();
+    assert_eq!(manifest, graph.entry_package().root().join("Cargo.toml"));
+    assert!(text.contains("rand = \"0.9\""), "{text}");
+    assert!(text.contains(&format!("path = {:?}", fs::canonicalize(&script).unwrap().display().to_string())), "{text}");
+
+    fs::write(&script, "---cargo\n[dependencies]\nrand = \"0.9\"\n[lib]\n---\n// rawr\nfn main() {}\n").unwrap();
+    let target = rawr::project::Target::discover(&script).unwrap();
     let error = Graph::load(&Engine::new(), &target).unwrap_err();
     let report = error.report().unwrap();
-
-    assert!(report.message().contains("declares dependencies"), "{report}");
-    assert_eq!(report.labels()[0].span().start(), Position::new(2, 2));
+    assert!(report.message().contains("`lib` is not allowed in embedded manifests"), "{report}");
+    assert_eq!(report.labels()[0].span().start(), Position::new(4, 2));
 }
 
 #[test]

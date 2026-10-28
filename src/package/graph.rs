@@ -36,6 +36,8 @@ pub struct Package {
     entry: Option<Box<str>>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
+    /// The crate root has a frontmatter block: a cargo script.
+    script: bool,
 }
 
 /// One native module of a marked crate: an unmarked `.rs` file in the
@@ -96,10 +98,19 @@ impl Package {
         &self.name
     }
 
-    /// Return the canonical package root.
+    /// Return the canonical package root: where Cargo builds the package
+    /// and Rawr keeps what it builds for it. A script's is its directory in
+    /// rawr's area for scripts, which holds its manifest and lockfile.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether the package is a cargo script: a crate root with a
+    /// frontmatter block, its own package wherever it sits.
+    #[must_use]
+    pub const fn is_script(&self) -> bool {
+        self.script
     }
 
     /// Return the crate root source (`src/main.rs`, `src/lib.rs` or the
@@ -209,10 +220,16 @@ impl Graph {
 
     /// The root of the package `target` selects: the project's root, or for
     /// one file, its directory (the crate's root for a `src/` file beside a
-    /// `Cargo.toml`).
+    /// `Cargo.toml`). A script's is its directory in rawr's area for
+    /// scripts, as [`Package::root`] has it.
     #[must_use]
     pub fn root_of(target: &project::Target) -> PathBuf {
         match target {
+            project::Target::File(source)
+                if crate::project::frontmatter::is_script(source.text()) =>
+            {
+                manifest::script::directory(source.path())
+            }
             project::Target::File(source) => {
                 file_root(source.path(), source.text(), |manifest| manifest.is_file())
             }
@@ -466,7 +483,28 @@ impl<'a> Builder<'a> {
 
     fn load_package(&mut self, request: Request) -> Result<Id, Error> {
         let root = self.canonical_directory(request.root)?;
-        let cargo = self.load_cargo(&root)?;
+        let canonical = self.canonical_source(request.source.clone(), &root, None)?;
+        let text = self.read_to_string(&canonical).map_err(|source| {
+            Error::resource(
+                self.evidence.clone(),
+                error::resource_message("read Rawr source", canonical.clone(), &source),
+                source,
+                None,
+            )
+        })?;
+        // A script's manifest is its frontmatter, wherever it sits, and its
+        // package lives in rawr's area for scripts (D608 point 6).
+        let script = crate::project::frontmatter::is_script(&text);
+        let cargo = if script {
+            self.script_cargo(&canonical, &text)?
+        } else {
+            self.load_cargo(&root)?
+        };
+        let package_root = if script {
+            manifest::script::directory(&canonical)
+        } else {
+            root.clone()
+        };
         // The crate name rustc gives this target, so item paths read as
         // Rust's do. A file outside a Cargo package is `main`.
         let library = request
@@ -487,13 +525,14 @@ impl<'a> Builder<'a> {
         self.packages.push(Package {
             id: package,
             name: name.clone(),
-            root: root.clone(),
+            root: package_root,
             source: source::Id::from_index(0),
             rust_modules: Vec::new(),
             native_root: None,
             entry: None,
             cargo: None,
             rust: None,
+            script,
         });
 
         let module_root = request
@@ -504,26 +543,6 @@ impl<'a> Builder<'a> {
         // An unmarked root that declares a marked module is native Rust
         // (D501): Rawr reads only its `mod` declarations, as the root of the
         // marked modules, and the native build compiles the rest.
-        let canonical = self.canonical_source(request.source.clone(), &root, None)?;
-        let text = self.read_to_string(&canonical).map_err(|source| {
-            Error::resource(
-                self.evidence.clone(),
-                error::resource_message("read Rawr source", canonical.clone(), &source),
-                source,
-                None,
-            )
-        })?;
-        if let Err(error) = manifest::script::check(&text) {
-            let source = diagnostic::Source::new(canonical.to_string_lossy().into_owned(), text)
-                .map_err(Error::diagnostic)?;
-            let evidence = self.push_evidence(source);
-            return Err(Error::manifest(
-                self.evidence.clone(),
-                evidence,
-                error.message,
-                error.span,
-            ));
-        }
         let read = if !crate::project::is_marked(&text) && self.reaches_marked(&module_root, &text)
         {
             let declarations = super::island::root_text(&text);
@@ -1077,6 +1096,38 @@ impl<'a> Builder<'a> {
         match manifest::cargo::Cargo::parse(path, text, root, ask_cargo) {
             Ok(cargo) => Ok(cargo.map(|cargo| (cargo, source))),
             Err(error) => {
+                let evidence = self.push_evidence(source);
+                Err(Error::manifest(
+                    self.evidence.clone(),
+                    evidence,
+                    error.message,
+                    error.span,
+                ))
+            }
+        }
+    }
+
+    /// A script's manifest, expanded from its frontmatter, with the
+    /// expansion as its evidence. Its errors point into the script.
+    fn script_cargo(
+        &mut self,
+        script: &Path,
+        text: &str,
+    ) -> Result<Option<(manifest::cargo::Cargo, diagnostic::Source)>, Error> {
+        match manifest::script::cargo(script, text) {
+            Ok(None) => Ok(None),
+            Ok(Some(cargo)) => {
+                let source = diagnostic::Source::new(
+                    cargo.path.to_string_lossy().into_owned(),
+                    cargo.text.clone(),
+                )
+                .map_err(Error::diagnostic)?;
+                Ok(Some((cargo, source)))
+            }
+            Err(error) => {
+                let source =
+                    diagnostic::Source::new(script.to_string_lossy().into_owned(), text.to_owned())
+                        .map_err(Error::diagnostic)?;
                 let evidence = self.push_evidence(source);
                 Err(Error::manifest(
                     self.evidence.clone(),

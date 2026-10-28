@@ -101,38 +101,7 @@ impl Cargo {
             .and_then(|item| item.get("name"))
             .and_then(|item| item.as_str())
             .map_or_else(|| name.replace('-', "_"), str::to_owned);
-        let mut dependencies =
-            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherited.as_ref())?
-                .into_vec();
-        // `[target.'cfg(..)'.dependencies]` whose `cfg` holds here, as
-        // Cargo builds them for this target.
-        for (key, target) in table
-            .get("target")
-            .and_then(Item::as_table_like)
-            .into_iter()
-            .flat_map(|targets| targets.iter())
-        {
-            if crate::resolve::cfg_text_holds(key) != Some(true) {
-                continue;
-            }
-            let more = rust::cargo_dependencies(
-                &text,
-                root,
-                target
-                    .as_table_like()
-                    .and_then(|target| target.get("dependencies")),
-                inherited.as_ref(),
-            )?;
-            for dependency in more {
-                if !dependencies
-                    .iter()
-                    .any(|known| known.alias == dependency.alias)
-                {
-                    dependencies.push(dependency);
-                }
-            }
-        }
-        let dependencies = dependencies.into_boxed_slice();
+        let dependencies = dependencies(&text, root, table, inherited.as_ref())?;
         Ok(Some(Self {
             path,
             package: name,
@@ -143,6 +112,46 @@ impl Cargo {
             text,
         }))
     }
+}
+
+/// A manifest's `[dependencies]`, then its
+/// `[target.'cfg(..)'.dependencies]` whose `cfg` holds here, as Cargo builds
+/// them for this target. `table` is the manifest parsed from `text`.
+pub(super) fn dependencies(
+    text: &str,
+    root: &Path,
+    table: &toml_edit::Table,
+    inherited: Option<&super::workspace::Inherited>,
+) -> Result<Box<[rust::Dependency]>, Error> {
+    let mut dependencies =
+        rust::cargo_dependencies(text, root, table.get("dependencies"), inherited)?.into_vec();
+    for (key, target) in table
+        .get("target")
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|targets| targets.iter())
+    {
+        if crate::resolve::cfg_text_holds(key) != Some(true) {
+            continue;
+        }
+        let more = rust::cargo_dependencies(
+            text,
+            root,
+            target
+                .as_table_like()
+                .and_then(|target| target.get("dependencies")),
+            inherited,
+        )?;
+        for dependency in more {
+            if !dependencies
+                .iter()
+                .any(|known| known.alias == dependency.alias)
+            {
+                dependencies.push(dependency);
+            }
+        }
+    }
+    Ok(dependencies.into_boxed_slice())
 }
 
 #[cfg(test)]
