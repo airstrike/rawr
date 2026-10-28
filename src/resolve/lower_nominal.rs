@@ -17901,6 +17901,25 @@ impl<'a> Parser<'a> {
                     length: None,
                 };
             }
+            // A lazy iterator where the host takes an iterable, as iced's
+            // `column(sizes.map(|size| ..))` takes `impl IntoIterator<Item
+            // = Element>`: its items, collected where the call takes them.
+            // rustc's check of the crate holds the parameter to one that
+            // takes an iterator.
+            if let (Ty::Array { length: None, .. }, Ty::Iter(item)) = (
+                self.inference.resolve(expected),
+                self.inference.resolve(&argument.ty),
+            ) {
+                let source = self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]);
+                *argument = self.operator_expr(
+                    source,
+                    Ty::Array {
+                        element: item,
+                        length: None,
+                    },
+                    argument.span,
+                );
+            }
             if !profile_mapper {
                 self.coerce_expr(expected, argument)?;
             }
