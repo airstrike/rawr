@@ -110,3 +110,14 @@ fn a_module_and_a_function_of_one_name_are_both_reached() {
 fn a_generic_traits_provided_method_is_each_implementors() {
     runs_as_cargo_does("provided", "4\n5\n6\n");
 }
+
+/// A generic impl's function whose named callable parameter `F` takes or
+/// gives what no script closure can, as tokio's `MappedMutexGuard::map`
+/// (`F: FnOnce(&mut T) -> &mut U`) and cosmic text's `with_buffer_mut`
+/// (`F: FnOnce(&mut Borrowed<Buffer>) -> T`) are, has no binding, and the
+/// module's other items stay importable. It used to fail the import with
+/// "unknown type parameter `F`" (T313).
+#[test]
+fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
+    runs_as_cargo_does("guard", "3\n");
+}

@@ -846,6 +846,17 @@ fn unavailable_evidence<'contract>(
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
         },
+        R::Invocation(plan)
+            if !fills_callables(plan.signature(), plan.call(), plan.crossings()) =>
+        {
+            UnavailableEvidence {
+                reason: representability::reject::Kind::CallableProtocol
+                    .describe()
+                    .into(),
+                source: outcome.origin()?.source(),
+                declaration: outcome.origin()?.declaration(),
+            }
+        }
         R::Invocation(_) => return None,
         R::Struct(plan) if plan.declaration_only() => UnavailableEvidence {
             reason:
@@ -1067,13 +1078,19 @@ fn augment_external(
             spans.push(origin.source());
             spans.push(origin.declaration());
         }
-        if let rawr_import::classify::representability::Representability::Rejected(reason) =
-            outcome.representability()
-        {
+        let reason = match outcome.representability() {
+            Representability::Rejected(reason) => Some(reason.kind().describe()),
+            Representability::Invocation(plan)
+                if !fills_callables(plan.signature(), plan.call(), plan.crossings()) =>
+            {
+                Some(representability::reject::Kind::CallableProtocol.describe())
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
             reasons.push(format!(
-                "rawr has no binding for `{}`: {}",
+                "rawr has no binding for `{}`: {reason}",
                 outcome.name(),
-                reason.kind().describe()
             ));
         }
     }
@@ -1980,8 +1997,11 @@ fn build(
         let Representability::Invocation(plan) = associated.representability() else {
             continue;
         };
+        // Its signature is written with no closure, so a callable
+        // parameter would be named undeclared.
         if plan.receiver()
             != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
+            || !fills_callables(plan.signature(), None, &[])
             || !names_declared(*associated, declared)
         {
             continue;
@@ -2128,26 +2148,26 @@ fn imported_item(
         | Representability::Method(_)
         | Representability::Constant(_) => true,
         // A callable parameter whose closure Rawr can't make, as cosmic
-        // text's `with_buffer_mut(impl FnOnce(&mut Borrowed<..>) -> T)`
-        // takes, leaves the item uncallable.
+        // text's `with_buffer_mut<F: FnOnce(&mut Borrowed<..>) -> T, T>`
+        // and tokio's `MappedMutexGuard::map<U, F: FnOnce(&mut T) -> &mut
+        // U>` take, leaves the item uncallable: no binding, and the crate's
+        // other items stay importable.
         Representability::Invocation(plan) => {
-            plan.call().is_some()
-                || plan.signature().parameters().iter().all(|parameter| {
-                    parameter.kind() != representability::signature::Kind::Callable
-                })
+            fills_callables(plan.signature(), plan.call(), plan.crossings())
         }
         Representability::FunctionItem(plan) => callable_generic(plan),
         _ => false,
     };
-    if retains_item {
-        let selector_bytes = outcome.identity().selector().retained_bytes();
-        let bytes = selector_bytes.and_then(|selector| {
-            std::mem::size_of::<host::item::Definition>()
-                .checked_add(unqualified_path_bytes(path)?)?
-                .checked_add(selector)
-        });
-        allocation.retain_checked(Some(1), bytes)?;
+    if !retains_item {
+        return Ok(None);
     }
+    let selector_bytes = outcome.identity().selector().retained_bytes();
+    let bytes = selector_bytes.and_then(|selector| {
+        std::mem::size_of::<host::item::Definition>()
+            .checked_add(unqualified_path_bytes(path)?)?
+            .checked_add(selector)
+    });
+    allocation.retain_checked(Some(1), bytes)?;
     let item = match outcome.representability() {
         Representability::Function(plan) => Some(
             match outcome.identity().selector() {
@@ -2444,7 +2464,7 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
                         | representability::signature::Kind::Future
                         | representability::signature::Kind::Callable
                 )
-            })
+            }) && fills_callables(plan.signature(), plan.call(), plan.crossings())
         }
         // `F: Future` takes a script future (D527).
         None => plan.signature().parameters().iter().all(|parameter| {
@@ -2464,6 +2484,29 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
         ) => plan.call().is_some(),
         Some(_) => false,
     }
+}
+
+/// Whether a script closure (`call`) or a script function's slot
+/// (`crossings`) fills each callable parameter of `signature`. A signature
+/// declares only its type parameters and writes a filled callable as the
+/// closure's type, so one left unfilled would be named undeclared. The
+/// classifier keeps such an item, as tokio's `MappedMutexGuard::map` and
+/// cosmic text's `with_buffer_mut` are, when it can't name what the
+/// callable takes or gives (T313).
+fn fills_callables(
+    signature: &representability::signature::Signature,
+    call: Option<&representability::callable::Call>,
+    crossings: &[representability::callable::Call],
+) -> bool {
+    signature
+        .parameters()
+        .iter()
+        .filter(|parameter| parameter.kind() == representability::signature::Kind::Callable)
+        .all(|parameter| {
+            call.into_iter()
+                .chain(crossings)
+                .any(|call| call.parameter() == parameter.index())
+        })
 }
 
 fn unqualified_path_bytes(path: &str) -> Option<usize> {

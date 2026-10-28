@@ -205,3 +205,56 @@ pub mod base {
 
     pub use helpers::*;
 }
+
+/// Functions whose callable parameter is a named type parameter that no
+/// script closure fills, as tokio's `MappedMutexGuard::map` (`F:
+/// FnOnce(&mut T) -> &mut U`) and cosmic-text's `with_buffer_mut` (`F:
+/// FnOnce(&mut Borrowed<Buffer>) -> T`) take, beside the items a script
+/// reaches.
+pub mod guard {
+    pub struct Guard<'a, T> {
+        value: &'a mut T,
+    }
+
+    impl<'a, T> Guard<'a, T> {
+        pub fn new(value: &'a mut T) -> Self {
+            Guard { value }
+        }
+
+        pub fn map<U, F>(this: Self, f: F) -> Guard<'a, U>
+        where
+            F: FnOnce(&mut T) -> &mut U,
+        {
+            Guard {
+                value: f(this.value),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Buffer {
+        pub lines: u32,
+    }
+
+    impl Buffer {
+        pub fn new(lines: u32) -> Self {
+            Buffer { lines }
+        }
+
+        pub fn lines(&self) -> u32 {
+            self.lines
+        }
+    }
+
+    pub struct Borrowed<'a, E> {
+        inner: &'a mut E,
+    }
+
+    impl<'a, E> Borrowed<'a, E> {
+        pub fn with_buffer_mut<F: FnOnce(&mut Borrowed<Buffer>) -> T, T>(&mut self, f: F) -> T {
+            let _ = &self.inner;
+            let mut buffer = Buffer::default();
+            f(&mut Borrowed { inner: &mut buffer })
+        }
+    }
+}
