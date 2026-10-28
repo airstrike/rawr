@@ -341,6 +341,26 @@ fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
     );
 }
 
+/// iced's exit, toast, game_of_life and modal: an array literal passed to
+/// `padding(impl Into<Padding>)` is the `[u16; 2]` or `[f32; 2]` of the
+/// `From` impl its elements fit, a range of floats fills a slider's
+/// `RangeInclusive<T>` at the `f64` or `f32` its value gives `T`, and
+/// `Some(color.into())` where a field takes `Option<Background>` converts
+/// through `Background`'s `From<Color>`, which the program never names.
+/// The output is `cargo run`'s.
+#[test]
+fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
+    let (rawr, cargo) = both_printed("crossing-conversions", "conversions.rs", "pair,slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("[pair 10x20 None/0] [one 4x4 None/0] [floats 1.5x2.5 None/0]")
+            && rawr.contains("2 message Timeout(30.0)")
+            && rawr.contains("1.0..=30.0@30.0/None 0.0..=1.0@0.5/None")
+            && rawr.contains("[dim 0x0 Some(Color(Color { r: 9, g: 0, b: 0 }))/0]"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,

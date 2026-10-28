@@ -15437,6 +15437,17 @@ impl<'a> Parser<'a> {
                 let source = self.inference.resolve(&conversion.source);
                 match self.host_into_helper(host, &source, &target, conversion.span)? {
                     Some(helper) => helper,
+                    // An imported target whose `from` the program never
+                    // named, as a field's `Background`: its member, which
+                    // the importer brings once it is demanded.
+                    #[cfg(feature = "rust-import")]
+                    None if let Some(owner) = self.imported_public_path(&target) => {
+                        return Err(Error::UnknownMember {
+                            owner,
+                            member: "from".into(),
+                            reference: conversion.span,
+                        });
+                    }
                     None => {
                         let (source, target) =
                             (source.name(&self.models), target.name(&self.models));
@@ -21166,6 +21177,30 @@ impl<'a> Parser<'a> {
                     .is_some()
             })
             .and_then(|path| self.models.host.type_(&path).cloned())
+    }
+
+    /// The path to demand an imported type's `from` at, when none of its
+    /// paths has one yet: its crate's public path, as
+    /// `events::conversions::Background`, before the hidden one.
+    #[cfg(feature = "rust-import")]
+    fn imported_public_path(&self, ty: &Ty) -> Option<ImmutableString> {
+        let (identity, owner, _) = ty.imported_alias_context()?;
+        let paths = self
+            .models
+            .host
+            .imported_type_paths(identity, owner)?
+            .collect::<Vec<_>>();
+        if paths
+            .iter()
+            .any(|path| self.models.host_items(&format!("{path}::from")).is_some())
+        {
+            return None;
+        }
+        paths
+            .iter()
+            .find(|path| !path.contains("::__rawr_crate_"))
+            .or(paths.first())
+            .map(|path| path.as_str().into())
     }
 
     /// The first alias of an imported type with no alias of its own whose
