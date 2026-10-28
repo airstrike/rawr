@@ -131,15 +131,17 @@ node --input-type=module -e '
       }
       if (!response.ok) {
         const message = (await response.text()).slice(0, 200);
-        // A fresh container can also crash or drop its first renders while
-        // it starts, as the checks of 0.3.4 and 0.3.6 did.
+        // A fresh container can also crash, drop its first renders or not
+        // be placed yet while it starts, as the checks of 0.3.4, 0.3.6 and
+        // 0.3.7 did. Those wait longer each time.
         const cold_start =
           (response.status === 422 &&
             (message.includes("render time limit") || message.includes("out of memory or crashed"))) ||
-          (response.status === 500 && message.includes("Container suddenly disconnected"));
-        if (cold_start && ++cold <= 3) {
-          console.log("the bot stopped on a cold start (" + message + "); retrying in 10 s");
-          await new Promise((resolve) => setTimeout(resolve, 10000));
+          (response.status === 500 && message.includes("Container suddenly disconnected")) ||
+          (response.status === 503 && message.includes("no Container instance available"));
+        if (cold_start && ++cold <= 6) {
+          console.log("the bot stopped on a cold start (" + message + "); retrying in " + 10 * cold + " s");
+          await new Promise((resolve) => setTimeout(resolve, 10000 * cold));
           continue;
         }
         const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
