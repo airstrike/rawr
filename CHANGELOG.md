@@ -9,6 +9,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate with Cargo dependencies runs under `rawr run` with no `rust-toolchain.toml` and no `.cargo/config.toml`. The project's own `cargo` builds rawr's runner with the project's toolchain, config and profiles, in the project's `target/`. Rust 1.95 or newer is enough.
 - `cargo build` after `rawr run` recompiles nothing. `rawr run` after `cargo build` compiles only rawr's own crates and the runner.
 - An older toolchain stops `rawr run` with a message that says to update it.
+- rawr's nightly build, which reads a project's dependencies, runs in `target/rawr` and no longer compiles rawr's own crates. A project's first `rawr run` through rawr-import takes about half as long.
 - `rawr new --template iced` writes only `Cargo.toml` and `src/main.rs`.
 - rawr asks smallvec for no features, so a project that uses smallvec without features keeps its one copy.
 - `rawr run` no longer deletes the project's own binary when the runner takes the project's crate name.

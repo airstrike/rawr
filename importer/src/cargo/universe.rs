@@ -608,6 +608,7 @@ impl Definition {
             let (reachable_units, reachable_packages) = unit_reachability_rooted(
                 value,
                 self.root,
+                self.framework.is_none(),
                 metadata.packages.value(),
                 limits,
                 allocation,
@@ -2330,12 +2331,25 @@ fn unit_reachability(
     allocation: &mut JsonAllocation,
     universe: &mut UniverseAccount,
 ) -> Result<Reachability> {
-    unit_reachability_rooted(value, ROOT_PACKAGE, packages, limits, allocation, universe)
+    unit_reachability_rooted(
+        value,
+        ROOT_PACKAGE,
+        false,
+        packages,
+        limits,
+        allocation,
+        universe,
+    )
 }
 
+/// The units and packages reachable from `root`'s lib unit. With
+/// `unbuilt`, a graph without that unit governs nothing: the plain
+/// universe's root, the `rawr` crate, is a build dependency of the harness,
+/// which builds no unit of it (D609.2).
 fn unit_reachability_rooted(
     value: &JsonValue,
     root: &str,
+    unbuilt: bool,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     limits: &Limits,
     allocation: &mut JsonAllocation,
@@ -2372,7 +2386,7 @@ fn unit_reachability_rooted(
             PendingUnits::enqueue(&mut pending, index, allocation, limits)?;
         }
     }
-    if PendingUnits::is_empty(&pending) {
+    if PendingUnits::is_empty(&pending) && !unbuilt {
         return Err(json_schema("the governed root's target unit is absent"));
     }
     let mut edges = 0_usize;

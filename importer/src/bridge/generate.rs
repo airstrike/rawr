@@ -4358,6 +4358,23 @@ fn runner_manifest(
     package.insert("edition", value("2024"));
     package.insert("build", value(BUILD_PATH));
     document.remove("lib");
+    // Rawr's own crate is a build dependency of the harness, which builds no
+    // unit of it. The runner links it, and its build script must not.
+    if let Some(item) = document.remove(crate::cargo::BUILD_DEPENDENCIES) {
+        let build = item.into_table().map_err(|_| request::Error::Manifest {
+            reason: "final-form harness build dependencies are not a table".into(),
+        })?;
+        let dependencies = document
+            .get_mut("dependencies")
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| request::Error::Manifest {
+                reason: "final-form harness has no dependencies table".into(),
+            })?;
+        for (key, item) in build {
+            dependencies.insert(&key, item);
+        }
+        dependencies.sort_values();
+    }
     // Each crate a macro's `$crate` names, as Rust reaches it.
     if !hidden.is_empty() {
         let dependencies = document
@@ -11703,6 +11720,23 @@ mod tests {
             Some("rawr-generated-runner")
         );
         assert!(document.get("lib").is_none());
+        // The harness's build dependency on Rawr's own crate, which it never
+        // builds, is a dependency of the runner, and its build script has none.
+        let harness = b"[workspace]\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nzeta = \"1\"\n\n[build-dependencies]\n__rawr_internal = { package = \"rawr\", path = \"/rawr\" }\n";
+        let manifest = super::runner_manifest(harness, None, &[]).unwrap();
+        let document = std::str::from_utf8(&manifest)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(document.get("build-dependencies").is_none());
+        let dependencies = document["dependencies"].as_table().unwrap();
+        assert_eq!(
+            dependencies
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["__rawr_internal", "zeta"]
+        );
     }
 
     #[test]

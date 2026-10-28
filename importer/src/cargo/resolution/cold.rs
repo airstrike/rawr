@@ -689,10 +689,12 @@ pub(in crate::cargo) fn build(
             source,
         }
     };
-    let build =
-        crate::location::build_directory(&request.project_root, request.config.environment());
+    // Rawr's own build directory under `<target>/rawr`: only this pinned
+    // nightly build uses it, so Cargo's freshness there is this build's
+    // alone, and `cargo build` never sees its units (D609.2).
+    let build = rawr.join("build");
     let shared = crate::deps::directory(&build)
-        .map_err(io("create the project's Cargo build directory", &build))?;
+        .map_err(io("create Rawr's Cargo build directory", &build))?;
     let mut prefix = prefix(request, paths.config(), allocation)?;
     // The shared directory overrides the reserved config's bundle build root;
     // relocation then fills that root with the files this resolution reads.
@@ -709,8 +711,8 @@ pub(in crate::cargo) fn build(
     Ok((bytes, command.into_environment()))
 }
 
-/// Build in `shared`, the project's own build directory, with Cargo's own
-/// freshness rules, so its units are the ones `cargo build` checks.
+/// Build in `shared`, Rawr's own build directory, with Cargo's own
+/// freshness rules, so a later resolution reuses this one's units.
 pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 2] {
     let value = toml_edit::Value::from(shared.to_string_lossy().as_ref()).to_string();
     ["--config".into(), format!("build.build-dir={value}").into()]

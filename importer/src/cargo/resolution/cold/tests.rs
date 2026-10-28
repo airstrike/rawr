@@ -305,10 +305,11 @@ fn expected_reply(
         Command::Build => (
             {
                 if bound {
-                    let build = crate::location::build_directory(
+                    let build = crate::location::rawr_directory(
                         &request.project_root,
                         request.config.environment(),
-                    );
+                    )
+                    .join("build");
                     let shared = crate::deps::directory(&build).unwrap();
                     prefix.extend(super::shared_arguments(&shared));
                 }

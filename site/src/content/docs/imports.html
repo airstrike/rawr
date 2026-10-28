@@ -14,6 +14,7 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>A crate that <code>cargo run</code> runs needs only the marker. rawr-import adds no file to it.</p>
 <p>Your own <code>cargo</code> builds rawr&rsquo;s runner. It runs from the project&rsquo;s directory, with your shell&rsquo;s environment. It uses the project&rsquo;s toolchain, Cargo config and profiles, and it builds in the project&rsquo;s <code>target/</code>. So <code>rawr run</code> and <code>cargo build</code> share every compiled dependency, and each compiles a dependency only once.</p>
 <p>The first <code>rawr run</code> of a project also compiles rawr&rsquo;s own crates into its <code>target/</code>.</p>
+<p>rawr reads your dependencies&rsquo; APIs with its own pinned nightly. That build runs in <code>target/rawr</code>, apart from the units <code>cargo build</code> uses.</p>
 <p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
 <p>rawr keeps what it makes for a crate in <code>target/rawr</code>. For a workspace member, that is <code>target/rawr/members/&lt;path&gt;</code> in the workspace&rsquo;s <code>target/</code>, where <code>&lt;path&gt;</code> is the member&rsquo;s directory. <code>cargo clean</code> removes it.</p>
