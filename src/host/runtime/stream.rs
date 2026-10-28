@@ -1,6 +1,7 @@
 //! Executor-neutral factories for exact symbolic host streams.
 
 use crate::func::SendSync;
+use crate::host::stream::Source;
 use crate::{host, Dynamic, ImmutableString, Shared};
 use futures_core::Stream;
 use std::fmt;
@@ -37,16 +38,16 @@ type Encoder = dyn Fn(
 #[cfg(feature = "sync")]
 /// Internal trait alias for a sendable native stream binding.
 #[doc(hidden)]
-pub trait Native<E>: Stream<Item = Result<Dynamic, E>> + Send + 'static {}
+pub trait Native<E>: Source<Item = Result<Dynamic, E>> + Send + 'static {}
 #[cfg(feature = "sync")]
-impl<T, E> Native<E> for T where T: Stream<Item = Result<Dynamic, E>> + Send + 'static {}
+impl<T, E> Native<E> for T where T: Source<Item = Result<Dynamic, E>> + Send + 'static {}
 
 #[cfg(not(feature = "sync"))]
 /// Internal trait alias for a native stream binding.
 #[doc(hidden)]
-pub trait Native<E>: Stream<Item = Result<Dynamic, E>> + 'static {}
+pub trait Native<E>: Source<Item = Result<Dynamic, E>> + 'static {}
 #[cfg(not(feature = "sync"))]
-impl<T, E> Native<E> for T where T: Stream<Item = Result<Dynamic, E>> + 'static {}
+impl<T, E> Native<E> for T where T: Source<Item = Result<Dynamic, E>> + 'static {}
 
 /// One native factory and encoder bound to an exact stream declaration.
 pub(crate) struct Binding {
@@ -194,14 +195,14 @@ impl Selected {
 
 impl<S, N, E> Stream for Normalized<S, N>
 where
-    S: Stream<Item = Result<Dynamic, E>>,
+    S: Source<Item = Result<Dynamic, E>>,
     N: Fn(E) -> Dynamic,
 {
     type Item = Dynamic;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
-        match this.stream.as_mut().poll_next(context) {
+        match Source::poll_next(this.stream.as_mut(), context) {
             Poll::Ready(Some(Ok(value))) => Poll::Ready(Some(value)),
             Poll::Ready(Some(Err(error))) => Poll::Ready(Some((this.normalize)(error))),
             Poll::Ready(None) => Poll::Ready(None),
