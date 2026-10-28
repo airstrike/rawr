@@ -1,0 +1,52 @@
+{
+  "$schema": "schema/project.schema.json",
+  "repo": "airstrike/rawr",
+  "project": {
+    "owner": "airstrike",
+    "title": "rawr work plan",
+    "description": "Every TODO item as an issue: divergences from rustc, the importer, the borrow checker, no glue, shared bindings and the rest.",
+    "id": "PVT_kwHOAAJU7M4BpMZA",
+    "number": 4,
+    "url": "https://github.com/users/airstrike/projects/4"
+  },
+  "labels": [
+    {"name":"rustc divergence","color":"b60205","description":"rawr behaves differently from rustc","id":"LA_kwDOVTbWOs8AAAAC_2XIMw"},
+    {"name":"borrow checker","color":"5319e7","description":"Borrow guards, moves and the borrow checker","id":"LA_kwDOVTbWOs8AAAAC_2XI4Q"},
+    {"name":"hot reload","color":"fbca04","description":"Live edits and swaps of a running program","id":"LA_kwDOVTbWOs8AAAAC_2XJjg"},
+    {"name":"importer","color":"1d76db","description":"Importing Rust crates: bindings, lifetimes, generics","id":"LA_kwDOVTbWOs8AAAAC_2XKbg"},
+    {"name":"rawr-iced","color":"c5def5","description":"The rawr-iced facade, its examples and its retirement","id":"LA_kwDOVTbWOs8AAAAC_2XK-g"},
+    {"name":"no glue","color":"0e8a16","description":"Every example running unchanged under rawr run, with no glue","id":"LA_kwDOVTbWOs8AAAAC_2XLrw"},
+    {"name":"shared bindings","color":"006b75","description":"Bindings and rawr's runtime built once per machine","id":"LA_kwDOVTbWOs8AAAAC_2XMJw"},
+    {"name":"playground","color":"d93f0b","description":"?play, the Discord bot and the browser playground","id":"LA_kwDOVTbWOs8AAAAC_2XMvg"},
+    {"name":"platform","color":"bfd4f2","description":"Operating systems and devices","id":"LA_kwDOVTbWOs8AAAAC_2XNiA"},
+    {"name":"health","color":"c2e0c6","description":"Tests, flaky runs and tooling","id":"LA_kwDOVTbWOs8AAAAC_2XOKA"}
+  ],
+  "categories": {
+    "Divergences from rustc": "rustc divergence",
+    "Borrow guards (D554)": "borrow checker",
+    "Hot reload of a marked `main` (D555)": "hot reload",
+    "Importer": "importer",
+    "Imported lifetimes after slice 1 (D561)": "importer",
+    "Imported lifetimes after slice 2": "importer",
+    "Borrow checker (D572)": "borrow checker",
+    "iced examples": "rawr-iced",
+    "rawr-iced (D586)": "rawr-iced",
+    "No glue (D593)": "no glue",
+    "Shared dependency cache (D607)": "shared bindings",
+    "Platforms": "platform",
+    "Health": "health"
+  },
+  "keywords": [
+    {"label":"playground","pattern":"\\?play\\b|playground|\\bplaybot\\b|rawr-web|\\bDiscord\\b|\\bthe bot\\b"}
+  ],
+  "repoId": "R_kgDOVTbWOg",
+  "fields": {
+    "status": {"id":"PVTSSF_lAHOAAJU7M4BpMZAzhnpGGQ","name":"Status","options":{"Todo":"f75ad846","In Progress":"47fc9ee4","Done":"98236657"}},
+    "category": {"id":"PVTSSF_lAHOAAJU7M4BpMZAzhnpGIw","name":"Category","options":{"Divergences from rustc":"70df3e4f","Borrow guards (D554)":"2542fadb","Hot reload of a marked `main` (D555)":"1f2745ef","Importer":"ed0c6df3","Imported lifetimes after slice 1 (D561)":"a2e87cae","Imported lifetimes after slice 2":"7dc461f9","Borrow checker (D572)":"e2bc2ab3","iced examples":"f21e4854","rawr-iced (D586)":"f43e4334","No glue (D593)":"0ade2067","Shared dependency cache (D607)":"21b52ed6","Platforms":"3f433e87","Health":"8fdbd4b3"}},
+    "t": {"id":"PVTF_lAHOAAJU7M4BpMZAzhnpGI0","name":"T number"},
+    "gantt": {"id":"PVTF_lAHOAAJU7M4BpMZAzhnpGI4","name":"Chart row"},
+    "decisions": {"id":"PVTF_lAHOAAJU7M4BpMZAzhnpGJU","name":"Decisions"},
+    "commit": {"id":"PVTF_lAHOAAJU7M4BpMZAzhnpGJ4","name":"Commit"},
+    "release": {"id":"PVTF_lAHOAAJU7M4BpMZAzhnpGJ8","name":"Shipped in"}
+  }
+}
