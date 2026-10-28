@@ -572,9 +572,13 @@ impl CargoAction {
             Self::Metadata | Self::PublicationMetadata => "metadata",
             #[cfg(not(feature = "rustc-driver"))]
             Self::Metadata => "metadata",
-            Self::UnitBuild(_) | Self::AuthoritativeBuild(_) | Self::RunnerBuild(_) => "build",
+            // The nightly build feeds extraction, which reads only metadata,
+            // so it checks the dependencies (D609.2). The project's runner is
+            // built.
+            Self::UnitBuild(_) | Self::AuthoritativeBuild(_) => "check",
             #[cfg(feature = "rustc-driver")]
-            Self::PublicationUnitBuild(_) => "build",
+            Self::PublicationUnitBuild(_) => "check",
+            Self::RunnerBuild(_) => "build",
             Self::PackagePath | Self::PackageGit => "package",
         }
     }
@@ -1793,7 +1797,7 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
                 "config.toml",
                 "-Z",
                 "unstable-options",
-                "build",
+                "check",
                 "--jobs",
                 "7",
                 "--unit-graph",
@@ -1827,7 +1831,7 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
                 Box::default(),
             )
             .expect("closed Cargo action seals independently of profile spelling");
-            assert_eq!(command.arguments[2], "build");
+            assert_eq!(command.arguments[2], "check");
             assert_eq!(command.arguments[3], "--jobs");
             assert_eq!(command.arguments[4], "5");
             assert_eq!(
