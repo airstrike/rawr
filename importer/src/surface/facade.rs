@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 18;
+const SCHEMA: u32 = 19;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -777,6 +777,34 @@ impl Plan {
                         .try_reserve(1)
                         .map_err(|_| super::Error::Allocation)?;
                     named_traits.push((copy(root)?, copy(&relative)?, *definition.as_bytes()));
+                }
+                // The methods of the trait's impls for `&str`, each a
+                // function whose first input is Rawr's string
+                // (`surface::text`).
+                for associated in outcome
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                    .filter(|associated| super::text::is_member(associated.representability()))
+                {
+                    let path = super::text::path(&relative, associated.name());
+                    let Some(mut item) = item(&path, associated)? else {
+                        continue;
+                    };
+                    if !matches!(item.kind, ItemKind::OwnedMethod) {
+                        continue;
+                    }
+                    item.kind = ItemKind::Function;
+                    let mut inputs = Vec::new();
+                    inputs
+                        .try_reserve_exact(item.signature.inputs.len() + 1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    inputs.push(Type::String);
+                    inputs.extend(std::mem::take(&mut item.signature.inputs).into_vec());
+                    item.signature.inputs = inputs.into_boxed_slice();
+                    let mut items = std::mem::take(&mut facade.items).into_vec();
+                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    items.push(item);
+                    facade.items = items.into_boxed_slice();
                 }
                 let mut traits = std::mem::take(&mut facade.traits).into_vec();
                 if let Err(position) = traits.binary_search(&relative) {

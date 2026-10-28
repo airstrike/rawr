@@ -480,11 +480,16 @@ pub(crate) fn shared(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
 ) -> crate::future::Program {
-    let clones = authority
-        .items()
-        .filter(|item| item.kind() == item::Kind::Method && item.key().name() == "Clone::clone")
-        .filter_map(|item| Some((item.key().owner()?.clone(), item.clone())))
-        .collect();
+    let methods = |name: &str| {
+        authority
+            .items()
+            .filter(|item| item.kind() == item::Kind::Method && item.key().name() == name)
+            .filter_map(|item| Some((item.key().owner()?.clone(), item.clone())))
+            .collect::<HashMap<_, _>>()
+    };
+    let clones = methods("Clone::clone");
+    let equals = methods("PartialEq::eq");
+    let displays = methods("Display::fmt");
     let defaults = authority
         .items()
         .filter(|item| {
@@ -507,9 +512,21 @@ pub(crate) fn shared(
         authority,
         runtime,
         clones,
+        equals,
+        displays,
         defaults,
         layouts,
     })
+}
+
+/// The script type of `value`, a script struct or enum.
+#[cfg(feature = "sync")]
+fn script_identity(value: &Dynamic) -> Option<&type_def::Identity> {
+    match &value.0 {
+        crate::types::dynamic::Union::Struct(value, ..) => Some(value.identity()),
+        crate::types::dynamic::Union::Enum(value, ..) => Some(value.identity()),
+        _ => None,
+    }
 }
 
 /// The function that writes a lifted closure, by package, module path and
@@ -731,6 +748,10 @@ struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
     clones: HashMap<type_def::Identity, item::Value>,
+    /// Each script type's own `PartialEq::eq`.
+    equals: HashMap<type_def::Identity, item::Value>,
+    /// Each script type's own `Display::fmt`.
+    displays: HashMap<type_def::Identity, item::Value>,
     /// Each script type's own `impl Default`, by its path (D594).
     defaults: HashMap<String, item::Value>,
     /// The closures each function writes (D553.5).
@@ -761,17 +782,38 @@ impl crate::future::Remote for Shared {
     }
 
     fn clone_value(&self, value: &Dynamic) -> Option<crate::RawrResultOf<Dynamic>> {
-        let identity = match &value.0 {
-            crate::types::dynamic::Union::Struct(value, ..) => value.identity(),
-            crate::types::dynamic::Union::Enum(value, ..) => value.identity(),
-            _ => return None,
-        };
-        let clone = self.clones.get(identity)?;
+        let clone = self.clones.get(script_identity(value)?)?;
         Some(self.invoke(clone, &mut [value.clone()]))
     }
 
     fn debug(&self, value: &Dynamic) -> Option<String> {
         self.authority.model().debug_text(value)
+    }
+
+    fn equal(&self, lhs: &Dynamic, rhs: &Dynamic) -> Option<crate::RawrResultOf<bool>> {
+        let identity = script_identity(lhs)?;
+        let Some(equal) = self.equals.get(identity) else {
+            return Some(Ok(crate::host::value::structural_equal(lhs, rhs)));
+        };
+        Some(
+            self.invoke(equal, &mut [lhs.clone(), rhs.clone()])
+                .and_then(|equal| {
+                    equal
+                        .as_bool()
+                        .map_err(|actual| crate::future::error(format!("rawr: `eq` gave {actual}")))
+                }),
+        )
+    }
+
+    fn display(&self, value: &Dynamic) -> Option<crate::RawrResultOf<String>> {
+        let display = self.displays.get(script_identity(value)?)?;
+        Some(
+            self.invoke(
+                display,
+                &mut [value.clone(), Dynamic::from(ImmutableString::new())],
+            )
+            .map(|text| text.to_string()),
+        )
     }
 
     fn default_of(&self, path: &str) -> Option<crate::RawrResultOf<Dynamic>> {

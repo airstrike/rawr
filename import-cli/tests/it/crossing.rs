@@ -212,6 +212,29 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
     );
 }
 
+/// iced's pick_list: `column!` boxes a string literal through the crate's
+/// impl of its trait for `&str`, and a choice takes an `Option` of a script
+/// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's
+/// `Display` as a callable, and compares options by the enum's derived
+/// `PartialEq`. The output is `cargo run`'s.
+#[test]
+fn a_choice_of_script_values_beside_a_string_literal_runs() {
+    let (rawr, cargo) = both_printed("crossing-pick", "pick.rs", "Ruby,Some other language");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 'Which is your favorite language?' \
+             <Choose a language...: Elm|Ruby|Rust|Some other language>"
+        ) && rawr.contains("1 message LanguageSelected(Ruby)")
+            && rawr.contains("2 message LanguageSelected(Other)")
+            && rawr.contains(
+                "last view pad 0 'Which is your favorite language?' \
+                 <Some other language: Elm|Ruby|Rust|*Some other language>"
+            ),
+        "{rawr}"
+    );
+}
+
 /// `event` and the count a `N view count X` line shows.
 fn parse(line: &str) -> Option<(i64, i64)> {
     let (event, count) = line.split_once(" view count ")?;

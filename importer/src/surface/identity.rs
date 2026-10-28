@@ -18,6 +18,7 @@ const RENDERER_DOMAIN: &[u8] = b"rawr.identity.renderer/v1";
 const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
+const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -199,6 +200,17 @@ impl Definition {
     pub(crate) fn of(definition: &api::Definition) -> Self {
         let mut framed = Framed::new(DEFINITION_DOMAIN);
         framed.definition(definition);
+        Self(framed.finish())
+    }
+
+    /// The method `method` of the trait impl `implementation` for `&str`,
+    /// called on Rawr's string (`surface::text`). A trait's provided method
+    /// is one definition every impl shares, so the impl tells this one from
+    /// the same method of another impl at the same type arguments.
+    pub(crate) fn text_member(implementation: &api::Definition, method: &api::Definition) -> Self {
+        let mut framed = Framed::new(TEXT_MEMBER_DOMAIN);
+        framed.definition(implementation);
+        framed.definition(method);
         Self(framed.finish())
     }
 

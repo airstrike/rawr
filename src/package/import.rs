@@ -1169,6 +1169,17 @@ fn imported_paths<'contract>(
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
+            // A method of a trait's impl for `&str` is reached beside the
+            // trait (`surface::text`).
+            if rawr_import::surface::text::is_member(associated.representability()) {
+                let associated_path = rawr_import::surface::text::path(&path, associated.name());
+                allocation.retain(1, associated_path.len())?;
+                entries.push(ImportedPath {
+                    path: associated_path.into_boxed_str(),
+                    outcome: associated,
+                });
+                continue;
+            }
             let path = &owner;
             let associated_bytes = path
                 .len()
@@ -1243,6 +1254,9 @@ struct Facade<'contract> {
     )>,
     /// The root's `macro_rules!` macros, as in the facade plan.
     macros: Vec<&'contract rawr_import::surface::facade::Macro>,
+    /// The methods the traits the program names give Rawr's string through
+    /// their impls for `&str`, each at its path (`surface::text`).
+    text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
 }
 
 struct Entry<'contract> {
@@ -1410,6 +1424,7 @@ fn install(
                         variants: Vec::new(),
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
+                        text_members: Vec::new(),
                     },
                 );
                 index
@@ -1439,6 +1454,7 @@ fn install(
                             variants: Vec::new(),
                             macros: Vec::new(),
                             trait_identities: Vec::new(),
+                            text_members: Vec::new(),
                         },
                     );
                     index
@@ -1448,6 +1464,20 @@ fn install(
                 let identities = &mut facades[index].trait_identities;
                 identities.try_reserve(1).map_err(|_| Error::Allocation)?;
                 identities.push((relative.clone().into_boxed_str(), *definition.as_bytes()));
+            }
+            for associated in outcome
+                .implementations()
+                .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+                .filter(|associated| {
+                    rawr_import::surface::text::is_member(associated.representability())
+                })
+            {
+                let members = &mut facades[index].text_members;
+                members.try_reserve(1).map_err(|_| Error::Allocation)?;
+                members.push((
+                    rawr_import::surface::text::path(&relative, associated.name()),
+                    associated,
+                ));
             }
             let traits = &mut facades[index].traits;
             if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
@@ -1481,6 +1511,7 @@ fn install(
                         variants: Vec::new(),
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
+                        text_members: Vec::new(),
                     },
                 );
                 index
@@ -1648,11 +1679,18 @@ fn build(
             .rsplit_once("::")
             .map(|(module, _)| Box::from(module))
     });
+    // So is the module beside a trait that holds the methods its impls for
+    // `&str` give Rawr's string (`surface::text`).
+    let text_modules = facade.text_members.iter().filter_map(|(path, _)| {
+        path.rsplit_once("::")
+            .map(|(module, _)| Box::<str>::from(module))
+    });
     let modules = facade
         .traits
         .iter()
         .cloned()
         .chain(macro_modules)
+        .chain(text_modules)
         .collect::<Vec<_>>();
     for path in &modules {
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
@@ -1882,6 +1920,38 @@ fn build(
                 builder.item(item)?;
             }
         }
+    }
+    // A trait's method its impl for `&str` gives Rawr's string: a function
+    // whose first input is the string (`surface::text`).
+    for (path, associated) in &facade.text_members {
+        let Representability::Invocation(plan) = associated.representability() else {
+            continue;
+        };
+        if plan.receiver()
+            != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
+            || !names_declared(*associated, declared)
+        {
+            continue;
+        }
+        let selector_bytes = associated.identity().selector().retained_bytes();
+        let bytes = selector_bytes.and_then(|selector| {
+            std::mem::size_of::<host::item::Definition>()
+                .checked_add(unqualified_path_bytes(path)?)?
+                .checked_add(selector)
+        });
+        allocation.retain_checked(Some(1), bytes)?;
+        let receiver = types.convert(
+            &representability::convert::Type::Builtin(
+                representability::convert::Builtin::StaticStr,
+            ),
+            &[],
+            allocation,
+        )?;
+        let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
+        builder.item(
+            host::item::Definition::function(path, signature)?
+                .imported(associated.identity().selector().try_clone()?),
+        )?;
     }
     // The headers of the traits the program names and of the crate's trait
     // impls, which fix a type a trait's defaults leave open (D604). A header
@@ -2493,6 +2563,16 @@ fn signature(
     signature: &representability::signature::Signature,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<host::signature::Definition, Error> {
+    signature_with(types, signature, None, allocation)
+}
+
+/// `signature`, with `receiver` as its first input when given.
+fn signature_with(
+    types: &Types,
+    signature: &representability::signature::Signature,
+    receiver: Option<host::type_ref::Type>,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<host::signature::Definition, Error> {
     let bytes = signature.parameters().iter().try_fold(
         std::mem::size_of::<host::signature::Definition>(),
         |bytes, parameter| bytes.checked_add(parameter.name().len()),
@@ -2508,6 +2588,9 @@ fn signature(
         if parameter.kind() == representability::signature::Kind::Type {
             builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
         }
+    }
+    if let Some(receiver) = receiver {
+        builder.try_parameter(receiver)?;
     }
     for input in signature.inputs() {
         builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;

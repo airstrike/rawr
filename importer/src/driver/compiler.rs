@@ -143,6 +143,9 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// `Type::member` paths Rawr demanded: a member the type may have
     /// through a trait it implements.
     member_demands: Vec<(DefId, String)>,
+    /// `Trait::member` paths Rawr demanded, as `Widget::_boxed(..)` of a
+    /// string: the member of each of the trait's impls for `&str`.
+    trait_member_demands: Vec<(DefId, String)>,
     /// The roots of crates a macro's `$crate` demanded (`crate_segment`),
     /// named under their segment after extraction drains.
     crate_roots: Vec<(DefId, String)>,
@@ -1338,6 +1341,7 @@ fn extract<'tcx>(
         scalar_predicate_proofs: BTreeMap::new(),
         active_demand: Demand::ShapeOnly,
         member_demands: Vec::new(),
+        trait_member_demands: Vec::new(),
         crate_roots: Vec::new(),
         applications: BTreeMap::new(),
         instance_aliases: None,
@@ -1369,6 +1373,7 @@ fn extract<'tcx>(
         }
         builder.drain_scheduler()?;
         builder.resolve_member_demands()?;
+        builder.resolve_trait_member_demands()?;
         builder.drain_scheduler()?;
         builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, true)?;
         // A macro's `$crate` paths, under the segment naming its crate.
@@ -2415,6 +2420,75 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .try_reserve(1)
                     .map_err(|error| format!("member demand allocation failed: {error}"))?;
                 self.member_demands.push((def_id, member.clone()));
+            } else if kind == DefKind::Trait
+                && let [member] = rest
+                && member != "*"
+            {
+                // `Trait::member`: the member of the trait's impls for a
+                // type Rawr holds as its own string.
+                self.budget.items(1)?;
+                self.trait_member_demands
+                    .try_reserve(1)
+                    .map_err(|error| format!("member demand allocation failed: {error}"))?;
+                self.trait_member_demands.push((def_id, member.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Each demanded `Trait::member`: the member of each of the trait's
+    /// impls for `&str`, as iced's `impl Widget<..> for &str` gives
+    /// `Widget::_boxed("label")` that `column!` writes. Rawr's string is
+    /// such a receiver, pinned as `&'static str`.
+    fn resolve_trait_member_demands(&mut self) -> Result<(), String> {
+        let tcx = self.tcx;
+        let mut demands = std::mem::take(&mut self.trait_member_demands);
+        demands.sort_unstable_by_key(|(trait_id, member)| {
+            (
+                tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0,
+                member.clone(),
+            )
+        });
+        demands.dedup();
+        for (trait_id, member) in demands {
+            let name = Symbol::intern(&member);
+            let Some(trait_item) = tcx
+                .associated_items(trait_id)
+                .filter_by_name_unhygienic(name)
+                .find(|item| item.is_fn())
+                .map(|item| item.def_id)
+            else {
+                continue;
+            };
+            let mut implementations = Vec::new();
+            for impl_id in tcx.all_impls(trait_id) {
+                self.budget.edge(1)?;
+                let Some(reference) = tcx.impl_opt_trait_ref(impl_id) else {
+                    continue;
+                };
+                let reference = reference.instantiate_identity().skip_norm_wip();
+                if matches!(
+                    reference.self_ty().kind(),
+                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
+                ) && tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                {
+                    implementations
+                        .try_reserve(1)
+                        .map_err(|error| format!("member demand allocation failed: {error}"))?;
+                    implementations.push((impl_id, reference.args));
+                }
+            }
+            implementations.sort_unstable_by_key(|(impl_id, _)| {
+                tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+            });
+            for (impl_id, arguments) in implementations {
+                let obligation = AssociatedObligation {
+                    kind: AssociatedDemandKind::SelectedMember,
+                    trait_item: Some(trait_item),
+                    arguments: Some(arguments),
+                    param_env: tcx.param_env(impl_id),
+                };
+                self.request_implementation(impl_id, trait_id, Some(obligation))?;
             }
         }
         Ok(())

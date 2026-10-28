@@ -121,6 +121,37 @@ impl Clone for Proxy {
     }
 }
 
+impl PartialEq for Proxy {
+    /// The script type's own `PartialEq` where the program wrote one, and
+    /// else as a derived one compares: Rawr's checker holds a script type
+    /// a native bound asks `PartialEq` of to having it.
+    fn eq(&self, other: &Self) -> bool {
+        let (lhs, rhs) = (self.value.flatten_clone(), other.value.flatten_clone());
+        match crate::future::equal(&lhs, &rhs) {
+            Some(Ok(equal)) => equal,
+            Some(Err(error)) => panic!("{}", crate::future::message(&error)),
+            None => crate::host::value::structural_equal(&lhs, &rhs),
+        }
+    }
+}
+
+impl Proxy {
+    /// The value's text as its script type's own `Display` writes it, as
+    /// a runner's newtype's `Display` gives it, and else its `Debug` text.
+    ///
+    /// # Errors
+    ///
+    /// When the formatter fails.
+    pub fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.value.flatten_clone();
+        match crate::future::display(&value) {
+            Some(Ok(text)) => f.write_str(&text),
+            Some(Err(error)) => panic!("{}", crate::future::message(&error)),
+            None => std::fmt::Debug::fmt(self, f),
+        }
+    }
+}
+
 impl std::fmt::Debug for Proxy {
     /// The script type's derived `Debug` text.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
