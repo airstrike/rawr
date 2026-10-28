@@ -1625,11 +1625,56 @@ fn attest_input(
     value: Dynamic,
     witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
 ) -> Result<Dynamic, Error> {
-    if let (Some(Some(witness)), Some(handle)) = (
-        witness,
-        value.read_lock::<NativeHandle>().map(|handle| handle.clone()),
-    ) {
+    match witness {
+        Some(Some(witness)) => attest_nested(arena, value, witness),
+        _ => Ok(value),
+    }
+}
+
+/// `value` with each native value in it attested, as its place in
+/// `witness` gives: inside an `Option`, a `Result` or an array too, as the
+/// `Vec<Family>` of iced's `Result<Vec<Family>, Error>` is.
+#[allow(dead_code)]
+fn attest_nested(
+    arena: &mut Arena,
+    mut value: Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+) -> Result<Dynamic, Error> {
+    if let Some(handle) = value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
         arena.attest(handle, witness.clone())?;
+        return Ok(value);
+    }
+    if __rawr_internal::option::is(&value) {
+        return Ok(match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {
+            Some(inner) => match witness.argument_witness(0) {
+                Some(element) => __rawr_internal::option::some(attest_nested(arena, inner, &element)?),
+                None => __rawr_internal::option::some(inner),
+            },
+            None => __rawr_internal::option::none(),
+        });
+    }
+    if __rawr_internal::result::is(&value) {
+        return Ok(match __rawr_internal::result::take(&mut value).ok_or(Error::TypeMismatch)? {
+            Ok(inner) => __rawr_internal::result::ok(match witness.argument_witness(0) {
+                Some(ok) => attest_nested(arena, inner, &ok)?,
+                None => inner,
+            }),
+            Err(inner) => __rawr_internal::result::err(match witness.argument_witness(1) {
+                Some(err) => attest_nested(arena, inner, &err)?,
+                None => inner,
+            }),
+        });
+    }
+    if value.is_array() {
+        let Some(element) = witness.argument_witness(0) else {
+            return Ok(value);
+        };
+        let items = value.into_array().map_err(|_| Error::TypeMismatch)?;
+        return items
+            .into_iter()
+            .map(|item| attest_nested(arena, item, &element))
+            .collect::<Result<Vec<_>, Error>>()
+            .map(Dynamic::from_array);
     }
     Ok(value)
 }
@@ -9200,6 +9245,7 @@ fn render_slot(
     let mut restores = String::new();
     let mut pins = None;
     let mut native = false;
+    let mut lends = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
         let name = format!("input_{position}");
         match input {
@@ -9222,6 +9268,42 @@ fn render_slot(
                 values.push(format!("{name}.0.lend()"));
                 pins.get_or_insert_with(|| format!("{name}.0.pins()"));
             }
+            // A shared borrow of a native value, as iced's `pick_list`
+            // gives `font::Family::to_string` a `&Family`: a copy, as a
+            // closure's borrowed native input crosses
+            // (`render_callable_closure`), so script code reads it as the
+            // value it is, `Display` too.
+            convert::Type::Borrowed { mutable: false, ty }
+                if family.is_none()
+                    && matches!(**ty, convert::Type::Nominal { .. })
+                    && !is_value(ty)
+                    && !carries_lifetime(ty) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                parameters.push(format!("{name}: &{rust}"));
+                let mut converted = String::new();
+                render_to_dynamic(ty, &format!("Clone::clone({name})"), 0, &mut converted)?;
+                native = true;
+                values.push(format!(
+                    "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
+                ));
+            }
+            // A native value the function borrows `&mut`: lent for the
+            // call alone, as a script impl's function is (D558.3).
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if family.is_none()
+                && matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && !carries_lifetime(ty) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let borrow = if *borrowed_mutably { "&mut " } else { "&" };
+                parameters.push(format!("{name}: {borrow}{rust}"));
+                values.push(lent_value(position, *borrowed_mutably, &rust));
+                lends.push((position, *borrowed_mutably, rust));
+            }
             convert::Type::Borrowed { .. } => {
                 return Err(drift(
                     "a slot's input borrows a value that isn't a script value",
@@ -9232,9 +9314,9 @@ fn render_slot(
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
                 render_to_dynamic(input, &name, 0, &mut converted)?;
-                let crate_value = matches!(input, convert::Type::Nominal { .. })
-                    && !is_value(input)
-                    && !is_duration(input);
+                // A crate value, alone or inside an `Option`, a `Result`,
+                // a `Vec` or a tuple, enters the arena.
+                let crate_value = holds_native(input);
                 native |= crate_value;
                 // A native value takes the script function's parameter's
                 // witness, so script code reads it as its type, as a
@@ -9338,17 +9420,24 @@ fn render_slot(
             } else {
                 String::new()
             };
+            // A conversion that gives its errors back by `?`, as an
+            // `Option` output's does, runs in a closure of its own.
             let converted = if native_output {
                 in_arena(&converted)
             } else {
-                format!("({converted})")
+                format!("(move || {converted})()")
             };
+            let invoked = format!(
+                "let mut values = {values};
+        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+        value"
+            );
+            let (items, invoked) = lent_around(&lends, invoked);
             (
                 "",
                 rust,
                 format!(
-                    "{deferred}let mut values = {values};
-        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+                    "{items}{deferred}let value = {{ {invoked} }};
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
                 ),
             )
@@ -11841,15 +11930,8 @@ fn render_impl_function(
                 && !carries_lifetime(ty) =>
             {
                 let target = concrete_type(ty).ok_or(drift("a script impl function's input"))?;
-                lends.push((position, *borrowed_mutably, target.clone()));
-                values.push(format!(
-                    "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
-                    if *borrowed_mutably {
-                        format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
-                    } else {
-                        "None".to_owned()
-                    }
-                ));
+                values.push(lent_value(position, *borrowed_mutably, &target));
+                lends.push((position, *borrowed_mutably, target));
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
@@ -11911,15 +11993,33 @@ fn render_impl_function(
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
     );
     // Each borrowed native value is lent around the call, innermost last.
+    let (items, wrapped) = lent_around(&lends, call);
+    call = wrapped;
+    Ok(format!(
+        "    fn {}({}) -> {rust} {{
+{items}        {call}
+    }}
+",
+        function.name(),
+        parameters.join(", ")
+    ))
+}
+
+/// The call `call` with each borrowed native value of `lends` (its input's
+/// position, whether it is `&mut`, and its Rust type) lent around it,
+/// innermost last, and the items that reach each one (D558.3): what a script
+/// impl function and a slot write where native code lends them a value.
+fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String) {
+    let mut call = call;
     let mut items = String::new();
     for (position, borrowed_mutably, target) in lends.iter().rev() {
-        let (lend, input) = if *borrowed_mutably {
-            ("lend", format!("input_{position}"))
+        let lend = if *borrowed_mutably {
+            "lend"
         } else {
-            ("lend_ref", format!("input_{position}"))
+            "lend_ref"
         };
         call = format!(
-            "__rawr_internal::scope::{lend}::<Lend{position}, _>({input}, |lent_{position}| {{
+            "__rawr_internal::scope::{lend}::<Lend{position}, _>(input_{position}, |lent_{position}| {{
         {call}
         }})"
         );
@@ -11946,14 +12046,19 @@ fn render_impl_function(
             ));
         }
     }
-    Ok(format!(
-        "    fn {}({}) -> {rust} {{
-{items}        {call}
-    }}
-",
-        function.name(),
-        parameters.join(", ")
-    ))
+    (items, call)
+}
+
+/// The script value of a native value lent at `position` (`lent_around`).
+fn lent_value(position: usize, borrowed_mutably: bool, target: &str) -> String {
+    format!(
+        "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
+        if borrowed_mutably {
+            format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
+        } else {
+            "None".to_owned()
+        }
+    )
 }
 
 /// The scope families the adapters named, as the `rawr_families` module.
@@ -12344,13 +12449,22 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
 /// with a script `&[Language]`. Rawr's array holds no Rust layout, so the
 /// runner makes the proxies whichever way it passes them; it passes them
 /// as an owned `Vec`, which borrows as the slice does and needs no
-/// lifetime to borrow at.
+/// lifetime to borrow at. So is a slice of crate values, as iced's text
+/// example fills it with `self.families.as_slice()` of `font::Family`:
+/// Rawr's array holds each in its own arena slot, so the `Vec` holds
+/// copies, as `Arena::take` clones a `Clone` value out.
 fn script_slice(ty: &convert::Type) -> Option<&convert::Type> {
     match ty {
         convert::Type::Sequence {
             element,
             owned: false,
-        } if matches!(element.as_ref(), convert::Type::Script { .. }) => Some(element),
+        } if matches!(
+            element.as_ref(),
+            convert::Type::Script { .. } | convert::Type::Nominal { .. }
+        ) && !is_duration(element) =>
+        {
+            Some(element)
+        }
         _ => None,
     }
 }

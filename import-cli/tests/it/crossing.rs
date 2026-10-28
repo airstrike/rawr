@@ -174,6 +174,23 @@ fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
     );
 }
 
+/// iced's text: a `Task<Result<Vec<Family>, Error>>` of a crate enum is
+/// mapped to a message on another thread, `and_then` takes the bounded
+/// generic `Task::done`, `listen_with` takes a closure where it takes a
+/// function pointer, and `pick(..)` takes a slice of the crate enum with
+/// `Family::to_string`, which borrows each option. The output is `cargo
+/// run`'s.
+#[test]
+fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
+    let (rawr, cargo) = both_printed("crossing-fonts", "fonts.rs", "Mono");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("boot message FamiliesListed(Ok([Monospace, Serif]))\nheard Rescaled(2.0)")
+            && rawr.ends_with("last view pad 0 <Mono: *Mono|Serif> \"Mono at 2 in 7\""),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

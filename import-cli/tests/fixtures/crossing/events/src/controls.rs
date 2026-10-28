@@ -293,6 +293,27 @@ impl<T> Subscription<T> {
     }
 }
 
+/// An event a program may listen for, as iced's `Event`.
+#[derive(Debug, Clone, Copy)]
+pub enum Signal {
+    /// The window's scale factor changed.
+    Rescaled(f32),
+    /// Something else happened.
+    Moved,
+}
+
+/// The messages `f` makes of each event, as iced's
+/// `event::listen_with(fn(Event, Status, window::Id) -> Option<Message>)`
+/// takes a function pointer.
+pub fn listen_with<Message>(f: fn(Signal, bool, u32) -> Option<Message>) -> Subscription<Message> {
+    Subscription {
+        messages: [Signal::Moved, Signal::Rescaled(2.0)]
+            .into_iter()
+            .filter_map(|signal| f(signal, false, 1))
+            .collect(),
+    }
+}
+
 /// The first `count` ticks of a clock, as iced's `time::every`.
 pub fn ticks(count: u32) -> Subscription<u32> {
     Subscription {

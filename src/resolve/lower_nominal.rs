@@ -1485,6 +1485,31 @@ fn imported_surface_type(
                 arguments: converted.into_boxed_slice(),
             }
         }
+        // An `Option` or a `Result` holding a crate value is Rust's own
+        // (`instance_surface_type`).
+        Ty::Option(element)
+            if instance_surface_type(inference, models, ty)
+                .is_some_and(|ty| matches!(ty, Type::Option(_))) =>
+        {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Option(Box::new(imported_surface_type(
+                inference, models, element, operation, imported,
+            )?))
+        }
+        Ty::Result(ok, err)
+            if instance_surface_type(inference, models, ty)
+                .is_some_and(|ty| matches!(ty, Type::Result(..))) =>
+        {
+            imported.retain_checked(Some(2), Some(2 * std::mem::size_of::<Type>()))?;
+            Type::Result(
+                Box::new(imported_surface_type(
+                    inference, models, ok, operation, imported,
+                )?),
+                Box::new(imported_surface_type(
+                    inference, models, err, operation, imported,
+                )?),
+            )
+        }
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
@@ -1650,6 +1675,24 @@ fn instance_surface_type(
                 }) =>
         {
             Type::Tuple(converted)
+        }
+        // An `Option` or a `Result` that holds a crate value is Rust's own,
+        // as iced's `font::list()` gives `Task<Result<Vec<Family>, Error>>`
+        // and `.map(Result::ok)` takes it: native code holds the crate
+        // value as itself.
+        Ty::Option(element)
+            if let Some(element) =
+                instance_surface_type(inference, models, element).filter(holds_crate_value) =>
+        {
+            Type::Option(Box::new(element))
+        }
+        Ty::Result(ok, err)
+            if let (Some(ok), Some(err)) = (
+                instance_surface_type(inference, models, ok),
+                instance_surface_type(inference, models, err),
+            ) && (holds_crate_value(&ok) || holds_crate_value(&err)) =>
+        {
+            Type::Result(Box::new(ok), Box::new(err))
         }
         Ty::Array { element, .. }
             if let Some(element) = instance_surface_type(inference, models, element)

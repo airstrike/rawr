@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 52;
+const CLASSIFIER_VERSION: u32 = 53;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5327,6 +5327,12 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.abi() != "\"Rust\"" {
             return Err(representability::reject::Kind::ForeignAbi.into());
         }
+        let pointers = self.pointer_callables(signature, generics);
+        let (signature, generics) = pointers
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         let opens_copies = self.late_binders_open_copies(signature);
         let borrows_receiver = borrows_receiver(signature);
         let outer_scope = self
@@ -5335,6 +5341,144 @@ impl<P: api::Phase> Context<'_, P> {
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
         self.scope_lifetimes.set(outer_scope);
         classified
+    }
+
+    /// `signature` and `generics` with each input that is a safe Rust
+    /// function pointer of other than one input, as iced's
+    /// `event::listen_with(f: fn(Event, Status, window::Id) ->
+    /// Option<Message>)` takes, read as a parameter `impl Fn(..) -> R` of
+    /// its own. A script function or a closure that captures nothing
+    /// fills it as a slot, a function item that coerces to the pointer
+    /// (D594), and so does a crate function. A pointer of one input stays
+    /// the function item it is (`convert_input`). `None` when there is none.
+    fn pointer_callables(
+        &self,
+        signature: &model::Signature,
+        generics: &model::Generics,
+    ) -> Option<(model::Signature, model::Generics)> {
+        fn pointer(ty: &model::Type) -> Option<&model::Signature> {
+            match ty {
+                model::Type::FunctionPointer(pointer)
+                    if pointer.safety() == model::Safety::Safe
+                        && !pointer.async_function()
+                        && !pointer.variadic()
+                        && pointer.abi() == "\"Rust\""
+                        && pointer.binders().len() == 0
+                        && matches!(pointer.receiver(), model::Receiver::None)
+                        && pointer.inputs().len() != 1 =>
+                {
+                    Some(pointer)
+                }
+                _ => None,
+            }
+        }
+        if !signature.inputs().any(|input| pointer(input).is_some()) {
+            return None;
+        }
+        let owner = generics.parameters().next()?.owner().clone();
+        let (callable, once, output) = self.callable_traits()?;
+        let mut next = generics
+            .parameters()
+            .map(model::Parameter::index)
+            .filter(|index| *index & representability::signature::FUTURE_OUTPUT == 0)
+            .max()
+            .map_or(0, |index| index + 1);
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        let mut predicates = generics.predicates().cloned().collect::<Vec<_>>();
+        let mut inputs = Vec::new();
+        for input in signature.inputs() {
+            let Some(pointer) = pointer(input) else {
+                inputs.push(input.clone());
+                continue;
+            };
+            let index = next;
+            next += 1;
+            let parameter = model::Type::Parameter {
+                owner: owner.clone(),
+                index,
+            };
+            let arguments = model::Type::Tuple(pointer.inputs().cloned().collect());
+            parameters.push(model::Parameter::new(
+                owner.clone(),
+                index,
+                format!("impl Fn#{index}").into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ));
+            predicates.push(model::Predicate::Bound {
+                ty: parameter.clone(),
+                bound: model::Bound::Trait {
+                    trait_id: callable.clone(),
+                    arguments: Box::from([model::Argument::Type(arguments.clone())]),
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                },
+            });
+            // A function pointer holds no borrow of its own.
+            predicates.push(model::Predicate::TypeOutlives {
+                ty: parameter.clone(),
+                lifetime: model::Lifetime::Static,
+            });
+            predicates.push(model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection {
+                    trait_id: once.clone(),
+                    associated: output.clone(),
+                    arguments: Box::from([
+                        model::Argument::Type(parameter.clone()),
+                        model::Argument::Type(arguments),
+                    ]),
+                },
+                ty: pointer.output().clone(),
+            });
+            inputs.push(parameter);
+        }
+        let rewritten = model::Signature::new(
+            signature.safety(),
+            signature.const_function(),
+            signature.async_function(),
+            signature.abi().into(),
+            signature.variadic(),
+            signature.binders().cloned().collect(),
+            signature.receiver().clone(),
+            inputs.into_boxed_slice(),
+            signature.output().clone(),
+        )
+        .with_guard(signature.guard().cloned());
+        Some((
+            rewritten,
+            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
+        ))
+    }
+
+    /// `core`'s `Fn` and `FnOnce` and `FnOnce::Output`, where the graph
+    /// holds them.
+    fn callable_traits(
+        &self,
+    ) -> Option<(
+        api::identity::Definition,
+        api::identity::Definition,
+        api::identity::Definition,
+    )> {
+        let mut callable = None;
+        let mut once = None;
+        for definition in self.graph.definitions() {
+            let id = definition.id();
+            if self.is_core_trait(id, "Fn") {
+                callable = Some(id.clone());
+            } else if self.is_core_trait(id, "FnOnce") {
+                once = Some(id.clone());
+            }
+        }
+        let once = once?;
+        let output = self.graph.definitions().find(|definition| {
+            let path = definition.display_path().collect::<Vec<_>>();
+            path.last() == Some(&"Output")
+                && (matches!(definition.owner(), model::Owner::Definition(owner) if *owner == once)
+                    || path.iter().rev().nth(1) == Some(&"FnOnce"))
+        })?;
+        Some((callable?, once, output.id().clone()))
     }
 
     fn function_with(
@@ -5757,6 +5901,14 @@ impl<P: api::Phase> Context<'_, P> {
                     Type::Option(Box::new(self.convert(element)?))
                 } else if let Some((ok, err)) = result_elements(definition, arguments) {
                     Type::Result(Box::new(self.convert(ok)?), Box::new(self.convert(err)?))
+                } else if let Some(element) = vec_element(definition, arguments) {
+                    // A `Vec<T>`, as iced's `font::list()` gives inside a
+                    // `Task<Result<Vec<Family>, Error>>`: Rawr's array,
+                    // which generated code names as the `Vec` it is.
+                    Type::Sequence {
+                        element: Box::new(self.convert(element)?),
+                        owned: true,
+                    }
                 } else {
                     definition_is_publishable_nominal(definition)?;
                     let mut converted = Vec::new();
