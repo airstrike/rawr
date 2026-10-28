@@ -354,7 +354,9 @@ fn a_cargo_script_runs_with_the_marker_after_its_frontmatter() {
     assert_eq!(handed.status.code(), Some(1));
     let text = stderr(&handed);
     assert!(
-        text.contains("which rawr-import serves, and it is not installed"),
+        text.contains(
+            "this program uses Rust dependencies in its frontmatter, which rawr-import serves, and it is not installed"
+        ),
         "{text}"
     );
     // Nothing of either script's is kept beside it.
