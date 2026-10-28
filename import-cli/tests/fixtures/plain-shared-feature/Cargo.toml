@@ -1,0 +1,13 @@
+[package]
+name = "plain-shared-feature"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# rawr depends on ahash too, with `compile-time-rng`, which brings in
+# `const-random`. This project leaves that feature off.
+ahash = { version = "0.8.12", default-features = false, features = ["std"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

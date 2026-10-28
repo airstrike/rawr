@@ -307,7 +307,17 @@ fn compile<B>(
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
     let sync = |runtime: Option<&crate::runner::runtime::Runtime>| {
-        let sources = runner_sources(manifest, mirrored.as_deref(), runtime, &level);
+        let mut sources = runner_sources(manifest, mirrored.as_deref(), runtime, &level);
+        // The lock cargo settled this pruned lock to, at an earlier build.
+        if runtime.is_some()
+            && let Some(settled) = settled_lock(&work, &sources)
+        {
+            for (path, bytes) in &mut sources {
+                if *path == "Cargo.lock" {
+                    *bytes = std::borrow::Cow::Owned(settled.clone().into_bytes());
+                }
+            }
+        }
         crate::bridge::generate::sync_sources(
             &work,
             sources
@@ -322,6 +332,22 @@ fn compile<B>(
         })
     };
     sync(runtime.as_ref())?;
+    if let Some(runtime) = &runtime {
+        let sources = runner_sources(manifest, mirrored.as_deref(), Some(runtime), &level);
+        let file = |name: &str| {
+            sources
+                .iter()
+                .find(|(path, _)| *path == name)
+                .map_or(&[][..], |(_, bytes)| bytes.as_ref())
+        };
+        runtime.settle_lock(
+            &work,
+            context.project(),
+            context.environment(),
+            file("Cargo.toml"),
+            file("Cargo.lock"),
+        )?;
+    }
     let started = std::time::SystemTime::now();
     let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
         .and_then(|output| output.checked(crate::process::Program::Cargo));
@@ -501,6 +527,18 @@ fn runner_sources<'a, B>(
             (path, bytes)
         })
         .collect()
+}
+
+/// The settled lock for the pruned manifest and lock in `sources`
+/// (`Runtime::settle_lock`).
+fn settled_lock(work: &Path, sources: &[(&str, std::borrow::Cow<'_, [u8]>)]) -> Option<String> {
+    let file = |name: &str| {
+        sources
+            .iter()
+            .find(|(path, _)| *path == name)
+            .map(|(_, bytes)| bytes.as_ref())
+    };
+    crate::runner::runtime::Runtime::settled_lock(work, file("Cargo.toml")?, file("Cargo.lock")?)
 }
 
 fn materialize<B>(
