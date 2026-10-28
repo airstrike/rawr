@@ -21,3 +21,4 @@ pub(crate) const ENTRY_MODULE: &str = entry::MODULE;
 pub use error::{Category, Error};
 pub use graph::{Graph, RustModule};
 pub use island::Shape;
+pub use manifest::script::{script_check, ScriptCheck};

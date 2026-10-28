@@ -5,6 +5,8 @@
 //! reports its errors after Rawr's, and `rawr run` keeps a `cargo check`
 //! going in the background (see [`Background`]) without holding up a
 //! reload. Cargo runs with the crate's own manifest and target directory.
+//! A script is checked as a package rawr writes from its frontmatter (see
+//! [`rawr::package::ScriptCheck`]).
 //!
 //! The command is `$CARGO` when set (Cargo sets it for `cargo rawr`), else
 //! `cargo` on `PATH`. Without it Rawr says so once and goes on.
@@ -24,13 +26,14 @@ pub const DEBOUNCE: Duration = Duration::from_millis(300);
 const POLL: Duration = Duration::from_millis(25);
 
 /// The `Cargo.toml` of the crate `graph` loaded, when it is a Cargo crate
-/// of marked `.rs` files. A script's manifest is the one rawr expands
-/// from its frontmatter, and `cargo check` doesn't run beside a script.
+/// of marked `.rs` files, or a script's own file: its manifest is its
+/// frontmatter, and each check reads it again (see
+/// [`rawr::package::ScriptCheck`]).
 #[must_use]
 pub fn manifest(graph: &rawr::package::Graph) -> Option<PathBuf> {
     let package = graph.entry_package();
     if package.is_script() {
-        return None;
+        return Some(graph.entry_source().path().to_path_buf());
     }
     let manifest = package.root().join("Cargo.toml");
     manifest.is_file().then_some(manifest)
@@ -207,24 +210,54 @@ struct Running {
 }
 
 impl Running {
-    fn start(program: &OsString, manifest: &Path) -> Result<Self, String> {
-        settle_lock(program, manifest);
-        let mut child = Command::new(program)
-            .args(["check", "--message-format=json", "--manifest-path"])
-            .arg(manifest)
+    /// Start cargo, or say why it didn't start: cargo is unavailable, or a
+    /// script's manifest failed as cargo's would.
+    fn start(program: &OsString, manifest: &Path) -> Result<Self, Status> {
+        let mut command = Command::new(program);
+        if manifest
+            .extension()
+            .is_some_and(|extension| extension == "rs")
+        {
+            // A script: its check package, from the script as it is now.
+            let check = rawr::package::script_check(manifest).map_err(|reason| {
+                Status::Finished(Outcome {
+                    failure: Some(reason),
+                    ..Outcome::default()
+                })
+            })?;
+            command
+                .args(["rustc", "--profile", "check", "--message-format=json"])
+                .arg("--bin")
+                .arg(&check.bin)
+                .arg("--manifest-path")
+                .arg(&check.manifest)
+                .arg("--")
+                .arg(&check.remap);
+            // The script area's Cargo config gives every script one build
+            // directory, as for its runner.
+            if let Some(directory) = check.manifest.parent() {
+                command.current_dir(directory);
+            }
+        } else {
+            settle_lock(program, manifest);
+            command
+                .args(["check", "--message-format=json", "--manifest-path"])
+                .arg(manifest);
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
+                Status::Unavailable(if error.kind() == std::io::ErrorKind::NotFound {
                     "cargo is not on PATH. Rawr skipped `cargo check`.".to_owned()
                 } else {
                     format!(
                         "cannot start `{}`: {error}. Rawr skipped `cargo check`.",
                         program.to_string_lossy()
                     )
-                }
+                })
             })?;
         let stdout = read_all(child.stdout.take());
         let stderr = read_all(child.stderr.take());
@@ -268,7 +301,7 @@ fn read_all(pipe: Option<impl std::io::Read + Send + 'static>) -> thread::JoinHa
 
 /// A `cargo check` started now and read later, for `rawr check`: cargo
 /// works while Rawr checks.
-pub struct Pending(Result<Running, String>);
+pub struct Pending(Result<Running, Status>);
 
 impl Pending {
     /// Start `cargo check` on the crate of `manifest`.
@@ -288,7 +321,7 @@ impl Pending {
     pub fn finish(self) -> Status {
         match self.0 {
             Ok(running) => Status::Finished(running.finish(None)),
-            Err(reason) => Status::Unavailable(reason),
+            Err(status) => status,
         }
     }
 }
@@ -410,10 +443,13 @@ impl Background {
                         due = None;
                         match Running::start(&program, &manifest) {
                             Ok(started) => running = Some(started),
-                            Err(reason) => {
+                            Err(status) => {
                                 // Said once: a missing cargo stays missing.
-                                report(Status::Unavailable(reason));
-                                break;
+                                let unavailable = matches!(status, Status::Unavailable(_));
+                                report(status);
+                                if unavailable {
+                                    break;
+                                }
                             }
                         }
                     }

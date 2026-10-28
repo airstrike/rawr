@@ -13,10 +13,10 @@ use crate::owner;
 use crate::plain::Plain;
 
 const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
-`rawr` hands it a program with Rust dependencies in Cargo.toml, or native\n\
-modules. The program runs in a runner that links the rawr crate and the\n\
-program's own dependencies, built in the project's build directory beside\n\
-`cargo build`.\n\n\
+`rawr` hands it a program with Rust dependencies in Cargo.toml or a script's\n\
+frontmatter, or native modules. The program runs in a runner that links the\n\
+rawr crate and the program's own dependencies, built in the project's build\n\
+directory beside `cargo build`.\n\n\
 Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
 

@@ -17,6 +17,8 @@ pub struct Facts {
     roots: BTreeSet<ImmutableString>,
     free: BTreeSet<ImmutableString>,
     rust_import: bool,
+    /// The program is a cargo script, whose manifest is its frontmatter.
+    script: bool,
 }
 
 /// What brings a layer in, as the layer declares it: a program naming one
@@ -65,7 +67,8 @@ impl Claims {
     }
 
     /// What in `facts` brings the extension in, as a user reads it: a crate
-    /// quoted (`` `name` ``) or `Rust dependencies in Cargo.toml`.
+    /// quoted (`` `name` ``), `Rust dependencies in Cargo.toml`, or for a
+    /// script, `Rust dependencies in its frontmatter`.
     #[must_use]
     pub fn reason(&self, facts: &Facts) -> Option<String> {
         self.crates
@@ -73,21 +76,31 @@ impl Claims {
             .find(|name| facts.names_crate(name))
             .map(|name| format!("`{name}`"))
             .or_else(|| {
-                self.sections
+                let section = self
+                    .sections
                     .iter()
-                    .find(|section| facts.declares(section))
-                    .map(|section| section_reason(section))
+                    .find(|section| facts.declares(section))?;
+                let manifest = if facts.script {
+                    "its frontmatter"
+                } else {
+                    "Cargo.toml"
+                };
+                Some(if section == "rust" {
+                    format!("Rust dependencies in {manifest}")
+                } else {
+                    format!("`{section}` in {manifest}")
+                })
             })
     }
 }
 
-/// A section that brings a layer in, as a user reads it.
+/// A section that brings a layer in, as a user reads it of any program.
 #[must_use]
 pub fn section_reason(section: &str) -> String {
     if section == "rust" {
-        "Rust dependencies in Cargo.toml".to_owned()
+        "Rust dependencies in Cargo.toml or a script's frontmatter".to_owned()
     } else {
-        format!("`{section}` in Cargo.toml")
+        format!("`{section}` in Cargo.toml or a script's frontmatter")
     }
 }
 
@@ -156,6 +169,7 @@ impl Facts {
             free: names.used.difference(&names.declared).cloned().collect(),
             roots: names.roots,
             rust_import: false,
+            script: false,
         }
     }
 
@@ -224,8 +238,10 @@ impl Sheet {
         let dropped = !self.cells.is_empty();
         self.cells = cells;
         let rust_import = graph.declares_rust_import();
-        let mut changed = rust_import != self.facts.rust_import;
+        let script = graph.entry_package().is_script();
+        let mut changed = rust_import != self.facts.rust_import || script != self.facts.script;
         self.facts.rust_import = rust_import;
+        self.facts.script = script;
         if recomputed > 0 || dropped {
             let union = |set: fn(&Names) -> &BTreeSet<ImmutableString>| -> BTreeSet<_> {
                 self.cells

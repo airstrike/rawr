@@ -173,6 +173,7 @@ sum 5050</span></div>
 <h2 id="check">Checking</h2>
 <p><code>rawr check</code> checks a program without running it. Then it runs <code>cargo check</code>, because rawr&rsquo;s check accepts some code that rustc rejects. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
 <p><code>rawr run</code> runs <code>cargo check</code> beside the program. When <code>rawr run</code> ends with the program, cargo&rsquo;s errors are printed after it.</p>
+<p>A script is checked too, with your own <code>cargo</code>. rustc refuses a frontmatter block outside <code>cargo -Zscript</code>, so rawr checks a copy of the script with the block blanked, in the script&rsquo;s directory in rawr&rsquo;s home. rustc&rsquo;s errors name the script and its own lines.</p>
 
 <h2 id="who">Who runs a program</h2>
 <p><code>rawr</code> runs a program itself or hands it to an installed extension.</p>

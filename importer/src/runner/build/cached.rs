@@ -317,12 +317,7 @@ fn compile<B>(
     let copied = result.as_ref().ok().map(|messages| {
         // Cargo's JSON names the rawr crate's sources and the executable.
         crate::deps::prune_rawr(&build, messages);
-        crate::deps::prune_superseded(
-            &build,
-            messages,
-            started,
-            &work.join("incremental-directories"),
-        );
+        crate::deps::prune_superseded(&build, messages, started, &work);
         let destination = target.join("debug");
         let executable = runner_executable(messages).ok_or_else(|| {
             node::Error::Transform("the runner build named no runner executable".into())

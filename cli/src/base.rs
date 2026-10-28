@@ -99,7 +99,8 @@ impl Session {
 }
 
 /// What `claims` names, as a user reads it: the crates quoted (`` `name` ``)
-/// and the sections (`Rust dependencies in Cargo.toml`), joined by "or".
+/// and the sections (`Rust dependencies in Cargo.toml or a script's
+/// frontmatter`), joined by "or".
 #[must_use]
 pub fn uses(claims: &Claims) -> String {
     claims
