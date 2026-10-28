@@ -58,31 +58,6 @@ impl Retained {
     }
 }
 
-#[cfg(feature = "rustc-driver")]
-impl Build {
-    /// Each build script's results, by package id, as shared bindings
-    /// compare them with the project's build (`crate::bindings`).
-    pub(crate) fn script_results(&self) -> BTreeMap<String, Vec<crate::bindings::Script>> {
-        let mut results = BTreeMap::<String, Vec<_>>::new();
-        for script in &self.evidence.scripts {
-            let result = crate::bindings::Script::new(
-                script.cfg.iter().map(ToString::to_string),
-                script
-                    .environment
-                    .iter()
-                    .map(|(name, value)| (name.to_string(), value.to_string())),
-                &script.out_dir,
-            );
-            let entry = results.entry(script.package_id.to_string()).or_default();
-            if !entry.contains(&result) {
-                entry.push(result);
-                entry.sort_unstable();
-            }
-        }
-        results
-    }
-}
-
 #[cfg(test)]
 impl Build {
     pub(crate) fn fixture_storage(&self) -> [usize; 5] {

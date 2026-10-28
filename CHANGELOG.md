@@ -8,7 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 - Bindings are shared per machine. What rawr reads of a crate from a registry or a git commit is kept in `bindings/` in rawr's home, keyed by the crate alone. A later project, or script, that uses the crate reads it from there. When every crate a program uses is there, rawr runs no nightly build.
 - The first program that reaches a crate reads its whole public API, so a later program that uses other items of it needs no nightly build either. Each program still gets exactly the part of the API it names.
-- A build script that answers differently on rawr's nightly and on the project's toolchain keeps its crate's bindings in the project, and rawr says so. A shared entry whose build scripts disagree with the project's toolchain stops the run, naming the crate, and is removed.
+- A shared entry keeps the cfgs and generated files that the publishing project's build scripts gave. A later project whose build scripts give other results stops the run, naming the crate, and the entry is removed.
 - Entries unused for 30 days are removed when another is added, never while a run reads them. `rawr cache clean` removes those unused for an hour.
 
 ## 0.3.11 (2026-10-28)

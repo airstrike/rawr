@@ -32,7 +32,7 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
   <li>the format rawr reads crates in.</li>
 </ul>
 <p>A new rawr whose format is unchanged keeps the entries already there.</p>
-<p>A build script can give one answer on rawr&rsquo;s nightly and another on your toolchain. So rawr compares the results of every build script in a crate&rsquo;s dependencies once your build has run them. A crate whose scripts disagree keeps its bindings in the project, and rawr says so. A shared entry that disagrees with your toolchain stops the run, naming the crate, and is removed. The next run reads the crate again.</p>
+<p>A build script can read the project&rsquo;s environment. So an entry keeps what your build&rsquo;s build scripts gave for the crates compiled into the program, as far as it can change a crate&rsquo;s API. That is each script&rsquo;s cfgs and the files it generated. A later project&rsquo;s build must give the same. An entry whose scripts gave another project other results stops the run, naming the crate, and is removed. The next run reads the crate again.</p>
 <p>An entry unused for 30 days is removed when another is added, unless a run is reading it. Removal never delays a run. <code>rawr cache clean</code> removes entries unused for an hour.</p>
 <p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
@@ -66,7 +66,7 @@ fn main() {
 2 doubled is 4
 3 doubled is 6</span></div>
 </div>
-<p>The first run compiles the dependencies and the runner. For a new project that uses semver, that took about 13&nbsp;s on an Apple Silicon Mac. The first project on a toolchain also compiles <a href="#runtime">rawr&rsquo;s runtime</a> once for every project, which took about 2 minutes. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
+<p>The first run compiles the dependencies and the runner. For a new project that uses semver, that took about 7&nbsp;s on an Apple Silicon Mac, with semver&rsquo;s <a href="#bindings">bindings</a> already in rawr&rsquo;s home. The first project on a toolchain also compiles <a href="#runtime">rawr&rsquo;s runtime</a> once for every project, which took about 2 minutes. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
 <p>rawr uses the dependencies as Cargo resolves them. It reads only the items your code uses.</p>
 
 <h2 id="native">Native modules</h2>

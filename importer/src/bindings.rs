@@ -5,11 +5,16 @@
 //! alone (`extract::shared`). A run that finds every selected crate's table
 //! there replays them and runs no nightly build (D609.4). A run that misses
 //! extracts on the nightly, and publishes each shared table once the
-//! project's own build has run its build scripts and given the same results
-//! the nightly's gave: a crate whose build scripts answer differently on the
-//! two toolchains keeps its table in the project and says so. A table used
-//! from the home whose build scripts answer differently stops the run,
-//! naming the crate, and is removed.
+//! project's own build has run its build scripts, with what those scripts
+//! gave. A table used from the home whose build scripts give this project's
+//! build other results stops the run, naming the crate, and is removed.
+//!
+//! The comparison is between the two projects' own builds, not between the
+//! nightly and the project's toolchain. Some crates' build scripts detect
+//! the nightly (thiserror, slotmap), so the nightly sees those crates with
+//! other cfgs on every machine. A table extracted in the project has the
+//! same view (T275). What sharing adds is a table made under another
+//! project's environment, and the two builds' results show that.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,7 +27,7 @@ use sha2::{Digest as _, Sha256};
 use crate::extract::engine::home;
 
 /// The format of an entry's `meta.json`.
-pub(crate) const META_SCHEMA: u32 = 1;
+pub(crate) const META_SCHEMA: u32 = 2;
 const META: &str = "meta.json";
 /// Where the runner's build records its build scripts' results, in the
 /// runner's work directory.
@@ -32,9 +37,13 @@ const IDLE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// `rawr cache clean` removes entries unused this long.
 const CLEAN_IDLE: Duration = Duration::from_secs(60 * 60);
 
-/// One build script's results, as either toolchain's build gives them: its
-/// cfgs, its environment with its own `OUT_DIR` written `$OUT_DIR`, and a
-/// digest of the files it wrote there.
+/// One build script's results, as either toolchain's build gives them, as far
+/// as they can change the crate's API: its cfgs, a digest of the files it
+/// wrote to its `OUT_DIR`, and the variables it set that name a path there,
+/// written `$OUT_DIR`, as `include!(env!(..))` reads. Any other variable
+/// reaches the crate only as a string the project's own build gives, and
+/// many differ between toolchains for no reason that matters here: libm
+/// sets `CFG_TARGET_FEATURES` to the compiler's list of target features.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Script {
@@ -58,6 +67,7 @@ impl Script {
                 let value = value.replace(directory.as_ref(), "$OUT_DIR");
                 (name, out_directories(&value))
             })
+            .filter(|(_, value)| value.contains("$OUT_DIR"))
             .collect::<Vec<_>>();
         env.sort_unstable();
         Self {
@@ -205,7 +215,9 @@ pub(crate) struct External {
     pub(crate) unit_key: Option<String>,
 }
 
-/// What a shared entry keeps beside its table.
+/// What a shared entry keeps beside its table: `scripts` holds the results
+/// that the publishing project's own build gave for the build scripts of the
+/// packages compiled into the program.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Meta {
@@ -213,7 +225,6 @@ pub(crate) struct Meta {
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: String,
     pub(crate) crate_hash: String,
-    /// The nightly build's results for each build script in the closure.
     pub(crate) scripts: BTreeMap<String, Vec<Script>>,
     pub(crate) externals: Vec<External>,
 }
@@ -243,12 +254,29 @@ pub(crate) fn directory(cargo_home: &Path) -> PathBuf {
 }
 
 /// One shared table a run used or extracted.
-pub(crate) struct Settled {
-    pub(crate) key: String,
-    pub(crate) crate_name: String,
-    pub(crate) scripts: BTreeMap<String, Vec<Script>>,
-    /// A table extracted on this run, published once its scripts compare.
-    pub(crate) publish: Option<Publish>,
+pub(crate) enum Settled {
+    /// A table this run extracted, published with the results the
+    /// project's build gives for the build scripts of `packages`.
+    Extracted {
+        key: String,
+        packages: Vec<String>,
+        publish: Publish,
+    },
+    /// A table read from the home, with the results its publisher's build
+    /// gave.
+    Read {
+        key: String,
+        crate_name: String,
+        scripts: BTreeMap<String, Vec<Script>>,
+    },
+}
+
+impl Settled {
+    fn key(&self) -> &str {
+        match self {
+            Self::Extracted { key, .. } | Self::Read { key, .. } => key,
+        }
+    }
 }
 
 pub(crate) struct Publish {
@@ -278,10 +306,10 @@ impl Settlement {
         }
     }
 
-    /// Compare each table's build scripts with what the runner's build in
-    /// the project's Rawr directory gave: publish the tables this
-    /// run extracted whose scripts agree, and refuse a table from the home
-    /// whose scripts do not, naming its crate.
+    /// Publish the tables this run extracted with what the runner's build in
+    /// the project's Rawr directory gave for their build scripts, and
+    /// compare each table read from the home with it, refusing one whose
+    /// scripts gave its publisher other results, naming its crate.
     ///
     /// # Errors
     ///
@@ -296,40 +324,60 @@ impl Settlement {
         }
         // The runner builds in `<rawr>/runner` (`runner::build::cached`).
         let runner = rawr.join("runner").join(RUNNER_SCRIPTS);
-        let stable = fs::read(&runner)
+        // With no results from the runner's build, nothing is published
+        // or compared.
+        let Some(stable) = fs::read(&runner)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<BTreeMap<String, Vec<Script>>>(&bytes).ok())
-            .unwrap_or_default();
+        else {
+            return Ok(());
+        };
         let mut refused = None;
-        for entry in self.entries {
-            let differs = entry.scripts.iter().find(|(package, nightly)| {
-                stable
-                    .get(*package)
-                    .is_some_and(|stable| nightly.iter().any(|script| !stable.contains(script)))
-            });
-            match (entry.publish, differs) {
-                (Some(publish), None) => publish_entry(&entry.key, &publish),
-                (Some(_), Some((package, _))) => crate::process::say(format_args!(
-                    "rawr: `{}` keeps its bindings in this project: the build script of `{}` \
-                     gives other results on rawr's nightly than on this project's toolchain",
-                    entry.crate_name,
-                    package_name(package),
-                )),
-                (None, Some((package, _))) => {
+        let mut entries = self.entries;
+        // The preparation loop may settle the same table more than once.
+        entries.sort_by(|left, right| left.key().cmp(right.key()));
+        entries.dedup_by(|later, earlier| later.key() == earlier.key());
+        for entry in entries {
+            match entry {
+                Settled::Extracted {
+                    key,
+                    packages,
+                    mut publish,
+                } => {
+                    publish.meta.scripts = packages
+                        .into_iter()
+                        .filter_map(|package| {
+                            let scripts = stable.get(&package)?.clone();
+                            Some((package, scripts))
+                        })
+                        .collect();
+                    publish_entry(&key, &publish);
+                }
+                Settled::Read {
+                    key,
+                    crate_name,
+                    scripts,
+                } => {
+                    let differs = scripts.iter().find(|(package, recorded)| {
+                        stable
+                            .get(*package)
+                            .is_some_and(|stable| stable != *recorded)
+                    });
+                    let Some((package, _)) = differs else {
+                        continue;
+                    };
                     if let Some(bindings) = &self.bindings {
-                        home::evict(bindings, &entry.key);
+                        home::evict(bindings, &key);
                     }
                     refused.get_or_insert_with(|| {
                         format!(
-                            "the shared bindings of `{}` were made where the build script of \
-                             `{}` gave other results than on this project's toolchain. rawr \
-                             removed them: run again to make them for this toolchain",
-                            entry.crate_name,
+                            "the shared bindings of `{crate_name}` were made in a project where \
+                             the build script of `{}` gave other results than in this one. rawr \
+                             removed them: run again to make them here",
                             package_name(package),
                         )
                     });
                 }
-                (None, None) => {}
             }
         }
         if let Some(bindings) = &self.bindings {
@@ -495,21 +543,29 @@ mod tests {
         let moved = root.join("bundle/build/demo-0123456789abcdef/out");
         let left = Script::new(
             ["b".to_owned(), "a".to_owned()],
-            [(
-                "GENERATED".to_owned(),
-                format!("{}/generated.rs", moved.display()),
-            )],
+            [
+                (
+                    "GENERATED".to_owned(),
+                    format!("{}/generated.rs", moved.display()),
+                ),
+                ("FEATURES".to_owned(), "neon, lse2".to_owned()),
+            ],
             &nightly,
         );
         let right = Script::new(
             ["a".to_owned(), "b".to_owned()],
-            [(
-                "GENERATED".to_owned(),
-                format!("{}/generated.rs", stable.display()),
-            )],
+            [
+                (
+                    "GENERATED".to_owned(),
+                    format!("{}/generated.rs", stable.display()),
+                ),
+                ("FEATURES".to_owned(), "neon".to_owned()),
+            ],
             &stable,
         );
+        // A variable that names no generated file compares as nothing.
         assert_eq!(left, right);
+        assert_eq!(left.env.len(), 1);
         assert_eq!(left.env[0].1, "$OUT_DIR/generated.rs");
         fs::write(stable.join("generated.rs"), "pub const X: u8 = 2;").unwrap();
         let changed = Script::new(["a".to_owned(), "b".to_owned()], [], &stable);
@@ -526,57 +582,68 @@ mod tests {
     }
 
     #[test]
-    fn a_table_publishes_when_its_scripts_agree_and_a_shared_one_that_differs_stops_the_run() {
+    fn a_table_publishes_with_its_projects_scripts_and_one_another_project_differs_from_stops_the_run(
+    ) {
         let root = scratch("settle");
         let bindings = root.join("bindings");
         let package = "registry+https://index#demo@1.0.0".to_owned();
-        let nightly = BTreeMap::from([(package.clone(), vec![script("nightly")])]);
         let table = root.join("table");
         fs::write(&table, b"units").unwrap();
-        let extracted = |key: &str, scripts: &BTreeMap<String, Vec<Script>>| Settled {
-            key: key.to_owned(),
-            crate_name: "demo".to_owned(),
-            scripts: scripts.clone(),
-            publish: Some(Publish {
+        let first = runner(
+            &root.join("first"),
+            &BTreeMap::from([(package.clone(), vec![script("first")])]),
+        );
+        // Published once, though the preparation loop settled it twice.
+        let extracted = || Settled::Extracted {
+            key: "demo".to_owned(),
+            packages: vec![package.clone()],
+            publish: Publish {
                 bindings: bindings.clone(),
                 table: table.clone(),
-                meta: meta(scripts.clone()),
-            }),
+                meta: meta(BTreeMap::new()),
+            },
         };
-        // The project's build agrees with one table and not with the other.
-        let rawr = runner(
-            &root,
-            &BTreeMap::from([(package.clone(), vec![script("stable")])]),
-        );
-        let agreed = BTreeMap::from([(package.clone(), vec![script("stable")])]);
         Settlement {
-            entries: vec![extracted("agrees", &agreed), extracted("differs", &nightly)],
+            entries: vec![extracted(), extracted()],
             bindings: Some(bindings.clone()),
-            rawr: Some(rawr.clone()),
+            rawr: Some(first.clone()),
         }
         .settle()
         .unwrap();
-        assert_eq!(super::read(&bindings, "agrees").unwrap().table, b"units");
-        assert!(
-            super::read(&bindings, "differs").is_none(),
-            "kept in the project"
-        );
-        // A shared table whose scripts differ from this project's stops the
-        // run, names the crate, and leaves the home.
-        let refused = Settlement {
-            entries: vec![Settled {
-                key: "agrees".to_owned(),
-                crate_name: "demo".to_owned(),
-                scripts: nightly,
-                publish: None,
-            }],
+        let entry = super::read(&bindings, "demo").unwrap();
+        assert_eq!(entry.table, b"units");
+        let recorded = entry.meta.scripts.clone();
+        assert_eq!(recorded[&package], [script("first")]);
+        drop(entry);
+        let read = || Settled::Read {
+            key: "demo".to_owned(),
+            crate_name: "demo".to_owned(),
+            scripts: recorded.clone(),
+        };
+        // The same results in another project use the table.
+        Settlement {
+            entries: vec![read()],
             bindings: Some(bindings.clone()),
-            rawr: Some(rawr),
+            rawr: Some(first),
+        }
+        .settle()
+        .unwrap();
+        assert!(super::read(&bindings, "demo").is_some());
+        // A project whose build gives other results stops the run, names
+        // the crate, and removes the table.
+        let second = runner(
+            &root.join("second"),
+            &BTreeMap::from([(package.clone(), vec![script("second")])]),
+        );
+        let refused = Settlement {
+            entries: vec![read()],
+            bindings: Some(bindings.clone()),
+            rawr: Some(second),
         }
         .settle()
         .unwrap_err();
         assert!(refused.contains("`demo`"), "{refused}");
-        assert!(super::read(&bindings, "agrees").is_none());
+        assert!(super::read(&bindings, "demo").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }

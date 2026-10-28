@@ -685,11 +685,10 @@ impl Plan {
             identity.update(digest.as_bytes());
             identity.update(Sha256::digest(&body));
             fragments.push(fragment);
-            settled.push(crate::bindings::Settled {
+            settled.push(crate::bindings::Settled::Read {
                 key: shared.key.to_string(),
                 crate_name: meta.crate_name.clone(),
                 scripts: meta.scripts.clone(),
-                publish: None,
             });
             leases.push(read);
         }
@@ -1717,15 +1716,12 @@ impl Capture {
         Ok(())
     }
 
-    /// What this extraction leaves to publish once the project's build
-    /// confirms its build scripts (`crate::bindings`): each shared crate's
+    /// What this extraction leaves to publish once the project's build has
+    /// run its build scripts (`crate::bindings`): each shared crate's
     /// table, the identity its sidecar gave it, the external crates the
-    /// probe named, and the nightly's results for the scripts its closure
-    /// runs, from `scripts`.
-    pub(crate) fn settlement(
-        &self,
-        scripts: &BTreeMap<String, Vec<crate::bindings::Script>>,
-    ) -> Vec<crate::bindings::Settled> {
+    /// probe named, and the packages compiled into the program whose build
+    /// scripts its closure runs.
+    pub(crate) fn settlement(&self) -> Vec<crate::bindings::Settled> {
         let (Some(reuse), Some(bindings)) = (&self.reuse, &self.sharing.bindings) else {
             return Vec::new();
         };
@@ -1743,18 +1739,10 @@ impl Capture {
             if !table.is_file() {
                 continue;
             }
-            let closure = shared
-                .scripts
-                .iter()
-                .filter_map(|package| {
-                    Some((package.to_string(), scripts.get(package.as_ref())?.clone()))
-                })
-                .collect::<BTreeMap<_, _>>();
-            settled.push(crate::bindings::Settled {
+            settled.push(crate::bindings::Settled::Extracted {
                 key: shared.key.to_string(),
-                crate_name: handshake.crate_name.clone(),
-                scripts: closure.clone(),
-                publish: Some(crate::bindings::Publish {
+                packages: shared.scripts.iter().map(ToString::to_string).collect(),
+                publish: crate::bindings::Publish {
                     bindings: bindings.clone(),
                     table,
                     meta: crate::bindings::Meta {
@@ -1762,10 +1750,10 @@ impl Capture {
                         crate_name: handshake.crate_name.clone(),
                         stable_crate_id: handshake.artifact.stable_crate_id.clone(),
                         crate_hash: handshake.artifact.crate_hash.clone(),
-                        scripts: closure,
+                        scripts: BTreeMap::new(),
                         externals: externals.clone(),
                     },
-                }),
+                },
             });
         }
         settled

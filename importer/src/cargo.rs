@@ -2538,7 +2538,7 @@ impl Request {
             None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
         };
         #[cfg(feature = "rustc-driver")]
-        let settlement = capture.settlement(&build.script_results());
+        let settlement = capture.settlement();
         #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture.artifact_inputs(limits)?;
         #[cfg(not(feature = "rustc-driver"))]

@@ -8,8 +8,11 @@
 //! crate's unit key from the resolution, which covers its features, profile,
 //! target and its dependencies' unit keys; the checksum or commit of every
 //! package it reaches; the extraction toolchain; and the extraction's
-//! formats. A build script's outputs are compared before an entry is used or
-//! published (`bindings.rs`).
+//! formats. The outputs of the build scripts of the packages compiled into
+//! the program are compared before an entry is used or published
+//! (`bindings.rs`). A script that runs only for a build script or a
+//! procedural macro, as proc-macro2's, reaches the crate's API through no
+//! cfg of its own and is not compared.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -18,8 +21,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cargo::unit::{Metadata, PackageSource};
 
-/// A selected crate's shared key, and the packages in its closure that run a
-/// build script.
+/// A selected crate's shared key, and the packages compiled into the program
+/// in its closure that run a build script.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shared {
     pub(crate) key: Box<str>,
@@ -114,11 +117,14 @@ fn key(
     unit_key: &str,
     toolchain: [&str; 3],
 ) -> Option<Shared> {
-    let mut seen = BTreeSet::from([root]);
-    let mut queue = VecDeque::from([root]);
+    // Each unit with whether it is compiled into the program, rather than
+    // only run while building: a procedural macro, a build script, and
+    // what either depends on are not.
+    let mut seen = BTreeSet::from([(root, true)]);
+    let mut queue = VecDeque::from([(root, true)]);
     let mut sources = BTreeSet::new();
     let mut scripts = BTreeSet::new();
-    while let Some(index) = queue.pop_front() {
+    while let Some((index, program)) = queue.pop_front() {
         let unit = document.units.get(index)?;
         let source = match metadata.package(&unit.pkg_id)?.source() {
             PackageSource::Registry {
@@ -131,12 +137,16 @@ fn key(
             }
         };
         sources.insert((unit.pkg_id.as_str(), source));
-        if unit.mode == "run-custom-build" {
+        let running = unit.mode == "run-custom-build";
+        if running && program {
             scripts.insert(unit.pkg_id.as_str());
         }
         for dependency in &unit.dependencies {
-            if seen.insert(dependency.index) {
-                queue.push_back(dependency.index);
+            let child = document.units.get(dependency.index)?;
+            let program =
+                program && !running && !child.target.kind.iter().any(|kind| kind == "proc-macro");
+            if seen.insert((dependency.index, program)) {
+                queue.push_back((dependency.index, program));
             }
         }
     }
@@ -173,6 +183,8 @@ mod tests {
     const SEMVER: &str = "registry+https://index#semver@1.0.0";
     const LIBC: &str = "registry+https://index#libc@0.2.0";
     const LOCAL: &str = "path+file:///project/local#0.1.0";
+    const PM2: &str = "registry+https://index#pm2@1.0.0";
+    const MACROS: &str = "registry+https://index#macros@1.0.0";
 
     fn registry(id: &str, checksum: u8) -> Package {
         let name = id.rsplit_once('#').unwrap().1.split_once('@').unwrap().0;
@@ -200,12 +212,19 @@ mod tests {
         )
     }
 
-    /// `semver` uses `libc`, whose build script runs; `local` uses both.
+    /// `semver` uses `libc`, whose build script runs, and the procedural
+    /// macros of `macros`, which use `pm2`, whose build script runs too;
+    /// `local` uses `semver`.
     fn units() -> Vec<u8> {
         let unit = |pkg_id: &str, src: &str, mode: &str, dependencies: &[usize]| {
+            let kind = if pkg_id == MACROS {
+                "proc-macro"
+            } else {
+                "lib"
+            };
             serde_json::json!({
                 "pkg_id": pkg_id,
-                "target": { "kind": ["lib"], "src_path": src },
+                "target": { "kind": [kind], "src_path": src },
                 "mode": mode,
                 "features": [],
                 "dependencies": dependencies
@@ -218,8 +237,11 @@ mod tests {
             "units": [
                 unit(LIBC, "/registry/libc/build.rs", "run-custom-build", &[]),
                 unit(LIBC, "/registry/libc/src/lib.rs", "check", &[0]),
-                unit(SEMVER, "/registry/semver/src/lib.rs", "check", &[1]),
+                unit(SEMVER, "/registry/semver/src/lib.rs", "check", &[1, 6]),
                 unit(LOCAL, "/project/local/src/lib.rs", "check", &[2]),
+                unit(PM2, "/registry/pm2/build.rs", "run-custom-build", &[]),
+                unit(PM2, "/registry/pm2/src/lib.rs", "build", &[4]),
+                unit(MACROS, "/registry/macros/src/lib.rs", "build", &[5]),
             ]
         }))
         .unwrap()
@@ -234,12 +256,21 @@ mod tests {
         }
     }
 
+    fn packages(libc: u8, pm2: u8) -> Metadata {
+        Metadata::fixture_packages([
+            registry(SEMVER, 1),
+            registry(LIBC, libc),
+            registry(PM2, pm2),
+            registry(MACROS, 4),
+            local(),
+        ])
+    }
+
     #[test]
     fn a_crate_from_registries_alone_is_keyed_by_its_closure_and_a_path_crate_is_not_shared() {
         let semver = selected(SEMVER, "/registry/semver/src/lib.rs");
         let path_crate = selected(LOCAL, "/project/local/src/lib.rs");
-        let metadata =
-            Metadata::fixture_packages([registry(SEMVER, 1), registry(LIBC, 2), local()]);
+        let metadata = packages(2, 3);
         let shared = keys(
             &units(),
             &metadata,
@@ -250,11 +281,14 @@ mod tests {
         );
         assert_eq!(shared.len(), 1, "a path crate is never shared");
         let first = &shared[SEMVER_TARGET];
+        // pm2's script runs only to build the procedural macros.
         assert_eq!(first.scripts.as_ref(), [LIBC.into()]);
-        // A dependency's new checksum, or another toolchain, is another key.
-        let changed = Metadata::fixture_packages([registry(SEMVER, 1), registry(LIBC, 3), local()]);
-        let changed = keys(&units(), &changed, &[semver], "commit", "host", "host");
-        assert_ne!(changed[SEMVER_TARGET].key, first.key);
+        // A dependency's new checksum, a procedural macro's among them, or
+        // another toolchain, is another key.
+        for changed in [packages(5, 3), packages(2, 5)] {
+            let changed = keys(&units(), &changed, &[semver], "commit", "host", "host");
+            assert_ne!(changed[SEMVER_TARGET].key, first.key);
+        }
         let toolchain = keys(&units(), &metadata, &[semver], "other", "host", "host");
         assert_ne!(toolchain[SEMVER_TARGET].key, first.key);
         let again = keys(&units(), &metadata, &[semver], "commit", "host", "host");
