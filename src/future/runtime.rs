@@ -574,6 +574,22 @@ pub trait Remote: crate::func::SendSync {
         None
     }
 
+    /// The function the program holds at `path`, its owner's path and the
+    /// member (`Arc::Program<Message>::draw`): a function of a script impl
+    /// native code calls through the owner's proxy (D594).
+    fn member(&self, path: &str) -> Option<item::Value> {
+        let _ = path;
+        None
+    }
+
+    /// The witness of each parameter of the function at `path`, as
+    /// [`Remote::member`] finds it, where it has one: what a native value
+    /// native code gives it is attested as (D594).
+    fn member_witnesses(&self, path: &str) -> Vec<Option<crate::host::runtime::Witness>> {
+        let _ = path;
+        Vec::new()
+    }
+
     /// Whether `function`, a callable `from` made, runs here: the same
     /// item by its stable key and signature, and for a lifted closure the
     /// same closures in the function that writes it (D553.5).
@@ -791,6 +807,17 @@ impl Callable {
             program,
             _held: held,
         })
+    }
+
+    /// The function `function` of `program`, as native code calls it
+    /// through a proxy (D594).
+    #[cfg(feature = "sync")]
+    pub(crate) fn of_item(function: item::Value, program: Program) -> Self {
+        Self {
+            function,
+            program,
+            _held: None,
+        }
     }
 
     /// The program this call runs in: the generation current on this

@@ -186,8 +186,21 @@ pub struct Identity {
     /// The script functions that fill callable parameters (D594).
     #[serde(default)]
     slots: Box<[super::instance::Slot]>,
+    /// The script's impls that cross with the instance's script types
+    /// (D594).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    impls: Box<[super::instance::ScriptImpl]>,
     hook: Option<Hook>,
     semantic: [u8; 32],
+}
+
+/// A digest of `impls`, as an instance's identity frames them.
+fn impls_digest(impls: &[super::instance::ScriptImpl]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"rawr.instance.impls/v1");
+    digest.update(serde_json::to_vec(impls).unwrap_or_default());
+    digest.finalize().into()
 }
 
 impl std::hash::Hash for Identity {
@@ -581,8 +594,9 @@ impl Identity {
             mappers,
             predicates,
             slots,
+            impls,
         } = instance.into_parts();
-        Self::seal_instance(
+        let mut sealed = Self::seal_instance(
             self.definition,
             self.export,
             self.implementation,
@@ -595,7 +609,17 @@ impl Identity {
             mappers,
             predicates,
             slots,
-        )
+        );
+        // An instance without impls frames as it did before them.
+        if !impls.is_empty() {
+            let mut framed = Framed::new(OPERATION_DOMAIN);
+            framed.bytes(&sealed.semantic);
+            framed.byte(3);
+            framed.bytes(&impls_digest(&impls));
+            sealed.semantic = framed.finish();
+            sealed.impls = impls;
+        }
+        sealed
     }
 
     fn seal(
@@ -729,9 +753,17 @@ impl Identity {
             mappers,
             predicates,
             slots,
+            impls: Box::default(),
             hook,
             semantic: framed.finish(),
         }
+    }
+
+    /// The script's impls that cross with the instance's script types
+    /// (D594).
+    #[must_use]
+    pub fn impls(&self) -> &[super::instance::ScriptImpl] {
+        &self.impls
     }
 
     /// The script functions that fill callable parameters (D594).

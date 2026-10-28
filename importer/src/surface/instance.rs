@@ -21,6 +21,7 @@ pub struct Arguments {
     mappers: Box<[EventMapper]>,
     predicates: Box<[super::identity::Implementation]>,
     slots: Box<[Slot]>,
+    impls: Box<[ScriptImpl]>,
 }
 
 /// A script function that fills a callable parameter of the item as a
@@ -71,6 +72,160 @@ pub(super) struct Parts {
     pub(super) mappers: Box<[EventMapper]>,
     pub(super) predicates: Box<[super::identity::Implementation]>,
     pub(super) slots: Box<[Slot]>,
+    pub(super) impls: Box<[ScriptImpl]>,
+}
+
+/// A script's impl of a trait that crosses into native code with its owner
+/// (D594): `impl canvas::Program<Message> for Arc`, of a dependency's trait
+/// for a script type, or `impl From<Color> for iced::Color`, of a std trait
+/// between a script type and a crate's. The runner writes it for the
+/// proxies, and each function calls the script's own in the generation
+/// current where native code calls it.
+///
+/// Types are as an instance's are, with each of the impl's own type
+/// parameters a [`convert::Type::Parameter`] at its index in `generics`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ScriptImpl {
+    owner: convert::Type,
+    trait_path: Box<str>,
+    arguments: Box<[convert::Type]>,
+    generics: Box<[Box<str>]>,
+    associated: Box<[(Box<str>, convert::Type)]>,
+    functions: Box<[ScriptImplFunction]>,
+}
+
+/// One function of a [`ScriptImpl`].
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ScriptImplFunction {
+    name: Box<str>,
+    member: Box<str>,
+    receiver: ImplReceiver,
+    inputs: Box<[convert::Type]>,
+    output: convert::Type,
+}
+
+/// How a [`ScriptImplFunction`] takes `self`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ImplReceiver {
+    /// An associated function, as `From::from`.
+    None,
+    /// `&self`.
+    Shared,
+    /// `&mut self`.
+    Mutable,
+    /// `self`.
+    Owned,
+}
+
+impl ScriptImpl {
+    /// The impl of the trait at `trait_path` (the Rust path the runner
+    /// writes, `iced::widget::canvas::Program` or `From`), with the type
+    /// arguments the header writes, for `owner`.
+    #[must_use]
+    pub const fn new(
+        owner: convert::Type,
+        trait_path: Box<str>,
+        arguments: Box<[convert::Type]>,
+        generics: Box<[Box<str>]>,
+        associated: Box<[(Box<str>, convert::Type)]>,
+        functions: Box<[ScriptImplFunction]>,
+    ) -> Self {
+        Self {
+            owner,
+            trait_path,
+            arguments,
+            generics,
+            associated,
+            functions,
+        }
+    }
+
+    /// The type the impl is for.
+    #[must_use]
+    pub const fn owner(&self) -> &convert::Type {
+        &self.owner
+    }
+
+    /// The trait's Rust path.
+    #[must_use]
+    pub fn trait_path(&self) -> &str {
+        &self.trait_path
+    }
+
+    /// The trait's type arguments as the header writes them.
+    #[must_use]
+    pub fn arguments(&self) -> &[convert::Type] {
+        &self.arguments
+    }
+
+    /// The impl's own type parameters, by name.
+    #[must_use]
+    pub fn generics(&self) -> &[Box<str>] {
+        &self.generics
+    }
+
+    /// The associated types the impl gives, by name.
+    #[must_use]
+    pub fn associated(&self) -> &[(Box<str>, convert::Type)] {
+        &self.associated
+    }
+
+    /// The impl's functions.
+    #[must_use]
+    pub fn functions(&self) -> &[ScriptImplFunction] {
+        &self.functions
+    }
+}
+
+impl ScriptImplFunction {
+    /// The function `name`, which the script's program holds as its
+    /// owner's `member` (`Program<Message>::draw`).
+    #[must_use]
+    pub const fn new(
+        name: Box<str>,
+        member: Box<str>,
+        receiver: ImplReceiver,
+        inputs: Box<[convert::Type]>,
+        output: convert::Type,
+    ) -> Self {
+        Self {
+            name,
+            member,
+            receiver,
+            inputs,
+            output,
+        }
+    }
+
+    /// The function's Rust name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The member the script's program holds it as.
+    #[must_use]
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// How it takes `self`.
+    #[must_use]
+    pub const fn receiver(&self) -> ImplReceiver {
+        self.receiver
+    }
+
+    /// Its inputs after `self`.
+    #[must_use]
+    pub fn inputs(&self) -> &[convert::Type] {
+        &self.inputs
+    }
+
+    /// Its output.
+    #[must_use]
+    pub const fn output(&self) -> &convert::Type {
+        &self.output
+    }
 }
 
 /// One exact public imported function item consumed at a direct formal.
@@ -167,7 +322,17 @@ impl Arguments {
             mappers: Box::default(),
             predicates: Box::default(),
             slots: Box::default(),
+            impls: Box::default(),
         })
+    }
+
+    /// Attach the script's impls that cross into native code with the
+    /// script types among the instance's arguments (D594).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_impls(mut self, impls: Box<[ScriptImpl]>) -> Self {
+        self.impls = impls;
+        self
     }
 
     /// Attach the script functions that fill the item's callable
@@ -402,6 +567,7 @@ impl Arguments {
             mappers: self.mappers,
             predicates: self.predicates,
             slots: self.slots,
+            impls: self.impls,
         }
     }
 

@@ -274,6 +274,31 @@ fn a_choice_of_script_values_beside_a_string_literal_runs() {
     );
 }
 
+/// iced's canvas examples: the program's own type implements the crate's
+/// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
+/// crate calls the impl's `draw` back while it lays the view out, lending
+/// it a pen and a theme whose methods it calls, and its `update` while it
+/// handles a press, with a script state lent `&mut` and an event it
+/// matches. A script color crosses into the crate's `impl Into<Color>`
+/// through the script's `impl From<Shade> for Color`, as lazy's does. The
+/// output is `cargo run`'s.
+#[test]
+fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
+    let (rawr, cargo) = both_printed("crossing-program", "program.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view canvas[primary plain 0#1, primary 40x30 after 0 rgb(10, 20, 30)#2]")
+            && rawr.contains(
+                "pressed Increment: canvas[primary plain 0#1, primary 40x30 after 1 rgb(10, 20, 30)#2]"
+            )
+            && rawr.contains("1 message Pressed(\"Increment\")")
+            && rawr.contains(
+                "last view canvas[primary plain 36#1, primary 40x30 after 0 rgb(10, 20, 30)#2]"
+            ),
+        "{rawr}"
+    );
+}
+
 /// `event` and the count a `N view count X` line shows.
 fn parse(line: &str) -> Option<(i64, i64)> {
     let (event, count) = line.split_once(" view count ")?;

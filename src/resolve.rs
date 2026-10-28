@@ -195,6 +195,12 @@ impl Program {
         &self.methods
     }
 
+    /// The functions of impls for builtin and crate types.
+    #[allow(dead_code)]
+    pub(crate) const fn builtin_methods(&self) -> &[method::Definition] {
+        &self.builtin_methods
+    }
+
     pub(crate) const fn application(&self) -> Option<&application::Entry> {
         self.application.as_ref()
     }
@@ -2067,8 +2073,22 @@ fn resolve_item(
                 native,
             )?;
             let mut functions = Vec::with_capacity(parsed.functions.len());
+            let mut parsed_functions = parsed.functions.into_vec();
+            // A dependency's trait declares nothing Rawr reads: `Self::State`
+            // in the impl's signatures is the type the impl gives it, as
+            // Rust normalizes it.
+            if matches!(trait_, Some(item::TraitImpl::Native { .. })) {
+                for function in &mut parsed_functions {
+                    for parameter in function.parameters.iter_mut() {
+                        self_associated(&mut parameter.ty, &parsed.associated);
+                    }
+                    if let Some(output) = &mut function.output {
+                        self_associated(output, &parsed.associated);
+                    }
+                }
+            }
 
-            for function in parsed.functions.into_vec() {
+            for function in parsed_functions {
                 let mut function = resolve_function(
                     function,
                     types,
@@ -2733,6 +2753,65 @@ fn resolve_methods(
             .get(&owner_id)
             .copied()
             .expect("resolved impl owners retain their generation-local definition");
+
+        // `impl canvas::Program<Message> for Arc`: a dependency's trait,
+        // whose functions Rawr reads only as the impl writes them. Each is
+        // a member `Program<Message>::draw` of the owner, apart from its
+        // inherent functions, which native code calls through the owner's
+        // proxy (D594).
+        if let Some(item::TraitImpl::Native {
+            name, arguments, ..
+        }) = &item.trait_
+        {
+            let instance: ImmutableString = if arguments.is_empty() {
+                name.text.clone()
+            } else {
+                format!(
+                    "{}<{}>",
+                    name.text,
+                    arguments
+                        .iter()
+                        .map(full_type_name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+                .into()
+            };
+            for function in &mut item.functions {
+                validate_method_signature(owner.name(), function, false, true)
+                    .map_err(|error| LocatedError::primary(shell.source, error))?;
+                let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
+                if let Some((previous_source, previous_declaration)) = declarations.insert(
+                    (owner_id, member.clone()),
+                    (shell.source, function.name.span),
+                ) {
+                    return Err(LocatedError::related(
+                        shell.source,
+                        previous_source,
+                        Error::DuplicateMethod {
+                            owner: owner_name.clone(),
+                            method: member,
+                            declaration: function.name.span,
+                            previous_declaration,
+                        },
+                    ));
+                }
+                let id = method::Id::from_index(methods.len());
+                let kind = if function.receiver.is_some() {
+                    crate::item::Kind::Method
+                } else {
+                    crate::item::Kind::AssociatedFunction
+                };
+                let key = crate::item::Key::associated(owner.key(), member, kind);
+                let definition = method::Definition::new(id, key, owner, function, shell.source)
+                    .in_generic_impl(&item.generics, owner_arguments(&item.owner))
+                    .with_trait(name.text.clone())
+                    .with_trait_arguments(arguments.clone());
+                function.body.lowering = item::Lowering::NominalMethod(id);
+                methods.push(definition);
+            }
+            continue;
+        }
 
         let widget_protocol = item
             .header
@@ -4732,10 +4811,98 @@ fn resolve_trait(
             arguments,
         });
     }
+    // `impl canvas::Program<Message> for Arc`: a dependency's trait, by its
+    // path from the crate's root once `use`s are followed
+    // (`package::qualify_opaque_bounds`). Native code calls the impl's
+    // functions through the owner's proxy (D594).
+    #[cfg(feature = "rust-import")]
+    if let Some(last) = path.segments.last()
+        && path.segments.len() > 1
+        && path.segments[..path.segments.len() - 1]
+            .iter()
+            .all(|segment| segment.arguments.is_empty())
+    {
+        let qualified: ImmutableString = path
+            .segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>()
+            .join("::")
+            .into();
+        let header = host::path::Path::parse(qualified.clone())
+            .ok()
+            .and_then(|parsed| {
+                host.trait_header(&parsed)
+                    .map(|header| header.path.to_string())
+            });
+        if let Some(trait_path) = header {
+            let arguments = last
+                .arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    crate::item::type_ref::Argument::Type(ty) => {
+                        Some(type_ref::resolve(ty.clone(), types, host, native))
+                    }
+                    crate::item::type_ref::Argument::Lifetime(_) => None,
+                })
+                .collect::<Result<_, _>>()?;
+            return Ok(item::TraitImpl::Native {
+                path: trait_path.into(),
+                name: last.name.clone(),
+                arguments,
+            });
+        }
+        let error = Error::UnknownType {
+            name: qualified.clone(),
+            reference: span,
+        };
+        if let Some(site) = native.filter(|site| site.missing_binding(host, &qualified)) {
+            site.record(&error);
+            return Err(error);
+        }
+    }
     Err(Error::UnsupportedNominalSyntax {
         construct: "an `impl` of a trait path that names no crate or std trait".into(),
         source: span,
     })
+}
+
+/// `ty` with each `Self::Name` that names one of `associated`, an impl's
+/// associated types, written as that type.
+fn self_associated(
+    ty: &mut crate::item::type_ref::Type,
+    associated: &[(crate::item::Name, crate::item::type_ref::Type)],
+) {
+    use crate::item::type_ref::{Argument, Type};
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for member in members.iter_mut() {
+                self_associated(member, associated);
+            }
+        }
+        Type::Reference { target, .. } => self_associated(target, associated),
+        Type::Path(path) => {
+            if let [first, second] = &path.segments[..]
+                && first.name.text == "Self"
+                && first.arguments.is_empty()
+                && second.arguments.is_empty()
+                && let Some((_, given)) = associated
+                    .iter()
+                    .find(|(name, _)| name.text == second.name.text)
+            {
+                *ty = given.clone();
+                return;
+            }
+            for segment in path.segments.iter_mut() {
+                for argument in segment.arguments.iter_mut() {
+                    if let Argument::Type(argument) = argument {
+                        self_associated(argument, associated);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The error for `dyn Trait` at `span` when the trait `declared` is not

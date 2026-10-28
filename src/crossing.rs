@@ -44,6 +44,18 @@ impl Proxy {
         }
     }
 
+    /// The proxy of the script value an argument's `place` holds: a handle
+    /// to it when script code shares it, as a borrow of `self` or of a
+    /// state native code lent does (`Canvas::new(self)`), and else the
+    /// value itself, which the call takes.
+    pub fn from_place(place: &mut Dynamic) -> Self {
+        if place.is_shared() {
+            Self::new(place.clone())
+        } else {
+            Self::new(place.take())
+        }
+    }
+
     /// The value, given back to script code: the value itself when no
     /// handle to it remains elsewhere.
     pub fn into_dynamic(self) -> Dynamic {
@@ -176,6 +188,38 @@ pub fn default_of(path: &str) -> RawrResultOf<Dynamic> {
             "rawr: the script type `{path}` has no `Default`"
         )))
     })
+}
+
+/// Call the function the running program holds at `path`, its owner's
+/// path and the member (`Arc::Program<Message>::draw`), with `arguments`:
+/// a function of a script impl, which a runner's impl for the owner's proxy
+/// calls where native code calls it (D594). It runs in the generation
+/// current on this thread, so an edit to its body takes effect at the next
+/// call. Each index in `mutable` is an argument it takes `&mut`, as in
+/// [`Slot::call`]. A panic with the reason when it fails, as a Rust
+/// function that fails does.
+pub fn call_member(path: &str, arguments: &mut [Dynamic], mutable: &[usize]) -> Dynamic {
+    let _entry = crate::future::entry();
+    let called = crate::future::current_program()
+        .ok_or_else(|| crate::future::error("rawr: no program runs script code on this thread"))
+        .and_then(|program| {
+            let function = program.member(path).ok_or_else(|| {
+                crate::future::error(format!("rawr: the running program has no `{path}`"))
+            })?;
+            crate::future::Callable::of_item(function, program).call_places(arguments, mutable)
+        });
+    called.unwrap_or_else(|error| panic!("{}", crate::future::message(&error)))
+}
+
+/// The witness of each parameter of the function the running program
+/// holds at `path`, as [`call_member`] calls it, where it has one: a native
+/// value native code gives the function is attested as its parameter's type,
+/// so script code reads it as that type.
+#[must_use]
+pub fn member_witnesses(path: &str) -> Vec<Option<crate::host::runtime::Witness>> {
+    crate::future::current_program()
+        .map(|program| program.member_witnesses(path))
+        .unwrap_or_default()
 }
 
 /// A script function where native generic code takes a callable: what a

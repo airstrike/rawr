@@ -4863,6 +4863,9 @@ fn render_source(
     for module in modules.keys() {
         writeln!(output, "mod {module};").map_err(|_| request::Error::Encoding)?;
     }
+    output
+        .write_all(b"include!(\"rawr_impls.rs\");\n")
+        .map_err(|_| request::Error::Encoding)?;
     sources.push((SOURCE_PATH.into(), main));
     let primitive = plans.iter().position(|plan| {
         matches!(
@@ -4940,8 +4943,13 @@ fn render_source(
     render_families(&mut families)?;
     view::render_families(&mut families)?;
     sources.push((FAMILIES_PATH.into(), families));
+    // The impls name the proxies of their owners, so they come first.
+    let mut impls = Vec::new();
+    render_impls(plans, &mut impls)?;
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
+    // In path order, as the sources are framed.
+    sources.push((IMPLS_PATH.into(), impls));
     sources.push((PROXIES_PATH.into(), proxies));
     sources.push((SURFACE_PATH.into(), stamps));
     Ok(PROXY_CRATE.with_borrow(Clone::clone))
@@ -5016,6 +5024,9 @@ const FAMILIES_PATH: &str = "src/rawr_families.rs";
 /// The runner's proxies of script types (D594), included at the crate root
 /// so each is named as the script names it.
 const PROXIES_PATH: &str = "src/rawr_proxies.rs";
+/// The script's impls for the proxies (D594), included after the runtime
+/// they call, whose macros come first.
+const IMPLS_PATH: &str = "src/rawr_impls.rs";
 
 /// The per-generation stamps module, after every adapter module in path order.
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
@@ -5497,9 +5508,30 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         )
         .map_err(|_| request::Error::Encoding)?;
     }
+    // A value native code lent the script function that matches it, as a
+    // canvas program's `update` takes `&Event` (D558.3), is reached through
+    // its accessor; any other is in the arena.
     writeln!(
         output,
-        "    let handle = native_handle(arguments, 0, false)?;\n    #[allow(unreachable_patterns)]\n    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;\n    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+        "    #[allow(unreachable_patterns)]
+    let output = match lent_value(arguments, 0) {{
+        Some(lent) => {{
+            let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+                .accessor(false)
+                .map_err(|error| Error::Lent(lent.name(), error))?;
+            let mut output = None;
+            access(lent.nonce().bits(), &mut |input| {{
+                output = Some(match input {{ {pattern} => Some({cloned}), _ => None }});
+            }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+            output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?
+        }}
+        None => {{
+            let handle = native_handle(arguments, 0, false)?;
+            arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
+        }}
+    }};
+    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
     )
     .map_err(|_| request::Error::Encoding)?;
     if fields.is_empty() {
@@ -9948,7 +9980,7 @@ fn render_take(
             })?;
             return writeln!(
                 output,
-                "    let argument_{local} = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()));"
+                "    let argument_{local} = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::from_place(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?));"
             )
             .map_err(|_| request::Error::Encoding);
         }
@@ -11373,6 +11405,338 @@ impl{bounds} std::fmt::Display for {name}{generics} {{
             .map_err(|_| request::Error::Encoding)?;
     }
     Ok(())
+}
+
+/// `ty` as Rust spells it in a script impl's header and signatures, with
+/// each of the impl's own type parameters by its name in `generics`.
+fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
+    let all = |types: &[convert::Type]| {
+        types
+            .iter()
+            .map(|ty| impl_type(ty, generics))
+            .collect::<Option<Vec<_>>>()
+    };
+    Some(match ty {
+        convert::Type::Parameter(index) => generics.get(*index as usize)?.to_string(),
+        _ if !names_parameter(ty) => match ty {
+            convert::Type::Borrowed { mutable, ty } => {
+                let inner = concrete_type(ty)?;
+                if *mutable {
+                    format!("&mut {inner}")
+                } else {
+                    format!("&{inner}")
+                }
+            }
+            ty => concrete_type(ty)?,
+        },
+        convert::Type::Script { path, arguments } => {
+            // Registers the proxy, as `concrete_type` does.
+            concrete_type(&convert::Type::Script {
+                path: path.clone(),
+                arguments: arguments.iter().map(|_| convert::Type::Unit).collect(),
+            })?;
+            let (_, path) = path.split_once("::")?;
+            format!("crate::{path}<{}>", all(arguments)?.join(", "))
+        }
+        convert::Type::Nominal { arguments, .. } => {
+            let bare = concrete_type(&convert::Type::Nominal {
+                definition: match ty {
+                    convert::Type::Nominal { definition, .. } => *definition,
+                    _ => return None,
+                },
+                arguments: Box::default(),
+            })?;
+            format!("{bare}<{}>", all(arguments)?.join(", "))
+        }
+        convert::Type::Option(element) => format!("Option<{}>", impl_type(element, generics)?),
+        convert::Type::Sequence { element, .. } => {
+            format!("Vec<{}>", impl_type(element, generics)?)
+        }
+        convert::Type::Tuple(members) => format!("({},)", all(members)?.join(", ")),
+        convert::Type::Borrowed { mutable, ty } => format!(
+            "&{}{}",
+            if *mutable { "mut " } else { "" },
+            impl_type(ty, generics)?
+        ),
+        _ => return None,
+    })
+}
+
+/// Whether `ty` names a type parameter at any depth.
+fn names_parameter(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Parameter(_) => true,
+        convert::Type::Nominal { arguments, .. } | convert::Type::Script { arguments, .. } => {
+            arguments.iter().any(names_parameter)
+        }
+        convert::Type::Tuple(members) => members.iter().any(names_parameter),
+        convert::Type::Option(inner)
+        | convert::Type::Range(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::ProfileMessage { payload: inner, .. } => names_parameter(inner),
+        convert::Type::Result(ok, err) => names_parameter(ok) || names_parameter(err),
+        convert::Type::FunctionItem { input, output } => {
+            names_parameter(input) || names_parameter(output)
+        }
+        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => false,
+    }
+}
+
+/// The script's impls that cross into native code with the script types
+/// the adapters take (D594), each once, for the proxies: `impl canvas::
+/// Program<Message> for Arc`, or `impl From<Color> for iced::Color`.
+///
+/// Each function calls the script's own, in the generation current where
+/// native code calls it. It lends what it takes as a slot does: a script
+/// value by its handle, a native value it borrows for the call alone,
+/// through a lend whose accessors the runner's adapters reach it by
+/// (D558.3), and a native value it owns through the arena.
+fn render_impls(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let impls = plans
+        .iter()
+        .flat_map(Plan::impls)
+        .collect::<std::collections::BTreeSet<_>>();
+    for script in impls {
+        render_impl(script, output)?;
+    }
+    Ok(())
+}
+
+fn render_impl(
+    script: &crate::surface::instance::ScriptImpl,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let drift = |field| request::Error::Drift { field };
+    let generics = script.generics();
+    let owner = impl_type(script.owner(), generics).ok_or(drift("a script impl's owner"))?;
+    let arguments = script
+        .arguments()
+        .iter()
+        .map(|argument| impl_type(argument, generics))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(drift("a script impl's trait arguments"))?;
+    let trait_ = if arguments.is_empty() {
+        script.trait_path().to_owned()
+    } else {
+        format!("{}<{}>", script.trait_path(), arguments.join(", "))
+    };
+    let parameters = if generics.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            generics
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let mut body = String::new();
+    for (name, ty) in script.associated() {
+        let ty = impl_type(ty, generics).ok_or(drift("a script impl's associated type"))?;
+        body.push_str(&format!("    type {name} = {ty};\n"));
+    }
+    for function in script.functions() {
+        body.push_str(&render_impl_function(function, generics)?);
+    }
+    writeln!(
+        output,
+        "/// The script's `impl {trait_} for {owner}` (D594).
+#[allow(unused_mut, unused_variables, clippy::all)]
+impl{parameters} {trait_} for {owner} {{
+{body}}}
+"
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// One function of a script impl, as `render_impls` writes it.
+fn render_impl_function(
+    function: &crate::surface::instance::ScriptImplFunction,
+    generics: &[Box<str>],
+) -> Result<String, request::Error> {
+    use crate::surface::instance::ImplReceiver;
+    let drift = |field| request::Error::Drift { field };
+    let mut parameters = Vec::new();
+    let mut values = Vec::new();
+    let mut mutable = Vec::new();
+    let mut restores = String::new();
+    let mut lends = Vec::new();
+    match function.receiver() {
+        ImplReceiver::None => {}
+        ImplReceiver::Shared => {
+            parameters.push("&self".to_owned());
+            values.push("self.0.lend()".to_owned());
+        }
+        ImplReceiver::Mutable => {
+            parameters.push("&mut self".to_owned());
+            values.push("self.0.lend_mut()".to_owned());
+            mutable.push("0".to_owned());
+            restores.push_str("\n        self.0.restore(std::mem::take(&mut values[0]));");
+        }
+        ImplReceiver::Owned => {
+            parameters.push("self".to_owned());
+            values.push("self.0.into_dynamic()".to_owned());
+        }
+    }
+    for (position, input) in function.inputs().iter().enumerate() {
+        let name = format!("input_{position}");
+        let at = values.len();
+        let rust = impl_type(input, generics).ok_or(drift("a script impl function's input"))?;
+        parameters.push(format!("{name}: {rust}"));
+        if names_parameter(input) {
+            return Err(drift(
+                "a script impl function's input names a type parameter of the impl",
+            ));
+        }
+        // The script function gives back each `&mut` it takes after its
+        // value (`Callable::call_places`).
+        if matches!(input, convert::Type::Borrowed { mutable: true, .. }) {
+            mutable.push(at.to_string());
+        }
+        match input {
+            convert::Type::Borrowed { mutable: true, ty }
+                if matches!(**ty, convert::Type::Script { .. }) =>
+            {
+                values.push(format!("{name}.0.lend_mut()"));
+                restores.push_str(&format!(
+                    "\n        {name}.0.restore(std::mem::take(&mut values[{at}]));"
+                ));
+            }
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(**ty, convert::Type::Script { .. }) =>
+            {
+                values.push(format!("{name}.0.lend()"));
+            }
+            convert::Type::Borrowed { ty, .. } if matches!(**ty, convert::Type::Unit) => {
+                values.push("Dynamic::UNIT".to_owned());
+            }
+            // A native value the function borrows: lent for the call
+            // alone, and reached by the adapters through the accessors
+            // (D558.3).
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && !carries_lifetime(ty) =>
+            {
+                let target = concrete_type(ty).ok_or(drift("a script impl function's input"))?;
+                lends.push((position, *borrowed_mutably, target.clone()));
+                values.push(format!(
+                    "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
+                    if *borrowed_mutably {
+                        format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
+                    } else {
+                        "None".to_owned()
+                    }
+                ));
+            }
+            convert::Type::Borrowed { ty, .. } => {
+                // A copy of a value Rawr holds by value, as a `&str` or a
+                // `&[T]` is.
+                let mut converted = String::new();
+                render_to_dynamic(ty, &format!("Clone::clone({name})"), 0, &mut converted)?;
+                values.push(format!(
+                    "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
+                ));
+            }
+            // A native value is attested as the type of the script
+            // function's parameter, so script code reads it as that type.
+            input => {
+                let mut converted = String::new();
+                render_to_dynamic(input, &name, 0, &mut converted)?;
+                values.push(format!(
+                    "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
+                ));
+            }
+        }
+    }
+    let returned = function.output();
+    if names_parameter(returned) {
+        return Err(drift(
+            "a script impl function's output names a type parameter of the impl",
+        ));
+    }
+    let rust = impl_type(returned, generics).ok_or(drift("a script impl function's output"))?;
+    let in_arena = |body: &str| {
+        format!(
+            "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
+        )
+    };
+    let crossed = |value: &str| {
+        if value.starts_with('(') {
+            format!("{value}?")
+        } else {
+            format!("Ok::<Dynamic, Error>({value})?")
+        }
+    };
+    // Native values go in and out through the arena.
+    let count = values.len();
+    let values = format!(
+        "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
+        in_arena(&format!(
+            "Ok::<[Dynamic; {count}], Error>([{}])",
+            values.iter().map(|value| crossed(value)).collect::<Vec<_>>().join(", ")
+        ))
+    );
+    let mut converted = String::new();
+    render_from_dynamic(returned, "value", 0, &mut converted)?;
+    let converted = in_arena(&converted);
+    let member = function.member();
+    let mutable = mutable.join(", ");
+    let mut call = format!(
+        "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+        let mut values: [Dynamic; {count}] = {values};
+        let value = __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]);{restores}
+        {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
+    );
+    // Each borrowed native value is lent around the call, innermost last.
+    let mut items = String::new();
+    for (position, borrowed_mutably, target) in lends.iter().rev() {
+        let (lend, input) = if *borrowed_mutably {
+            ("lend", format!("input_{position}"))
+        } else {
+            ("lend_ref", format!("input_{position}"))
+        };
+        call = format!(
+            "__rawr_internal::scope::{lend}::<Lend{position}, _>({input}, |lent_{position}| {{
+        {call}
+        }})"
+        );
+        items.push_str(&format!(
+            "        struct Lend{position};
+        impl __rawr_internal::scope::Family for Lend{position} {{
+            type Of<'x> = {target};
+        }}
+        fn reach_{position}(nonce: u64, visit: &mut dyn FnMut(&{target})) -> Result<(), u8> {{
+            __rawr_internal::scope::with_ref::<Lend{position}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value))
+                .map_err(__rawr_internal::scope::Error::code)
+        }}
+        static REACH_{position}: fn(u64, &mut dyn FnMut(&{target})) -> Result<(), u8> = reach_{position};
+"
+        ));
+        if *borrowed_mutably {
+            items.push_str(&format!(
+                "        fn reach_mut_{position}(nonce: u64, visit: &mut dyn FnMut(&mut {target})) -> Result<(), u8> {{
+            __rawr_internal::scope::with::<Lend{position}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value))
+                .map_err(__rawr_internal::scope::Error::code)
+        }}
+        static REACH_MUT_{position}: fn(u64, &mut dyn FnMut(&mut {target})) -> Result<(), u8> = reach_mut_{position};
+"
+            ));
+        }
+    }
+    Ok(format!(
+        "    fn {}({}) -> {rust} {{
+{items}        {call}
+    }}
+",
+        function.name(),
+        parameters.join(", ")
+    ))
 }
 
 /// The scope families the adapters named, as the `rawr_families` module.

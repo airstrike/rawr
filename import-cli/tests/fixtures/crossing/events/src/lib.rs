@@ -559,4 +559,199 @@ pub mod canvas {
             fallback::Geometry::Secondary(label, _) => format!("secondary {label}"),
         }
     }
+
+    // ---- iced's canvas::Program: a trait a program's own type implements ----
+
+    /// Where a program draws, as iced's `Rectangle`.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Bounds {
+        /// Its width.
+        pub width: u32,
+        /// Its height.
+        pub height: u32,
+    }
+
+    impl Bounds {
+        /// Its area.
+        pub fn area(&self) -> u32 {
+            self.width * self.height
+        }
+    }
+
+    /// What a canvas gives its program, as iced's canvas `Event`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Event {
+        /// The button labelled with the string was pressed.
+        Pressed(String),
+    }
+
+    /// The pen a renderer draws with, as iced's renderer is lent to `draw`.
+    pub struct Pen {
+        strokes: std::cell::Cell<u32>,
+    }
+
+    impl Pen {
+        /// `label`, drawn with this pen.
+        pub fn stroke(&self, label: &str) -> Geometry {
+            self.strokes.set(self.strokes.get() + 1);
+            <crate::widgets::Renderer as parts::geometry::Renderer>::draw(&format!(
+                "{label}#{}",
+                self.strokes.get()
+            ))
+        }
+    }
+
+    /// What a canvas draws and how it answers events, as iced's
+    /// `canvas::Program`: a program's own type implements it, and the
+    /// canvas calls it back while it lays out and while it handles a press.
+    pub trait Program<Message, Theme = crate::Theme> {
+        /// What the canvas keeps for the program between calls.
+        type State: Default + 'static;
+
+        /// What a press gives, if anything.
+        fn update(
+            &self,
+            _state: &mut Self::State,
+            _event: &Event,
+            _bounds: Bounds,
+        ) -> Option<Message> {
+            None
+        }
+
+        /// What the program draws at `bounds` with `pen`.
+        fn draw(
+            &self,
+            state: &Self::State,
+            pen: &Pen,
+            theme: &Theme,
+            bounds: Bounds,
+        ) -> Vec<Geometry>;
+    }
+
+    impl<Message, Theme, T> Program<Message, Theme> for &T
+    where
+        T: Program<Message, Theme>,
+    {
+        type State = T::State;
+
+        fn update(
+            &self,
+            state: &mut Self::State,
+            event: &Event,
+            bounds: Bounds,
+        ) -> Option<Message> {
+            T::update(self, state, event, bounds)
+        }
+
+        fn draw(
+            &self,
+            state: &Self::State,
+            pen: &Pen,
+            theme: &Theme,
+            bounds: Bounds,
+        ) -> Vec<Geometry> {
+            T::draw(self, state, pen, theme, bounds)
+        }
+    }
+
+    /// A widget a program draws, as iced's `Canvas`.
+    pub struct Canvas<P, Message, Theme = crate::Theme>
+    where
+        P: Program<Message, Theme>,
+    {
+        program: P,
+        state: std::cell::RefCell<P::State>,
+        look: std::marker::PhantomData<(Message, Theme)>,
+    }
+
+    /// A canvas `program` draws, as iced's `canvas(..)`.
+    pub fn canvas<P, Message, Theme>(program: P) -> Canvas<P, Message, Theme>
+    where
+        P: Program<Message, Theme>,
+    {
+        Canvas {
+            program,
+            state: std::cell::RefCell::new(P::State::default()),
+            look: std::marker::PhantomData,
+        }
+    }
+
+    const BOUNDS: Bounds = Bounds {
+        width: 40,
+        height: 30,
+    };
+
+    impl<P, Message, Theme> crate::widgets::Widget<Message, Theme> for Canvas<P, Message, Theme>
+    where
+        P: Program<Message, Theme>,
+        Theme: Default,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(self.drawn());
+        }
+
+        /// The program's `update`, then what it draws with the state the
+        /// update left.
+        fn press(&self, label: &str) -> Option<Message> {
+            let message = self.program.update(
+                &mut self.state.borrow_mut(),
+                &Event::Pressed(label.to_owned()),
+                BOUNDS,
+            );
+            println!("pressed {label}: {}", self.drawn());
+            message
+        }
+    }
+
+    impl<P, Message, Theme> Canvas<P, Message, Theme>
+    where
+        P: Program<Message, Theme>,
+        Theme: Default,
+    {
+        fn drawn(&self) -> String {
+            let pen = Pen {
+                strokes: std::cell::Cell::new(0),
+            };
+            let drawn = self
+                .program
+                .draw(&self.state.borrow(), &pen, &Theme::default(), BOUNDS);
+            format!(
+                "canvas[{}]",
+                drawn.iter().map(describe).collect::<Vec<_>>().join(", ")
+            )
+        }
+    }
+}
+
+impl Theme {
+    /// The theme's name.
+    pub fn name(&self) -> String {
+        "plain".to_owned()
+    }
+}
+
+/// A color a crate draws with, as iced's `Color`, which a program's own
+/// colors convert into.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Color {
+    /// Its red.
+    pub r: u8,
+    /// Its green.
+    pub g: u8,
+    /// Its blue.
+    pub b: u8,
+}
+
+impl Color {
+    /// The color of `r`, `g` and `b`, as iced's `Color::from_rgb8`.
+    pub fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Color { r, g, b }
+    }
+}
+
+/// `color` as a crate takes a color: anything that converts into one, as
+/// iced's `text(..).color(..)` takes `impl Into<Color>`.
+pub fn paint(color: impl Into<Color>) -> String {
+    let color = color.into();
+    format!("rgb({}, {}, {})", color.r, color.g, color.b)
 }
