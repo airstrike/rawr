@@ -17,6 +17,7 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>rawr reads your dependencies&rsquo; APIs with its own pinned nightly. That build runs in <code>target/rawr</code>, apart from the units <code>cargo build</code> uses. It is a check build. It runs build scripts and compiles proc macros, and for every other crate it writes only the metadata rawr reads.</p>
 <p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
+<p>A cargo script with dependencies builds the same way too, from its own directory in rawr&rsquo;s home. Every script shares one build directory there. <a href="/docs/run#scripts">Run</a> explains it.</p>
 <p>rawr keeps what it makes for a crate in <code>target/rawr</code>. For a workspace member, that is <code>target/rawr/members/&lt;path&gt;</code> in the workspace&rsquo;s <code>target/</code>, where <code>&lt;path&gt;</code> is the member&rsquo;s directory. <code>cargo clean</code> removes it.</p>
 
 <h2 id="use">Use a dependency</h2>
