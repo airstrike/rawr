@@ -723,6 +723,36 @@ impl Builder {
         Ok(self)
     }
 
+    /// Re-export the std item `std` at `path`, as iced's `pub use
+    /// crate::core::time::*` re-exports `core::time::Duration` at
+    /// `time::Duration`: the path names that std item, which Rawr resolves by
+    /// its std path. `path` is relative and `std` starts at `std`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn std_alias(&mut self, path: &str, std: &str) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        let target = host::path::Path::parse(std)?;
+        if !host::is_std_alias_target(&target) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export of an item outside std",
+                incoming: "re-export",
+            });
+        }
+        self.ensure_vacant(&path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path, target));
+        Ok(self)
+    }
+
     /// Declare a host type with explicit structural parameters and capabilities.
     pub fn type_<T: 'static>(
         &mut self,
@@ -1610,6 +1640,7 @@ impl Builder {
             };
             // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
+                && !host::is_std_alias_target(target)
                 && !declared(target)
                 && !target.parent().is_some_and(|owner| declared(&owner))
             {
@@ -1746,6 +1777,7 @@ impl Builder {
             };
             // A re-exported variant names a variant of one of its types.
             if !host::is_builtin_alias_target(target)
+                && !host::is_std_alias_target(target)
                 && !declared(target)
                 && !target.parent().is_some_and(|owner| declared(&owner))
             {

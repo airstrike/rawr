@@ -41,6 +41,12 @@ pub(crate) fn is_builtin_alias_target(target: &path::Path) -> bool {
     matches!(target.segments(), [name] if BUILTIN_TYPES.contains(&name.as_str()))
 }
 
+/// Whether a re-export's `target` is an item of the standard library, as a
+/// crate's re-export of one names it (`std_alias`): a path under `std`.
+pub(crate) fn is_std_alias_target(target: &path::Path) -> bool {
+    matches!(target.segments(), [root, _, ..] if root.as_str() == "std")
+}
+
 /// The runtime builtin a Rust numeric type is: every integer kind up to 64
 /// bits an `i64`, `f32` an `f64` (the checker keeps the kinds apart), and
 /// `i128` and `u128` an `i64` or, past its range, a boxed `i128` or `u128`.
@@ -1170,6 +1176,17 @@ impl Registry {
             (alias == path && is_builtin_alias_target(target))
                 .then(|| target.segments()[0].as_str())
         })
+    }
+
+    /// The std path `qualified` names through a crate's re-export of a std
+    /// item, as `iced::time::Duration` is `std::time::Duration`.
+    pub(crate) fn std_alias(&self, qualified: &str) -> Option<ImmutableString> {
+        let path = path::Path::parse(qualified).ok()?;
+        self.aliases
+            .iter()
+            .filter(|(_, target)| is_std_alias_target(target))
+            .find_map(|(alias, target)| path.rebase(alias, target))
+            .map(|path| path.to_string().into())
     }
 
     /// The canonical spelling of a path through a facade re-export:

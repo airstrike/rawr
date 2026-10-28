@@ -1052,6 +1052,10 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
         },
+        Ty::Time(Time::Instant) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::instant(),
+            arguments: Box::default(),
+        },
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference { mutable: false, .. }
@@ -1241,6 +1245,10 @@ fn instance_surface_type(
         },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
+            arguments: Box::default(),
+        },
+        Ty::Time(Time::Instant) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::instant(),
             arguments: Box::default(),
         },
         // A shared borrow of a script value is its proxy, which shares it.
@@ -17280,6 +17288,7 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::Usize) => Ty::Int(Int::Usize),
             Shape::Builtin(Builtin::F32) => Ty::Float(Float::F32),
             Shape::Builtin(Builtin::Duration) => Ty::Time(Time::Duration),
+            Shape::Builtin(Builtin::Instant) => Ty::Time(Time::Instant),
             Shape::Builtin(Builtin::String) => Ty::String,
             Shape::Builtin(Builtin::InclusiveRange) => Ty::InclusiveRange,
             Shape::Builtin(Builtin::FloatInclusiveRange) => Ty::FloatRange,

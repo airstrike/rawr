@@ -377,6 +377,71 @@ pub fn macros(
     Ok(macros)
 }
 
+/// A crate's re-export of an item of the standard library, as iced's
+/// `time::Duration` is `core::time::Duration`.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct StdReexport {
+    /// The crate's root alias (`iced`).
+    pub root: Box<str>,
+    /// The path under that root (`time::Duration`).
+    pub path: Box<str>,
+    /// The std path the item has (`std::time::Duration`).
+    pub std: Box<str>,
+}
+
+/// The paths at which `graph`'s crates re-export an item of the standard
+/// library, sorted by root and path. A re-export is the item it names, so
+/// Rawr resolves the path as that item's std path.
+pub fn std_reexports(
+    graph: &crate::api::Graph<impl crate::api::Phase>,
+) -> Result<Vec<StdReexport>, super::Error> {
+    let mut sysroot = graph
+        .definitions()
+        .filter(|definition| matches!(definition.kind(), crate::api::model::Kind::Sysroot { .. }))
+        .map(|definition| (definition.id(), definition))
+        .collect::<Vec<_>>();
+    sysroot.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut reexports = Vec::new();
+    for export in graph.exports() {
+        let crate::api::ledger::Path::Imported(export) = export else {
+            continue;
+        };
+        if export.variant().is_some() {
+            continue;
+        }
+        let Ok(index) = sysroot.binary_search_by(|(id, _)| (*id).cmp(export.target())) else {
+            continue;
+        };
+        // std re-exports `core` and `alloc` at the same paths, so the path
+        // a program writes is under `std`.
+        let mut segments = sysroot[index].1.display_path();
+        let Some(_) = segments
+            .next()
+            .filter(|root| matches!(*root, "std" | "core" | "alloc"))
+        else {
+            continue;
+        };
+        let mut std = String::from("std");
+        for segment in segments {
+            std.push_str("::");
+            std.push_str(segment);
+        }
+        let std = std.into_boxed_str();
+        let key = export.key();
+        reexports
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
+        reexports.push(StdReexport {
+            root: copy(key.root_alias())?,
+            path: path(key.path())?,
+            std,
+        });
+    }
+    reexports.sort_unstable();
+    reexports.dedup();
+    Ok(reexports)
+}
+
 /// One imported nominal definition and complete admitted shape.
 #[derive(Deserialize, Serialize)]
 pub struct TypeDefinition {

@@ -10211,7 +10211,7 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
-        ty if is_duration(ty) => cast(output, "std::time::Duration"),
+        ty if let Some(time) = std_time(ty) => cast(output, time),
         ty if is_facade_value(ty) => {
             let rust = concrete_type(ty).ok_or(request::Error::Drift {
                 field: "a facade value's Rust type",
@@ -10515,9 +10515,24 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 }
 
 /// Rust's `std::time::Duration`, which crosses by value.
+/// Whether `ty` is std's `Duration` or `Instant`, which cross by value as
+/// Rawr's own.
 fn is_duration(ty: &convert::Type) -> bool {
-    matches!(ty, convert::Type::Nominal { definition, .. }
-        if *definition == crate::surface::identity::Definition::duration())
+    std_time(ty).is_some()
+}
+
+/// The Rust path of std's `Duration` or `Instant`, when `ty` is one.
+fn std_time(ty: &convert::Type) -> Option<&'static str> {
+    use crate::surface::identity::Definition;
+    match ty {
+        convert::Type::Nominal { definition, .. } if *definition == Definition::duration() => {
+            Some("std::time::Duration")
+        }
+        convert::Type::Nominal { definition, .. } if *definition == Definition::instant() => {
+            Some("std::time::Instant")
+        }
+        _ => None,
+    }
 }
 
 /// The `Output` and `Progress` of an `impl Sipper<Output, Progress>` output.
@@ -12058,6 +12073,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
+        ty if let Some(time) = std_time(ty) => time.to_owned(),
         convert::Type::Nominal {
             definition,
             arguments,

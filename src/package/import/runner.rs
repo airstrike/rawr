@@ -469,6 +469,11 @@ impl Profile for Ordinary {
                 host::type_ref::Builtin::Duration,
             )));
         }
+        if identity == Definition::instant().as_bytes() && arguments.is_empty() {
+            return Ok(Some(host::type_ref::Type::builtin(
+                host::type_ref::Builtin::Instant,
+            )));
+        }
         Ok(None)
     }
 

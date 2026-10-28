@@ -5558,11 +5558,9 @@ impl<P: api::Phase> Context<'_, P> {
                     // type, as a script struct's is: palette's `Rgb` has
                     // `standard: PhantomData<S>`.
                     Type::Unit
-                } else if id.unit().crate_name() == "core"
-                    && definition.display_path().eq(["core", "time", "Duration"])
-                {
+                } else if let Some(time) = std_time(id, definition) {
                     Type::Nominal {
-                        definition: crate::surface::identity::Definition::duration(),
+                        definition: time,
                         arguments: Box::default(),
                     }
                 } else if is_i64_range(definition, arguments) {
@@ -7751,6 +7749,25 @@ fn is_string(definition: &model::Definition) -> bool {
     unit.authority().sysroot().is_some()
         && matches!(unit.crate_name(), "alloc" | "std")
         && definition.display_path().last() == Some("String")
+}
+
+/// The identity std's `time::Duration` (in `core`) or `time::Instant` (in
+/// `std`) crosses as: each is Rawr's own type, passed by value.
+fn std_time(
+    id: &api::identity::Definition,
+    definition: &model::Definition,
+) -> Option<crate::surface::identity::Definition> {
+    id.unit().authority().sysroot()?;
+    let path = |expected: [&str; 3]| definition.display_path().eq(expected);
+    match id.unit().crate_name() {
+        "core" if path(["core", "time", "Duration"]) => {
+            Some(crate::surface::identity::Definition::duration())
+        }
+        "std" if path(["std", "time", "Instant"]) => {
+            Some(crate::surface::identity::Definition::instant())
+        }
+        _ => None,
+    }
 }
 
 /// core's `marker::PhantomData<T>`.
