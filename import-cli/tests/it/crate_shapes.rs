@@ -110,3 +110,29 @@ fn a_module_and_a_function_of_one_name_are_both_reached() {
 fn a_generic_traits_provided_method_is_each_implementors() {
     runs_as_cargo_does("provided", "4\n5\n6\n");
 }
+
+/// A generic impl's function whose named callable parameter `F` takes or
+/// gives what no script closure can, as tokio's `MappedMutexGuard::map`
+/// (`F: FnOnce(&mut T) -> &mut U`) and cosmic text's `with_buffer_mut`
+/// (`F: FnOnce(&mut Borrowed<Buffer>) -> T`) are, has no binding, and the
+/// module's other items stay importable. So does a method whose closure
+/// gives a future parameter, as warp's `Ws::on_upgrade` (`F: FnOnce(WebSocket)
+/// -> U, U: Future`) is. Each used to fail the import with "unknown type
+/// parameter" (T313).
+#[test]
+fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
+    runs_as_cargo_does("guard", "3\n");
+}
+
+/// A trait method generic over `T` is a member of the opaque `impl Trait`
+/// that a function generic over its own `T` gives, as warp's `form<T>()`
+/// gives an `impl Filter` with `untuple_one<T>`. The two `T`s used to be
+/// declared twice in one signature, which failed the crate's import. A
+/// member that gives a type holding the opaque type (`Filter::and`), and a
+/// type's method that gives an opaque type (`Source::filter`, as image's
+/// `Reader::into_decoder`), used to declare an opaque type under a function
+/// or a type, which isn't a module, and failed the import too.
+#[test]
+fn an_opaque_types_members_import() {
+    runs_as_cargo_does("opaque", "7\nvalue 8\n");
+}

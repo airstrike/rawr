@@ -110,6 +110,37 @@ fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
     );
 }
 
+/// iced's `.boxed()`: a method of an extension trait no widget implements
+/// itself, which a blanket impl over the crate's own `Widget` gives every
+/// widget, on a button and on text of generic types. The output is `cargo
+/// run`'s.
+#[test]
+fn a_method_of_a_blanket_extension_trait_runs_on_generic_widgets() {
+    let (rawr, cargo) = both_printed("crossing-framed", "framed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 20 [Increment] [Decrement]\n1 message Increment")
+            && rawr.contains("3 view pad 20 [Increment] 2@50\n3 message Increment")
+            && rawr.ends_with("last view pad 20 [Increment] 3@50"),
+        "{rawr}"
+    );
+}
+
+/// iced's modal and toast helpers: an `impl Widget<Message>` parameter
+/// called with a button and with text, and a function generic over its
+/// message that builds a crate widget, each compiled once per
+/// instantiation its callers use (D629). The output is `cargo run`'s.
+#[test]
+fn generic_functions_over_crate_types_run_once_per_instantiation() {
+    let (rawr, cargo) = both_printed("crossing-instances", "instances.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 pad 5 [Increment] pad 7 0@50 [Decrement]")
+            && rawr.ends_with("last view pad 0 pad 5 [Increment] pad 7 2@50 [Decrement]"),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.
@@ -230,6 +261,48 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
             && rawr.contains(
                 "last view pad 20 [Increment] count 2 of 3@50 pad 0 2+1@16 2+2@16 [Decrement]"
             ),
+        "{rawr}"
+    );
+}
+
+/// iced's events and url_handler: the opaque `impl Program` that
+/// `application(..)` gives takes a script function as its subscription,
+/// which borrows the program's state as `&P::State` and gives a
+/// `Subscription<P::Message>`, both read through the opaque program's
+/// bounds. The call gives another opaque program, whose `fonts` and `run`
+/// are compiled where it was made, and the crate calls the subscription
+/// back with the booted state. As url_handler's `text(url)` does, the view
+/// gives a widget that borrows a string of the state through an `impl
+/// IntoLabel<'a>` its output keeps. The output is `cargo run`'s.
+#[test]
+fn an_opaque_program_takes_a_subscription_of_its_state() {
+    let (rawr, cargo) = both_printed("crossing-subscription", "subscription.rs", "Listen");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("heard Ticked(3)")
+            && rawr.contains("1 view pad 0 <Listen:0> 'tick 3 of 6'@48")
+            && rawr.contains("1 message Toggled(true)")
+            && rawr.contains("last view pad 0 <x Listen:0> 'tick 3 of 6'@48"),
+        "{rawr}"
+    );
+}
+
+/// iced's exit and events: `latest().and_then(..)` takes a script closure,
+/// or the generic crate function `close` as `and_then(window::close)` does,
+/// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's
+/// type argument across `impl<T> Task<Option<T>>` and `impl<T, E>
+/// Task<Result<T, E>>`, and the receiver's type picks the first, so
+/// `close` is `close::<Message>`. The crate delivers the message a task
+/// gives. The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
+    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit,Exit");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Confirm(true)")
+            && rawr.contains("task message Closed(7)")
+            && rawr.contains("2 message Confirm(false)\nclose 7")
+            && rawr.contains("last view pad 0 <Exit:0> \"7\""),
         "{rawr}"
     );
 }

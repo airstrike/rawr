@@ -96,6 +96,7 @@ impl<'tcx, 'invocation, 'budget, 'diagnostic> Builder<'tcx, 'invocation, 'budget
             external: BTreeMap::new(),
             implementation_index: std::collections::HashMap::new(),
             obligation_candidates: std::collections::HashMap::new(),
+            reowned: None,
             instance_aliases: None,
             passing_aliases: std::collections::HashMap::new(),
             budget,
@@ -510,8 +511,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 self.request_implementation(implementation, adt, Some(obligation))?;
                 continue;
             }
-            // A blanket implementation of a generic trait is left
-            // unresolved, as rustc would choose its arguments.
+            // A blanket implementation whose where-clause names a trait
+            // the type implements itself, as iced's extension trait
+            // `impl<T, M, Th, R> Widget<M, Th, R> for T where T:
+            // core::Widget<M, Th, R>`, applies through that
+            // implementation, which fixes the trait's arguments.
+            if (trait_generic || generic)
+                && self.apply_blanket_through(&candidates, adt, self_ty, obligation)?
+            {
+                continue;
+            }
+            // Any other blanket implementation of a generic trait is
+            // left unresolved, as rustc would choose its arguments.
             if trait_generic {
                 continue;
             }
@@ -545,6 +556,170 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// The one blanket implementation among `candidates` (`impl<T, ..>
+    /// Trait<..> for T where T: Base<..>`) whose where-clause on `T` names
+    /// a trait `adt` implements itself (`impl<..> Base<..> for Adt<..>`),
+    /// applied to `adt` through that implementation: the application has
+    /// its generics and where-clauses, and its trait arguments fix every
+    /// other parameter of the blanket implementation. rustc proves the
+    /// blanket implementation's other bounds where the bridge calls the
+    /// member. `false` when no candidate, or more than one, applies so.
+    fn apply_blanket_through(
+        &mut self,
+        candidates: &[DefId],
+        adt: DefId,
+        self_ty: Ty<'tcx>,
+        obligation: AssociatedObligation<'tcx>,
+    ) -> Result<bool, String> {
+        let tcx = self.tcx;
+        let mut found = Vec::new();
+        for &implementation in candidates {
+            let Some(reference) = tcx.impl_opt_trait_ref(implementation) else {
+                continue;
+            };
+            let reference = reference.instantiate_identity().skip_norm_wip();
+            let ty::Param(blanket) = reference.self_ty().kind() else {
+                continue;
+            };
+            let generics = tcx.generics_of(implementation);
+            if generics.parent.is_some() {
+                continue;
+            }
+            for (clause, _) in tcx.predicates_of(implementation).predicates {
+                self.edge(1)?;
+                let ty::ClauseKind::Trait(predicate) = clause.kind().skip_binder() else {
+                    continue;
+                };
+                if predicate.polarity != ty::PredicatePolarity::Positive
+                    || !matches!(predicate.self_ty().kind(), ty::Param(bounded) if bounded.index == blanket.index)
+                {
+                    continue;
+                }
+                let base_trait = predicate.def_id();
+                let mut own = Vec::new();
+                tcx.for_each_relevant_impl(base_trait, self_ty, |base| own.push(base));
+                own.retain(|base| {
+                    tcx.impl_opt_trait_ref(*base).is_some_and(|base| {
+                        matches!(
+                            base.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                            ty::Adt(definition, _) if definition.did() == adt
+                        )
+                    })
+                });
+                let [base] = own.as_slice() else {
+                    continue;
+                };
+                let base_reference = tcx
+                    .impl_opt_trait_ref(*base)
+                    .ok_or_else(|| "base implementation lost its trait".to_owned())?
+                    .instantiate_identity()
+                    .skip_norm_wip();
+                // Each parameter of the blanket implementation: its self
+                // type is the base's, and each other is the base's trait
+                // argument where the where-clause names it.
+                let mut fixed = vec![None; generics.count()];
+                fixed[blanket.index as usize] = Some(base_reference.self_ty().into());
+                for (written, argument) in predicate
+                    .trait_ref
+                    .args
+                    .iter()
+                    .zip(base_reference.args.iter())
+                    .skip(1)
+                {
+                    if let Some(written) = written.as_type()
+                        && let ty::Param(parameter) = written.kind()
+                        && let Some(slot) = fixed.get_mut(parameter.index as usize)
+                    {
+                        *slot = Some(argument);
+                    }
+                }
+                let Some(arguments) = fixed.into_iter().collect::<Option<Vec<_>>>() else {
+                    continue;
+                };
+                found.push((implementation, *base, tcx.mk_args(&arguments)));
+            }
+        }
+        found.sort_unstable_by_key(|(implementation, base, _)| {
+            (
+                tcx.def_path_hash(*implementation).to_raw_def_path_hash().0,
+                tcx.def_path_hash(*base).to_raw_def_path_hash().0,
+            )
+        });
+        found.dedup_by_key(|(implementation, base, _)| (*implementation, *base));
+        let [(implementation, base, arguments)] = found.as_slice() else {
+            return Ok(false);
+        };
+        let (implementation, base, arguments) = (*implementation, *base, *arguments);
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.blanket-through-application/v1");
+        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
+        digest.update(tcx.def_path_hash(base).to_raw_def_path_hash().0);
+        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
+        let digest = digest.finalize();
+        let key = hex(&digest[..16])?;
+        let instantiated = tcx
+            .impl_opt_trait_ref(implementation)
+            .ok_or_else(|| "blanket implementation lost its trait".to_owned())?
+            .instantiate(tcx, arguments)
+            .skip_norm_wip();
+        let identity = tcx
+            .impl_opt_trait_ref(implementation)
+            .map(|reference| reference.instantiate_identity().skip_norm_wip());
+        match implementation_crate_authority(self.is_sysroot_crate(implementation.krate)?) {
+            ImplementationCrateAuthority::Sysroot => self.register_sysroot(implementation.krate)?,
+            ImplementationCrateAuthority::External => {
+                self.register_external(implementation.krate)?;
+            }
+        }
+        let mut id = self.id(base, Namespace::Type)?;
+        id.def_path_hash = key.clone();
+        let associated =
+            self.expand_associated_obligations(implementation, identity, &[obligation], &id, true)?;
+        self.ensure(adt, Namespace::Type)?;
+        self.ensure(instantiated.def_id, Namespace::Type)?;
+        let mut relevance = vec![
+            self.id(adt, Namespace::Type)?,
+            self.id(instantiated.def_id, Namespace::Type)?,
+        ];
+        relevance.sort_unstable();
+        relevance.dedup();
+        // The base implementation's parameters are the application's.
+        let previous = self.reowned.replace((base, id.clone()));
+        let parts = (|| {
+            Ok::<_, String>((
+                self.arguments(instantiated.args, base, 0)?,
+                self.type_of(instantiated.self_ty(), base, 0)?,
+                self.generics(base)?,
+            ))
+        })();
+        self.reowned = previous;
+        let (trait_arguments, self_type, generics) = parts?;
+        let header = tcx.impl_trait_header(implementation);
+        let record = engine::model::Implementation {
+            key,
+            id,
+            relevance,
+            trait_ref: raw(&Trait::Trait {
+                id: self.id(instantiated.def_id, Namespace::Type)?,
+                arguments: trait_arguments,
+            })?,
+            self_type: raw(&self_type)?,
+            safety: raw(&safety(header.safety))?,
+            polarity: raw(&Polarity::Positive)?,
+            const_impl: false,
+            default_impl: false,
+            generics: raw(&generics)?,
+            associated,
+            span: raw(&self.span(tcx.def_span(implementation))?)?,
+            origin: raw(&self.origin(tcx.def_span(implementation))?)?,
+        };
+        self.budget.items(1)?;
+        self.emissions.push(Emission::Application {
+            implementation: Box::new(record),
+        });
+        Ok(true)
     }
 
     /// The blanket implementation `implementation` applied to the concrete

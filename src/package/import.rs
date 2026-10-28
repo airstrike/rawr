@@ -484,7 +484,8 @@ impl crate::Engine {
                             source_identity: source.identity().into(),
                         })
                         .map_err(super::Error::import)?;
-                functions.push(
+                // A generic function, at the types its use infers.
+                let item = if function.types.is_empty() {
                     rawr_import::surface::instance::FunctionItem::selected(
                         function.position,
                         selected,
@@ -492,9 +493,26 @@ impl crate::Engine {
                         function_start,
                         function_end,
                     )
-                    .map_err(Error::from)
-                    .map_err(super::Error::import)?,
-                );
+                } else {
+                    rawr_import::surface::instance::Arguments::new(
+                        function.types,
+                        Box::default(),
+                        Box::default(),
+                        None,
+                        limits,
+                    )
+                    .and_then(|instance| {
+                        rawr_import::surface::instance::FunctionItem::instantiated(
+                            function.position,
+                            selected,
+                            function.selector,
+                            instance,
+                            function_start,
+                            function_end,
+                        )
+                    })
+                };
+                functions.push(item.map_err(Error::from).map_err(super::Error::import)?);
             }
             let mut mappers = Vec::new();
             mappers
@@ -846,6 +864,17 @@ fn unavailable_evidence<'contract>(
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
         },
+        R::Invocation(plan)
+            if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
+        {
+            UnavailableEvidence {
+                reason: representability::reject::Kind::CallableProtocol
+                    .describe()
+                    .into(),
+                source: outcome.origin()?.source(),
+                declaration: outcome.origin()?.declaration(),
+            }
+        }
         R::Invocation(_) => return None,
         R::Struct(plan) if plan.declaration_only() => UnavailableEvidence {
             reason:
@@ -1067,13 +1096,19 @@ fn augment_external(
             spans.push(origin.source());
             spans.push(origin.declaration());
         }
-        if let rawr_import::classify::representability::Representability::Rejected(reason) =
-            outcome.representability()
-        {
+        let reason = match outcome.representability() {
+            Representability::Rejected(reason) => Some(reason.kind().describe()),
+            Representability::Invocation(plan)
+                if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
+            {
+                Some(representability::reject::Kind::CallableProtocol.describe())
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
             reasons.push(format!(
-                "rawr has no binding for `{}`: {}",
+                "rawr has no binding for `{}`: {reason}",
                 outcome.name(),
-                reason.kind().describe()
             ));
         }
     }
@@ -1980,8 +2015,11 @@ fn build(
         let Representability::Invocation(plan) = associated.representability() else {
             continue;
         };
+        // Its signature is written with no closure, so a callable
+        // parameter would be named undeclared.
         if plan.receiver()
             != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
+            || !writes_declared(plan.signature(), None, &[])
             || !names_declared(*associated, declared)
         {
             continue;
@@ -2128,26 +2166,26 @@ fn imported_item(
         | Representability::Method(_)
         | Representability::Constant(_) => true,
         // A callable parameter whose closure Rawr can't make, as cosmic
-        // text's `with_buffer_mut(impl FnOnce(&mut Borrowed<..>) -> T)`
-        // takes, leaves the item uncallable.
+        // text's `with_buffer_mut<F: FnOnce(&mut Borrowed<..>) -> T, T>`
+        // and tokio's `MappedMutexGuard::map<U, F: FnOnce(&mut T) -> &mut
+        // U>` take, leaves the item uncallable: no binding, and the crate's
+        // other items stay importable.
         Representability::Invocation(plan) => {
-            plan.call().is_some()
-                || plan.signature().parameters().iter().all(|parameter| {
-                    parameter.kind() != representability::signature::Kind::Callable
-                })
+            writes_declared(plan.signature(), plan.call(), plan.crossings())
         }
         Representability::FunctionItem(plan) => callable_generic(plan),
         _ => false,
     };
-    if retains_item {
-        let selector_bytes = outcome.identity().selector().retained_bytes();
-        let bytes = selector_bytes.and_then(|selector| {
-            std::mem::size_of::<host::item::Definition>()
-                .checked_add(unqualified_path_bytes(path)?)?
-                .checked_add(selector)
-        });
-        allocation.retain_checked(Some(1), bytes)?;
+    if !retains_item {
+        return Ok(None);
     }
+    let selector_bytes = outcome.identity().selector().retained_bytes();
+    let bytes = selector_bytes.and_then(|selector| {
+        std::mem::size_of::<host::item::Definition>()
+            .checked_add(unqualified_path_bytes(path)?)?
+            .checked_add(selector)
+    });
+    allocation.retain_checked(Some(1), bytes)?;
     let item = match outcome.representability() {
         Representability::Function(plan) => Some(
             match outcome.identity().selector() {
@@ -2347,7 +2385,9 @@ fn opaque_types(
         rawr_import::surface::identity::Definition,
         Box<[ImmutableString]>,
     )> = Vec::new();
-    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>| {
+    // `member` marks a member's output, which only names a type: one already
+    // declared beside a function isn't declared again.
+    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>, member: bool| {
         let signature = match outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan) => plan.signature(),
@@ -2361,7 +2401,10 @@ fn opaque_types(
         // are reached through.
         for (index, (definition, arguments)) in found.into_iter().enumerate() {
             let path = rawr_import::surface::opaque::path(path, index);
-            if types.iter().any(|(known, _, _)| *known == path) {
+            if types
+                .iter()
+                .any(|(known, declared, _)| *known == path || (member && *declared == definition))
+            {
                 continue;
             }
             let names = arguments
@@ -2383,15 +2426,21 @@ fn opaque_types(
         }
     };
     for entry in &facade.entries {
-        visit(&entry.relative, entry.outcome);
+        visit(&entry.relative, entry.outcome, false);
+    }
+    // A member's opaque output is declared in its owner's module, as
+    // `image::io::__rawr_opaque_Reader__into_decoder` for `Reader`'s
+    // `into_decoder`: a type or a function is no module to declare it in.
+    for entry in &facade.entries {
         for associated in entry
             .outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
             visit(
-                &format!("{}::{}", entry.relative, associated.name()),
+                &format!("{}__{}", entry.relative, associated.name()),
                 associated,
+                true,
             );
         }
     }
@@ -2433,7 +2482,7 @@ fn ty_ok(
 /// A generic item Rawr calls directly: every parameter a type, none a
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
-    match plan.class() {
+    let kinds = match plan.class() {
         // A script function fills each callable parameter as a slot,
         // as `iced::run(update, view)` takes them (D594).
         None if !plan.crossings().is_empty() => {
@@ -2463,7 +2512,80 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
             | rawr_import::surface::callable::Class::Mutable(_),
         ) => plan.call().is_some(),
         Some(_) => false,
+    };
+    kinds && writes_declared(plan.signature(), plan.call(), plan.crossings())
+}
+
+/// Whether the binding of `signature`, with a script closure (`call`) or a
+/// script function's slots (`crossings`) for its callables, names only the
+/// type parameters it declares. A signature declares only its type
+/// parameters and writes each filled callable as the closure's type. The
+/// classifier keeps items that break this when it can't name what a
+/// callable takes or gives, as tokio's `MappedMutexGuard::map` and cosmic
+/// text's `with_buffer_mut` are, or when a closure gives a future parameter,
+/// as warp's `Ws::on_upgrade(F) where F: FnOnce(WebSocket) -> U, U: Future`
+/// does. Such an item has no binding (T313).
+fn writes_declared(
+    signature: &representability::signature::Signature,
+    call: Option<&representability::callable::Call>,
+    crossings: &[representability::callable::Call],
+) -> bool {
+    use representability::convert::Type;
+    use representability::signature::Kind;
+
+    fn declared(ty: &Type, parameters: &[representability::signature::Parameter]) -> bool {
+        match ty {
+            Type::Parameter(index) => parameters
+                .iter()
+                .find(|parameter| parameter.index() == *index)
+                .is_none_or(|parameter| parameter.kind() == Kind::Type),
+            Type::Nominal { arguments, .. }
+            | Type::Tuple(arguments)
+            | Type::Script { arguments, .. } => arguments.iter().all(|ty| declared(ty, parameters)),
+            Type::Option(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Range(element)
+            | Type::Sequence { element, .. }
+            | Type::ProfileMessage {
+                payload: element, ..
+            } => declared(element, parameters),
+            Type::Result(first, second)
+            | Type::FunctionItem {
+                input: first,
+                output: second,
+            } => declared(first, parameters) && declared(second, parameters),
+            Type::Unit | Type::Builtin(_) | Type::Inferred => true,
+        }
     }
+
+    let parameters = signature.parameters();
+    let calls = || call.into_iter().chain(crossings);
+    let filled = parameters
+        .iter()
+        .filter(|parameter| parameter.kind() == Kind::Callable)
+        .all(|parameter| calls().any(|call| call.parameter() == parameter.index()));
+    // An input a closure fills, or an `Option` of the one Rawr makes, is
+    // written as the closure's type (`callable_signature`).
+    let closure = |input: &Type| {
+        calls().any(|filled| *input == Type::Parameter(filled.parameter()))
+            || call.is_some_and(|call| {
+                matches!(input, Type::Option(inner)
+                    if **inner == Type::Parameter(call.parameter()))
+            })
+    };
+    filled
+        && signature
+            .inputs()
+            .iter()
+            .filter(|input| !closure(input))
+            .chain([signature.output()])
+            .all(|ty| declared(ty, parameters))
+        && calls().all(|call| {
+            call.inputs()
+                .iter()
+                .chain([call.output()])
+                .all(|ty| declared(ty, parameters))
+        })
 }
 
 fn unqualified_path_bytes(path: &str) -> Option<usize> {
@@ -2649,6 +2771,9 @@ fn signature_with(
         builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;
     }
     builder.output(types.convert(signature.output(), signature.parameters(), allocation)?);
+    if let Some(instance) = fixed_instance(types, signature, allocation)? {
+        builder.instance(instance);
+    }
     let parameters = signature.parameters();
     for source in signature.relations() {
         let Some(parameter) = parameters
@@ -2826,7 +2951,49 @@ fn callable_signature(
         }
     }
     builder.output(convert(signature.output(), allocation)?);
+    if let Some(instance) = fixed_instance(types, signature, allocation)? {
+        builder.instance(instance);
+    }
     Ok(builder.finish())
+}
+
+/// The receiver's type a method's impl fixes, when one of its arguments
+/// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
+/// `Task<Option<T>>`: which form of an overloaded method a receiver takes.
+fn fixed_instance(
+    types: &Types,
+    signature: &representability::signature::Signature,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<Option<host::type_ref::Type>, Error> {
+    use representability::convert::Type;
+    fn names_parameter(ty: &Type) -> bool {
+        match ty {
+            Type::Parameter(_) => true,
+            Type::Nominal { arguments, .. }
+            | Type::Tuple(arguments)
+            | Type::Script { arguments, .. } => arguments.iter().any(names_parameter),
+            Type::Option(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Range(element)
+            | Type::Sequence { element, .. } => names_parameter(element),
+            Type::Result(ok, err) => names_parameter(ok) || names_parameter(err),
+            _ => false,
+        }
+    }
+    let Some(instance @ Type::Nominal { arguments, .. }) = signature.instance() else {
+        return Ok(None);
+    };
+    if !arguments
+        .iter()
+        .any(|argument| !matches!(argument, Type::Parameter(_)) && names_parameter(argument))
+    {
+        return Ok(None);
+    }
+    Ok(Some(types.convert(
+        instance,
+        signature.parameters(),
+        allocation,
+    )?))
 }
 
 fn type_usage(

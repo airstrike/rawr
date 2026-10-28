@@ -1,0 +1,225 @@
+---
+// /todo: the work plan as a Gantt chart. Nothing links here and robots skip
+// it. The groups are in src/lib/todo.ts. Bar length is complexity, not time.
+// Each group folds, and the chart rescales to the groups that are open.
+import { EXAMPLES, GROUPS, UPDATED, VERSION, type Row } from "../lib/todo.ts";
+
+const rows = GROUPS.flatMap((g) => g.rows);
+const open = GROUPS.filter((g) => g.open).flatMap((g) => g.rows);
+const lo = Math.floor(Math.min(...open.map((r) => r.start)) / 5) * 5;
+const hi = Math.ceil(Math.max(...open.map((r) => r.start + r.size)) / 5) * 5;
+const span = hi - lo;
+const ticks = Array.from({ length: span / 5 + 1 }, (_, i) => lo + i * 5);
+const pct = (n: number) => `${(n / span) * 100}%`;
+const sum = (state: Row["state"]) => rows.filter((r) => r.state === state).reduce((n, r) => n + r.size, 0);
+const counts = { done: sum("done"), now: sum("now"), next: sum("next") };
+const all = counts.done + counts.now + counts.next;
+const label = { done: "Done", now: "In progress", next: "Next" };
+const tally = (g: (typeof GROUPS)[number]) => {
+  const n = (s: Row["state"]) => g.rows.filter((r) => r.state === s).length;
+  return [n("done") && `${n("done")} done`, n("now") && `${n("now")} in progress`, n("next") && `${n("next")} next`]
+    .filter(Boolean)
+    .join(" · ");
+};
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>rawr work plan</title>
+<link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
+<link rel="stylesheet" href="https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300">
+<style is:inline>
+  :root {
+    --ink: #000;
+    --paper: #fff;
+    --red: #e4002b;
+    --rule: #000;
+    --grid: #e8e8e8;
+    --quiet: #6b6b6b;
+    --name: 13rem;
+    --note: 15rem;
+    --cols: 8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--paper); color: var(--ink); }
+  body {
+    font-family: "Abitaro Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-kerning: normal;
+    font-size: 14px;
+    font-weight: 450;
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+    padding: 40px 40px 96px;
+  }
+  header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    border-bottom: 4px solid var(--rule);
+    padding-bottom: 16px;
+  }
+  .mark { font-weight: 800; font-size: 14px; letter-spacing: 0.01em; margin-bottom: 40px; }
+  h1 { font-size: clamp(48px, 9vw, 128px); font-weight: 800; letter-spacing: -0.05em; line-height: 0.88; }
+  .meta { text-align: right; font-size: 13px; line-height: 1.6; }
+  .meta b { font-weight: 700; }
+  .figures { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
+  .figures div { padding: 20px 16px 24px 0; }
+  .figures div + div { padding-left: 16px; border-left: 1px solid var(--rule); }
+  .figures .n { display: block; font-size: 60px; font-weight: 800; letter-spacing: -0.045em; line-height: 1; }
+  .figures .n.red { color: var(--red); }
+  .figures .k { display: block; margin-top: 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 24px; padding: 14px 0;
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--rule);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend .say { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 450; color: var(--quiet); font-size: 13px; }
+  .key { display: inline-block; width: 24px; height: 10px; }
+  .bar.done, .key.done { background: var(--ink); }
+  .bar.now, .key.now { background: var(--red); }
+  .bar.next, .key.next { border: 1px solid var(--ink); background: transparent; }
+  .row, .axis { display: grid; grid-template-columns: var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
+  .axis {
+    position: sticky; top: 0; z-index: 1; background: var(--paper);
+    padding: 14px 0 8px; font-size: 11px; font-weight: 600; color: var(--quiet);
+    border-bottom: 1px solid var(--grid);
+  }
+  .scale { position: relative; height: 14px; }
+  .scale span { position: absolute; transform: translateX(-50%); }
+  .scale span:first-child { transform: none; }
+  .scale span:last-child { transform: translateX(-100%); }
+  details { margin-top: 22px; }
+  summary {
+    list-style: none; cursor: pointer;
+    display: grid; grid-template-columns: var(--name) 1fr auto; column-gap: 20px; align-items: baseline;
+    border-top: 2px solid var(--rule); padding: 9px 0 7px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary .t { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
+  summary .s { font-size: 13px; font-weight: 500; }
+  summary .c { font-size: 12px; color: var(--quiet); display: inline-flex; gap: 14px; align-items: baseline; }
+  summary .c::after { content: "+"; font-size: 18px; font-weight: 400; line-height: 0; color: var(--ink); width: 10px; text-align: center; }
+  details[open] summary .c::after { content: "−"; }
+  summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  .name { font-weight: 600; }
+  .note { color: var(--quiet); font-size: 13px; }
+  .track {
+    position: relative; height: 14px;
+    background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / var(--cols)));
+  }
+  .bar { position: absolute; top: 2px; height: 10px; }
+  footer {
+    margin-top: 56px; padding-top: 12px; border-top: 4px solid var(--rule);
+    display: grid; grid-template-columns: 1fr 1fr; font-size: 12px; color: var(--quiet);
+  }
+  footer p + p { text-align: right; }
+  @media (max-width: 1100px) {
+    :root { --note: 0px; }
+    .row, .axis { grid-template-columns: var(--name) 1fr; }
+    .note, .axis .pad-r { display: none; }
+  }
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 64px; }
+    header { grid-template-columns: 1fr; }
+    .meta { text-align: left; margin-top: 16px; }
+    .figures { grid-template-columns: repeat(2, 1fr); }
+    .figures div:nth-child(3) { border-left: 0; padding-left: 0; }
+    .figures div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+    .figures .n { font-size: 40px; }
+    .legend .say { margin-left: 0; flex-basis: 100%; }
+    .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
+    .axis .pad-l { display: none; }
+    .note { display: block; font-size: 12px; }
+    summary { grid-template-columns: 1fr auto; }
+    summary .s { grid-column: 1; grid-row: 2; }
+    summary .c { grid-column: 2; grid-row: 1 / span 2; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="mark">rawr</p>
+    <h1>Work plan</h1>
+  </div>
+  <p class="meta">Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
+</header>
+
+<div class="figures">
+  <div><span class="n">{counts.done}</span><span class="k">Done</span></div>
+  <div><span class="n red">{counts.now}</span><span class="k">In progress</span></div>
+  <div><span class="n">{counts.next}</span><span class="k">Next, of {all}</span></div>
+  <div><span class="n">{EXAMPLES.running}/{EXAMPLES.total}</span><span class="k">iced examples, no rawr-iced</span></div>
+</div>
+
+<div class="legend">
+  <span><i class="key done"></i>{label.done}</span>
+  <span><i class="key now"></i>{label.now}</span>
+  <span><i class="key next"></i>{label.next}</span>
+  <span class="say">Bar length is complexity, how much code changes. It is not time. The scale fits the open groups.</span>
+</div>
+
+<div class="axis" aria-hidden="true">
+  <span class="pad-l"></span>
+  <div class="scale" id="scale">{ticks.map((t) => <span style={`left:${pct(t - lo)}`}>{t}</span>)}</div>
+  <span class="pad-r"></span>
+</div>
+
+{GROUPS.map((g) => (
+  <details open={g.open} id={g.id}>
+    <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
+    {g.rows.map((r) => (
+      <div class="row" data-start={r.start} data-size={r.size}>
+        <span class="name">{r.name}</span>
+        <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
+          <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
+        </div>
+        <span class="note">{r.note}</span>
+      </div>
+    ))}
+  </details>
+))}
+
+<footer>
+  <p>{EXAMPLES.running} of {EXAMPLES.total} upstream iced examples run under rawr run with no rawr-iced. {EXAMPLES.note}.</p>
+  <p>rawr.airstrike.fyi</p>
+</footer>
+
+<script is:inline>
+  // Fit the axis to the rows of the open groups, on 5-unit lines.
+  (() => {
+    const rows = [...document.querySelectorAll(".row")];
+    const scale = document.getElementById("scale");
+    const fit = () => {
+      const open = rows.filter((r) => r.closest("details").open);
+      const use = open.length ? open : rows;
+      const lo = Math.floor(Math.min(...use.map((r) => +r.dataset.start)) / 5) * 5;
+      const hi = Math.ceil(Math.max(...use.map((r) => +r.dataset.start + +r.dataset.size)) / 5) * 5;
+      const span = Math.max(hi - lo, 5);
+      document.documentElement.style.setProperty("--cols", span / 5);
+      for (const r of rows) {
+        const bar = r.querySelector(".bar");
+        bar.style.left = `${((+r.dataset.start - lo) / span) * 100}%`;
+        bar.style.width = `${(+r.dataset.size / span) * 100}%`;
+      }
+      scale.replaceChildren(
+        ...Array.from({ length: span / 5 + 1 }, (_, i) => {
+          const tick = document.createElement("span");
+          tick.style.left = `${(i / (span / 5)) * 100}%`;
+          tick.textContent = lo + i * 5;
+          return tick;
+        }),
+      );
+    };
+    for (const d of document.querySelectorAll("details")) d.addEventListener("toggle", fit);
+    fit();
+  })();
+</script>
+</body>
+</html>

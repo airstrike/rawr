@@ -76,10 +76,12 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // `next`; schema 23 keeps an AsRef impl's `as_ref`. Schema 27 gives a
 // constant of no scalar value as its own. Schema 28 names a type only an
 // alias reaches under its crate's `$crate` segment, and gives an alias of an
-// associated type as the type it names at its defaults.
+// associated type as the type it names at its defaults. Schema 29 applies a
+// blanket implementation through a type's own implementation of the trait
+// its where-clause names.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 28;
+const PROTOCOL_SCHEMA: u32 = 29;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -161,6 +163,11 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     external: BTreeMap<CrateNum, ExternalCrate>,
     implementation_index: HashMap<CrateNum, HashMap<DefId, Vec<DefId>>>,
     obligation_candidates: HashMap<TraitObligationKey<'tcx>, Vec<DefId>>,
+    /// While a blanket implementation is applied through a type's own
+    /// implementation of the trait its where-clause names, that
+    /// implementation and the application's identity, which owns its
+    /// parameters (`apply_blanket_through`).
+    reowned: Option<(DefId, Id)>,
     /// The selected crate's public aliases with no parameters of a generic
     /// type at fixed arguments, found once (`instance_alias`).
     instance_aliases: Option<Vec<(DefId, Ty<'tcx>)>>,
@@ -3980,7 +3987,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
         }
         self.edge(generics.own_params.len())?;
-        let owner = self.id(def_id, definition_namespace(self.tcx.def_kind(def_id)))?;
+        let owner = match &self.reowned {
+            Some((reowned, id)) if *reowned == def_id => id.clone(),
+            _ => self.id(def_id, definition_namespace(self.tcx.def_kind(def_id)))?,
+        };
         let mut parameters = Vec::new();
         for parameter in &generics.own_params {
             let name = self.budget.owned(parameter.name.as_str())?;
@@ -4358,7 +4368,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let owner = self.parameter_owner_def_id(owner, index, expected)?;
         let generics = self.tcx.generics_of(owner);
         Ok(ResolvedParameter {
-            owner: self.id(owner, definition_namespace(self.tcx.def_kind(owner)))?,
+            owner: match &self.reowned {
+                Some((reowned, id)) if *reowned == owner => id.clone(),
+                _ => self.id(owner, definition_namespace(self.tcx.def_kind(owner)))?,
+            },
             self_type: expected == ParameterClass::Type && generics.has_self && index == 0,
         })
     }

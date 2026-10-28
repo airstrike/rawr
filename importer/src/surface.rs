@@ -916,18 +916,24 @@ fn validate_function_items(
         let selected_outcome = contract
             .outcome(selected.identity())
             .ok_or(Error::ForeignIdentity)?;
+        // A generic function is selected at its instance's types, one per
+        // type parameter, as `window::close::<Message>` is.
         let selected_signature = match selected_outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan)
-                if plan.signature().parameters().is_empty()
-                    && plan.receiver().is_none()
-                    && plan.predicates().is_empty() =>
+                if plan.receiver().is_none()
+                    && plan.predicates().is_empty()
+                    && plan.call().is_none()
+                    && plan.crossings().is_empty()
+                    && plan.signature().parameters().iter().all(|parameter| {
+                        parameter.kind() == crate::classify::representability::signature::Kind::Type
+                    }) =>
             {
                 plan.signature()
             }
             _ => return Err(Error::InstanceMismatch),
         };
-        if !selected_signature.parameters().is_empty()
+        if selected_signature.parameters().len() != selected.identity().types().len()
             || selected_signature.inputs().len() != call.inputs().len()
         {
             return Err(Error::InstanceMismatch);
