@@ -15,6 +15,13 @@
   <span class="c">= help:</span> add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr</code></pre>
 </div>
 <p>Add the line as the help says. A single <code>.rs</code> file runs without it.</p>
+<p>After a shebang line or a frontmatter block, the marker goes on the next line. <a href="/docs/run#marker">Run</a> shows where.</p>
+
+<h2 id="script-dependencies">A script declares dependencies</h2>
+<div class="block diag">
+  <pre><code><span class="e">error[RAWR-ENVIRONMENT-PACKAGE-MANIFEST]</span><span class="h">: this script declares dependencies in its frontmatter. Rawr doesn't resolve a script's dependencies yet. A script with no dependencies runs.</span></code></pre>
+</div>
+<p>rawr can&rsquo;t run a cargo script with dependencies yet. Move the code into a Cargo package, with the dependencies in its <code>Cargo.toml</code>.</p>
 
 <h2 id="not-installed">A program needs an extension that isn&rsquo;t installed</h2>
 <p><code>rawr run</code> names the missing extension and prints the commands that install it. <a href="/docs/imports#install">Imports</a> and <a href="/docs/iced#install">iced</a> list them too.</p>
