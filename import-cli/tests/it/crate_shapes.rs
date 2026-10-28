@@ -125,8 +125,12 @@ fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
 /// A trait method generic over `T` is a member of the opaque `impl Trait`
 /// that a function generic over its own `T` gives, as warp's `form<T>()`
 /// gives an `impl Filter` with `untuple_one<T>`. The two `T`s used to be
-/// declared twice in one signature, which failed the crate's import.
+/// declared twice in one signature, which failed the crate's import. A
+/// member that gives a type holding the opaque type (`Filter::and`), and a
+/// type's method that gives an opaque type (`Source::filter`, as image's
+/// `Reader::into_decoder`), used to declare an opaque type under a function
+/// or a type, which isn't a module, and failed the import too.
 #[test]
-fn an_opaque_types_method_may_reuse_its_functions_parameter_name() {
+fn an_opaque_types_members_import() {
     runs_as_cargo_does("opaque", "7\nvalue 8\n");
 }

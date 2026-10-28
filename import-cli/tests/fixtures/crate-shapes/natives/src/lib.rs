@@ -272,6 +272,33 @@ pub mod form {
         {
             format!("{prefix} {}", self.value())
         }
+
+        /// A type that holds `Self`, as warp's `Filter::and` gives
+        /// `And<Self, F>`.
+        fn and(self, more: u32) -> And<Self>
+        where
+            Self: Sized,
+        {
+            And(self, more)
+        }
+    }
+
+    pub struct And<F>(F, u32);
+
+    impl<F: Filter> Filter for And<F> {
+        fn value(self) -> u32 {
+            self.0.value() + self.1
+        }
+    }
+
+    /// A type whose method gives an opaque type, as image's
+    /// `Reader::into_decoder` gives `impl ImageDecoder`.
+    pub struct Source(pub u32);
+
+    impl Source {
+        pub fn filter(self) -> impl Filter {
+            Plain(self.0)
+        }
     }
 
     struct Plain(u32);

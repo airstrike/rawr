@@ -2367,7 +2367,9 @@ fn opaque_types(
         rawr_import::surface::identity::Definition,
         Box<[ImmutableString]>,
     )> = Vec::new();
-    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>| {
+    // `member` marks a member's output, which only names a type: one already
+    // declared beside a function isn't declared again.
+    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>, member: bool| {
         let signature = match outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan) => plan.signature(),
@@ -2381,7 +2383,10 @@ fn opaque_types(
         // are reached through.
         for (index, (definition, arguments)) in found.into_iter().enumerate() {
             let path = rawr_import::surface::opaque::path(path, index);
-            if types.iter().any(|(known, _, _)| *known == path) {
+            if types
+                .iter()
+                .any(|(known, declared, _)| *known == path || (member && *declared == definition))
+            {
                 continue;
             }
             let names = arguments
@@ -2403,15 +2408,21 @@ fn opaque_types(
         }
     };
     for entry in &facade.entries {
-        visit(&entry.relative, entry.outcome);
+        visit(&entry.relative, entry.outcome, false);
+    }
+    // A member's opaque output is declared in its owner's module, as
+    // `image::io::__rawr_opaque_Reader__into_decoder` for `Reader`'s
+    // `into_decoder`: a type or a function is no module to declare it in.
+    for entry in &facade.entries {
         for associated in entry
             .outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
             visit(
-                &format!("{}::{}", entry.relative, associated.name()),
+                &format!("{}__{}", entry.relative, associated.name()),
                 associated,
+                true,
             );
         }
     }
