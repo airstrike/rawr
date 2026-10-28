@@ -132,7 +132,7 @@ node --input-type=module -e '
       if (!response.ok) {
         const message = (await response.text()).slice(0, 200);
         // A fresh container can also crash or drop its first renders while
-        // it starts, as 0.3.4's and 0.3.6's checks did.
+        // it starts, as the checks of 0.3.4 and 0.3.6 did.
         const cold_start =
           (response.status === 422 &&
             (message.includes("render time limit") || message.includes("out of memory or crashed"))) ||
