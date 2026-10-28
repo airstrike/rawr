@@ -199,12 +199,13 @@ fn main() {
 invalid digit found in string | ParseIntError { kind: InvalidDigit }
 -2 is negative | Negative(-2)</span></div>
 </div>
-<h2 id="path-io"><code>path</code>, <code>ffi</code>, <code>io</code>, <code>env</code> and <code>fs</code></h2>
+<h2 id="path-io"><code>path</code>, <code>ffi</code>, <code>io</code>, <code>env</code>, <code>fs</code> and <code>process</code></h2>
 <p><code>std::path</code> and <code>std::ffi</code> work in every program. <code>PathBuf</code>, <code>Path</code>, <code>OsString</code> and <code>OsStr</code> are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function doesn&rsquo;t take one yet.</p>
 <p><code>std::io</code> has <code>Error</code> and <code>ErrorKind</code>, with <code>Error::new</code>, <code>Error::other</code>, <code>Error::from</code> and <code>kind</code>. Nothing in it reads or writes a file.</p>
 <p><code>std::io::stdin()</code> reads the program&rsquo;s standard input. <code>read_line</code> and <code>read_to_string</code> append to a <code>&amp;mut String</code> and return an <code>io::Result</code> of the bytes read, as in Rust. <code>lines()</code> reads to the end of the input before it gives its first line, so a program that answers each line as it comes uses <code>read_line</code>. <code>lock()</code> gives the same reader. <code>std::io::stdout().flush()</code> flushes what the program printed.</p>
 <p><code>std::env::args()</code> gives the program&rsquo;s arguments. Under <code>rawr run</code> the first is the program&rsquo;s name and the rest come after <code>--</code>, as <code>cargo run</code> gives them. <a href="/docs/run#arguments">Run</a> says more.</p>
 <p><code>std::fs::read_to_string</code> reads a file into a <code>String</code>. Snippets in the playground read no files.</p>
+<p><code>std::process::id()</code> gives the id of the process the program runs in, as a <code>u32</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="path.rs" id="src-path">use std::path::PathBuf;
 

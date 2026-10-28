@@ -9995,6 +9995,24 @@ main();
     );
 }
 
+/// `std::process::id()` is the running process's id, a `u32`, as rustc
+/// gives it.
+#[test]
+fn language_std_process_id() {
+    assert_eq!(
+        printed(
+            r#"
+fn main() {
+    let id: u32 = std::process::id();
+    println!("{}", id == std::process::id() && id > 0);
+}
+main();
+"#
+        ),
+        "true\n"
+    );
+}
+
 /// A file whose `mod` items are inline compiles as a crate root without a
 /// file or a project, as `?play` and rawr-web compile a snippet: nested
 /// modules, `super::`, `use` of a module's type, and `main` callable by
