@@ -1,0 +1,195 @@
+---
+// /todo: the work plan as a Gantt chart. Nothing links here and robots skip
+// it. The rows are in src/lib/todo.ts. Bar length is complexity, not time.
+import { EXAMPLES, LANES, ROWS, UPDATED, VERSION, type Row } from "../lib/todo.ts";
+
+const total = Math.max(...ROWS.map((r) => r.start + r.size));
+const span = Math.ceil(total / 5) * 5;
+const ticks = Array.from({ length: span / 5 + 1 }, (_, i) => i * 5);
+const sum = (state: Row["state"]) => ROWS.filter((r) => r.state === state).reduce((n, r) => n + r.size, 0);
+const counts = { done: sum("done"), now: sum("now"), next: sum("next") };
+const all = counts.done + counts.now + counts.next;
+const lanes = Object.keys(LANES).filter((lane) => ROWS.some((r) => r.lane === lane));
+const pct = (n: number) => `${(n / span) * 100}%`;
+const label = { done: "Done", now: "In progress", next: "Next" };
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>rawr work plan</title>
+<style is:inline>
+  :root {
+    --ink: #000;
+    --paper: #fff;
+    --red: #e4002b;
+    --rule: #000;
+    --grid: #e6e6e6;
+    --quiet: #6b6b6b;
+    --name: 15rem;
+    --note: 17rem;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--paper); color: var(--ink); }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+    padding: 48px 48px 96px;
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+  header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    border-bottom: 4px solid var(--rule);
+    padding-bottom: 16px;
+  }
+  .mark { font-weight: 700; font-size: 14px; letter-spacing: 0.02em; margin-bottom: 40px; }
+  h1 { font-size: clamp(48px, 9vw, 120px); font-weight: 700; letter-spacing: -0.045em; line-height: 0.9; }
+  .meta { text-align: right; font-size: 13px; line-height: 1.6; }
+  .meta b { font-weight: 700; }
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border-bottom: 1px solid var(--rule);
+  }
+  .figures div { padding: 20px 16px 24px 0; }
+  .figures div + div { padding-left: 16px; border-left: 1px solid var(--rule); }
+  .figures .n { display: block; font-size: 56px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+  .figures .n.red { color: var(--red); }
+  .figures .k { display: block; margin-top: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    padding: 14px 0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--rule);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend .say { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--quiet); font-size: 13px; }
+  .key { display: inline-block; width: 24px; height: 10px; }
+  .bar.done, .key.done { background: var(--ink); }
+  .bar.now, .key.now { background: var(--red); }
+  .bar.next, .key.next { border: 1px solid var(--ink); background: transparent; }
+  .row, .axis {
+    display: grid;
+    grid-template-columns: var(--name) 1fr var(--note);
+    column-gap: 16px;
+    align-items: center;
+  }
+  .axis { padding: 18px 0 6px; font-size: 11px; color: var(--quiet); }
+  .scale { position: relative; height: 14px; }
+  .scale span { position: absolute; transform: translateX(-50%); }
+  .scale span:first-child { transform: none; }
+  .scale span:last-child { transform: translateX(-100%); }
+  section { margin-top: 28px; }
+  h2 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-top: 2px solid var(--rule);
+    padding: 8px 0 6px;
+  }
+  .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  .name { font-weight: 500; }
+  .note { color: var(--quiet); font-size: 13px; }
+  .track {
+    position: relative;
+    height: 14px;
+    background-image: repeating-linear-gradient(
+      to right,
+      var(--grid) 0 1px,
+      transparent 1px calc(100% / var(--cols))
+    );
+  }
+  .bar { position: absolute; top: 2px; height: 10px; }
+  footer {
+    margin-top: 56px;
+    padding-top: 12px;
+    border-top: 4px solid var(--rule);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    font-size: 12px;
+    color: var(--quiet);
+  }
+  footer p + p { text-align: right; }
+  @media (max-width: 1000px) {
+    :root { --note: 0px; }
+    .row, .axis { grid-template-columns: var(--name) 1fr; }
+    .note, .axis .pad-r { display: none; }
+  }
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 64px; }
+    header { grid-template-columns: 1fr; }
+    .meta { text-align: left; margin-top: 16px; }
+    .figures { grid-template-columns: repeat(2, 1fr); }
+    .figures div:nth-child(3) { border-left: 0; padding-left: 0; }
+    .figures div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+    .figures .n { font-size: 40px; }
+    .legend .say { margin-left: 0; flex-basis: 100%; }
+    .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
+    .axis .pad-l { display: none; }
+    .note { display: block; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="mark">rawr</p>
+    <h1>Work plan</h1>
+  </div>
+  <p class="meta">Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
+</header>
+
+<div class="figures">
+  <div><span class="n">{counts.done}</span><span class="k">Done</span></div>
+  <div><span class="n red">{counts.now}</span><span class="k">In progress</span></div>
+  <div><span class="n">{counts.next}</span><span class="k">Next, of {all}</span></div>
+  <div><span class="n">{EXAMPLES.running}/{EXAMPLES.total}</span><span class="k">iced examples, no rawr-iced</span></div>
+</div>
+
+<div class="legend">
+  <span><i class="key done"></i>{label.done}</span>
+  <span><i class="key now"></i>{label.now}</span>
+  <span><i class="key next"></i>{label.next}</span>
+  <span class="say">Bar length is complexity, how much code changes. It is not time.</span>
+</div>
+
+<div class="axis" aria-hidden="true">
+  <span class="pad-l"></span>
+  <div class="scale">{ticks.map((t) => <span style={`left:${pct(t)}`}>{t}</span>)}</div>
+  <span class="pad-r"></span>
+</div>
+
+{lanes.map((lane) => (
+  <section>
+    <h2>{LANES[lane]}</h2>
+    {ROWS.filter((r) => r.lane === lane).map((r) => (
+      <div class="row">
+        <span class="name">{r.name}</span>
+        <div class="track" style={`--cols:${span / 5}`} role="img" aria-label={`${label[r.state]}, ${r.size} units from ${r.start}`}>
+          <i class={`bar ${r.state}`} style={`left:${pct(r.start)};width:${pct(r.size)}`}></i>
+        </div>
+        <span class="note">{r.note}</span>
+      </div>
+    ))}
+  </section>
+))}
+
+<footer>
+  <p>{EXAMPLES.running} of {EXAMPLES.total} upstream iced examples run under rawr run with no rawr-iced. {EXAMPLES.note}.</p>
+  <p>rawr.airstrike.fyi</p>
+</footer>
+</body>
+</html>
