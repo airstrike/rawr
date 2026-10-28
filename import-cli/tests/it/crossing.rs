@@ -169,14 +169,18 @@ fn a_checkbox_with_an_optional_callable_and_a_crate_style_runs() {
 
 /// iced's slider: `logo(..)` gives an opaque `impl Widget` that `column!`
 /// boxes through `Widget::_boxed`, and `default(50)` takes the literal as
-/// the slider's `u8`. The output is `cargo run`'s.
+/// the slider's `u8`. `caption(self.value)` calls the function where a
+/// macro has the same name, as iced's `text(self.value)` does, and its
+/// type's only name is an alias that passes its parameters on. The output
+/// is `cargo run`'s.
 #[test]
 fn a_slider_beside_an_opaque_widget_runs() {
     let (rawr, cargo) = both_printed("crossing-slider", "slider.rs", "slide");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 message SliderChanged(100)")
-            && rawr.contains("last view pad 0 1..=100@100/Some(50) logo100@16"),
+        rawr.contains("1 view pad 0 1..=100@50/Some(50) \"50\" logo50@16")
+            && rawr.contains("1 message SliderChanged(100)")
+            && rawr.contains("last view pad 0 1..=100@100/Some(50) \"100\" logo100@16"),
         "{rawr}"
     );
 }

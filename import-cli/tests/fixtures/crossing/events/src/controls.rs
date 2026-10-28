@@ -470,3 +470,97 @@ impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for &str {
         None
     }
 }
+
+mod caption_core {
+    /// Text at a theme, which no public path names, as iced's
+    /// `core::widget::Text<'a, Theme>` while `iced::advanced` is off.
+    pub struct Caption<'a, Theme> {
+        pub(crate) text: String,
+        pub(crate) look: Option<super::Look>,
+        pub(crate) theme: std::marker::PhantomData<&'a Theme>,
+    }
+}
+
+/// Text at the crate's theme: an alias that passes its parameters on, and
+/// the only name of its type, as iced's `widget::Text` is.
+pub type Caption<'a, Theme = crate::Theme> = caption_core::Caption<'a, Theme>;
+
+/// A caption showing `value`, as iced's `text(..)`, whose name a macro
+/// and the function share.
+pub fn caption<'a, Theme>(value: impl ToString) -> Caption<'a, Theme> {
+    caption_core::Caption {
+        text: value.to_string(),
+        look: None,
+        theme: std::marker::PhantomData,
+    }
+}
+
+impl<Theme> caption_core::Caption<'_, Theme> {
+    /// A caption showing `value`, as iced's `Text::new`.
+    pub fn new(value: impl ToString) -> Self {
+        caption(value)
+    }
+
+    /// The caption in `look`.
+    pub fn look(mut self, look: Look) -> Self {
+        self.look = Some(look);
+        self
+    }
+}
+
+/// A caption of a format string, as iced's `text!`.
+#[macro_export]
+macro_rules! controls_caption {
+    ($($arg:tt)*) => {
+        $crate::controls::Caption::new(format!($($arg)*))
+    };
+}
+
+pub use crate::controls_caption as caption;
+
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for caption_core::Caption<'_, Theme>
+{
+    fn labels(&self, labels: &mut Vec<String>) {
+        match &self.look {
+            Some(look) => labels.push(format!("\"{}\"/{}", self.text, look.name())),
+            None => labels.push(format!("\"{}\"", self.text)),
+        }
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
+    }
+}
+
+/// A tone and whether it is monospaced, with constants of no scalar value,
+/// as iced's `Font::MONOSPACE` and `Theme::ALL`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    /// Its tone.
+    pub tone: u8,
+    /// Whether it is monospaced.
+    pub mono: bool,
+}
+
+impl Look {
+    /// The plain look.
+    pub const DEFAULT: Look = Look {
+        tone: 0,
+        mono: false,
+    };
+
+    /// The monospaced look.
+    pub const MONOSPACE: Look = Look {
+        mono: true,
+        ..Self::DEFAULT
+    };
+
+    /// Every look.
+    pub const ALL: &'static [Self] = &[Self::DEFAULT, Self::MONOSPACE];
+
+    /// Its name.
+    pub fn name(&self) -> String {
+        format!("{}{}", if self.mono { "mono" } else { "plain" }, self.tone)
+    }
+}

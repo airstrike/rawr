@@ -2,9 +2,11 @@
 // iced's slider in the fixture's controls: `logo(..)` gives an opaque
 // `impl Widget` that `column!` boxes through the trait's own method, a
 // slider takes a `RangeInclusive<u8>` and `default(impl Into<u8>)` takes a
-// number literal as the `u8` it is.
+// number literal as the `u8` it is. `caption(..)` names the function where
+// a macro has the same name, as iced's `text(self.value)` does, and gives a
+// type whose only name is an alias that passes its parameters on.
 
-use events::controls::{logo, slider};
+use events::controls::{caption, logo, slider};
 use events::widgets::{column, Widget};
 
 #[derive(Debug, Clone)]
@@ -33,7 +35,8 @@ impl Slider {
 
     fn view(&self) -> impl Widget<Message> {
         let h_slider = slider(1..=100, self.value, Message::SliderChanged).default(50);
-        column![h_slider, logo(self.value as f32)]
+        let caption = caption(self.value);
+        column![h_slider, caption, logo(self.value as f32)]
     }
 }
 

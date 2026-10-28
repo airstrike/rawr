@@ -4,6 +4,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 ## Unreleased
 
+- Upstream iced's `slider` example runs under `rawr run` without rawr-iced again. Its `text(self.value)` was read as the `text!` macro, because the `text` function had no binding.
+- A crate type whose only public name is an alias that passes its parameters on is named through that alias, with the alias's defaults. iced's `widget::Text` is such an alias while `iced::advanced` is off. Functions that give such a type, such as `text(..)`, now have bindings.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 - A project whose watched folders include two names where one is the other followed by `-`, such as `target/rawr` and `target/rawr-home`, no longer fails with "invalid stored baseline" on its next run.
