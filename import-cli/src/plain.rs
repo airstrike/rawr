@@ -105,6 +105,7 @@ fn prepare(
     let policy = rawr_import::classify::Policy::standard();
     let mut snapshot = Some(snapshot);
     let mut crate_demand = rawr_import::crate_demand::load(&project);
+    let mut settlement = rawr_import::bindings::Settlement::default();
     let mut remembered = !crate_demand.is_empty();
     let seed = graph.rust_demand_seed(&[], None);
     let (demand, profile_contract, cached, native) = loop {
@@ -133,9 +134,10 @@ fn prepare(
             Err(error) => return Err(Error::other(error)),
         };
         remembered = false;
-        let prepared = request
+        let mut prepared = request
             .prepare_cached_in(&limits, scope)
             .map_err(Error::other)?;
+        settlement.absorb(prepared.settlement());
         let api = prepared.retain_api(&limits).map_err(Error::other)?;
         let snapshot = snapshot
             .take()
@@ -234,7 +236,8 @@ fn prepare(
         .request_retained(native, profile, revision)
         .map_err(Error::other)?;
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_imported(request.watch());
-    Ok(crate::Prepared::new(
-        request, transport, project, inputs, &graph, limits,
-    ))
+    Ok(
+        crate::Prepared::new(request, transport, project, inputs, &graph, limits)
+            .with_settlement(settlement),
+    )
 }

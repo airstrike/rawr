@@ -403,8 +403,16 @@ const fn diagnostic_namespace(namespace: u8) -> &'static str {
 }
 
 #[cfg(feature = "rustc-driver")]
+#[allow(
+    dead_code,
+    reason = "shared with the driver, which answers and records the units"
+)]
+pub(crate) mod engine;
+#[cfg(feature = "rustc-driver")]
 pub(crate) mod plan;
 pub(crate) mod protocol;
+#[cfg(feature = "rustc-driver")]
+pub(crate) mod shared;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) struct DirectPublication {
@@ -2173,6 +2181,23 @@ impl Invocations {
             },
             allocation,
         })
+    }
+
+    /// Each external crate the probe named, with the unit that compiled it.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn external_records(&self) -> Vec<crate::bindings::External> {
+        self.authority
+            .external_units
+            .iter()
+            .map(|(key, authority)| crate::bindings::External {
+                crate_name: key.crate_name.to_string(),
+                stable_crate_id: key.stable_crate_id.to_string(),
+                unit_key: match authority {
+                    ExternalAuthority::Available(unit) => Some(unit.unit_key.to_string()),
+                    ExternalAuthority::Unavailable { .. } => None,
+                },
+            })
+            .collect()
     }
 
     #[cfg(feature = "rustc-driver")]

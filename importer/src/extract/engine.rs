@@ -20,6 +20,8 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+#[path = "engine/home.rs"]
+pub(crate) mod home;
 #[path = "engine/model.rs"]
 pub(crate) mod model;
 
@@ -30,7 +32,7 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 1;
+pub(crate) const TABLE_SCHEMA: u32 = 2;
 
 const MAX_DEFINITIONS: usize = 500_000;
 const MAX_PACKAGES: usize = 4_096;
@@ -133,6 +135,8 @@ pub(crate) enum Emission {
         key: String,
         proof: ScalarPredicateProof,
     },
+    /// The names a struct or enum's inherent impls give.
+    Inherent { names: Vec<String> },
 }
 
 /// What a trait obligation's self type is, which decides whether being
@@ -176,17 +180,22 @@ pub(crate) enum Unit {
         implementation: Hash,
         obligation: String,
     },
-    /// A demanded `Type::member` that a trait provides.
+    /// A demanded `Type::member` that a trait provides. The traits the
+    /// compiler sees are every selected crate's, so the unit is keyed by
+    /// them too (`session`).
     Member {
         #[serde(with = "hex16")]
         owner: Hash,
         name: String,
+        session: String,
     },
-    /// A demanded `Trait::member`, for the trait's impls on `&str`.
+    /// A demanded `Trait::member`, for the trait's impls on `&str` in every
+    /// selected crate (`session`).
     TraitMember {
         #[serde(with = "hex16")]
         owner: Hash,
         name: String,
+        session: String,
     },
 }
 
@@ -561,6 +570,7 @@ pub(crate) struct Engine<'o, O: Oracle> {
     oracle: &'o mut O,
     root: Root,
     aliases: Vec<String>,
+    session: String,
     scheduler: BTreeMap<Key, Scheduled>,
     ready: BTreeSet<Key>,
     definitions: BTreeMap<Key, Defined>,
@@ -580,16 +590,27 @@ pub(crate) struct Engine<'o, O: Oracle> {
     crate_roots: Vec<(Hash, String, String)>,
     members: Vec<(Hash, String)>,
     trait_members: Vec<(Hash, String)>,
+    inherent: BTreeMap<Hash, Vec<String>>,
+    /// The definition whose impl tables are being applied.
+    current: Option<Hash>,
     active: Level,
     only_names: Option<BTreeSet<Key>>,
 }
 
 impl<'o, O: Oracle> Engine<'o, O> {
-    pub(crate) fn new(oracle: &'o mut O, root: Root, aliases: Vec<String>) -> Self {
+    /// A walk of `root`'s crate under `aliases`, in a session of selected
+    /// crates `session` names (`session_key`).
+    pub(crate) fn new(
+        oracle: &'o mut O,
+        root: Root,
+        aliases: Vec<String>,
+        session: String,
+    ) -> Self {
         Self {
             oracle,
             root,
             aliases,
+            session,
             scheduler: BTreeMap::new(),
             ready: BTreeSet::new(),
             definitions: BTreeMap::new(),
@@ -609,6 +630,8 @@ impl<'o, O: Oracle> Engine<'o, O> {
             crate_roots: Vec::new(),
             members: Vec::new(),
             trait_members: Vec::new(),
+            inherent: BTreeMap::new(),
+            current: None,
             active: Level::Shape,
             only_names: None,
         }
@@ -754,6 +777,11 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     ids.extend(values.iter().cloned());
                 }
                 Emission::Base { .. } => {}
+                Emission::Inherent { names } => {
+                    if let Some(hash) = self.current {
+                        self.inherent.insert(hash, names.clone());
+                    }
+                }
                 Emission::Application { implementation } => {
                     match self.applications.get_mut(&implementation.key) {
                         Some(existing) => {
@@ -919,7 +947,10 @@ impl<'o, O: Oracle> Engine<'o, O> {
         }
         if level == Level::Selected {
             if self.implemented.insert(key.hash) {
-                self.apply(&Unit::Implementations(key.hash))?;
+                self.current = Some(key.hash);
+                let applied = self.apply(&Unit::Implementations(key.hash));
+                self.current = None;
+                applied?;
             }
             if self.surfaced.insert(key.hash) {
                 self.apply(&Unit::Surface(key.hash))?;
@@ -1026,13 +1057,31 @@ impl<'o, O: Oracle> Engine<'o, O> {
         members.sort_unstable();
         members.dedup();
         for (owner, name) in members {
-            self.apply(&Unit::Member { owner, name })?;
+            // An inherent member needs no trait: the unit would emit nothing.
+            if self
+                .inherent
+                .get(&owner)
+                .is_some_and(|names| names.binary_search(&name).is_ok())
+            {
+                continue;
+            }
+            let session = self.session.clone();
+            self.apply(&Unit::Member {
+                owner,
+                name,
+                session,
+            })?;
         }
         let mut members = std::mem::take(&mut self.trait_members);
         members.sort_unstable();
         members.dedup();
         for (owner, name) in members {
-            self.apply(&Unit::TraitMember { owner, name })?;
+            let session = self.session.clone();
+            self.apply(&Unit::TraitMember {
+                owner,
+                name,
+                session,
+            })?;
         }
         Ok(())
     }
@@ -1271,6 +1320,20 @@ impl<'o, O: Oracle> Engine<'o, O> {
     }
 }
 
+/// What names a session's selected crates: their unit keys, in any order.
+pub(crate) fn session_key<'a>(unit_keys: impl IntoIterator<Item = &'a str>) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut keys = unit_keys.into_iter().collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut digest = Sha256::new();
+    for key in keys {
+        digest.update((key.len() as u64).to_le_bytes());
+        digest.update(key.as_bytes());
+    }
+    hex(&digest.finalize())
+}
+
 pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(bytes.len() * 2);
@@ -1469,9 +1532,14 @@ mod tests {
             Unit::Shape(key(3)),
             vec![definition(3), request(2, Level::Selected)],
         );
-        let extracted = Engine::new(&mut fixture, root(), vec!["fixture".to_owned()])
-            .run(&[])
-            .unwrap();
+        let extracted = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
         assert_eq!(extracted.definitions.len(), 3);
         assert_eq!(extracted.reachable.len(), 1);
         for unit in [
@@ -1519,9 +1587,14 @@ mod tests {
                 },
             ],
         );
-        Engine::new(&mut fixture, root(), vec!["fixture".to_owned()])
-            .run(&[])
-            .unwrap();
+        Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
         let asked = |key: &str| {
             fixture.asked.contains_key(&Unit::Obligation {
                 key: key.to_owned(),
@@ -1600,9 +1673,14 @@ mod tests {
                 Emission::Associated { ids: vec![id(6)] },
             ],
         );
-        let extracted = Engine::new(&mut fixture, root(), vec!["fixture".to_owned()])
-            .run(&[])
-            .unwrap();
+        let extracted = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
         assert_eq!(extracted.implementations.len(), 1);
         let record = &extracted.implementations[0];
         assert_eq!(record.relevance, [id(1), id(3), id(4), id(5)]);
@@ -1627,26 +1705,41 @@ mod tests {
                 live: &mut fixture,
                 memo: &mut memo,
             };
-            Engine::new(&mut record, root(), vec!["fixture".to_owned()])
-                .run(&[])
-                .unwrap()
-                .body()
-                .unwrap()
-        };
-        let table = serde_json::to_vec(&memo.to_table(root())).unwrap();
-        let memo = Memo::from_table(serde_json::from_slice(&table).unwrap());
-        let replayed = Engine::new(&mut Replay(&memo), root(), vec!["fixture".to_owned()])
+            Engine::new(
+                &mut record,
+                root(),
+                vec!["fixture".to_owned()],
+                String::new(),
+            )
             .run(&[])
             .unwrap()
             .body()
-            .unwrap();
+            .unwrap()
+        };
+        let table = serde_json::to_vec(&memo.to_table(root())).unwrap();
+        let memo = Memo::from_table(serde_json::from_slice(&table).unwrap());
+        let replayed = Engine::new(
+            &mut Replay(&memo),
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap()
+        .body()
+        .unwrap();
         assert_eq!(live, replayed);
         let partial = Memo {
             modules: memo.modules.clone(),
             ..Memo::default()
         };
-        let missing =
-            Engine::new(&mut Replay(&partial), root(), vec!["fixture".to_owned()]).run(&[]);
+        let missing = Engine::new(
+            &mut Replay(&partial),
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[]);
         assert!(matches!(missing, Err(Fault::Missing(_))));
     }
 }

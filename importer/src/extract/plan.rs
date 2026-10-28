@@ -43,8 +43,17 @@ pub(crate) struct Plan {
     entries: Box<[Entry<Prepared>]>,
     demand: Box<[cargo::DemandPath]>,
     reuse: Option<PathBuf>,
+    sharing: Sharing,
     allocation: Allocation,
     graph_budget: Option<crate::node::GraphBudget>,
+}
+
+/// The selected crates whose extraction tables are shared per machine, by
+/// unit correlation, and where the home keeps them (`crate::bindings`).
+#[derive(Default)]
+pub(crate) struct Sharing {
+    pub(crate) keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
+    pub(crate) bindings: Option<PathBuf>,
 }
 
 /// One exact artifact-bound probe and its expected control bytes.
@@ -63,6 +72,7 @@ struct Probe {
     dependency_directories: Box<[PathBuf]>,
     namespace: Option<Namespace>,
     reuse: Option<PathBuf>,
+    sharing: Sharing,
     allocation: Allocation,
     graph_budget: Option<crate::node::GraphBudget>,
 }
@@ -86,6 +96,8 @@ pub(crate) struct Capture {
     controls: Box<[(PathBuf, [u8; 32])]>,
     artifacts: Box<[(PathBuf, u64, [u8; 32])]>,
     graph_budget: Option<crate::node::GraphBudget>,
+    sharing: Sharing,
+    reuse: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -241,6 +253,7 @@ impl Plan {
             entries: entries.into_boxed_slice(),
             demand: Box::default(),
             reuse: None,
+            sharing: Sharing::default(),
             allocation,
             graph_budget: None,
         })
@@ -421,6 +434,7 @@ impl Plan {
             entries: entries.into_boxed_slice(),
             demand: Box::default(),
             reuse: None,
+            sharing: Sharing::default(),
             allocation,
             graph_budget: None,
         })
@@ -448,6 +462,24 @@ impl Plan {
         })?;
         self.reuse = Some(self.allocation.clone_path(directory)?);
         Ok(self)
+    }
+
+    /// Share these selected crates' tables per machine: their keys, by
+    /// unit key, and the home's bindings directory.
+    pub(crate) fn share(
+        mut self,
+        keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
+        bindings: PathBuf,
+    ) -> Self {
+        for entry in self.entries.iter() {
+            if let Some(shared) = keys.get(&entry.unit_key) {
+                self.sharing
+                    .keys
+                    .insert(entry.unit_correlation.clone(), shared.clone());
+            }
+        }
+        self.sharing.bindings = Some(bindings);
+        self
     }
 
     pub(crate) fn target_directory(&self) -> &Path {
@@ -613,6 +645,7 @@ impl Plan {
             dependency_directories: probe_directories,
             namespace: None,
             reuse: self.reuse,
+            sharing: self.sharing,
             allocation,
             graph_budget: self.graph_budget,
         })
@@ -687,6 +720,9 @@ impl Probe {
                 process::CAPTURE_BYTES,
             )?;
             self.namespace = Some(Namespace::Cold(search, snapshot));
+        }
+        if let Some(reuse) = &self.reuse {
+            seed(reuse, &self.sharing);
         }
         let allocation = &mut self.allocation;
         publish(&self.plan_file, &self.plan_bytes, allocation)?;
@@ -1171,7 +1207,41 @@ impl Probe {
             controls: controls.into_boxed_slice(),
             artifacts: artifacts.into_boxed_slice(),
             graph_budget: self.graph_budget,
+            sharing: self.sharing,
+            reuse: self.reuse,
         })
+    }
+}
+
+/// Name each shared crate's key for the driver, and give it the table the
+/// home keeps, when the project has none of its own yet. Best effort: a
+/// table that is not there is extracted.
+fn seed(reuse: &Path, sharing: &Sharing) {
+    if sharing.keys.is_empty() {
+        return;
+    }
+    let keys = sharing
+        .keys
+        .iter()
+        .map(|(correlation, shared)| (correlation.as_ref(), shared.key.as_ref()))
+        .collect::<BTreeMap<_, _>>();
+    if let Ok(bytes) = serde_json::to_vec(&keys) {
+        let _ = fs::write(reuse.join("keys.json"), bytes);
+    }
+    let Some(bindings) = &sharing.bindings else {
+        return;
+    };
+    for shared in sharing.keys.values() {
+        let local = reuse.join(shared.key.as_ref());
+        if local.exists() {
+            continue;
+        }
+        if let Some(entry) = crate::bindings::read(bindings, &shared.key) {
+            let temporary = reuse.join(format!(".{}.seed-{}", shared.key, std::process::id()));
+            if fs::write(&temporary, &entry.table).is_ok() {
+                let _ = fs::rename(&temporary, &local);
+            }
+        }
     }
 }
 
@@ -1416,6 +1486,91 @@ impl Capture {
             }
         }
         Ok(())
+    }
+
+    /// What this extraction leaves to publish once the project's build
+    /// confirms its build scripts (`crate::bindings`): each shared crate's
+    /// table, the identity its sidecar gave it, the external crates the
+    /// probe named, and the nightly's results for the scripts its closure
+    /// runs, from `scripts`.
+    pub(crate) fn settlement(
+        &self,
+        scripts: &BTreeMap<String, Vec<crate::bindings::Script>>,
+    ) -> Vec<crate::bindings::Settled> {
+        let (Some(reuse), Some(bindings)) = (&self.reuse, &self.sharing.bindings) else {
+            return Vec::new();
+        };
+        let handshakes = self.handshakes();
+        let externals = self.invocations.external_records();
+        let mut settled = Vec::new();
+        for (correlation, shared) in &self.sharing.keys {
+            let table = reuse.join(shared.key.as_ref());
+            let Some(handshake) = handshakes
+                .iter()
+                .find(|handshake| handshake.unit_correlation == correlation.as_ref())
+            else {
+                continue;
+            };
+            if !table.is_file() {
+                continue;
+            }
+            let closure = shared
+                .scripts
+                .iter()
+                .filter_map(|package| {
+                    Some((package.to_string(), scripts.get(package.as_ref())?.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            settled.push(crate::bindings::Settled {
+                key: shared.key.to_string(),
+                crate_name: handshake.crate_name.clone(),
+                scripts: closure.clone(),
+                publish: Some(crate::bindings::Publish {
+                    bindings: bindings.clone(),
+                    table,
+                    meta: crate::bindings::Meta {
+                        schema: crate::bindings::META_SCHEMA,
+                        crate_name: handshake.crate_name.clone(),
+                        stable_crate_id: handshake.artifact.stable_crate_id.clone(),
+                        crate_hash: handshake.artifact.crate_hash.clone(),
+                        scripts: closure,
+                        externals: externals.clone(),
+                    },
+                }),
+            });
+        }
+        settled
+    }
+
+    /// Each sidecar's handshake, read again; one that changed is left out.
+    fn handshakes(&self) -> Vec<protocol::Handshake> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Shell {
+            handshake: protocol::Handshake,
+        }
+        const BODY: &[u8] = b",\"reachable\":";
+        let mut handshakes = Vec::new();
+        for (path, expected) in &self.sidecars {
+            if path.file_name() == Some(std::ffi::OsStr::new(ATTEMPTS_FILE)) {
+                continue;
+            }
+            let Ok(bytes) = fs::read(path) else {
+                continue;
+            };
+            if <[u8; 32]>::from(Sha256::digest(&bytes)) != *expected {
+                continue;
+            }
+            let Some(start) = bytes.windows(BODY.len()).position(|window| window == BODY) else {
+                continue;
+            };
+            let mut shell = bytes[..start].to_vec();
+            shell.push(b'}');
+            if let Ok(shell) = serde_json::from_slice::<Shell>(&shell) {
+                handshakes.push(shell.handshake);
+            }
+        }
+        handshakes
     }
 
     pub(crate) fn into_parts(
@@ -2675,6 +2830,8 @@ mod tests {
             controls: Box::from([(control, digest(b"control"))]),
             artifacts: Box::default(),
             graph_budget: Some(graph.clone()),
+            sharing: super::Sharing::default(),
+            reuse: None,
         };
         capture.revalidate(&limits).unwrap();
         capture.revalidate(&limits).unwrap();
@@ -2745,6 +2902,8 @@ mod tests {
             controls: Box::from([(control.clone(), digest(b"control"))]),
             artifacts: Box::from([(artifact.clone(), 8, digest(b"artifact"))]),
             graph_budget: None,
+            sharing: super::Sharing::default(),
+            reuse: None,
         };
 
         capture()
@@ -2835,6 +2994,8 @@ mod tests {
             controls: Box::default(),
             artifacts: Box::default(),
             graph_budget: None,
+            sharing: super::Sharing::default(),
+            reuse: None,
         };
         let digest = <[u8; 32]>::from(Sha256::digest(&bytes));
         let (decoded, _) = capture(digest).into_parts(&limits).unwrap();
@@ -2903,6 +3064,8 @@ mod tests {
                 controls: Box::default(),
                 artifacts: Box::default(),
                 graph_budget: None,
+                sharing: super::Sharing::default(),
+                reuse: None,
             }
             .semantic_sidecars()
         };

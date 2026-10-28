@@ -58,6 +58,7 @@ pub struct Prepared {
     inputs: rawr::reload::source::Inputs,
     manifests: owner::resident::Manifests,
     limits: rawr_import::cargo::Limits,
+    settlement: rawr_import::bindings::Settlement,
 }
 
 impl Prepared {
@@ -80,7 +81,21 @@ impl Prepared {
             inputs,
             manifests: owner::resident::Manifests::from_graph(graph),
             limits,
+            settlement: rawr_import::bindings::Settlement::default(),
         }
+    }
+
+    /// The shared bindings this preparation used or extracted, settled once
+    /// the runner builds.
+    #[must_use]
+    pub fn with_settlement(mut self, settlement: rawr_import::bindings::Settlement) -> Self {
+        self.settlement = settlement;
+        self
+    }
+
+    /// Take the shared bindings to settle after the runner builds.
+    pub fn take_settlement(&mut self) -> rawr_import::bindings::Settlement {
+        std::mem::take(&mut self.settlement)
     }
 
     /// The limits profile this preparation captured; later routes reuse it.

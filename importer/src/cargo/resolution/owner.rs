@@ -70,6 +70,23 @@ pub(crate) struct Ready {
 }
 
 impl Ready {
+    /// The shared tables this evaluation's cold extraction left to publish.
+    pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {
+        let entries = self
+            .evaluation
+            .settled
+            .lock()
+            .map(|mut settled| std::mem::take(&mut *settled))
+            .unwrap_or_default();
+        crate::bindings::Settlement {
+            entries,
+            bindings: Some(crate::bindings::directory(
+                self.evaluation.cached.context.cargo_home(),
+            )),
+            rawr: Some(self.evaluation.cached.context.rawr().to_path_buf()),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn node(&self) -> &node::Validated<Product> {
         &self.node
@@ -357,6 +374,8 @@ struct Evaluation {
     accounts: node::account::Key<Accounts>,
     stage: node::account::Key<Stage>,
     captured: Mutex<Captured>,
+    /// The shared tables a cold extraction of this evaluation left.
+    settled: Mutex<Vec<crate::bindings::Settled>>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -533,6 +552,7 @@ fn evaluate_preflight(
             replay: None,
             current: None,
         }),
+        settled: Mutex::new(Vec::new()),
     });
     let validator = Arc::clone(&state);
     let executor = Arc::clone(&state);
@@ -949,13 +969,16 @@ impl Evaluation {
             &self.limits,
             &self.limits,
         )?;
-        let completed = self.request.complete_parts_in(
+        let mut completed = self.request.complete_parts_in(
             &self.cached,
             &layout,
             built,
             &self.limits,
             &self.limits,
         )?;
+        if let Ok(mut settled) = self.settled.lock() {
+            *settled = std::mem::take(&mut completed.settlement);
+        }
         // The build's own completion names the product; the one replay after
         // publication proves the bundle reaches it, so the sealed bundle is
         // not replayed here as well.

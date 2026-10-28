@@ -275,6 +275,12 @@ pub struct Prepared {
 
 #[cfg(feature = "rustc-driver")]
 impl Prepared {
+    /// The shared tables this preparation extracted, to publish once the
+    /// runner builds (`crate::bindings`).
+    pub fn settlement(&mut self) -> crate::bindings::Settlement {
+        self.owner.settlement()
+    }
+
     /// Publish this currently validated owner through the extraction API node.
     pub fn publish(self, limits: &Limits) -> Result<crate::api::Graph<crate::api::Extracted>> {
         self.owner.publish(limits)
@@ -337,6 +343,9 @@ struct CompletedHarness {
     universe: Option<universe::Proof>,
     #[cfg(feature = "rustc-driver")]
     capture: crate::extract::plan::Capture,
+    /// The shared tables this extraction leaves to publish.
+    #[cfg(feature = "rustc-driver")]
+    settlement: Vec<crate::bindings::Settled>,
 }
 
 impl CompletedHarness {
@@ -2511,6 +2520,8 @@ impl Request {
             None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
         };
         #[cfg(feature = "rustc-driver")]
+        let settlement = capture.settlement(&build.script_results());
+        #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture.artifact_inputs(limits)?;
         #[cfg(not(feature = "rustc-driver"))]
         let probe_artifacts = Vec::new();
@@ -2589,6 +2600,8 @@ impl Request {
             universe,
             #[cfg(feature = "rustc-driver")]
             capture,
+            #[cfg(feature = "rustc-driver")]
+            settlement,
         })
     }
 }

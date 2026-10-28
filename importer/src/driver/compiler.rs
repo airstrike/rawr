@@ -871,6 +871,11 @@ fn extract_all(
         _ => None,
     };
     let mut used = Vec::new();
+    let session = engine::session_key(
+        invocations
+            .iter()
+            .map(|invocation| invocation.unit_key.as_str()),
+    );
     for invocation in invocations {
         let selected = selected_crate(tcx, &invocation.artifact.path, &mut budget)?;
         if let Some(diagnostic) = diagnostic {
@@ -901,6 +906,7 @@ fn extract_all(
             &crate_hash,
             &stable_crate_id,
             &loaded_crates,
+            &session,
             tables.as_ref(),
             &mut used,
             &mut budget,
@@ -1061,6 +1067,7 @@ fn extract<'tcx>(
     crate_hash: &str,
     stable_crate_id: &str,
     loaded: &[ExternalCrate],
+    session: &str,
     tables: Option<&table::Tables>,
     used: &mut Vec<String>,
     budget: &mut Budget,
@@ -1074,11 +1081,19 @@ fn extract<'tcx>(
         krate: stable_crate_id.to_owned(),
     };
     let Root::Selected { aliases } = &invocation.root;
-    let kept = tables.map(|tables| tables.load(invocation, crate_hash, &root, used));
+    let key = tables.map(|tables| tables.key_for(invocation, crate_hash));
+    let kept = tables
+        .zip(key.as_deref())
+        .map(|(tables, key)| tables.load(key, &root, used));
     if let Some(Some(memo)) = &kept {
         let mut replay = engine::Replay(memo);
-        if let Ok(extracted) =
-            engine::Engine::new(&mut replay, root.clone(), aliases.clone()).run(&invocation.demand)
+        if let Ok(extracted) = engine::Engine::new(
+            &mut replay,
+            root.clone(),
+            aliases.clone(),
+            session.to_owned(),
+        )
+        .run(&invocation.demand)
         {
             let body = extracted.body()?;
             let (sysroot, external) = units::registered(
@@ -1101,11 +1116,16 @@ fn extract<'tcx>(
             live: &mut builder,
             memo: &mut memo,
         };
-        engine::Engine::new(&mut record, root.clone(), aliases.clone())
-            .run(&invocation.demand)
-            .map_err(units::fault)?
+        engine::Engine::new(
+            &mut record,
+            root.clone(),
+            aliases.clone(),
+            session.to_owned(),
+        )
+        .run(&invocation.demand)
+        .map_err(units::fault)?
     };
-    if let Some(tables) = tables {
+    if let (Some(tables), Some(key)) = (tables, &key) {
         let mut kept = kept.flatten().unwrap_or_default();
         if invocation.demand.is_empty() {
             memo.whole = true;
@@ -1117,14 +1137,19 @@ fn extract<'tcx>(
                     live: &mut builder,
                     memo: &mut memo,
                 };
-                engine::Engine::new(&mut record, root.clone(), aliases.clone())
-                    .run(&[])
-                    .is_ok()
+                engine::Engine::new(
+                    &mut record,
+                    root.clone(),
+                    aliases.clone(),
+                    session.to_owned(),
+                )
+                .run(&[])
+                .is_ok()
             };
             memo.whole = whole;
         }
         kept.absorb(&memo);
-        tables.store(invocation, crate_hash, &root, &kept);
+        tables.store(key, &root, &kept);
     }
     let body = extracted.body()?;
     let (sysroot, external) = units::registered(
@@ -2466,6 +2491,22 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // is not an unconstrained request for every implementation.
             ImplementationWork::Trait => {}
             ImplementationWork::Nominal => {
+                // The names its inherent impls give: a demanded member of one
+                // of them needs no trait (`Unit::Member`).
+                let mut names = self
+                    .tcx
+                    .inherent_impls(def_id)
+                    .iter()
+                    .flat_map(|implementation| {
+                        self.tcx
+                            .associated_items(*implementation)
+                            .in_definition_order()
+                            .map(|item| item.name().to_string())
+                    })
+                    .collect::<Vec<_>>();
+                names.sort_unstable();
+                names.dedup();
+                self.emissions.push(Emission::Inherent { names });
                 let inherent_count = self.tcx.inherent_impls(def_id).len();
                 self.edge(inherent_count)?;
                 self.budget.items(inherent_count)?;

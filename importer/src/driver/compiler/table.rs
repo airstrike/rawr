@@ -5,7 +5,12 @@
 //! any program that reaches the crate reads it. A crate from a registry or
 //! a git commit cannot change under its key; any other crate's key takes
 //! its crate hash too, which an edit to it or to its dependencies changes.
+//!
+//! The importer names the key of each crate it shares per machine
+//! (`extract::shared`) in `keys.json`, by unit correlation; such a crate's
+//! table is kept under that key, which the importer publishes.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -17,15 +22,34 @@ use super::{Invocation, PROTOCOL_SCHEMA};
 
 pub(super) struct Tables {
     directory: PathBuf,
+    /// Shared keys by unit correlation, as the importer named them.
+    shared: BTreeMap<String, String>,
 }
+
+/// The importer's shared keys, beside the tables.
+const KEYS: &str = "keys.json";
 
 impl Tables {
     pub(super) fn open(directory: &Path) -> Result<Self, String> {
         fs::create_dir_all(directory)
             .map_err(|error| format!("failed to create the extraction table directory: {error}"))?;
+        let shared = fs::read(directory.join(KEYS))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
         Ok(Self {
             directory: directory.to_path_buf(),
+            shared,
         })
+    }
+
+    /// The key of `invocation`'s table: the importer's shared key, or this
+    /// crate's own.
+    pub(super) fn key_for(&self, invocation: &Invocation, crate_hash: &str) -> String {
+        match self.shared.get(&invocation.unit_correlation) {
+            Some(key) => key.clone(),
+            None => Self::key(invocation, crate_hash),
+        }
     }
 
     pub(super) fn key(invocation: &Invocation, crate_hash: &str) -> String {
@@ -75,16 +99,9 @@ impl Tables {
 
     /// The crate's recorded units, when a table of this format for this very
     /// crate is kept. A table that fails to read is extracted again.
-    pub(super) fn load(
-        &self,
-        invocation: &Invocation,
-        crate_hash: &str,
-        root: &Root,
-        used: &mut Vec<String>,
-    ) -> Option<Memo> {
-        let key = Self::key(invocation, crate_hash);
-        used.push(key.clone());
-        let bytes = fs::read(self.directory.join(&key)).ok()?;
+    pub(super) fn load(&self, key: &str, root: &Root, used: &mut Vec<String>) -> Option<Memo> {
+        used.push(key.to_owned());
+        let bytes = fs::read(self.directory.join(key)).ok()?;
         let table: Table = serde_json::from_slice(&bytes).ok()?;
         (table.schema == engine::TABLE_SCHEMA && table.root == *root)
             .then(|| Memo::from_table(table))
@@ -92,14 +109,7 @@ impl Tables {
 
     /// Keep a crate's table, replacing the one kept before. Failure only
     /// costs a later extraction.
-    pub(super) fn store(
-        &self,
-        invocation: &Invocation,
-        crate_hash: &str,
-        root: &Root,
-        memo: &Memo,
-    ) {
-        let key = Self::key(invocation, crate_hash);
+    pub(super) fn store(&self, key: &str, root: &Root, memo: &Memo) {
         let temporary = self
             .directory
             .join(format!(".{key}.tmp-{}", std::process::id()));
@@ -107,7 +117,7 @@ impl Tables {
             let mut file = std::io::BufWriter::new(fs::File::create(&temporary)?);
             serde_json::to_writer(&mut file, &memo.to_table(root.clone()))?;
             file.flush()?;
-            fs::rename(&temporary, self.directory.join(&key))
+            fs::rename(&temporary, self.directory.join(key))
         })();
         if written.is_err() {
             let _ = fs::remove_file(&temporary);

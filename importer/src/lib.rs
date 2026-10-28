@@ -10,6 +10,8 @@ extern crate alloc;
 // compiler bridge; P2 will also consume these modules in the default configuration.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod api;
+#[cfg(feature = "rustc-driver")]
+pub mod bindings;
 pub mod bridge;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod cache;

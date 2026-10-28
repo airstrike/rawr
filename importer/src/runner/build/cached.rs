@@ -379,6 +379,10 @@ fn compile<B>(
         "rawr-generated-runner"
     };
     let copied = result.as_ref().ok().map(|messages| {
+        // The project's toolchain's build-script results, for shared
+        // bindings to compare with the nightly's (`crate::bindings`).
+        #[cfg(feature = "rustc-driver")]
+        crate::bindings::record_runner_scripts(&work, messages);
         // Cargo's JSON names the rawr crate's sources and the executable.
         crate::deps::prune_rawr(&build, messages);
         // Linked to the shared runtime, the copies of rawr that earlier

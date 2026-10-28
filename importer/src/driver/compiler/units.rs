@@ -901,11 +901,11 @@ impl engine::Oracle for Builder<'_, '_, '_, '_> {
                 })?;
                 self.implementation_associated(impl_id, obligation)
             }
-            Unit::Member { owner, name } => {
+            Unit::Member { owner, name, .. } => {
                 let adt = self.definition(owner)?;
                 self.member(adt, name)
             }
-            Unit::TraitMember { owner, name } => {
+            Unit::TraitMember { owner, name, .. } => {
                 let trait_id = self.definition(owner)?;
                 self.trait_member(trait_id, name)
             }
