@@ -53,6 +53,9 @@ const LOCAL: &str = "runtime-local";
 const IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 /// How many recently used entries are kept besides the one in use.
 const KEPT: usize = 3;
+/// In the runner's directory: the pruned lockfile's digest, then the lock
+/// cargo settled it to.
+const SETTLED: &str = "rawr-settled-lock";
 
 /// One compiled runtime, leased for as long as a runner build links it.
 pub(crate) struct Runtime {
@@ -60,6 +63,8 @@ pub(crate) struct Runtime {
     stamp: PathBuf,
     key: String,
     native: BTreeSet<String>,
+    /// The project's cargo, which settles the runner's lockfile.
+    cargo: PathBuf,
     /// A shared lock on the entry: cleanup never removes it while held.
     _lease: File,
 }
@@ -271,10 +276,70 @@ impl Runtime {
         Some(document.to_string())
     }
 
-    /// The runner's lockfile without `rawr` and what only it needs, so cargo's
-    /// `--locked` holds.
+    /// The runner's lockfile without `rawr` and what only it needs. Cargo
+    /// settles it before the `--locked` build (`settle_lock`).
     pub(crate) fn lock(&self, text: &str) -> Option<String> {
         prune_lock(text)
+    }
+
+    /// The lock cargo settled the runner's `pruned` lock to at an earlier
+    /// build, for the same `manifest`: the lock this build writes instead.
+    pub(crate) fn settled_lock(work: &Path, manifest: &[u8], pruned: &[u8]) -> Option<String> {
+        let recorded = fs::read_to_string(work.join(SETTLED)).ok()?;
+        let (digest, settled) = recorded.split_once('\n')?;
+        (digest == runner_digest(manifest, pruned)).then(|| settled.to_owned())
+    }
+
+    /// Settle the runner's lockfile in `work`, written from the `pruned`
+    /// lock and `manifest`, to what cargo resolves without rawr, unless an
+    /// earlier build did. Pruning walks the lock's edges, which name a
+    /// shared package's dependencies at the features rawr turned on too:
+    /// ahash keeps `const-random` from rawr's `compile-time-rng`. Cargo
+    /// drops what no remaining feature needs and keeps every version, so
+    /// the build's `--locked` holds.
+    pub(crate) fn settle_lock(
+        &self,
+        work: &Path,
+        project: &Path,
+        environment: &crate::cargo::config::Environment,
+        manifest: &[u8],
+        pruned: &[u8],
+    ) -> Result<(), node::Error> {
+        if Self::settled_lock(work, manifest, pruned).is_some() {
+            return Ok(());
+        }
+        let output = Command::new(&self.cargo)
+            .args(["update", "--workspace", "--offline", "--quiet"])
+            .arg("--manifest-path")
+            .arg(work.join("Cargo.toml"))
+            .current_dir(project)
+            .env_clear()
+            .envs(environment.entries())
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|source| node::Error::Io {
+                operation: "settle the runner's lockfile",
+                path: self.cargo.clone(),
+                source,
+            })?;
+        if !output.status.success() {
+            return Err(node::Error::Transform(
+                format!(
+                    "cargo could not settle the runner's lockfile in {}: {}",
+                    work.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )
+                .into_boxed_str(),
+            ));
+        }
+        let lock = work.join("Cargo.lock");
+        let settled = fs::read_to_string(&lock).map_err(|source| node::Error::Io {
+            operation: "read the runner's settled lockfile",
+            path: lock,
+            source,
+        })?;
+        let record = format!("{}\n{settled}", runner_digest(manifest, pruned));
+        write_changed(&work.join(SETTLED), record.as_bytes())
     }
 
     /// The runner's build script, which also points rustc at the runtime.
@@ -688,6 +753,7 @@ fn ensure(
         stamp,
         key: key.to_owned(),
         native,
+        cargo: toolchain.cargo.clone(),
         _lease: lock,
     })
 }
@@ -1056,6 +1122,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             stamp: PathBuf::from("/home/rawr/runtime/0123/built"),
             key: "0123456789abcdef0123".into(),
             native: ["sha2-asm".to_owned()].into(),
+            cargo: PathBuf::from("cargo"),
             _lease: fs::File::create(root.join("lock")).unwrap(),
         }
     }

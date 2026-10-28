@@ -257,3 +257,38 @@ fn a_script_with_a_dependency_runs_from_its_frontmatter() {
         .count();
     assert_eq!(semver, 1);
 }
+
+/// A project that shares a dependency with rawr's runtime at fewer
+/// features: ahash, which rawr takes with `compile-time-rng` and so with
+/// `const-random`. The runner's lockfile is what cargo resolves once rawr
+/// is gone, so the runner's `--locked` build runs, and a second run keeps
+/// that lockfile.
+#[test]
+fn a_dependency_rawr_takes_with_more_features_keeps_the_locked_runner_build() {
+    const SHARED: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-shared-feature"
+    );
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-shared-feature");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(SHARED), &root);
+
+    for _ in 0..2 {
+        let run = rawr_import(&root, &["run"]);
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), "seeded\n");
+    }
+    let lock = fs::read_to_string(root.join("target/rawr/runner/Cargo.lock")).unwrap();
+    assert!(lock.contains("name = \"ahash\""), "{lock}");
+    assert!(!lock.contains("const-random"), "{lock}");
+    let main = fs::read_to_string(root.join("target/rawr/runner/src/main.rs")).unwrap();
+    assert!(
+        main.contains("extern crate rawr as __rawr_internal;"),
+        "{main}"
+    );
+}
