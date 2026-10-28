@@ -71,6 +71,10 @@ pub(crate) enum Operation {
         signature: signature::Signature,
         substitutions: Box<[convert::Type]>,
         constants: Box<[convert::Constant]>,
+        /// Crate functions filling callable parameters, as
+        /// `.style(container::rounded_box)` takes one.
+        #[serde(default)]
+        functions: Box<[FunctionItem]>,
         container_parameters: usize,
         /// The callable parameter a script closure fills, as Freya's
         /// `on_press` takes (D551.6).
@@ -193,7 +197,15 @@ impl Plan {
                     .checked_sub(functions.len())
                     .and_then(|arity| arity.checked_sub(mappers.len()))
                     .ok_or(Error::BuilderShape)?,
-                Operation::Method { signature, .. } => signature.inputs().len(),
+                Operation::Method {
+                    signature,
+                    functions,
+                    ..
+                } => signature
+                    .inputs()
+                    .len()
+                    .checked_sub(functions.len())
+                    .ok_or(Error::BuilderShape)?,
                 _ => return Err(Error::BuilderShape),
             };
             if arity != step.arguments().len()
@@ -662,6 +674,7 @@ fn clone_operation(
                 signature: clone_signature(plan.signature())?,
                 substitutions: Box::default(),
                 constants: Box::default(),
+                functions: Box::default(),
                 container_parameters: 0,
                 call: None,
                 slots: Box::default(),
@@ -709,7 +722,8 @@ fn clone_operation(
             signature: clone_signature(plan.signature())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
-            container_parameters: 0,
+            functions: clone_function_items(contract, selected)?,
+            container_parameters: instance_parameters(plan.signature()),
             call: plan.call().cloned(),
             slots: selected.slots().into(),
             crossings: plan.crossings().into(),
@@ -724,6 +738,7 @@ fn clone_operation(
             signature: clone_signature(plan.signature())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
+            functions: clone_function_items(contract, selected)?,
             container_parameters: plan.container_parameters(),
             call: plan.call().cloned(),
             slots: selected.slots().into(),
@@ -775,6 +790,30 @@ fn event_mappers_bytes(selected: &identity::Identity) -> Option<usize> {
         .event_mappers()
         .len()
         .checked_mul(mem::size_of::<EventMapper>())
+}
+
+/// How many of a method's leading type parameters its receiver's instance
+/// names: those of the function whose opaque `impl Trait` type the method is
+/// a member of, which the receiver's value fixes, as `iced(..)`'s value
+/// fixes `Widget::_boxed`'s. A turbofish names only the ones after them.
+fn instance_parameters(signature: &signature::Signature) -> usize {
+    fn names(ty: &convert::Type, index: u32) -> bool {
+        match ty {
+            convert::Type::Parameter(parameter) => *parameter == index,
+            convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => {
+                arguments.iter().any(|argument| names(argument, index))
+            }
+            _ => false,
+        }
+    }
+    let Some(instance) = signature.instance() else {
+        return 0;
+    };
+    signature
+        .parameters()
+        .iter()
+        .take_while(|parameter| names(instance, parameter.index()))
+        .count()
 }
 
 fn clone_function_items(

@@ -1154,10 +1154,22 @@ fn imported_paths<'contract>(
         .map_err(|_| Error::Allocation)?;
     for outcome in contract.outcomes() {
         let path = import_path(outcome.export(), allocation)?;
+        // A function's members are those of the opaque type it gives.
+        let owner = if matches!(
+            outcome.representability(),
+            Representability::Function(_)
+                | Representability::FunctionItem(_)
+                | Representability::Invocation(_)
+        ) {
+            rawr_import::surface::opaque::path(&path, 0)
+        } else {
+            path.clone()
+        };
         for associated in outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
+            let path = &owner;
             let associated_bytes = path
                 .len()
                 .checked_add(2)
@@ -1168,7 +1180,7 @@ fn imported_paths<'contract>(
             associated_path
                 .try_reserve_exact(associated_bytes)
                 .map_err(|_| Error::Allocation)?;
-            associated_path.push_str(&path);
+            associated_path.push_str(path);
             associated_path.push_str("::");
             associated_path.push_str(associated.name());
             entries.push(ImportedPath {
@@ -1539,6 +1551,11 @@ fn install(
                 )
             })
             .map(|entry| entry.definition)
+            .chain(
+                opaque_types(contract, &facade)
+                    .into_iter()
+                    .map(|(_, definition, _)| definition),
+            )
             .collect::<std::collections::BTreeSet<_>>();
         let definition = build(contract, facade, &declared, &mut shapes, allocation)?;
         let (items, bytes) = definition.registry_usage();
@@ -1647,6 +1664,23 @@ fn build(
         }
     }
 
+    // An opaque `impl Trait` type a function gives is a type of its own,
+    // declared beside the function, at the type arguments its caller fixes.
+    for (path, definition, parameters) in opaque_types(contract, &facade) {
+        let shape = crate::Shared::new(host::type_def::Shape::Opaque);
+        match builder.imported_type(
+            &path,
+            imported_identity(definition),
+            &[],
+            parameters,
+            Box::default(),
+            shape,
+            allocation,
+        ) {
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     for entry in &facade.entries {
         let (parameters, defaults, implemented) = match entry.outcome.representability() {
             Representability::Struct(plan) => (
@@ -1809,13 +1843,23 @@ fn build(
         if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
             builder.item(item)?;
         }
+        // A function's members are those of the opaque type it gives.
+        let owner = if matches!(
+            entry.outcome.representability(),
+            Representability::Function(_)
+                | Representability::FunctionItem(_)
+                | Representability::Invocation(_)
+        ) {
+            rawr_import::surface::opaque::path(&entry.relative, 0)
+        } else {
+            entry.relative.to_string()
+        };
         for associated in entry
             .outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
-            let path_bytes = entry
-                .relative
+            let path_bytes = owner
                 .len()
                 .checked_add(2)
                 .and_then(|bytes| bytes.checked_add(associated.name().len()))
@@ -1824,7 +1868,7 @@ fn build(
             let mut path = String::new();
             path.try_reserve_exact(path_bytes)
                 .map_err(|_| Error::Allocation)?;
-            path.push_str(&entry.relative);
+            path.push_str(&owner);
             path.push_str("::");
             path.push_str(associated.name());
             if let Some(item) = imported_item(&types, &path, associated, allocation)?
@@ -2117,6 +2161,115 @@ fn names_declared(
         && ty_ok(signature.output(), declared)
 }
 
+/// The opaque `impl Trait` types the facade's functions and methods give:
+/// each one's path beside each function that gives it, its definition,
+/// and its type parameters, named as the function's parameters its
+/// arguments are, so its members' signatures name them.
+fn opaque_types(
+    contract: &rawr_import::Contract<rawr_import::Classified>,
+    facade: &Facade<'_>,
+) -> Vec<(
+    String,
+    rawr_import::surface::identity::Definition,
+    Box<[ImmutableString]>,
+)> {
+    fn walk<'t>(
+        ty: &'t representability::convert::Type,
+        opaque: &std::collections::BTreeSet<[u8; 32]>,
+        found: &mut Vec<(
+            rawr_import::surface::identity::Definition,
+            &'t [representability::convert::Type],
+        )>,
+    ) {
+        use representability::convert::Type;
+        match ty {
+            Type::Nominal {
+                definition,
+                arguments,
+            } => {
+                if opaque.contains(definition.as_bytes()) {
+                    found.push((*definition, arguments));
+                }
+                for argument in arguments {
+                    walk(argument, opaque, found);
+                }
+            }
+            Type::Option(inner)
+            | Type::Borrowed { ty: inner, .. }
+            | Type::Range(inner)
+            | Type::Sequence { element: inner, .. } => walk(inner, opaque, found),
+            Type::Result(ok, err) => {
+                walk(ok, opaque, found);
+                walk(err, opaque, found);
+            }
+            Type::Tuple(members) => {
+                for member in members {
+                    walk(member, opaque, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let opaque = rawr_import::surface::opaque::identities(contract.raw_graph());
+    if opaque.is_empty() {
+        return Vec::new();
+    }
+    let mut types: Vec<(
+        String,
+        rawr_import::surface::identity::Definition,
+        Box<[ImmutableString]>,
+    )> = Vec::new();
+    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>| {
+        let signature = match outcome.representability() {
+            Representability::Function(plan) => plan.signature(),
+            Representability::FunctionItem(plan) => plan.signature(),
+            Representability::Invocation(plan) => plan.signature(),
+            Representability::Method(plan) => plan.signature(),
+            _ => return,
+        };
+        let mut found = Vec::new();
+        walk(signature.output(), &opaque, &mut found);
+        // Declared beside each path to the function, which its members
+        // are reached through.
+        for (index, (definition, arguments)) in found.into_iter().enumerate() {
+            let path = rawr_import::surface::opaque::path(path, index);
+            if types.iter().any(|(known, _, _)| *known == path) {
+                continue;
+            }
+            let names = arguments
+                .iter()
+                .enumerate()
+                .map(|(position, argument)| match argument {
+                    representability::convert::Type::Parameter(index) => signature
+                        .parameters()
+                        .iter()
+                        .find(|parameter| parameter.index() == *index)
+                        .map_or_else(
+                            || ImmutableString::from(format!("T{position}")),
+                            |parameter| ImmutableString::from(parameter.name()),
+                        ),
+                    _ => ImmutableString::from(format!("T{position}")),
+                })
+                .collect();
+            types.push((path, definition, names));
+        }
+    };
+    for entry in &facade.entries {
+        visit(&entry.relative, entry.outcome);
+        for associated in entry
+            .outcome
+            .implementations()
+            .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+        {
+            visit(
+                &format!("{}::{}", entry.relative, associated.name()),
+                associated,
+            );
+        }
+    }
+    types
+}
+
 /// Whether every imported type `ty` names is declared.
 fn ty_ok(
     ty: &representability::convert::Type,
@@ -2221,7 +2374,9 @@ impl Types {
                 Builtin::F64 => host::type_ref::Builtin::F64,
                 Builtin::I64 => host::type_ref::Builtin::I64,
                 Builtin::InclusiveRange => host::type_ref::Builtin::InclusiveRange,
-                Builtin::String | Builtin::Str | Builtin::Text => host::type_ref::Builtin::String,
+                Builtin::String | Builtin::Str | Builtin::StaticStr | Builtin::Text => {
+                    host::type_ref::Builtin::String
+                }
                 Builtin::I8 => host::type_ref::Builtin::I8,
                 Builtin::I16 => host::type_ref::Builtin::I16,
                 Builtin::I32 => host::type_ref::Builtin::I32,
@@ -2368,6 +2523,7 @@ fn signature(
                 .cases()
                 .iter()
                 .map(|case| (case.this(), case.arguments())),
+            source.trait_identity(),
             |ty| converted_pattern(ty, parameters),
         ) {
             builder.relation(relation)?;
@@ -2378,11 +2534,12 @@ fn signature(
 
 /// A relation on `parameter`, its types made patterns by `pattern`: `None`
 /// when one of its trait arguments can't be one. A case that can't be is
-/// dropped, and a relation without cases is none.
+/// dropped, and a relation without cases or a trait is none.
 pub(crate) fn relation<'a, T: 'a>(
     parameter: &str,
     arguments: &'a [T],
     cases: impl Iterator<Item = (&'a T, &'a [T])>,
+    trait_identity: Option<[u8; 32]>,
     pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
 ) -> Option<host::signature::Relation> {
     let arguments = arguments
@@ -2400,7 +2557,9 @@ pub(crate) fn relation<'a, T: 'a>(
             ))
         })
         .collect::<Box<[_]>>();
-    (!cases.is_empty()).then(|| host::signature::Relation::new(parameter, arguments, cases))
+    (!cases.is_empty() || trait_identity.is_some()).then(|| {
+        host::signature::Relation::new(parameter, arguments, cases).of_trait(trait_identity)
+    })
 }
 
 /// A classified type as a relation's pattern.
@@ -2486,28 +2645,41 @@ fn callable_signature(
     if !crossings.is_empty() {
         builder.crossing();
     }
-    let convert = |ty, allocation: &mut rawr_import::contract::Allocation| {
+    let convert = |ty: &representability::convert::Type,
+                   allocation: &mut rawr_import::contract::Allocation| {
         types.convert(ty, signature.parameters(), allocation)
     };
+    let closure = |call: &representability::callable::Call,
+                   allocation: &mut rawr_import::contract::Allocation|
+     -> Result<host::type_ref::Type, Error> {
+        let input = match call.inputs() {
+            [] => host::type_ref::Type::unit(),
+            [single] => convert(single, allocation)?,
+            many => host::type_ref::Type::tuple(
+                many.iter()
+                    .map(|ty| convert(ty, allocation))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?,
+        };
+        Ok(host::type_ref::Type::callable(
+            input,
+            convert(call.output(), allocation)?,
+        ))
+    };
     for input in signature.inputs() {
-        let call = crossings
+        let found = crossings
             .iter()
             .chain(call)
             .find(|call| *input == representability::convert::Type::Parameter(call.parameter()));
-        if let Some(call) = call {
-            let input = match call.inputs() {
-                [] => host::type_ref::Type::unit(),
-                [single] => convert(single, allocation)?,
-                many => host::type_ref::Type::tuple(
-                    many.iter()
-                        .map(|ty| convert(ty, allocation))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )?,
-            };
-            builder.try_parameter(host::type_ref::Type::callable(
-                input,
-                convert(call.output(), allocation)?,
-            ))?;
+        // An `Option` of the closure Rawr makes, as `on_toggle_maybe` takes.
+        let optional = call.filter(|call| {
+            matches!(input, representability::convert::Type::Option(inner)
+                if **inner == representability::convert::Type::Parameter(call.parameter()))
+        });
+        if let Some(call) = found {
+            builder.try_parameter(closure(call, allocation)?)?;
+        } else if let Some(call) = optional {
+            builder.try_parameter(host::type_ref::Type::option(closure(call, allocation)?))?;
         } else {
             builder.try_parameter(convert(input, allocation)?)?;
         }

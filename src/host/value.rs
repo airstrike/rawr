@@ -50,6 +50,26 @@ pub(crate) fn host_default(ty: TypeId) -> Option<Dynamic> {
     DEFAULTS.read().ok()?.get(&ty).map(|default| default())
 }
 
+type MakeDefault = fn() -> Dynamic;
+
+static IMPORTED_DEFAULTS: RwLock<BTreeMap<[u8; 32], MakeDefault>> = RwLock::new(BTreeMap::new());
+
+/// Let a derived `Default` build a field of the imported type `identity`
+/// by the crate's own `Default`, as a generated runner calls it.
+#[doc(hidden)]
+pub fn register_imported_default(identity: [u8; 32], default: MakeDefault) {
+    if let Ok(mut defaults) = IMPORTED_DEFAULTS.write() {
+        defaults.insert(identity, default);
+    }
+}
+
+/// The `Default` value of the imported type `identity`, when a runner
+/// registered one.
+pub(crate) fn imported_default(identity: &[u8; 32]) -> Option<Dynamic> {
+    let default = *IMPORTED_DEFAULTS.read().ok()?.get(identity)?;
+    Some(default())
+}
+
 fn equal<T: PartialEq + Clone + 'static>(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
     Some(*lhs.read_lock::<T>()? == *rhs.read_lock::<T>()?)
 }

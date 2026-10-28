@@ -15014,9 +15014,20 @@ impl<'a> Parser<'a> {
                 for (parameter, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     // A parameter no script value fixes is rustc's to infer
-                    // and to check (D594).
+                    // and to check (D594). So is one a crate's own type
+                    // fills, as a trait's default `Theme` does: the facade
+                    // knows its derives only where a program uses them, and
+                    // rustc checks the bound where it compiles the call.
                     #[cfg(feature = "rust-import")]
-                    if matches!(ty, Ty::Infer(_)) && item.imported_identity().is_some() {
+                    if item.imported_identity().is_some()
+                        && match &ty {
+                            Ty::Infer(_) => true,
+                            Ty::Host { proof, .. } => {
+                                proof.definition.identity().imported().is_some()
+                            }
+                            _ => false,
+                        }
+                    {
                         continue;
                     }
                     for capability in required.iter() {
@@ -16672,6 +16683,76 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// The type parameters an imported item's bounds leave open once its
+    /// call is checked, fixed by the bound trait's impl headers as D604
+    /// fixes an `impl Trait`'s: iced's `application(.., view)` has `W:
+    /// Widget<Message, Theme, Renderer>` for the `W` `view` gives, and when
+    /// that is `Column<Element<Message, Theme, Renderer>>` the impl for
+    /// `Column<W>` and its own `W: Widget<M, T, R>` fix `Theme` and
+    /// `Renderer`, as rustc's trait selection does. An argument the bound
+    /// leaves open stays rustc's to infer (D594).
+    #[cfg(feature = "rust-import")]
+    fn fix_bounds_by_impls(
+        &mut self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+    ) -> Result<(), Error> {
+        let signature = item.signature();
+        if item.imported_identity().is_none()
+            || signature
+                .relations()
+                .iter()
+                .all(|relation| relation.trait_identity().is_none())
+        {
+            return Ok(());
+        }
+        let item_path = item.path();
+        let owner = item_path
+            .rsplit_once("::")
+            .and_then(|(path, _)| self.models.host.type_owner(path))
+            .or_else(|| self.models.host.item_owner(&item_path))
+            .cloned();
+        let mut parameters = requirements
+            .iter()
+            .map(|(name, ty, _)| (name.clone(), ty.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for relation in signature.relations() {
+            let Some(identity) = relation.trait_identity() else {
+                continue;
+            };
+            let Some(bounded) = parameters.get(relation.parameter()).cloned() else {
+                continue;
+            };
+            let bounded = self.inference.resolve(&bounded);
+            if matches!(bounded, Ty::Infer(_)) {
+                continue;
+            }
+            let mut arguments = Vec::with_capacity(relation.arguments().len());
+            for argument in relation.arguments() {
+                arguments.push(self.pattern_type(
+                    argument,
+                    &mut BTreeMap::new(),
+                    &mut parameters,
+                    &item_path,
+                    owner.as_ref(),
+                )?);
+            }
+            if !arguments
+                .iter()
+                .any(|argument| contains_inference(&self.inference.resolve(argument)))
+            {
+                continue;
+            }
+            // No fit, or more than one, leaves them to rustc.
+            let checkpoint = self.inference.checkpoint();
+            match self.select_impl(&bounded, identity, &arguments, owner.as_ref(), 0) {
+                Ok(()) => self.inference.commit(checkpoint),
+                Err(_) => self.inference.rollback(checkpoint),
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `ty` is a type of `pattern`, binding its variables. An
     /// integer or float literal whose kind is still open is a type of each
     /// builtin of its kind, as rustc's `{integer}` is.
@@ -17221,6 +17302,8 @@ impl<'a> Parser<'a> {
                 true
             }
         });
+        #[cfg(feature = "rust-import")]
+        self.fix_bounds_by_impls(&item, &requirements)?;
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -17347,24 +17430,21 @@ impl<'a> Parser<'a> {
         definition: &method::Definition,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
-        let [parameter] = definition.parameters() else {
-            return Err(Error::InvalidMethodCall {
-                owner: definition.owner_name().into(),
-                method: definition.name().into(),
-                reason: format!(
-                    "symbolic callable requires exactly 1 owned parameter, found {}",
-                    definition.parameters().len()
-                )
-                .into(),
-                call: expression,
-            });
-        };
-        let input = symbolic_input_type(&parameter.ty).ok_or_else(|| Error::InvalidMethodCall {
-            owner: definition.owner_name().into(),
-            method: definition.name().into(),
-            reason: "symbolic callable input must be one owned, runtime-supported type".into(),
-            call: expression,
-        })?;
+        // Any number of inputs, as a hand-written `Default`'s `State::default`
+        // that `application(State::default, ..)` takes has none.
+        let inputs = definition
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                symbolic_input_type(&parameter.ty).ok_or_else(|| Error::InvalidMethodCall {
+                    owner: definition.owner_name().into(),
+                    method: definition.name().into(),
+                    reason: "symbolic callable inputs must be owned, runtime-supported types"
+                        .into(),
+                    call: expression,
+                })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
         let output =
             exact_symbolic_type(definition.output()).ok_or_else(|| Error::InvalidMethodCall {
                 owner: definition.owner_name().into(),
@@ -17384,7 +17464,7 @@ impl<'a> Parser<'a> {
                 .capabilities()
                 .fingerprint(),
         );
-        Ok(self.symbolic_expr(value, Box::new([input]), output, expression, Vec::new()))
+        Ok(self.symbolic_expr(value, inputs, output, expression, Vec::new()))
     }
 
     fn parse_host_function(
@@ -17393,6 +17473,26 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A call names the function where a macro has the same path, as
+        // iced's `text` and `text!` do; `text![..]` names the macro.
+        let callable = |item: &crate::host::item::Definition| {
+            matches!(
+                item.kind(),
+                crate::host::item::Kind::Function
+                    | crate::host::item::Kind::IntrinsicFunction
+                    | crate::host::item::Kind::AssociatedFunction
+            )
+        };
+        let items = if items.iter().any(|item| item.kind().is_macro()) && items.iter().any(callable)
+        {
+            items
+                .into_vec()
+                .into_iter()
+                .filter(|item| !item.kind().is_macro())
+                .collect()
+        } else {
+            items
+        };
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
                 item: "<host item>".into(),
@@ -17951,13 +18051,12 @@ impl<'a> Parser<'a> {
         }
         let signature = self.instantiate_host_signature(item, None, None)?;
         let owner = owner.expect("guard proves one imported function owner");
-        let [input] = signature.inputs.as_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "compile-time imported function item must accept exactly one owned input"
-                    .into(),
-                operation: expression,
-            });
+        // One input is itself; none is `()`, and several are their tuple,
+        // as a host callable's are (`checkbox::primary(&Theme, Status)`).
+        let input = match signature.inputs.as_slice() {
+            [input] => input.clone(),
+            [] => Ty::Unit,
+            inputs => Ty::Tuple(inputs.into()),
         };
         if !signature.requirements.is_empty() {
             return Err(Error::InvalidHostOperation {
@@ -17970,7 +18069,7 @@ impl<'a> Parser<'a> {
             prelude: origin::Fragment::default(),
             source: origin::Fragment::plain(item.path()),
             ty: Ty::ImportedFunctionItem {
-                input: Box::new(input.clone()),
+                input: Box::new(input),
                 output: Box::new(signature.output),
                 item: Some(Box::new(ImportedFunctionProof {
                     item: item.clone(),
@@ -19631,6 +19730,24 @@ impl<'a> Parser<'a> {
             });
         }
         for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
+            // An array where the method takes a slice or an iterable, as
+            // iced's `fonts([..])` takes `impl IntoIterator`, as a
+            // function's argument is (`call_host_function`).
+            if let (
+                Ty::Array { length: None, .. },
+                Ty::Array {
+                    element,
+                    length: Some(_),
+                },
+            ) = (
+                self.inference.resolve(expected),
+                self.inference.resolve(&argument.ty),
+            ) {
+                argument.ty = Ty::Array {
+                    element,
+                    length: None,
+                };
+            }
             self.coerce_expr(expected, argument)?;
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;
@@ -35481,7 +35598,9 @@ impl<'a> Parser<'a> {
                     crate::host::item::Kind::Function | crate::host::item::Kind::AssociatedFunction
                 )
             {
-                return self.parse_imported_function_item(items, owner, name_span);
+                // The name's own text, which the item's proof points at.
+                let named = span(name_span.start(), text_end(name_span.start(), &name));
+                return self.parse_imported_function_item(items, owner, named);
             }
             let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             let [item] = items.as_slice() else {
@@ -35912,6 +36031,11 @@ impl<'a> Parser<'a> {
             .find(|definition| definition.receiver().is_none() && definition.key() == &*key)
             .cloned()
         {
+            // So does an associated one, as a hand-written `Default`'s
+            // `State::default`.
+            if inputs.is_empty() && !nullary {
+                return Ok(());
+            }
             let symbolic = self.symbolic_associated(&definition, value.span)?;
             value.source = symbolic.source;
             value.prelude = symbolic.prelude;
@@ -43220,6 +43344,25 @@ impl<'a> Parser<'a> {
             return self.method_value(member, Box::new([receiver]), owner_span, member_span);
         }
 
+        // `Type::default` as a value, as `iced::application(State::default,
+        // ..)` takes it: the closure `|| Type::default()`, which a derived
+        // `Default` has no function of its own for.
+        if member == "default" && !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let mut path = segments
+                .iter()
+                .map(|(segment, _)| segment.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            if !path.ends_with("::default") {
+                path.push_str("::default");
+            }
+            return self.function_value_closure(
+                &path,
+                0,
+                None,
+                span(owner_span.start(), member_span.end()),
+            );
+        }
         if member == "default" {
             let end = if matches!(self.peek(), Token::Unit) {
                 self.next().1
@@ -46393,6 +46536,45 @@ impl<'a> Parser<'a> {
                     .iter()
                     .zip(actual_inputs.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
+                    && self.unify_type(expected_output, actual_output)
+            }
+            // A crate's function where a host callable is expected, as
+            // `.style(container::rounded_box)`: the adapter passes the Rust
+            // function itself, so a `&T` it takes is the callable's `&T`.
+            #[cfg(feature = "rust-import")]
+            (
+                Ty::Callable {
+                    inputs: expected_inputs,
+                    output: expected_output,
+                    ..
+                },
+                Ty::ImportedFunctionItem {
+                    input: actual_input,
+                    output: actual_output,
+                    item: Some(proof),
+                },
+            ) if proof.item.signature().parameters().len() == expected_inputs.len() => {
+                let actual_inputs: Box<[Ty]> = match (expected_inputs.len(), actual_input.as_ref())
+                {
+                    (1, input) => Box::new([input.clone()]),
+                    (_, Ty::Tuple(members)) => members.clone(),
+                    (_, _) => Box::default(),
+                };
+                expected_inputs
+                    .iter()
+                    .zip(actual_inputs.iter())
+                    .all(|(expected, actual)| {
+                        let unborrowed = |ty: Ty| match ty {
+                            Ty::Reference {
+                                mutable: false,
+                                target,
+                            } => *target,
+                            ty => ty,
+                        };
+                        let expected = unborrowed(self.inference.resolve(expected));
+                        let actual = unborrowed(self.inference.resolve(actual));
+                        self.unify_type(&expected, &actual)
+                    })
                     && self.unify_type(expected_output, actual_output)
             }
             #[cfg(feature = "rust-import")]

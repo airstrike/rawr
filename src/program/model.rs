@@ -509,6 +509,13 @@ impl Model {
                     {
                         return Ok(value);
                     }
+                    // An imported type's own `Default`, which the runner
+                    // registered (D594).
+                    if let Some(value) = definition.identity().imported().and_then(|identity| {
+                        crate::host::value::imported_default(identity.as_bytes())
+                    }) {
+                        return Ok(value);
+                    }
                     let _ = definition;
                     Err(construction::Error::ValueType {
                         expected: path.name.clone(),

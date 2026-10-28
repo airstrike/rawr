@@ -167,7 +167,7 @@ sum 5050</span></div>
   <tr><th>Program</th><th>Runs in</th></tr>
   <tr><td>No dependencies and no native modules</td><td><code>rawr</code> itself.</td></tr>
   <tr><td>Dependencies in <code>Cargo.toml</code> or native modules</td><td><a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo.</td></tr>
-  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which reloads the app on save.</td></tr>
+  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which reloads the app on save. Without rawr-iced, rawr-import runs it through <a href="/docs/iced#without">generated bindings</a>.</td></tr>
 </table>
 <p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 
