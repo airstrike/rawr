@@ -458,7 +458,7 @@ fn type_late_input(
         model::Type::Reference { lifetime, ty, .. } => {
             Ok(lifetime_late_input(lifetime, binders)? || type_late_input(ty, binders)?)
         }
-        model::Type::Definition { arguments, .. } => {
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
             arguments.iter().try_fold(false, |late, argument| {
                 argument_late_input(argument, binders).map(|actual| late || actual)
             })
@@ -476,8 +476,7 @@ fn type_late_input(
         | model::Type::Never => Ok(false),
         model::Type::FunctionPointer(_)
         | model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. }
-        | model::Type::Projection { .. } => Err(representability::reject::Kind::CallableProtocol),
+        | model::Type::ImplTrait { .. } => Err(representability::reject::Kind::CallableProtocol),
     }
 }
 
@@ -562,9 +561,10 @@ fn type_has_late_lifetime(ty: &model::Type) -> bool {
             signature.inputs().any(type_has_late_lifetime)
                 || type_has_late_lifetime(signature.output())
         }
-        model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. }
-        | model::Type::Projection { .. } => true,
+        // A projection borrows where its arguments do: iced's
+        // `Subscription<P::Message>` borrows nothing.
+        model::Type::Projection { arguments, .. } => arguments.iter().any(argument),
+        model::Type::TraitObject { .. } | model::Type::ImplTrait { .. } => true,
         model::Type::Primitive(_)
         | model::Type::Parameter { .. }
         | model::Type::SelfType(_)
