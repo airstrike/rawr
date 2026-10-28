@@ -3,6 +3,7 @@
 //! builds compile into it, so a unit `cargo build` compiled is reused, and
 //! the reverse. Rawr removes only its own units there.
 
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -147,33 +148,63 @@ fn unit_key_at(name: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// The newest linked runner binary in `shared`'s deps directories and its
-/// unit hash.
-fn current_runner(shared: &Path, runner: &str) -> Option<(String, PathBuf)> {
+/// The runner's unit hashes in the profiles' deps directories: those whose
+/// dep-info names a file in `sources`, the runner's source directory. The
+/// runner takes the script crate's name (D594), and so does the project's own
+/// binary in the same build directory, so the name alone does not tell them
+/// apart.
+fn runner_hashes(profiles: &[PathBuf], runner: &str, sources: &str) -> BTreeSet<String> {
+    let mut hashes = BTreeSet::new();
+    for profile in profiles {
+        for entry in fs::read_dir(profile.join("deps"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let file = entry.file_name();
+            let Some(hash) = file
+                .to_str()
+                .and_then(|file| file.strip_suffix(".d"))
+                .and_then(|stem| stem.strip_prefix(runner))
+                .and_then(|rest| rest.strip_prefix('-'))
+                .filter(|hash| {
+                    hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            else {
+                continue;
+            };
+            let named = fs::read_to_string(entry.path()).is_ok_and(|text| {
+                text.lines()
+                    .next()
+                    .is_some_and(|line| line.contains(sources))
+            });
+            if named {
+                hashes.insert(hash.to_owned());
+            }
+        }
+    }
+    hashes
+}
+
+/// The newest linked runner binary among the runner's unit `hashes`, and its
+/// hash.
+fn current_runner(
+    profiles: &[PathBuf],
+    runner: &str,
+    hashes: &BTreeSet<String>,
+) -> Option<(String, PathBuf)> {
     let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
-    for profile in fs::read_dir(shared).into_iter().flatten().flatten() {
-        for deps in [
-            profile.path().join("deps"),
-            profile.path().join("debug/deps"),
-        ] {
-            for entry in fs::read_dir(&deps).into_iter().flatten().flatten() {
-                let file = entry.file_name();
-                let Some(file) = file.to_str() else { continue };
-                let Some(hash) = file
-                    .strip_prefix(runner)
-                    .and_then(|rest| rest.strip_prefix('-'))
-                    .filter(|hash| {
-                        hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    })
-                else {
-                    continue;
-                };
-                let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
-                    continue;
-                };
-                if newest.as_ref().is_none_or(|(time, _, _)| modified > *time) {
-                    newest = Some((modified, hash.to_owned(), entry.path()));
-                }
+    for profile in profiles {
+        for hash in hashes {
+            let binary = profile
+                .join("deps")
+                .join(format!("{runner}-{hash}{}", std::env::consts::EXE_SUFFIX));
+            let Ok(modified) = fs::metadata(&binary).and_then(|metadata| metadata.modified())
+            else {
+                continue;
+            };
+            if newest.as_ref().is_none_or(|(time, _, _)| modified > *time) {
+                newest = Some((modified, hash.clone(), binary));
             }
         }
     }
@@ -230,11 +261,17 @@ fn debug_map_objects(binary: &Path) -> Option<std::collections::HashSet<String>>
 /// install's `rawr_iced`), the
 /// runner's own outputs this build did not write (each incremental build
 /// leaves a new set of codegen objects beside the binary), and incremental
-/// state this build did not touch (only the runner is incremental).
-/// Crates this build did not use (the resolution harness) are kept, and so is
-/// every crate that is not Rawr's, since `cargo build` shares the directory.
-/// Best effort; the caller holds the build lock.
-pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::time::SystemTime) {
+/// state of the runner's this build did not touch. `record` lists the
+/// runner's incremental directories, since the project's own binary may
+/// share the runner's crate name. Crates this build did not use are kept,
+/// and so is every crate that is not Rawr's, since `cargo build` shares the
+/// directory. Best effort; the caller holds the build lock.
+pub(crate) fn prune_superseded(
+    shared: &Path,
+    messages: &[u8],
+    started: std::time::SystemTime,
+    record: &Path,
+) {
     let owned = |krate: &str| krate == "rawr" || krate.starts_with("rawr_");
     let mut live = std::collections::BTreeSet::new();
     let mut crates = std::collections::BTreeSet::new();
@@ -251,6 +288,8 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
     // The runner's binary target, named as the script's crate when its
     // proxies stand for script types (D594).
     let mut runner = String::from("rawr_generated_runner");
+    // The directory of the runner's sources, which its dep-info names.
+    let mut sources = None;
     for line in messages.split(|byte| *byte == b'\n') {
         let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
             continue;
@@ -273,6 +312,11 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
                 .and_then(serde_json::Value::as_str)
         {
             runner = name.replace('-', "_");
+            sources = message
+                .pointer("/target/src_path")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|path| Path::new(path).parent())
+                .map(|directory| directory.to_string_lossy().into_owned());
         }
         rebuilt |=
             message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false) && is_runner;
@@ -292,18 +336,8 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
         return;
     }
     let runner = runner.as_str();
-    // The runner this build linked, and the object files its debug map names
-    // (macOS keeps debug info in them, by path): a rebuilt runner's earlier
-    // objects, and every output of its other unit hashes, are superseded.
-    // Without a Mach-O debug map (an ELF runner on Linux) the other hashes
-    // still go, and every object of the current one stays.
-    let linked = rebuilt
-        .then(|| current_runner(shared, runner))
-        .flatten()
-        .map(|(hash, binary)| (hash, debug_map_objects(&binary)));
-    let before = |entry: &fs::DirEntry| {
-        entry
-            .metadata()
+    let before = |path: &Path| {
+        fs::metadata(path)
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|time| time < started)
     };
@@ -319,8 +353,24 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
             }
         }
     }
+    let hashes = sources
+        .as_deref()
+        .map(|sources| runner_hashes(&profiles, runner, sources))
+        .unwrap_or_default();
+    // The runner this build linked, and the object files its debug map names
+    // (macOS keeps debug info in them, by path): a rebuilt runner's earlier
+    // objects, and every output of its other unit hashes, are superseded.
+    // Without a Mach-O debug map (an ELF runner on Linux) the other hashes
+    // still go, and every object of the current one stays.
+    let linked = rebuilt
+        .then(|| current_runner(&profiles, runner, &hashes))
+        .flatten()
+        .map(|(hash, binary)| (hash, debug_map_objects(&binary)));
+    if rebuilt {
+        prune_incremental(&profiles, runner, record, &before);
+    }
     for profile in &profiles {
-        for directory in ["deps", ".fingerprint", "build", "incremental"] {
+        for directory in ["deps", ".fingerprint", "build"] {
             for entry in fs::read_dir(profile.join(directory))
                 .into_iter()
                 .flatten()
@@ -328,12 +378,7 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
             {
                 let file = entry.file_name();
                 let Some(file) = file.to_str() else { continue };
-                let stale = if directory == "incremental" {
-                    // `<crate>-<session base>`: the runner is Rawr's one
-                    // incremental unit, and a rebuilt runner's directory took
-                    // a new session. The project's own are Cargo's.
-                    rebuilt && file.starts_with(runner) && before(&entry)
-                } else if let Some((krate, hash)) = unit_key(file) {
+                let stale = if let Some((krate, hash)) = unit_key(file) {
                     // The build directory is the project's: only Rawr's own
                     // crates are Rawr's to remove.
                     let superseded = owned(&krate)
@@ -341,8 +386,10 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
                         && !live.contains(&format!("{krate}-{hash}"));
                     if krate == runner {
                         // A binary unit's messages name its uplifted copy, not
-                        // its hash.
+                        // its hash. A unit of this name that is not the
+                        // runner's is the project's binary.
                         directory == "deps"
+                            && hashes.contains(hash)
                             && linked.as_ref().is_some_and(|(current, objects)| {
                                 hash != current
                                     || (file.ends_with(".rcgu.o")
@@ -367,6 +414,47 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
             }
         }
     }
+}
+
+/// Remove the runner's incremental directories that `record` lists and this
+/// rebuilt runner did not touch, then record the ones it did. A directory is
+/// `<crate>-<stable crate id>`, so the project's own binary of the runner's
+/// crate name has one of the same shape; only a recorded one is the runner's.
+fn prune_incremental(
+    profiles: &[PathBuf],
+    runner: &str,
+    record: &Path,
+    before: &dyn Fn(&Path) -> bool,
+) {
+    let prefix = format!("{runner}-");
+    let mut current = Vec::new();
+    for profile in profiles {
+        for entry in fs::read_dir(profile.join("incremental"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if entry.file_name().to_string_lossy().starts_with(&prefix) && !before(&path) {
+                current.push(path);
+            }
+        }
+    }
+    for recorded in fs::read_to_string(record).unwrap_or_default().lines() {
+        let recorded = Path::new(recorded);
+        if !current.iter().any(|path| path == recorded)
+            && profiles.iter().any(|profile| recorded.starts_with(profile))
+            && before(recorded)
+        {
+            let _ = fs::remove_dir_all(recorded);
+        }
+    }
+    let mut text = String::new();
+    for path in &current {
+        text.push_str(&path.to_string_lossy());
+        text.push('\n');
+    }
+    let _ = fs::write(record, text);
 }
 
 #[cfg(test)]
@@ -406,29 +494,45 @@ mod tests {
         let iced_host = write(host.join(format!("deps/librawr_iced-{}.rlib", hash('c'))));
         let serde = write(target.join(format!("deps/libserde-{}.rlib", hash('d'))));
         let serde_other = write(target.join(format!("deps/libserde-{}.rlib", hash('9'))));
-        let project_incremental = target.join("incremental/app-old");
+        // The runner takes the script crate's name, `app` (D594), and the
+        // project's own binary of that name shares the build directory.
+        let runner_sources = project.path().join("runner/src");
+        let project_binary = write(target.join(format!("deps/app-{}", hash('3'))));
+        fs::write(
+            target.join(format!("deps/app-{}.d", hash('3'))),
+            format!(
+                "{}: {}\n",
+                project_binary.display(),
+                project.path().join("app/src/main.rs").display()
+            ),
+        )
+        .unwrap();
+        let project_incremental = target.join("incremental/app-project");
         fs::create_dir_all(&project_incremental).unwrap();
         let derive = write(host.join(format!("deps/libserde_derive-{}.dylib", hash('e'))));
         let harness = write(target.join(format!(
             "deps/librawr_resolution_harness-{}.rlib",
             hash('f')
         )));
-        let old_objects = write(target.join(format!(
-            "deps/rawr_generated_runner-{}.cgu.old.rcgu.o",
-            hash('1')
-        )));
-        let other_runner = write(host.join(format!("deps/rawr_generated_runner-{}", hash('2'))));
-        let old_incremental = target.join("incremental/rawr_generated_runner-old");
+        let old_objects = write(target.join(format!("deps/app-{}.cgu.old.rcgu.o", hash('1'))));
+        let other_runner = write(host.join(format!("deps/app-{}", hash('2'))));
+        for (profile, digit) in [(&target, '1'), (&host, '2')] {
+            fs::write(
+                profile.join(format!("deps/app-{}.d", hash(digit))),
+                format!("app: {}\n", runner_sources.join("main.rs").display()),
+            )
+            .unwrap();
+        }
+        let old_incremental = target.join("incremental/app-old");
         fs::create_dir_all(&old_incremental).unwrap();
+        let record = project.path().join("incremental-directories");
+        fs::write(&record, format!("{}\n", old_incremental.display())).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         let started = std::time::SystemTime::now();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let new_objects = write(target.join(format!(
-            "deps/rawr_generated_runner-{}.cgu.new.rcgu.o",
-            hash('1')
-        )));
+        let new_objects = write(target.join(format!("deps/app-{}.cgu.new.rcgu.o", hash('1'))));
         // A linked runner whose debug map (one `N_OSO` stab) names the new set.
-        let binary = target.join(format!("deps/rawr_generated_runner-{}", hash('1')));
+        let binary = target.join(format!("deps/app-{}", hash('1')));
         let oso = format!("\0{}\0", new_objects.display()).into_bytes();
         let mut macho = Vec::new();
         for word in [0xfeed_facf_u32, 0x0100_000c, 0, 2, 1, 24, 0, 0] {
@@ -443,7 +547,7 @@ mod tests {
         macho.extend_from_slice(&0_u64.to_le_bytes());
         macho.extend_from_slice(&oso);
         fs::write(&binary, macho).unwrap();
-        let new_incremental = target.join("incremental/rawr_generated_runner-new");
+        let new_incremental = target.join("incremental/app-new");
         fs::create_dir_all(&new_incremental).unwrap();
         let artifact = |file: &std::path::Path, name: &str, kind: &str, fresh: bool| {
             format!(
@@ -456,23 +560,22 @@ mod tests {
                 artifact(&iced, "rawr_iced", "lib", true),
                 artifact(&serde, "serde", "lib", true),
                 artifact(&derive, "serde_derive", "proc-macro", true),
-                artifact(
-                    &project.path().join("runner/target/rawr-generated-runner"),
-                    "rawr-generated-runner",
-                    "bin",
-                    fresh,
+                format!(
+                    r#"{{"reason":"compiler-artifact","package_id":"path+file:///runner#rawr-generated-runner@0.0.0","target":{{"name":"app","kind":["bin"],"src_path":"{}"}},"fresh":{fresh},"filenames":["{}"],"executable":null}}"#,
+                    runner_sources.join("main.rs").display(),
+                    project.path().join("runner/target/app").display()
                 ),
             ]
             .join("\n")
         };
         // A fresh runner build keeps the runner's outputs it did not rewrite.
-        super::prune_superseded(&shared, runner_fresh(true).as_bytes(), started);
+        super::prune_superseded(&shared, runner_fresh(true).as_bytes(), started, &record);
         assert!(old_objects.exists() && old_incremental.exists() && other_runner.exists());
         assert!(
             !iced_old.exists() && !iced_host.exists(),
             "superseded rawr_iced units"
         );
-        super::prune_superseded(&shared, runner_fresh(false).as_bytes(), started);
+        super::prune_superseded(&shared, runner_fresh(false).as_bytes(), started, &record);
         for kept in [
             &iced,
             &serde,
@@ -483,6 +586,7 @@ mod tests {
             &binary,
             &new_incremental,
             &project_incremental,
+            &project_binary,
         ] {
             assert!(kept.exists(), "{} is kept", kept.display());
         }
@@ -494,6 +598,10 @@ mod tests {
         assert!(
             !old_incremental.exists(),
             "incremental state the build did not touch"
+        );
+        assert_eq!(
+            fs::read_to_string(&record).unwrap(),
+            format!("{}\n", new_incremental.display())
         );
         assert_eq!(
             super::unit_key("librawr_iced-0123456789abcdef.rlib"),

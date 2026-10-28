@@ -320,7 +320,12 @@ fn compile<B>(
         if let Ok(used) = fs::read(output.join("rawr-generated-runner.d")) {
             crate::deps::prune_rawr(&build, &used);
         }
-        crate::deps::prune_superseded(&build, messages, started);
+        crate::deps::prune_superseded(
+            &build,
+            messages,
+            started,
+            &work.join("incremental-directories"),
+        );
         // Copy (a clone on APFS) under the lock, before another build of this
         // project replaces the executable.
         let destination = target.join("debug");
