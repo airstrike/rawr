@@ -764,8 +764,8 @@ fn native_impls(
                 let converted = convert(ty)?;
                 // A type Rust holds as a script value, as `RefCell<Vec<
                 // Cache>>` is, has none of the bounds the trait may ask of it,
-                // such as `Default`.
-                if is_erased(&converted) {
+                // such as `Default`. A script type's proxy has them.
+                if holds_value(&converted) {
                     return Err(super::ImportedFailure::Lowering(LoweringFailure::original(
                         shell.source,
                         Error::UnsupportedNominalSyntax {
@@ -1307,6 +1307,36 @@ fn range_type_id(element: &Ty) -> TypeId {
         TypeId::of::<std::ops::Range<crate::FLOAT>>()
     } else {
         TypeId::of::<std::ops::Range<INT>>()
+    }
+}
+
+/// Whether Rust holds some part of `ty` as a bare script value. Unlike
+/// [`is_erased`], a script type counts as its proxy, a Rust type of its own.
+#[cfg(feature = "rust-import")]
+fn holds_value(ty: &rawr_import::classify::representability::convert::Type) -> bool {
+    use rawr_import::classify::representability::convert::Type;
+    match ty {
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            *definition == rawr_import::surface::identity::Definition::value()
+                || arguments.iter().any(holds_value)
+        }
+        Type::Script { arguments, .. } | Type::Tuple(arguments) => {
+            arguments.iter().any(holds_value)
+        }
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. } => holds_value(element),
+        Type::Result(ok, err) => holds_value(ok) || holds_value(err),
+        Type::ProfileMessage { payload, .. } => holds_value(payload),
+        Type::Inferred
+        | Type::Unit
+        | Type::Builtin(_)
+        | Type::FunctionItem { .. }
+        | Type::Parameter(_) => false,
     }
 }
 
