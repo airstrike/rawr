@@ -17393,6 +17393,26 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A call names the function where a macro has the same path, as
+        // iced's `text` and `text!` do; `text![..]` names the macro.
+        let callable = |item: &crate::host::item::Definition| {
+            matches!(
+                item.kind(),
+                crate::host::item::Kind::Function
+                    | crate::host::item::Kind::IntrinsicFunction
+                    | crate::host::item::Kind::AssociatedFunction
+            )
+        };
+        let items = if items.iter().any(|item| item.kind().is_macro()) && items.iter().any(callable)
+        {
+            items
+                .into_vec()
+                .into_iter()
+                .filter(|item| !item.kind().is_macro())
+                .collect()
+        } else {
+            items
+        };
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
                 item: "<host item>".into(),
@@ -19630,6 +19650,24 @@ impl<'a> Parser<'a> {
             });
         }
         for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
+            // An array where the method takes a slice or an iterable, as
+            // iced's `fonts([..])` takes `impl IntoIterator`, as a
+            // function's argument is (`call_host_function`).
+            if let (
+                Ty::Array { length: None, .. },
+                Ty::Array {
+                    element,
+                    length: Some(_),
+                },
+            ) = (
+                self.inference.resolve(expected),
+                self.inference.resolve(&argument.ty),
+            ) {
+                argument.ty = Ty::Array {
+                    element,
+                    length: None,
+                };
+            }
             self.coerce_expr(expected, argument)?;
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;
@@ -43219,6 +43257,25 @@ impl<'a> Parser<'a> {
             return self.method_value(member, Box::new([receiver]), owner_span, member_span);
         }
 
+        // `Type::default` as a value, as `iced::application(State::default,
+        // ..)` takes it: the closure `|| Type::default()`, which a derived
+        // `Default` has no function of its own for.
+        if member == "default" && !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let mut path = segments
+                .iter()
+                .map(|(segment, _)| segment.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            if !path.ends_with("::default") {
+                path.push_str("::default");
+            }
+            return self.function_value_closure(
+                &path,
+                0,
+                None,
+                span(owner_span.start(), member_span.end()),
+            );
+        }
         if member == "default" {
             let end = if matches!(self.peek(), Token::Unit) {
                 self.next().1

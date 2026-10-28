@@ -84,7 +84,7 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable> }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
@@ -464,7 +464,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None });
                 slot
             }
         };
@@ -480,8 +480,29 @@ impl Arena {
         entry.project = None;
         entry.mapper = None;
         entry.default_of = None;
+        entry.opaque = None;
         let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
+    }
+
+    /// Give the value at `handle`, whose type holds an opaque `impl Trait`
+    /// type, the calls that take it, compiled where it was made.
+    #[allow(dead_code)]
+    fn set_opaque(&mut self, handle: &NativeHandle, table: OpaqueTable) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.opaque = Some(table);
+        }
+    }
+
+    /// The calls that take the value at `handle`, compiled where it was
+    /// made.
+    #[allow(dead_code)]
+    fn opaque(&self, handle: &NativeHandle) -> Result<OpaqueTable, Error> {
+        let entry = self.slots.get(handle.slot as usize).ok_or(Error::StaleHandle)?;
+        if handle.epoch != self.epoch || handle.generation != entry.generation {
+            return Err(Error::StaleHandle);
+        }
+        entry.opaque.ok_or(Error::TypeMismatch)
     }
 
     /// Mark the value at `handle` as made by the `Default` of the imported
@@ -1270,6 +1291,71 @@ fn lent_argument<'r>(lent: &mut LentArguments<'r>, index: usize) -> Option<Reach
 fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
+}
+
+/// The calls that take a value whose type holds an opaque `impl Trait`
+/// type, which Rust code can't write: each one is compiled where such a
+/// value is made, where rustc knows its type, and a call that takes it runs
+/// the one at its index.
+#[derive(Clone, Copy)]
+struct OpaqueTable(&'static [OpaqueEntry]);
+
+type OpaqueEntry = Box<dyn Fn(&mut Arguments<'_, '_, '_>, OpaqueTable) -> Result<Dynamic, Error> + Send + Sync>;
+
+impl OpaqueTable {
+    #[allow(dead_code)]
+    fn call(self, index: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+        let entry = self.0.get(index).ok_or(Error::TypeMismatch)?;
+        entry(arguments, self)
+    }
+}
+
+/// The table of `entries`, each a call that takes a value of `T`'s type.
+#[allow(dead_code)]
+fn opaque_table<T: 'static, const N: usize>(
+    _: &T,
+    entries: [fn(&mut Arguments<'_, '_, '_>, OpaqueTable, std::marker::PhantomData<T>) -> Result<Dynamic, Error>; N],
+) -> Box<[OpaqueEntry]> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            Box::new(move |arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable| {
+                entry(arguments, table, std::marker::PhantomData)
+            }) as OpaqueEntry
+        })
+        .collect()
+}
+
+/// Strings a call takes as `&'static str`, as iced's `Font::new` does,
+/// pinned for as long as the runner lives.
+#[allow(dead_code)]
+fn static_pins() -> &'static __rawr_internal::scope::Pins {
+    static PINS: std::sync::OnceLock<__rawr_internal::scope::Pins> = std::sync::OnceLock::new();
+    PINS.get_or_init(__rawr_internal::scope::Pins::default)
+}
+
+/// Bytes a call takes as `&'static [u8]`, as a font's are, kept for as long
+/// as the runner lives: once for each content, however often it is given.
+#[allow(dead_code)]
+fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
+    static KEPT: std::sync::Mutex<Vec<&'static [u8]>> = std::sync::Mutex::new(Vec::new());
+    let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = kept.iter().find(|kept| ***kept == *bytes) {
+        return found;
+    }
+    let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+    kept.push(leaked);
+    leaked
+}
+
+/// [`take_native`] at the type `witness` names, which Rust code can't write.
+#[allow(dead_code)]
+fn take_like<T: 'static>(
+    arguments: &mut Arguments<'_, '_, '_>,
+    index: usize,
+    _witness: std::marker::PhantomData<T>,
+) -> Result<T, Error> {
+    take_native(arguments, index)
 }
 
 fn take_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], Error> {
@@ -5453,6 +5539,27 @@ fn render_adapter(
         view::render(plan, output)?;
         return output.write_all(b"}\n\n").map_err(encoding);
     }
+    // A call that takes a value whose type holds an opaque `impl Trait`
+    // type runs what the call that made the value compiled for it.
+    if let Some((position, key)) = opaque_operand(plan)? {
+        let index = opaque_consumers(cohort, &key)?
+            .iter()
+            .position(|consumer| std::ptr::eq(*consumer, plan))
+            .ok_or(request::Error::Drift {
+                field: "an opaque type's consumer",
+            })?;
+        return writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let handle = native_handle(arguments, {position}, false)?;
+    let table = arguments.arena.opaque(&handle)?;
+    table.call({index}, arguments)
+}}
+"
+        )
+        .map_err(encoding);
+    }
+    let _producing = OpaqueProducing::enter(opaque_table_source(plan, cohort, profile, facade)?);
     let plain = method_message(plan, cohort, profile, facade)?.is_none()
         && replay(plan, profile)?.is_none();
     let lent = if plain {
@@ -5592,6 +5699,202 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
         }
     }
     Ok(region)
+}
+
+thread_local! {
+    /// While a call that makes a value whose type holds an opaque type is
+    /// rendered: the expression of the table of calls that take it.
+    static OPAQUE_PRODUCING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// While a call that takes such a value is rendered inside the call
+    /// that made it: a value of the same type it gives takes `table`.
+    static OPAQUE_CONSUMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets `OPAQUE_PRODUCING` for as long as it lives.
+struct OpaqueProducing(Option<String>);
+
+impl OpaqueProducing {
+    fn enter(table: Option<String>) -> Self {
+        Self(OPAQUE_PRODUCING.replace(table))
+    }
+}
+
+impl Drop for OpaqueProducing {
+    fn drop(&mut self) {
+        OPAQUE_PRODUCING.set(self.0.take());
+    }
+}
+
+/// Sets `OPAQUE_CONSUMING` for as long as it lives.
+struct OpaqueConsuming(bool);
+
+impl OpaqueConsuming {
+    fn enter(consuming: bool) -> Self {
+        Self(OPAQUE_CONSUMING.replace(consuming))
+    }
+}
+
+impl Drop for OpaqueConsuming {
+    fn drop(&mut self) {
+        OPAQUE_CONSUMING.set(self.0);
+    }
+}
+
+/// The first opaque type `ty` holds, as its own type node.
+fn first_opaque(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal { definition, .. } if is_opaque(definition) => Some(ty),
+        convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => {
+            arguments.iter().find_map(first_opaque)
+        }
+        convert::Type::Option(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::Sequence { element: inner, .. } => first_opaque(inner),
+        convert::Type::Result(ok, err) => first_opaque(ok).or_else(|| first_opaque(err)),
+        _ => None,
+    }
+}
+
+/// The operand of `plan` whose type holds an opaque type, by its argument
+/// index, with that opaque type: the receiver, or an input.
+fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request::Error> {
+    let (signature, substitutions, receiver, functions) = match plan.operation() {
+        Operation::Method {
+            signature,
+            substitutions,
+            container_parameters,
+            functions,
+            ..
+        } => {
+            if let Some(opaque) = substitutions
+                .iter()
+                .take(*container_parameters)
+                .find_map(first_opaque)
+            {
+                return Ok(Some((0, opaque.clone())));
+            }
+            (signature, substitutions, 1, functions)
+        }
+        Operation::Function {
+            signature,
+            substitutions,
+            functions,
+            ..
+        } => (signature, substitutions, 0, functions),
+        _ => return Ok(None),
+    };
+    let mut runtime = receiver;
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if functions
+            .iter()
+            .any(|function| usize::try_from(function.position()).ok() == Some(position))
+        {
+            continue;
+        }
+        let ty = substituted(input, signature, substitutions)?;
+        if let Some(opaque) = first_opaque(&ty) {
+            return Ok(Some((runtime, opaque.clone())));
+        }
+        runtime += 1;
+    }
+    Ok(None)
+}
+
+/// The calls in `cohort` that take a value holding the opaque type `key`,
+/// in a fixed order: each one's index in the table such a value carries.
+fn opaque_consumers<'p>(
+    cohort: &'p [Plan],
+    key: &convert::Type,
+) -> Result<Vec<&'p Plan>, request::Error> {
+    let mut consumers = Vec::new();
+    for plan in cohort {
+        if opaque_operand(plan)?.is_some_and(|(_, opaque)| opaque == *key) {
+            consumers.push(plan);
+        }
+    }
+    Ok(consumers)
+}
+
+/// The table of calls that take the value `plan` gives, when its type holds
+/// an opaque type: each call's body is compiled here, where rustc knows the
+/// value's type, and takes it at that type (`take_like`).
+fn opaque_table_source(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Result<Option<String>, request::Error> {
+    let returned = match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            ..
+        }
+        | Operation::Method {
+            signature,
+            substitutions,
+            ..
+        } => substituted(signature.output(), signature, substitutions)?,
+        _ => return Ok(None),
+    };
+    let Some(key) = first_opaque(&returned).cloned() else {
+        return Ok(None);
+    };
+    let mut entries = Vec::new();
+    for consumer in opaque_consumers(cohort, &key)? {
+        let Some((position, _)) = opaque_operand(consumer)? else {
+            continue;
+        };
+        let body = {
+            let _producing = OpaqueProducing::enter(None);
+            let _consuming = OpaqueConsuming::enter(true);
+            let mut body = Vec::new();
+            let region = region_inputs(consumer)?;
+            if !region.is_empty() {
+                let indices = region
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(
+                    body,
+                    "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
+                )
+                .map_err(|_| request::Error::Encoding)?;
+                {
+                    let _region = InRegion::enter();
+                    let _arguments = RegionArguments::enter();
+                    render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
+                }
+                body.write_all(
+                    b"        })
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }
+",
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
+            render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
+            String::from_utf8(body).map_err(|_| request::Error::Encoding)?
+        };
+        // The operand is taken at the type of the value this call made.
+        let body = body.replace(
+            &format!("take_native(arguments, {position})"),
+            &format!("take_like(arguments, {position}, _w)"),
+        );
+        entries.push(format!(
+            "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
+        ));
+    }
+    Ok(Some(format!(
+        "{{
+        static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
+        OpaqueTable(TABLE.get_or_init(|| opaque_table(&__RAWR_VALUE__, [{}])))
+    }}",
+        entries.join(",\n")
+    )))
 }
 
 /// The signature, substitutions and argument offset of a call: a
@@ -8426,6 +8729,9 @@ fn render_rust_type(
         convert::Type::Builtin(builtin) => output
             .write_all(builtin.rust_name().unwrap_or_default().as_bytes())
             .map_err(|_| request::Error::Encoding),
+        convert::Type::Nominal { definition, .. } if is_opaque(definition) => {
+            output.write_all(b"_").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Nominal {
             definition,
             arguments,
@@ -9244,7 +9550,15 @@ fn render_take_input(
         );
     }
     let generic = matches!(ty, convert::Type::Parameter(_));
-    let ty = substitute(ty, signature, substitutions)?;
+    // An array of a type parameter's values, as `impl IntoIterator<Item =
+    // impl Into<..>>` takes, at the type the call's instance gives them.
+    let deep;
+    let ty = if matches!(ty, convert::Type::Sequence { .. }) {
+        deep = substituted(ty, signature, substitutions)?;
+        &deep
+    } else {
+        substitute(ty, signature, substitutions)?
+    };
     let mut taken = Vec::new();
     match profile {
         Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
@@ -9504,6 +9818,15 @@ fn render_take(
     ty: &convert::Type,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // A `&'static str` input pins the string taken from Rawr for as long as
+    // the runner lives, as a string literal's is.
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr)) {
+        return writeln!(
+            output,
+            "    let argument_{local} = static_pins().pin(take_primitive::<ImmutableString>(arguments, {index})?);"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     // A `&str` input lends the string taken from Rawr, which a region can
     // pin by its shared handle: no text is copied.
     if matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
@@ -9595,6 +9918,28 @@ fn render_give(
                 output,
                 "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
             )
+        }
+        // A value whose type holds an opaque type carries the calls that
+        // take it, compiled here (`opaque_table_source`), or those of the
+        // value of the same type the call took.
+        convert::Type::Nominal { .. } if holds_opaque(ty) => {
+            let table = if OPAQUE_CONSUMING.get() {
+                Some("table".to_owned())
+            } else {
+                OPAQUE_PRODUCING.with_borrow(|table| {
+                    table.as_ref().map(|table| table.replace("__RAWR_VALUE__", value))
+                })
+            };
+            match table {
+                Some(table) => writeln!(
+                    output,
+                    "    let table = {table};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
+                ),
+                None => writeln!(
+                    output,
+                    "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+                ),
+            }
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
@@ -9718,6 +10063,10 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        convert::Type::Builtin(convert::Builtin::StaticStr) => write!(
+            output,
+            "{value}.try_cast_result::<ImmutableString>().map(|value| static_pins().pin(value)).map_err(|_| Error::TypeMismatch)"
+        ),
         convert::Type::Builtin(
             convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
         ) => write!(
@@ -9795,6 +10144,18 @@ fn render_from_dynamic(
                 output,
                 "{{ let mut {value} = {value}; match __rawr_internal::result::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ Ok({inner}) => ({ok_converted}).map(Ok), Err({inner}) => ({err_converted}).map(Err) }} }}"
             )
+        }
+        // A `&[u8]` a type parameter takes by value, as an item of iced's
+        // `fonts(impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>)`:
+        // the bytes, kept for as long as the runner lives, once for each
+        // content.
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(ty.as_ref(), convert::Type::Sequence { element, .. }
+                if **element == convert::Type::Builtin(convert::Builtin::U8)) =>
+        {
+            let mut converted = String::new();
+            render_from_dynamic(ty, value, depth, &mut converted)?;
+            write!(output, "({converted}).map(static_bytes)")
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
@@ -10492,6 +10853,10 @@ thread_local! {
     /// a field of one through a shared borrow.
     static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    /// The opaque `impl Trait` types functions give, by identity, which Rust
+    /// code can't write: spelled `_`, for rustc to infer (`surface::opaque`).
+    static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// The imported types that carry lifetimes (D558 tier 1), by identity:
     /// how many lifetime parameters each declares, and whether it is
     /// `Debug` and `Clone`.
@@ -11025,6 +11390,20 @@ impl TypePaths {
                 }
             }
         });
+        OPAQUE_TYPES.with_borrow_mut(|opaque| {
+            opaque.clear();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                opaque.extend(
+                    owner
+                        .types()
+                        .filter(|ty| ty.opaque())
+                        .map(|ty| *ty.identity()),
+                );
+            }
+        });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
             for owner in facade
@@ -11088,6 +11467,7 @@ impl Drop for TypePaths {
     fn drop(&mut self) {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+        OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         view::clear();
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -11124,6 +11504,28 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
     }
 }
 
+/// Whether `definition` is an opaque `impl Trait` type a function gives.
+fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
+    OPAQUE_TYPES.with_borrow(|opaque| opaque.contains(definition.as_bytes()))
+}
+
+/// Whether `ty` holds an opaque `impl Trait` type a function gives.
+fn holds_opaque(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => is_opaque(definition) || arguments.iter().any(holds_opaque),
+        convert::Type::Option(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::Sequence { element: inner, .. } => holds_opaque(inner),
+        convert::Type::Result(ok, err) => holds_opaque(ok) || holds_opaque(err),
+        convert::Type::Tuple(members) => members.iter().any(holds_opaque),
+        _ => false,
+    }
+}
+
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Inferred => "_".to_owned(),
@@ -11132,6 +11534,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             "String".to_owned()
         }
         convert::Type::Builtin(convert::Builtin::Str) => "&str".to_owned(),
+        convert::Type::Builtin(convert::Builtin::StaticStr) => "&'static str".to_owned(),
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
             "std::ops::RangeInclusive<i64>".to_owned()
         }
@@ -11141,6 +11544,8 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         {
             "__rawr_internal::Value".to_owned()
         }
+        // An opaque `impl Trait` type, which rustc infers.
+        convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         convert::Type::Nominal {
             definition,
             arguments,
@@ -11688,7 +12093,10 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         convert::Type::Builtin(convert::Builtin::F32) => "Dynamic::from(0.0_f64)",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "Dynamic::from(0_i64..=0_i64)",
         convert::Type::Builtin(
-            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
+            convert::Builtin::String
+            | convert::Builtin::Str
+            | convert::Builtin::StaticStr
+            | convert::Builtin::Text,
         ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
         convert::Type::Range(element)

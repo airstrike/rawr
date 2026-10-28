@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 38;
+const CLASSIFIER_VERSION: u32 = 40;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -301,6 +301,11 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// The crate type aliases that are the only name of the type they
     /// name, by definition index (`instance_aliases`).
     instance_aliases: std::cell::OnceCell<Box<[usize]>>,
+    /// While a function's output is converted: the type parameters a
+    /// script callable or future fills, which an opaque `impl Trait` type
+    /// it gives does not take as arguments. `None` elsewhere, where an
+    /// opaque type is refused.
+    opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -592,6 +597,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             scope_lifetimes: Cell::new(false),
             account: Account::new(),
             instance_aliases: std::cell::OnceCell::new(),
+            opaque_output: std::cell::RefCell::new(None),
         };
         let initialized = (|| {
             context.retain(
@@ -1390,10 +1396,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             };
             predicates.extend(relabeled);
             if let Some(other) = other {
+                // Two traits' blanket impls may each name theirs `C`, as
+                // iced's `BootFn` and `UpdateFn` do: each is its own.
+                let mut name = other.name().to_owned();
+                let mut suffix = 1_u32;
+                while parameters.iter().any(|parameter| parameter.name() == name) {
+                    suffix += 1;
+                    name = format!("{}{suffix}", other.name());
+                }
                 parameters.push(model::Parameter::new(
                     owner.clone(),
                     synthetic,
-                    other.name().into(),
+                    name.into(),
                     model::ParameterKind::Type {
                         bounds: Box::default(),
                         default: model::Default::Absent,
@@ -3094,6 +3108,9 @@ struct Names<'graph> {
     /// that leaned on it.
     visiting: Vec<crate::surface::identity::Definition>,
     resolved: Vec<crate::surface::identity::Definition>,
+    /// The opaque `impl Trait` types functions give, which a facade
+    /// declares under names of its own.
+    opaque: std::collections::BTreeSet<[u8; 32]>,
 }
 
 impl<'graph> Names<'graph> {
@@ -3118,6 +3135,7 @@ impl<'graph> Names<'graph> {
             settled: std::collections::BTreeMap::new(),
             visiting: Vec::new(),
             resolved: Vec::new(),
+            opaque: crate::surface::opaque::identities(graph),
         }
     }
 }
@@ -3336,7 +3354,9 @@ fn type_nameable(
                 return (false, assumed);
             }
             // iced's facade names a future or a sipper; no Rust definition does.
-            if crate::surface::identity::Definition::is_projected(definition.as_bytes()) {
+            if crate::surface::identity::Definition::is_projected(definition.as_bytes())
+                || names.opaque.contains(definition.as_bytes())
+            {
                 return (true, assumed);
             }
             let (nameable, leaned) = definition_nameable(*definition, root, names);
@@ -4871,6 +4891,15 @@ impl<P: api::Phase> Context<'_, P> {
         // receiver or the receiver itself, lent from Rawr until the future
         // ends (D513.6).
         let rewritten = rewrite(signature.output());
+        // An opaque `impl Trait` the function gives is a type of its own,
+        // at the type parameters the caller fixes (`iced::widget::iced`).
+        *self.opaque_output.borrow_mut() = Some(
+            call.iter()
+                .map(|(parameter, ..)| *parameter)
+                .chain(crossings.iter().map(|(parameter, ..)| *parameter))
+                .chain(futures.iter().map(|(parameter, _)| *parameter))
+                .collect(),
+        );
         let output = match signature.receiver() {
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(&rewritten)
@@ -4896,6 +4925,7 @@ impl<P: api::Phase> Context<'_, P> {
             }
             _ => self.convert_value(&rewritten),
         };
+        *self.opaque_output.borrow_mut() = None;
         let mut guard = None;
         let output = match output {
             Ok(output) => output,
@@ -5238,8 +5268,30 @@ impl<P: api::Phase> Context<'_, P> {
             model::Type::TraitObject { .. } => {
                 return Err(representability::reject::Kind::TraitObject.into())
             }
-            model::Type::ImplTrait { .. } => {
-                return Err(representability::reject::Kind::OpaqueType.into())
+            // An opaque type a function gives, as `fn iced<Message, Theme,
+            // Renderer>(..) -> impl Widget<Message, Theme, Renderer>`: a
+            // type of its own, named by its compiler definition, at the
+            // type arguments it captures that a caller's types fix.
+            model::Type::ImplTrait { id, captures, .. } => {
+                let excluded = self.opaque_output.borrow().clone();
+                let Some(excluded) = excluded else {
+                    return Err(representability::reject::Kind::OpaqueType.into());
+                };
+                let mut arguments = Vec::new();
+                for capture in captures.iter() {
+                    let model::Argument::Type(ty) = capture else {
+                        continue;
+                    };
+                    if matches!(ty, model::Type::Parameter { index, .. } if excluded.contains(index))
+                    {
+                        continue;
+                    }
+                    arguments.push(self.convert(ty)?);
+                }
+                Type::Nominal {
+                    definition: crate::surface::identity::Definition::of(id),
+                    arguments: arguments.into_boxed_slice(),
+                }
             }
             // `<T as Iterator>::Item` of an `impl Iterator for T` the crate
             // declares, as `next`'s `Option<Self::Item>` names it (D558
@@ -5982,6 +6034,21 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     fn convert_input(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        // `&'static str`, as iced's `Font::new(name)` takes: Rawr's
+        // string, pinned for as long as the runner lives.
+        if is_str_reference(ty)
+            && matches!(
+                ty,
+                model::Type::Reference {
+                    lifetime: model::Lifetime::Static,
+                    ..
+                }
+            )
+        {
+            return Ok(representability::convert::Type::Builtin(
+                representability::convert::Builtin::StaticStr,
+            ));
+        }
         // `&str`: Rawr's string, lent to the call.
         if is_str_reference(ty) {
             return Ok(representability::convert::Type::Builtin(
@@ -7179,10 +7246,18 @@ fn is_i64_range(definition: &model::Definition, arguments: &[model::Argument]) -
     unit.authority().sysroot().is_some()
         && unit.crate_name() == "core"
         && definition.display_path().last() == Some("RangeInclusive")
-        && matches!(
-            arguments,
-            [model::Argument::Type(model::Type::Primitive(name))] if name.as_ref() == "i64"
-        )
+        && match arguments {
+            // Rawr's `RangeInclusive<i64>`, which a range of another integer
+            // type, or of a type parameter an integer fills, as iced's
+            // `slider(range: RangeInclusive<T>, value: T, ..)` takes, is
+            // converted to where the call takes it.
+            [model::Argument::Type(model::Type::Primitive(name))] => matches!(
+                name.as_ref(),
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+            ),
+            [model::Argument::Type(model::Type::Parameter { .. })] => true,
+            _ => false,
+        }
 }
 
 /// Classification failure that cannot expose a partial contract.

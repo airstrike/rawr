@@ -339,7 +339,14 @@ impl Definition {
     pub(crate) fn takes_callable(&self) -> bool {
         self.parameters
             .iter()
-            .any(|parameter| matches!(parameter.shape(), host::type_ref::Shape::Callable { .. }))
+            .any(|parameter| match parameter.shape() {
+                host::type_ref::Shape::Callable { .. } => true,
+                // An `Option` of a closure, as `on_toggle_maybe(Option<F>)`.
+                host::type_ref::Shape::Option(inner) => {
+                    matches!(inner.shape(), host::type_ref::Shape::Callable { .. })
+                }
+                _ => false,
+            })
     }
 
     /// Return the requirements attached to a declared type parameter.

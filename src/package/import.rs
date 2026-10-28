@@ -1539,6 +1539,11 @@ fn install(
                 )
             })
             .map(|entry| entry.definition)
+            .chain(
+                opaque_types(contract, &facade)
+                    .into_iter()
+                    .map(|(_, definition, _)| definition),
+            )
             .collect::<std::collections::BTreeSet<_>>();
         let definition = build(contract, facade, &declared, &mut shapes, allocation)?;
         let (items, bytes) = definition.registry_usage();
@@ -1647,6 +1652,26 @@ fn build(
         }
     }
 
+    // An opaque `impl Trait` type a function gives is a type of its own,
+    // declared beside the function, at the type arguments its caller fixes.
+    for (path, definition, arity) in opaque_types(contract, &facade) {
+        let parameters = (0..arity)
+            .map(|index| ImmutableString::from(format!("T{index}")))
+            .collect::<Box<[_]>>();
+        let shape = crate::Shared::new(host::type_def::Shape::Opaque);
+        match builder.imported_type(
+            &path,
+            imported_identity(definition),
+            &[],
+            parameters,
+            Box::default(),
+            shape,
+            allocation,
+        ) {
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     for entry in &facade.entries {
         let (parameters, defaults, implemented) = match entry.outcome.representability() {
             Representability::Struct(plan) => (
@@ -2117,6 +2142,88 @@ fn names_declared(
         && ty_ok(signature.output(), declared)
 }
 
+/// The opaque `impl Trait` types the facade's functions and methods give:
+/// each one's path beside the first function that gives it, its
+/// definition, and how many type arguments it takes.
+fn opaque_types(
+    contract: &rawr_import::Contract<rawr_import::Classified>,
+    facade: &Facade<'_>,
+) -> Vec<(String, rawr_import::surface::identity::Definition, usize)> {
+    fn walk(
+        ty: &representability::convert::Type,
+        opaque: &std::collections::BTreeSet<[u8; 32]>,
+        found: &mut Vec<(rawr_import::surface::identity::Definition, usize)>,
+    ) {
+        use representability::convert::Type;
+        match ty {
+            Type::Nominal {
+                definition,
+                arguments,
+            } => {
+                if opaque.contains(definition.as_bytes()) {
+                    found.push((*definition, arguments.len()));
+                }
+                for argument in arguments {
+                    walk(argument, opaque, found);
+                }
+            }
+            Type::Option(inner)
+            | Type::Borrowed { ty: inner, .. }
+            | Type::Range(inner)
+            | Type::Sequence { element: inner, .. } => walk(inner, opaque, found),
+            Type::Result(ok, err) => {
+                walk(ok, opaque, found);
+                walk(err, opaque, found);
+            }
+            Type::Tuple(members) => {
+                for member in members {
+                    walk(member, opaque, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let opaque = rawr_import::surface::opaque::identities(contract.raw_graph());
+    if opaque.is_empty() {
+        return Vec::new();
+    }
+    let mut types: Vec<(String, rawr_import::surface::identity::Definition, usize)> = Vec::new();
+    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>| {
+        let output = match outcome.representability() {
+            Representability::Function(plan) => plan.signature().output(),
+            Representability::FunctionItem(plan) => plan.signature().output(),
+            Representability::Invocation(plan) => plan.signature().output(),
+            Representability::Method(plan) => plan.signature().output(),
+            _ => return,
+        };
+        let mut found = Vec::new();
+        walk(output, &opaque, &mut found);
+        for (index, (definition, arity)) in found.into_iter().enumerate() {
+            if !types.iter().any(|(_, known, _)| *known == definition) {
+                types.push((
+                    rawr_import::surface::opaque::path(path, index),
+                    definition,
+                    arity,
+                ));
+            }
+        }
+    };
+    for entry in &facade.entries {
+        visit(&entry.relative, entry.outcome);
+        for associated in entry
+            .outcome
+            .implementations()
+            .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+        {
+            visit(
+                &format!("{}::{}", entry.relative, associated.name()),
+                associated,
+            );
+        }
+    }
+    types
+}
+
 /// Whether every imported type `ty` names is declared.
 fn ty_ok(
     ty: &representability::convert::Type,
@@ -2221,7 +2328,9 @@ impl Types {
                 Builtin::F64 => host::type_ref::Builtin::F64,
                 Builtin::I64 => host::type_ref::Builtin::I64,
                 Builtin::InclusiveRange => host::type_ref::Builtin::InclusiveRange,
-                Builtin::String | Builtin::Str | Builtin::Text => host::type_ref::Builtin::String,
+                Builtin::String | Builtin::Str | Builtin::StaticStr | Builtin::Text => {
+                    host::type_ref::Builtin::String
+                }
                 Builtin::I8 => host::type_ref::Builtin::I8,
                 Builtin::I16 => host::type_ref::Builtin::I16,
                 Builtin::I32 => host::type_ref::Builtin::I32,

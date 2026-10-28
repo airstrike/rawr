@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 14;
+const SCHEMA: u32 = 15;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -409,6 +409,10 @@ pub struct TypeDefinition {
     /// Whether iced implements `Widget` for the view type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     widget: bool,
+    /// Whether the type is the opaque `impl Trait` a function gives, which
+    /// Rust code can't write (`surface::opaque`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    opaque: bool,
     shape: Shape,
 }
 
@@ -613,6 +617,40 @@ impl Signature {
 }
 
 impl Type {
+    /// Each type among `opaque` this type names, with its arity.
+    fn opaque(
+        &self,
+        opaque: &std::collections::BTreeSet<[u8; 32]>,
+        found: &mut Vec<([u8; 32], usize)>,
+    ) {
+        match self {
+            Self::Nominal {
+                identity,
+                arguments,
+            } => {
+                if opaque.contains(identity) {
+                    found.push((*identity, arguments.len()));
+                }
+                for argument in arguments.iter() {
+                    argument.opaque(opaque, found);
+                }
+            }
+            Self::Result(left, right) => {
+                left.opaque(opaque, found);
+                right.opaque(opaque, found);
+            }
+            Self::Option(element) | Self::Array(element) | Self::Range(element) => {
+                element.opaque(opaque, found);
+            }
+            Self::Tuple(members) => {
+                for member in members.iter() {
+                    member.opaque(opaque, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
         match self {
             Self::Nominal {
@@ -854,6 +892,51 @@ impl Plan {
             list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
             list.push(rules);
             facade.macros = list.into_boxed_slice();
+        }
+        // An opaque `impl Trait` type a function gives is a type of its
+        // own, declared beside the function (`surface::opaque`).
+        let opaque = super::opaque::identities(graph);
+        if !opaque.is_empty() {
+            for facade in &mut facades {
+                let mut types = std::mem::take(&mut facade.types).into_vec();
+                for item in facade.items.iter() {
+                    let mut found = Vec::new();
+                    item.signature.output.opaque(&opaque, &mut found);
+                    for (index, (identity, arity)) in found.into_iter().enumerate() {
+                        if types.iter().any(|ty| ty.identity == identity) {
+                            continue;
+                        }
+                        types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                        types.push(TypeDefinition {
+                            path: super::opaque::path(&item.path, index).into(),
+                            identity,
+                            parameters: (0..arity)
+                                .map(|index| format!("T{index}").into())
+                                .collect(),
+                            defaults: Box::default(),
+                            copy: false,
+                            default: false,
+                            debug: false,
+                            clone: false,
+                            partial_eq: false,
+                            eq: false,
+                            hash: false,
+                            lifetimes: 0,
+                            iterator: false,
+                            view: false,
+                            widget: false,
+                            opaque: true,
+                            shape: Shape::Struct {
+                                form: Form::Record,
+                                constructor: None,
+                                fields: Box::default(),
+                                constructible: false,
+                            },
+                        });
+                    }
+                }
+                facade.types = types.into_boxed_slice();
+            }
         }
         // An item whose signature names a type its own facade does not
         // declare (one the importer could not model, or one only another
@@ -1279,6 +1362,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         iterator: false,
         view: false,
         widget: false,
+        opaque: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1354,6 +1438,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 iterator: false,
                 view: false,
                 widget: false,
+                opaque: false,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -1398,6 +1483,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         iterator: false,
         view: false,
         widget: false,
+        opaque: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -2379,6 +2465,11 @@ impl TypeDefinition {
     pub const fn view(&self) -> bool {
         self.view
     }
+
+    /// Return whether the type is the opaque `impl Trait` a function gives.
+    pub const fn opaque(&self) -> bool {
+        self.opaque
+    }
     /// Return whether the native type is a view type iced implements
     /// `Widget` for.
     pub const fn widget(&self) -> bool {
@@ -2621,6 +2712,7 @@ fn type_definition(
         iterator: borrowing.1,
         view: borrowing.2,
         widget: borrowing.3,
+        opaque: false,
         shape,
     }))
 }
@@ -2985,7 +3077,9 @@ fn ty(
         Source::Builtin(Builtin::F64) => Type::F64,
         Source::Builtin(Builtin::I64) => Type::I64,
         Source::Builtin(Builtin::InclusiveRange) => Type::InclusiveRange,
-        Source::Builtin(Builtin::String | Builtin::Str | Builtin::Text) => Type::String,
+        Source::Builtin(Builtin::String | Builtin::Str | Builtin::StaticStr | Builtin::Text) => {
+            Type::String
+        }
         Source::Builtin(builtin) => Type::Primitive(builtin.rust_name().unwrap_or_default().into()),
         Source::Nominal {
             definition,

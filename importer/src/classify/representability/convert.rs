@@ -22,6 +22,9 @@ pub enum Builtin {
     F32,
     /// A `&str` input: Rawr's string, lent to the Rust call.
     Str,
+    /// A `&'static str` input, as iced's `Font::new(name: &'static str)`
+    /// takes: Rawr's string, pinned for as long as the runner lives.
+    StaticStr,
     /// An output Rawr cannot hold whose type implements `Display`, as
     /// chrono's `DelayedFormat<StrftimeItems<'a>>`: its text, a `String`.
     Text,
@@ -69,7 +72,9 @@ impl Builtin {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::Usize => "usize",
-            Self::InclusiveRange | Self::String | Self::Str | Self::Text => return None,
+            Self::InclusiveRange | Self::String | Self::Str | Self::StaticStr | Self::Text => {
+                return None
+            }
         })
     }
 

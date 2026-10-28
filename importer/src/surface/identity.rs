@@ -1309,6 +1309,7 @@ impl Framed {
                     convert::Builtin::I64 => 3,
                     convert::Builtin::String => 4,
                     convert::Builtin::Str => 17,
+                    convert::Builtin::StaticStr => 19,
                     convert::Builtin::Text => 18,
                     convert::Builtin::InclusiveRange => 5,
                     convert::Builtin::I8 => 6,
