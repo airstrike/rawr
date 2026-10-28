@@ -12,19 +12,7 @@
 crossterm = "0.29"
 ratatui = "0.30"</code></pre>
 </div>
-<p>rawr-import runs it, as it runs every crate with dependencies. <a href="/docs/imports#install">Imports</a> says how to install it. The crate needs two more files, so <code>rawr run</code> and <code>cargo build</code> share one build of ratatui:</p>
-<div class="block">
-  <div class="file"><b>rust-toolchain.toml</b></div>
-  <pre><code data-lang="toml">[toolchain]
-channel = "nightly-2026-07-11"
-components = ["rust-src", "rustfmt", "clippy"]</code></pre>
-</div>
-<div class="block">
-  <div class="file"><b>.cargo/config.toml</b></div>
-  <pre><code data-lang="toml">[build]
-target = "host-tuple"</code></pre>
-</div>
-<p><code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> puts both builds in <code>target/&lt;host&gt;/debug</code>. A member of a Cargo workspace needs neither file, as <a href="/docs/imports#project">Imports</a> explains.</p>
+<p>rawr-import runs it, as it runs every crate with dependencies. <a href="/docs/imports#install">Imports</a> says how to install it. The crate needs no other file. <code>rawr run</code> and <code>cargo build</code> share one build of ratatui, as <a href="/docs/imports#project">Imports</a> explains.</p>
 <p>Then run it from a terminal:</p>
 <div class="block"><pre><code>rawr run</code></pre></div>
 

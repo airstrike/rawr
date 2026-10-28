@@ -4373,8 +4373,8 @@ fn runner_manifest(
             );
         }
     }
-    // The binary is the script crate's name; the build gives it the name
-    // `rawr-generated-runner` as well (`runner::build::name_binary`).
+    // The binary is the script crate's name; its bundle keeps the executable
+    // as `rawr-generated-runner`.
     if let Some(binary) = binary.filter(|binary| *binary != RUNNER_BINARY) {
         let mut target = toml_edit::Table::new();
         target.insert("name", value(binary));
@@ -4383,27 +4383,10 @@ fn runner_manifest(
         targets.push(target);
         document.insert("bin", Item::ArrayOfTables(targets));
     }
-    share_harness_units(&mut document)?;
+    // The project's own profile, `[patch]` and `[replace]` come with the
+    // harness manifest unchanged, so the runner's units are the ones the
+    // project's `cargo build` compiles (D609.1).
     Ok(normalize(document.to_string().as_bytes()))
-}
-
-/// The runner is built from the harness's dependency set, for the harness's
-/// target, in the same build directory: every dependency unit, the edited
-/// crates included, is the one the harness build already compiled (the harness
-/// builds them non-incremental). Only the runner crate itself is incremental.
-fn share_harness_units(document: &mut DocumentMut) -> Result<(), request::Error> {
-    let mut item = Some(document.as_item());
-    for key in ["profile", "dev", "package"] {
-        item = item.and_then(|item| item.get(key));
-        if item.is_some_and(|item| !item.is_table()) {
-            return Err(request::Error::Manifest {
-                reason: "final-form harness profile is not a table".into(),
-            });
-        }
-    }
-    document["profile"]["dev"]["incremental"] = value(false);
-    document["profile"]["dev"]["package"]["rawr-generated-runner"]["incremental"] = value(true);
-    Ok(())
 }
 
 fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
@@ -11702,7 +11685,7 @@ mod tests {
     }
 
     #[test]
-    fn runner_manifest_makes_only_the_runner_unit_incremental() {
+    fn runner_manifest_keeps_the_projects_profile() {
         let harness = b"[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n[dependencies]\niced = \"0.14\"\n";
         let manifest = super::runner_manifest(harness, None, &[]).unwrap();
         let document = std::str::from_utf8(&manifest)
@@ -11710,25 +11693,16 @@ mod tests {
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
         let dev = &document["profile"]["dev"];
-        // The harness builds every dependency non-incremental; the runner's
-        // dependency units are those units only when its profile agrees.
-        assert_eq!(dev["incremental"].as_bool(), Some(false));
-        assert_eq!(
-            dev["package"]["rawr-generated-runner"]["incremental"].as_bool(),
-            Some(true)
-        );
+        // The project's `cargo build` takes its profile as written, and so
+        // does the runner: a setting Rawr adds would change every unit's hash.
+        assert!(dev.get("incremental").is_none());
+        assert!(dev["package"].get("rawr-generated-runner").is_none());
         assert_eq!(dev["package"]["*"]["opt-level"].as_integer(), Some(3));
         assert_eq!(
             document["package"]["name"].as_str(),
             Some("rawr-generated-runner")
         );
         assert!(document.get("lib").is_none());
-        assert!(super::runner_manifest(
-            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n",
-            None,
-            &[]
-        )
-        .is_err());
     }
 
     #[test]

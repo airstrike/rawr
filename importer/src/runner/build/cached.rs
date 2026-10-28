@@ -8,7 +8,6 @@ use std::path::{Component, Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::node;
-use crate::process::{ProductionReplay as _, ToolPaths as _};
 use crate::runner::artifact::retained;
 
 const DOMAIN: &[u8] = b"rawr.runner.bundle-request/v2";
@@ -16,7 +15,7 @@ const MAGIC: &[u8; 8] = b"RAWRRUN3";
 const BUNDLE_MAGIC: &[u8; 8] = b"RAWRBNDL";
 const SCHEMA: u32 = 3;
 const BUNDLE_SCHEMA: u32 = 2;
-const COMMAND_SCHEMA: u32 = 4;
+const COMMAND_SCHEMA: u32 = 5;
 const PRODUCT_BYTES: usize = 288;
 const BUNDLE_HEADER_BYTES: usize = 296;
 
@@ -50,7 +49,6 @@ pub(super) fn build<B>(
     let limits = context.limits();
     let store = context.open_store()?;
     let validation_store = store.clone();
-    let native = crate::process::Native::from_attestation(toolchain.as_ref());
     let retention = chain
         .retention()
         .map(|parent| {
@@ -63,14 +61,11 @@ pub(super) fn build<B>(
     let validate = move |candidate: &Product, budget: &node::GraphBudget| {
         candidate.revalidate(&validation_store, &validation, budget)
     };
-    let host = toolchain.value().proof().host();
     let execute = |attempt| {
         compile(
             &manifest,
             &inputs,
             &context,
-            &native,
-            host,
             parallelism,
             cargo_owner,
             attempt,
@@ -218,8 +213,6 @@ fn compile<B>(
     manifest: &super::super::Manifest<super::super::Generated, B>,
     inputs: &Inputs,
     context: &crate::context::Context,
-    native: &crate::process::Native,
-    host: &str,
     parallelism: crate::process::parallelism::Proof,
     cargo_owner: Option<&crate::cargo::Owner>,
     attempt: crate::store::bundle::Attempt,
@@ -229,8 +222,6 @@ fn compile<B>(
     let generated = attempt.generated();
     materialize(manifest, &generated)?;
     let target = attempt.target();
-    let production = native.production();
-    let (rustc, rustdoc) = production.cargo_tools();
     let project_build = crate::location::build_directory(context.project(), context.environment());
     let build = crate::deps::directory(&project_build).map_err(|source| node::Error::Io {
         operation: "create the project's Cargo build directory",
@@ -239,18 +230,19 @@ fn compile<B>(
     })?;
     let work = work_directory(context.rawr());
     // Cargo builds the project's one runner in place; the sealed bundle
-    // receives a copy of the executable it produced.
+    // receives a copy of the executable it produced. Its final artifacts go
+    // beside it, since the runner may take the project's own binary name.
     let built = work.join("target");
-    // Rustc reuses the unchanged adapter modules from its incremental
-    // state for this one stable-path unit. The generated manifest makes only
-    // that unit incremental, so `CARGO_INCREMENTAL` must not override it, and
-    // every dependency is the non-incremental unit the harness build already
-    // compiled for the same target.
+    // The project's own Cargo builds the runner as `cargo build` builds the
+    // project (D609.1): the rustup proxy picks the project's toolchain from
+    // the project root, with the shell's environment and the project's Cargo
+    // config, no `--target` and the project's profile. Its units are the ones
+    // `cargo build` compiles, in the project's build directory, and Cargo
+    // decides which are fresh.
     let environment = context
         .environment()
-        .command_values(&built, rustc, rustdoc)?
-        .into_iter()
-        .filter(|(key, _)| key != "CARGO_INCREMENTAL")
+        .entries()
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)))
         .collect::<Box<[_]>>();
     let build_value = toml_edit::Value::from(build.to_string_lossy().as_ref()).to_string();
     let prefix = vec![
@@ -261,18 +253,17 @@ fn compile<B>(
         // Artifacts as JSON name every unit this build used; rustc's
         // diagnostics still render on stderr.
         OsString::from("--message-format=json-render-diagnostics"),
-        OsString::from("--offline"),
         OsString::from("--locked"),
-        OsString::from("--target"),
-        OsString::from(host),
         OsString::from("--manifest-path"),
         work.join("Cargo.toml").into_os_string(),
+        OsString::from("--target-dir"),
+        built.into_os_string(),
     ];
     let command = crate::process::Command::cargo(
         prefix,
         crate::process::CargoAction::RunnerBuild(parallelism),
         tail,
-        work.clone(),
+        context.project().to_path_buf(),
         environment,
     )?;
     let acquired = if cargo_owner.is_none() {
@@ -304,9 +295,7 @@ fn compile<B>(
         source,
     })?;
     let started = std::time::SystemTime::now();
-    let result = production
-        .cargo()
-        .run(&command, context.limits().process_limits())
+    let result = crate::process::project_cargo(&command, context.limits().process_limits())
         .and_then(|output| output.checked(crate::process::Program::Cargo));
     let name = if cfg!(windows) {
         "rawr-generated-runner.exe"
@@ -314,23 +303,22 @@ fn compile<B>(
         "rawr-generated-runner"
     };
     let copied = result.as_ref().ok().map(|messages| {
-        // The runner's dep-info names every source this build compiled.
-        let output = built.join(host).join("debug");
-        let _ = super::name_binary(&output, &work.join("Cargo.toml"));
-        if let Ok(used) = fs::read(output.join("rawr-generated-runner.d")) {
-            crate::deps::prune_rawr(&build, &used);
-        }
+        // Cargo's JSON names the rawr crate's sources and the executable.
+        crate::deps::prune_rawr(&build, messages);
         crate::deps::prune_superseded(
             &build,
             messages,
             started,
             &work.join("incremental-directories"),
         );
+        let destination = target.join("debug");
+        let executable = runner_executable(messages).ok_or_else(|| {
+            node::Error::Transform("the runner build named no runner executable".into())
+        })?;
         // Copy (a clone on APFS) under the lock, before another build of this
         // project replaces the executable.
-        let destination = target.join("debug");
         fs::create_dir_all(&destination)
-            .and_then(|()| fs::copy(output.join(name), destination.join(name)))
+            .and_then(|()| fs::copy(&executable, destination.join(name)))
             .map(|_| first_exec(&destination.join(name)))
             .map_err(|source| node::Error::Io {
                 operation: "copy the built runner into its bundle",
@@ -402,6 +390,28 @@ fn compile<B>(
     node::Bundled::validate(product, pending, |product, pending| {
         product.revalidate_pending(pending, inputs, budget)
     })
+}
+
+/// The executable of the runner's binary target, from Cargo's
+/// `compiler-artifact` message for the `rawr-generated-runner` package. The
+/// binary may take the script crate's name (D594).
+fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
+    messages
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .filter(|message| {
+            message.get("reason").and_then(serde_json::Value::as_str) == Some("compiler-artifact")
+                && message
+                    .get("package_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|package| package.contains("rawr-generated-runner"))
+        })
+        .find_map(|message| {
+            message
+                .get("executable")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
 }
 
 fn materialize<B>(

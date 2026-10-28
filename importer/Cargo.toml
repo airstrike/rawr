@@ -12,11 +12,14 @@ path = "src/lib.rs"
 [features]
 canonical-selector-diagnostic = []
 default = []
-rustc-driver = ["unicode-hosts"]
+rustc-driver = ["unicode-hosts", "unicode-names"]
 # UTS46 processing of non-ASCII and uppercase host names in manifest URLs.
 # Every command that reads manifests has it; a project's runner does not.
 unicode-hosts = ["dep:icu_collections", "dep:icu_normalizer", "dep:idna_adapter"]
-test-fixtures = ["unicode-hosts"]
+# Unicode identifier classes for package, target and feature names (`xid`).
+# Every command that reads manifests has it; a project's runner does not.
+unicode-names = ["dep:unicode-ident"]
+test-fixtures = ["unicode-hosts", "unicode-names"]
 # Embed the Rawr source tree a generated harness builds against, so an
 # installed `rawr` never reads a development checkout.
 embedded-host = []
@@ -50,7 +53,9 @@ serde_json = { version = "1", features = ["raw_value"] }
 sha2 = { version = "0.10", features = ["asm"] }
 thiserror = "2"
 toml_edit = { package = "rawr-toml-edit", path = "../toml/edit" }
-unicode-ident = "1.0.24"
+# Optional (`unicode-names`): a project's proc macros build `unicode-ident` as a
+# host unit, and without `--target` the runner's own copy would replace it.
+unicode-ident = { version = "1.0.24", optional = true }
 utf8_iter = "1.0.4"
 
 [build-dependencies]

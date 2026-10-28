@@ -95,12 +95,12 @@ fn visit(bytes: &[u8], placeholder: char, mut emit: impl FnMut(char) -> Step<()>
             emit(':')?;
             started = false;
         } else if !started {
-            if (unicode_ident::is_xid_start(ch) || ch == '_') && !ch.is_ascii_digit() {
+            if (crate::xid::is_xid_start(ch) || ch == '_') && !ch.is_ascii_digit() {
                 emit(ch)?;
                 started = true;
             }
         } else {
-            emit(if unicode_ident::is_xid_continue(ch) || ch == '-' {
+            emit(if crate::xid::is_xid_continue(ch) || ch == '-' {
                 ch
             } else {
                 placeholder

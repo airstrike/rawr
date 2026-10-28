@@ -1,13 +1,11 @@
 //! rawr-iced's `rawr new` template, `iced`: a counter in a Cargo crate that
-//! depends on iced, with the files a project that imports Rust needs.
+//! depends on iced.
 //! `rawr new <path> --template iced` hands the request to rawr-iced, which
 //! writes it through `rawr`'s own transactional crate writer.
 
 use std::path::PathBuf;
 
 pub use rawr_cli::new::{Created, Error};
-#[cfg(feature = "native-runner")]
-pub use rawr_import_cli::project::{cargo_config, toolchain};
 
 /// The template's name, as `rawr new --template` spells it.
 pub const TEMPLATE: &str = "iced";
@@ -47,17 +45,13 @@ pub const ICED_FEATURES: [&str; 7] = [
     "svg",
 ];
 
-/// The template's files for the package `name`: the manifest, the counter,
-/// and the toolchain and Cargo config a project that imports Rust needs, so
-/// `cargo build` and `rawr run` build the same iced.
+/// The template's files for the package `name`: the manifest and the
+/// counter. The project's own Cargo builds Rawr's runner, so `cargo build`
+/// and `rawr run` build the same iced with no other file.
 #[must_use]
 pub fn files(name: &str) -> Vec<rawr_cli::new::File> {
     vec![
         rawr_cli::new::File::new("Cargo.toml", manifest(name)),
-        #[cfg(feature = "native-runner")]
-        rawr_cli::new::File::new("rust-toolchain.toml", toolchain()),
-        #[cfg(feature = "native-runner")]
-        rawr_cli::new::File::new(".cargo/config.toml", cargo_config()),
         rawr_cli::new::File::new("src/main.rs", COUNTER_SOURCE),
     ]
 }
@@ -95,19 +89,8 @@ mod tests {
             "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\", \"canvas\", \"image-without-codecs\", \"qr_code\", \"selector\", \"sipper\", \"svg\"] }}",
             rawr_iced::native::ICED_REVISION
         )));
-        #[cfg(feature = "native-runner")]
-        assert_eq!(
-            std::fs::read_to_string(target.join("rust-toolchain.toml")).unwrap(),
-            format!(
-                "[toolchain]\nchannel = \"{}\"\ncomponents = [\"rust-src\", \"rustfmt\", \"clippy\"]\n",
-                rawr_import::cargo::toolchain::CHANNEL
-            )
-        );
-        #[cfg(feature = "native-runner")]
-        assert_eq!(
-            std::fs::read_to_string(target.join(".cargo/config.toml")).unwrap(),
-            super::cargo_config()
-        );
+        assert!(!target.join("rust-toolchain.toml").exists());
+        assert!(!target.join(".cargo").exists());
         let source = std::fs::read_to_string(target.join("src/main.rs")).unwrap();
         assert_eq!(source, super::COUNTER_SOURCE);
         assert!(rawr::project::is_marked(&source));

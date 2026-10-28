@@ -11,21 +11,11 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>rawr-iced imports an iced app&rsquo;s dependencies the same way. It doesn&rsquo;t need rawr-import installed.</p>
 
 <h2 id="project">Project setup</h2>
-<p>rawr-import builds your dependencies in the project&rsquo;s <code>target/</code> and shares them with <code>cargo build</code>. The project needs two files for that:</p>
-<div class="block">
-  <div class="file"><b>rust-toolchain.toml</b></div>
-  <pre><code data-lang="toml">[toolchain]
-channel = "nightly-2026-07-11"
-components = ["rust-src", "rustfmt", "clippy"]</code></pre>
-</div>
-<div class="block">
-  <div class="file"><b>.cargo/config.toml</b></div>
-  <pre><code data-lang="toml">[build]
-target = "host-tuple"</code></pre>
-</div>
-<p><code>rust-toolchain.toml</code> pins the nightly for both. <code>.cargo/config.toml</code> puts both builds in <code>target/&lt;host&gt;/debug</code>.</p>
-<p>Without the files, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add. A crate with no dependencies doesn&rsquo;t need them.</p>
-<p>A member of a Cargo workspace doesn&rsquo;t need them either. <code>cargo build</code> takes its toolchain from the workspace&rsquo;s root, and rawr doesn&rsquo;t ask the whole workspace to use the nightly. rawr builds the member with the nightly in the workspace&rsquo;s <code>target/</code>. <code>cargo build</code> then compiles the member&rsquo;s dependencies a second time, with the workspace&rsquo;s toolchain.</p>
+<p>A crate that <code>cargo run</code> runs needs only the marker. rawr-import adds no file to it.</p>
+<p>Your own <code>cargo</code> builds rawr&rsquo;s runner. It runs from the project&rsquo;s directory, with your shell&rsquo;s environment. It uses the project&rsquo;s toolchain, Cargo config and profiles, and it builds in the project&rsquo;s <code>target/</code>. So <code>rawr run</code> and <code>cargo build</code> share every compiled dependency, and each compiles a dependency only once.</p>
+<p>The first <code>rawr run</code> of a project also compiles rawr&rsquo;s own crates into its <code>target/</code>.</p>
+<p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
+<p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
 <p>rawr keeps what it makes for a crate in <code>target/rawr</code>. For a workspace member, that is <code>target/rawr/members/&lt;path&gt;</code> in the workspace&rsquo;s <code>target/</code>, where <code>&lt;path&gt;</code> is the member&rsquo;s directory. <code>cargo clean</code> removes it.</p>
 
 <h2 id="use">Use a dependency</h2>

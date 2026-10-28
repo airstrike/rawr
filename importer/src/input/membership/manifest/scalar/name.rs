@@ -63,12 +63,12 @@ fn basic(text: &str) -> Result<(), Rejection> {
         if character.is_ascii_digit() {
             return Err(Rejection::LeadingDigit(character));
         }
-        if !(unicode_ident::is_xid_start(character) || character == '_') {
+        if !(crate::xid::is_xid_start(character) || character == '_') {
             return Err(Rejection::Start(character));
         }
     }
     for character in characters {
-        if !(unicode_ident::is_xid_continue(character) || character == '-') {
+        if !(crate::xid::is_xid_continue(character) || character == '-') {
             return Err(Rejection::Continue(character));
         }
     }
@@ -140,14 +140,12 @@ fn feature(text: &str) -> Result<(), Rejection> {
     }
     let mut characters = text.chars();
     if let Some(character) = characters.next()
-        && !(unicode_ident::is_xid_start(character)
-            || character == '_'
-            || character.is_ascii_digit())
+        && !(crate::xid::is_xid_start(character) || character == '_' || character.is_ascii_digit())
     {
         return Err(Rejection::Start(character));
     }
     for character in characters {
-        if !(unicode_ident::is_xid_continue(character)
+        if !(crate::xid::is_xid_continue(character)
             || character == '-'
             || character == '+'
             || character == '.')
