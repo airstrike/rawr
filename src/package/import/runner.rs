@@ -895,13 +895,20 @@ fn build(
         .types()
         .map(facade::TypeDefinition::path)
         .collect::<Vec<_>>();
+    // An alias's associated functions, as `widget::Text::new`, sit under
+    // the alias, which is no module.
+    let owner_paths = type_paths
+        .iter()
+        .copied()
+        .chain(facade.type_aliases().map(facade::TypeAlias::path))
+        .collect::<Vec<_>>();
     let mut modules = Vec::<Box<str>>::new();
     for path in type_paths
         .iter()
         .copied()
         .chain(facade.items().map(facade::Item::path))
     {
-        collect_modules(path, &type_paths, &mut modules)?;
+        collect_modules(path, &owner_paths, &mut modules)?;
     }
     if let Some(seed) = compatibility {
         let prefix = format!("{}::", facade.root());

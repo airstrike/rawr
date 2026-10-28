@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 46;
+const CLASSIFIER_VERSION: u32 = 48;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3640,8 +3640,20 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     None => None,
                 };
+                // An alias that passes its parameters on to a type, as
+                // iced's `widget::Text<'a, Theme = crate::Theme>` is
+                // `core::widget::Text<'a, Theme>`, stays an alias, with its
+                // defaults, and has that type's members: `$crate::Text::new`
+                // in `text!` is `core::widget::Text::new`.
+                let passed_on = aliased
+                    .is_none()
+                    .then(|| self.passed_on_target(definition))
+                    .flatten()
+                    .map(|target| export.retargeted(target.id().clone()));
                 let implementations = if variant.is_some() {
                     Box::default()
+                } else if let Some(passed_on) = &passed_on {
+                    self.implementations(passed_on, definitions)?
                 } else {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
@@ -3685,6 +3697,50 @@ impl<P: api::Phase> Context<'_, P> {
         .then_some(target)
     }
 
+    /// The struct or enum a generic alias names with each of its own type
+    /// parameters, in order, and nothing else, as `pub type Text<'a, Theme =
+    /// crate::Theme> = core::widget::Text<'a, Theme>;` does.
+    fn passed_on_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
+        let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
+            return None;
+        };
+        let model::Type::Definition { id, arguments } = ty else {
+            return None;
+        };
+        if generics.predicates().len() != 0 {
+            return None;
+        }
+        let parameters = generics
+            .parameters()
+            .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+            .collect::<Vec<_>>();
+        let types = arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(ty),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if parameters.is_empty()
+            || parameters.len() != types.len()
+            || !parameters.iter().zip(&types).all(|(parameter, ty)| {
+                matches!(ty, model::Type::Parameter { owner, index }
+                    if owner == parameter.owner() && *index == parameter.index())
+            })
+        {
+            return None;
+        }
+        let target = self
+            .graph
+            .definitions()
+            .nth(self.graph.definition_index(id)?)?;
+        matches!(
+            target.kind(),
+            model::Kind::Struct { .. } | model::Kind::Enum { .. }
+        )
+        .then_some(target)
+    }
+
     fn implementations(
         &self,
         export: &ledger::Export,
@@ -3713,7 +3769,23 @@ impl<P: api::Phase> Context<'_, P> {
                     .definitions()
                     .nth(definition_index)
                     .ok_or(Error::Cardinality)?;
-                let selector = selector(definition)?;
+                let selector = match selector(definition)? {
+                    // A method of a trait's impl for `&str` is that impl's
+                    // own (`surface::text`).
+                    crate::surface::identity::Selector::Method { receiver, .. }
+                        if is_str_reference(implementation.self_type())
+                            && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == export.target()) =>
+                    {
+                        crate::surface::identity::Selector::Method {
+                            item: crate::surface::identity::Definition::text_member(
+                                implementation.id(),
+                                definition.id(),
+                            ),
+                            receiver,
+                        }
+                    }
+                    selector => selector,
+                };
                 self.retain_selector(&selector)?;
                 let item_identity = crate::surface::identity::Identity::imported(
                     export,
@@ -4039,6 +4111,20 @@ impl<P: api::Phase> Context<'_, P> {
                     )),
                 )))
             }
+            // A trait's impl for `&str`, as iced's `impl Widget<..> for
+            // &str`: its methods take Rawr's string as `&'static str`.
+            None if is_str_reference(implementation.self_type())
+                && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == target) =>
+            {
+                let index = self
+                    .graph
+                    .implementation_index(implementation.id())
+                    .ok_or(Error::Cardinality)?;
+                let outer = self.trait_self.replace(Some(index));
+                let evidence = self.classify_str_member(implementation, definition);
+                self.trait_self.set(outer);
+                evidence
+            }
             None if default_method => {
                 let index = self
                     .graph
@@ -4077,6 +4163,93 @@ impl<P: api::Phase> Context<'_, P> {
             return Err(Error::Cardinality);
         };
         match self.function(signature, generics) {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(implementation.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        implementation.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
+        }
+    }
+
+    /// A method of a trait's impl for `&str`, as iced's `impl<Message,
+    /// Theme, Renderer> Widget<Message, Theme, Renderer> for &str` gives
+    /// `_boxed`: an invocation whose instance is `&'static str`, Rawr's
+    /// string pinned for the runner's life, with every parameter of the
+    /// impl the call's to infer, as rustc infers them.
+    fn classify_str_member(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{callable, reject, Representability};
+
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let result = (|| -> Result<Representability, Failure> {
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = definition.kind()
+            else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            // Only a method that takes the string by value: `&self` would
+            // borrow a `&&str`.
+            if !matches!(signature.receiver(), model::Receiver::Value { .. })
+                || generics
+                    .parameters()
+                    .any(|parameter| parameter.owner() != definition.id())
+            {
+                return Err(reject::Kind::GenericImplementation.into());
+            }
+            let parameters = implementation
+                .generics()
+                .parameters()
+                .filter(|parameter| !is_lifetime_parameter(parameter))
+                .collect::<Vec<_>>();
+            if parameters
+                .iter()
+                .any(|parameter| !matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+            {
+                return Err(reject::Kind::GenericImplementation.into());
+            }
+            let inferred = parameters
+                .iter()
+                .map(|parameter| parameter.index())
+                .collect::<Vec<_>>();
+            let provided = provided_signature(implementation, definition, signature, generics)?;
+            let (signature, generics) = match &provided {
+                Some((signature, generics)) => (signature, generics),
+                None => (signature, generics),
+            };
+            let inherited = model::Generics::inherited(implementation.generics(), generics)
+                .map_err(|_| Error::Allocation)?;
+            let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            let item = item.with_inferred(&inferred, parameters.len());
+            if item.call().is_some() || !item.crossings().is_empty() {
+                return Err(reject::Kind::CallableProtocol.into());
+            }
+            let item = item.with_instance(representability::convert::Type::Builtin(
+                representability::convert::Builtin::StaticStr,
+            ));
+            Ok(Representability::Invocation(callable::Invocation::new(
+                item, 0,
+            )))
+        })();
+        match result {
             Ok(plan) => {
                 self.retain_inline_representability()?;
                 Ok(OutcomeEvidence::Inline(Box::new(plan)))
@@ -4195,59 +4368,7 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             }
             let container_parameters = parameters.len() - inferred.len();
-            // A trait's provided method, as iced's `Widget::_boxed`, names
-            // the trait's parameters, which this implementation's trait
-            // arguments are. Its own parameters follow the trait's, so they
-            // follow the implementation's here.
-            let provided = match (definition.owner(), implementation.trait_ref()) {
-                (model::Owner::Definition(owner), model::Trait::Trait { id, arguments })
-                    if owner == id =>
-                {
-                    let mut substitutions = arguments
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, argument)| match argument {
-                            model::Argument::Type(ty) => {
-                                Some(((id.clone(), u32::try_from(index).ok()?), ty.clone()))
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    let first = implementation
-                        .generics()
-                        .parameters()
-                        .map(|parameter| parameter.index().saturating_add(1))
-                        .max()
-                        .unwrap_or(0);
-                    let mut own = Vec::new();
-                    for (position, parameter) in generics.parameters().enumerate() {
-                        let index = first
-                            .checked_add(u32::try_from(position).map_err(|_| Error::IndexOverflow)?)
-                            .ok_or(Error::IndexOverflow)?;
-                        if matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
-                            substitutions.push((
-                                (parameter.owner().clone(), parameter.index()),
-                                model::Type::Parameter {
-                                    owner: parameter.owner().clone(),
-                                    index,
-                                },
-                            ));
-                        }
-                        own.push(model::Parameter::new(
-                            parameter.owner().clone(),
-                            index,
-                            parameter.name().into(),
-                            parameter.kind().clone(),
-                        ));
-                    }
-                    let own = model::Generics::new(
-                        own.into_boxed_slice(),
-                        generics.predicates().cloned().collect(),
-                    );
-                    Some((substituted_signature(signature, &substitutions), own))
-                }
-                _ => None,
-            };
+            let provided = provided_signature(implementation, definition, signature, generics)?;
             let (signature, generics) = match &provided {
                 Some((signature, generics)) => (signature, generics),
                 None => (signature, generics),
@@ -6490,6 +6611,72 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 fn is_str_reference(ty: &model::Type) -> bool {
     matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
         if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// A trait's provided method, as iced's `Widget::_boxed`, as a member of
+/// `implementation`: it names the trait's parameters, which the
+/// implementation's trait arguments are, and its own parameters follow the
+/// trait's, so they follow the implementation's here. `None` for any other
+/// definition.
+fn provided_signature(
+    implementation: &model::Implementation,
+    definition: &model::Definition,
+    signature: &model::Signature,
+    generics: &model::Generics,
+) -> Result<Option<(model::Signature, model::Generics)>, Error> {
+    let (model::Owner::Definition(owner), model::Trait::Trait { id, arguments }) =
+        (definition.owner(), implementation.trait_ref())
+    else {
+        return Ok(None);
+    };
+    if owner != id {
+        return Ok(None);
+    }
+    let mut substitutions = arguments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| match argument {
+            model::Argument::Type(ty) => {
+                Some(((id.clone(), u32::try_from(index).ok()?), ty.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let first = implementation
+        .generics()
+        .parameters()
+        .map(|parameter| parameter.index().saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    let mut own = Vec::new();
+    for (position, parameter) in generics.parameters().enumerate() {
+        let index = first
+            .checked_add(u32::try_from(position).map_err(|_| Error::IndexOverflow)?)
+            .ok_or(Error::IndexOverflow)?;
+        if matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+            substitutions.push((
+                (parameter.owner().clone(), parameter.index()),
+                model::Type::Parameter {
+                    owner: parameter.owner().clone(),
+                    index,
+                },
+            ));
+        }
+        own.push(model::Parameter::new(
+            parameter.owner().clone(),
+            index,
+            parameter.name().into(),
+            parameter.kind().clone(),
+        ));
+    }
+    let own = model::Generics::new(
+        own.into_boxed_slice(),
+        generics.predicates().cloned().collect(),
+    );
+    Ok(Some((
+        substituted_signature(signature, &substitutions),
+        own,
+    )))
 }
 
 /// A method whose own lifetimes only lend its `&str` inputs, as chrono's

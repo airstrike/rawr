@@ -1690,6 +1690,11 @@ impl Builder {
         items
             .try_reserve_exact(item_count)
             .map_err(|_| host::Error::Allocation)?;
+        let alias_paths = self
+            .type_aliases
+            .iter()
+            .map(|alias| alias.path.clone())
+            .collect::<Vec<_>>();
         for (_, declarations) in self.items {
             let start = items.len();
             for item in declarations {
@@ -1697,6 +1702,7 @@ impl Builder {
                     &self.root,
                     &self.modules,
                     &self.types,
+                    &alias_paths,
                     &self.supports,
                     &imported,
                     allocation,

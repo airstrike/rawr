@@ -2,7 +2,9 @@
 //! an `Option` of a callable, a crate function where a style closure goes,
 //! a widget invariant in the lifetime of the label it borrows, an opaque
 //! `impl Widget` a function gives, an application an opaque `impl Program`
-//! carries, and a field of a type whose `Default` the crate derives.
+//! carries, a field of a type whose `Default` the crate derives, and, in
+//! the shape of iced's pick_list, a choice of script values and a string
+//! literal as a widget.
 
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -369,5 +371,102 @@ impl<P: Program> Application<P> {
         let mut labels = Vec::new();
         let _ = self.program.view(&state, "", &mut labels);
         println!("last view {}", labels.join(" "));
+    }
+}
+
+/// A choice among options, as iced's `pick_list(selected, options,
+/// to_string)`: the options are any `Borrow<[T]>`, and the selected one any
+/// `Borrow<T>`, which a script value fills.
+pub struct Pick<'a, T, L, V, Message> {
+    selected: Option<V>,
+    options: L,
+    to_string: Box<dyn Fn(&T) -> String + 'a>,
+    on_select: Option<Box<dyn Fn(T) -> Message + 'a>>,
+    placeholder: String,
+}
+
+/// A choice of `options`, `selected` marked, each shown by `to_string`.
+pub fn pick<'a, T, L, V, Message>(
+    selected: Option<V>,
+    options: L,
+    to_string: impl Fn(&T) -> String + 'a,
+) -> Pick<'a, T, L, V, Message>
+where
+    T: PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+{
+    Pick {
+        selected,
+        options,
+        to_string: Box::new(to_string),
+        on_select: None,
+        placeholder: String::new(),
+    }
+}
+
+impl<'a, T, L, V, Message> Pick<'a, T, L, V, Message>
+where
+    T: PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+{
+    /// The message a choice sends.
+    pub fn on_select(mut self, on_select: impl Fn(T) -> Message + 'a) -> Self {
+        self.on_select = Some(Box::new(on_select));
+        self
+    }
+
+    /// What shows while nothing is selected.
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+}
+
+impl<'a, T, L, V, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for Pick<'a, T, L, V, Message>
+where
+    T: PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+{
+    fn labels(&self, labels: &mut Vec<String>) {
+        let selected = self.selected.as_ref().map(std::borrow::Borrow::borrow);
+        let options = self
+            .options
+            .borrow()
+            .iter()
+            .map(|option| {
+                let mark = if Some(option) == selected { "*" } else { "" };
+                format!("{mark}{}", (self.to_string)(option))
+            })
+            .collect::<Vec<_>>();
+        let shown = selected.map_or_else(
+            || self.placeholder.clone(),
+            |selected| (self.to_string)(selected),
+        );
+        labels.push(format!("<{shown}: {}>", options.join("|")));
+    }
+
+    fn press(&self, label: &str) -> Option<Message> {
+        let on_select = self.on_select.as_ref()?;
+        self.options
+            .borrow()
+            .iter()
+            .find(|option| (self.to_string)(option) == label)
+            .map(|option| on_select(option.clone()))
+    }
+}
+
+/// A string literal is a widget, as iced's `impl Widget for &str` makes
+/// `column!["label", ..]` write `Widget::_boxed("label")`.
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for &str {
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push(format!("'{self}'"));
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
     }
 }

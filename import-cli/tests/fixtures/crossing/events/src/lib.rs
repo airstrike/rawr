@@ -352,6 +352,28 @@ pub mod widgets {
         }
     }
 
+    impl<'a, Theme> Text<'a, Theme> {
+        /// Text showing `value`, as iced's `Text::new`.
+        pub fn new(value: impl ToString) -> Self {
+            text(value)
+        }
+    }
+
+    /// Text at the crate's theme: an alias that passes its parameters on
+    /// to the type, as iced's `widget::Text` is `core::widget::Text`.
+    pub type Label<'a, Theme = crate::Theme> = Text<'a, Theme>;
+
+    /// Text of a format string, as iced's `text!`: the type's associated
+    /// function reached through the alias. It shares `text`'s name.
+    #[macro_export]
+    macro_rules! widgets_text {
+        ($($arg:tt)*) => {
+            $crate::widgets::Label::new(format!($($arg)*))
+        };
+    }
+
+    pub use crate::widgets_text as text;
+
     impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Text<'_, Theme> {
         fn labels(&self, labels: &mut Vec<String>) {
             labels.push(format!("{}@{}", self.text, self.size));

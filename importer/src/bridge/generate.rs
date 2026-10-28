@@ -5362,6 +5362,15 @@ fn witness_mode(plan: &Plan) -> u8 {
         | Operation::EnumVariant { .. }
         | Operation::Function { .. }
         | Operation::Constant { .. } => 1,
+        // A trait's method on Rawr's string, which Rawr calls as a function
+        // (`surface::text`).
+        Operation::Method {
+            receiver: Receiver::Owned,
+            signature,
+            ..
+        } if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) => {
+            1
+        }
         Operation::StructField { field, .. } if !copy_scalar(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
@@ -6457,6 +6466,46 @@ fn render_adapter_body(
                 )?;
             } else {
                 match receiver {
+                    // A trait's method of its impl for `&str`, called on
+                    // Rawr's string (`surface::text`): the string, pinned
+                    // for the runner's life as a `&'static str` input is.
+                    Receiver::Owned
+                        if signature.instance()
+                            == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) =>
+                    {
+                        output
+                            .write_all(
+                                b"    let receiver: &'static str = static_pins().pin(take_primitive::<ImmutableString>(arguments, 0)?);\n",
+                            )
+                            .map_err(|_| request::Error::Encoding)?;
+                        let annotation = concrete_type(&substituted(
+                            signature.output(),
+                            signature,
+                            substitutions,
+                        )?)
+                        .map(|ty| format!(": {ty}"))
+                        .unwrap_or_default();
+                        write!(
+                            output,
+                            "    let output{annotation} = lend(arguments.arena, || receiver.{}",
+                            plan.name()
+                        )
+                        .map_err(|_| request::Error::Encoding)?;
+                        render_item_turbofish(
+                            signature,
+                            substitutions,
+                            constants,
+                            *container_parameters,
+                            output,
+                        )?;
+                        output
+                            .write_all(b"(")
+                            .map_err(|_| request::Error::Encoding)?;
+                        argument_list(signature.inputs().len(), 1, output)?;
+                        output
+                            .write_all(b"));\n")
+                            .map_err(|_| request::Error::Encoding)?;
+                    }
                     Receiver::Owned => {
                         render_scoped_receiver(
                             plan,
@@ -9594,9 +9643,14 @@ fn render_take_input(
     }
     let generic = matches!(ty, convert::Type::Parameter(_));
     // An array of a type parameter's values, as `impl IntoIterator<Item =
-    // impl Into<..>>` takes, at the type the call's instance gives them.
+    // impl Into<..>>` takes, or an `Option` of one, as iced's `pick_list(
+    // selected: Option<V>, ..)` takes a script value's, at the type the
+    // call's instance gives them.
     let deep;
-    let ty = if matches!(ty, convert::Type::Sequence { .. }) {
+    let ty = if matches!(
+        ty,
+        convert::Type::Sequence { .. } | convert::Type::Option(_)
+    ) {
         deep = substituted(ty, signature, substitutions)?;
         &deep
     } else {
@@ -9901,6 +9955,15 @@ fn render_take(
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
+        // A slice of script values a type argument names, as an owned
+        // `Vec` of their proxies (`script_slice`).
+        convert::Type::Borrowed { mutable: false, ty } if let Some(element) = script_slice(ty) => {
+            let owned = convert::Type::Sequence {
+                element: Box::new(element.clone()),
+                owned: true,
+            };
+            return render_take(local, index, &owned, output);
+        }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
                 field: "static function item entered runtime argument decoding",
@@ -10199,6 +10262,15 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(ty, value, depth, &mut converted)?;
             write!(output, "({converted}).map(static_bytes)")
+        }
+        // A slice of script values a type argument names, as an owned
+        // `Vec` of their proxies (`script_slice`).
+        convert::Type::Borrowed { mutable: false, ty } if let Some(element) = script_slice(ty) => {
+            let owned = convert::Type::Sequence {
+                element: Box::new(element.clone()),
+                owned: true,
+            };
+            return render_from_dynamic(&owned, value, depth, output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::Error::Drift {
@@ -11047,7 +11119,7 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
             scoped_type(ok)?,
             scoped_type(err)?
         )),
-        convert::Type::Borrowed { mutable: false, ty } => {
+        convert::Type::Borrowed { mutable: false, ty } if script_slice(ty).is_none() => {
             Some(format!("&'x {}", borrowed_target(ty)?))
         }
         ty => concrete_type(ty),
@@ -11276,6 +11348,18 @@ impl{bounds} std::fmt::Debug for {name}{generics} {{
 impl{bounds} Default for {name}{generics} {{
     fn default() -> Self {{
         Self::from_proxy(__rawr_internal::crossing::Proxy::default_of({path:?}))
+    }}
+}}
+
+impl{bounds} PartialEq for {name}{generics} {{
+    fn eq(&self, other: &Self) -> bool {{
+        self.0 == other.0
+    }}
+}}
+
+impl{bounds} std::fmt::Display for {name}{generics} {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        self.0.display(f)
     }}
 }}
 "
@@ -11662,12 +11746,32 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .collect::<Option<Vec<_>>>()?
                 .join(", ")
         ),
+        // A type argument `&[T]` of script values (`script_slice`).
+        convert::Type::Borrowed { mutable: false, ty } if let Some(element) = script_slice(ty) => {
+            format!("Vec<{}>", concrete_type(element)?)
+        }
         // A type argument `&[T]` or `&str` (D558 tier 1).
         convert::Type::Borrowed { mutable: false, ty } => format!("&{}", borrowed_target(ty)?),
         convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }
         | convert::Type::Parameter(_) => return None,
     })
+}
+
+/// The element of a slice of script values a type argument `&[T]` borrows,
+/// as iced's `pick_list(.., Language::ALL, ..)` fills `L: Borrow<[T]>`
+/// with a script `&[Language]`. Rawr's array holds no Rust layout, so the
+/// runner makes the proxies whichever way it passes them; it passes them
+/// as an owned `Vec`, which borrows as the slice does and needs no
+/// lifetime to borrow at.
+fn script_slice(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Sequence {
+            element,
+            owned: false,
+        } if matches!(element.as_ref(), convert::Type::Script { .. }) => Some(element),
+        _ => None,
+    }
 }
 
 /// What a type argument `&[T]` or `&str` borrows: `[T]` or `str`.

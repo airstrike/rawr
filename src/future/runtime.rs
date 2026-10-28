@@ -552,6 +552,20 @@ pub trait Remote: crate::func::SendSync {
         None
     }
 
+    /// `lhs == rhs` by their script type's own `PartialEq`, when the
+    /// program wrote one, and else as a derived one compares them.
+    fn equal(&self, lhs: &Dynamic, rhs: &Dynamic) -> Option<RawrResultOf<bool>> {
+        let _ = (lhs, rhs);
+        None
+    }
+
+    /// `value`'s text as its script type's own `Display` writes it; `None`
+    /// when the type has none.
+    fn display(&self, value: &Dynamic) -> Option<RawrResultOf<String>> {
+        let _ = value;
+        None
+    }
+
     /// The `Default` of the script type at `path` (`State`, `app::State`):
     /// its own `impl Default`, or the derived one (D594). `None` when the
     /// program has no such type.
@@ -983,6 +997,20 @@ fn with_host<T>(work: impl FnOnce(&dyn Host) -> T) -> Option<T> {
 /// `value`'s `Debug` text through the program it belongs to (review 8).
 pub(crate) fn debug(value: &Dynamic) -> Option<String> {
     published()?.debug(value)
+}
+
+/// `lhs == rhs` by their script type's `PartialEq`, through the program
+/// they belong to.
+#[cfg(feature = "sync")]
+pub(crate) fn equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<RawrResultOf<bool>> {
+    published()?.equal(lhs, rhs)
+}
+
+/// `value`'s text by its script type's own `Display`, through the program
+/// it belongs to.
+#[cfg(feature = "sync")]
+pub(crate) fn display(value: &Dynamic) -> Option<RawrResultOf<String>> {
+    published()?.display(value)
 }
 
 fn send(job: Job) {

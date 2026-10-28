@@ -20,6 +20,7 @@ pub mod identity;
 pub mod instance;
 pub mod opaque;
 mod runner;
+pub mod text;
 
 pub(crate) const SURFACE_SCHEMA: u32 = 3;
 

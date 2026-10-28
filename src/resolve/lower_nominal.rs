@@ -9880,6 +9880,10 @@ struct Parser<'a> {
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// The crate trait each `Trait::method(receiver, ..)` call names, by
+    /// the position of the method it was rewritten to (`path_method_call`):
+    /// a text receiver takes the method the trait's impl for `&str` gives.
+    spliced_traits: BTreeMap<Position, ImmutableString>,
     /// The turbofish of the host function call whose signature is being
     /// instantiated (`rand::random::<f64>()`).
     host_turbofish: Option<Vec<Ty>>,
@@ -10137,6 +10141,7 @@ impl<'a> Parser<'a> {
             text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
+            spliced_traits: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
@@ -13139,6 +13144,7 @@ impl<'a> Parser<'a> {
         &mut self,
         member: &str,
         member_span: Span,
+        trait_path: Option<ImmutableString>,
     ) -> Option<Vec<(Token, Position)>> {
         let (arguments, end) = self.take_argument_tokens().ok()?;
         let mut depth = 0_usize;
@@ -13189,6 +13195,9 @@ impl<'a> Parser<'a> {
         // What follows the receiver takes its last position, so each span
         // the call makes runs forward.
         let after = receiver.last().map_or(end, |(_, position)| *position);
+        if let Some(trait_path) = trait_path {
+            self.spliced_traits.insert(after, trait_path);
+        }
         let mut tokens = vec![(Token::LeftParen, at)];
         if !plain {
             tokens.push((Token::LeftParen, at));
@@ -17891,6 +17900,25 @@ impl<'a> Parser<'a> {
                     element,
                     length: None,
                 };
+            }
+            // A lazy iterator where the host takes an iterable, as iced's
+            // `column(sizes.map(|size| ..))` takes `impl IntoIterator<Item
+            // = Element>`: its items, collected where the call takes them.
+            // rustc's check of the crate holds the parameter to one that
+            // takes an iterator.
+            if let (Ty::Array { length: None, .. }, Ty::Iter(item)) = (
+                self.inference.resolve(expected),
+                self.inference.resolve(&argument.ty),
+            ) {
+                let source = self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]);
+                *argument = self.operator_expr(
+                    source,
+                    Ty::Array {
+                        element: item,
+                        length: None,
+                    },
+                    argument.span,
+                );
             }
             if !profile_mapper {
                 self.coerce_expr(expected, argument)?;
@@ -31743,6 +31771,40 @@ impl<'a> Parser<'a> {
     }
 
     /// The `String` methods Rust code reaches for, with Rust results.
+    /// `Trait::method(text, ..)` of the crate trait at `trait_path`: the
+    /// function the facade declares for the method of the trait's impl for
+    /// `&str`, with the text as its first input (`surface::text`). A trait
+    /// whose impls for `&str` weren't extracted yet misses `trait::member`,
+    /// which the importer demands.
+    #[cfg(feature = "rust-import")]
+    fn parse_text_member(
+        &mut self,
+        receiver: ParsedExpr,
+        trait_path: &ImmutableString,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let path = rawr_import::surface::text::path(trait_path, &member);
+        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            let error = Error::UnknownMember {
+                owner: trait_path.clone(),
+                member,
+                reference: member_span,
+            };
+            return Err(self.native_miss(true, error));
+        };
+        let owner = self.models.item_owner(&path).cloned();
+        let start = receiver.span.start();
+        let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+        let mut inputs = Vec::with_capacity(arguments.len() + 1);
+        inputs.push(receiver);
+        for mut argument in arguments {
+            self.move_local(&mut argument)?;
+            inputs.push(argument);
+        }
+        self.call_host_function(&items, owner, inputs, span(start, end))
+    }
+
     fn parse_string_method(
         &mut self,
         value: ParsedExpr,
@@ -33091,6 +33153,17 @@ impl<'a> Parser<'a> {
                 && matches!(self.peek(), Token::LeftParen)
             {
                 value = self.parse_bool_method(value, member)?;
+                continue;
+            }
+            // `Trait::method(text, ..)` of a crate's trait, as `column!`'s
+            // `Widget::_boxed("label")`: the method the trait's impl for
+            // `&str` gives (`surface::text`).
+            #[cfg(feature = "rust-import")]
+            if (builtin.is_text()
+                || matches!(&builtin, Ty::Reference { target, .. } if target.is_text()))
+                && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
+            {
+                value = self.parse_text_member(value, &trait_path, member, member_span)?;
                 continue;
             }
             if builtin.is_text()
@@ -42834,7 +42907,8 @@ impl<'a> Parser<'a> {
                     .and_then(|name| name.chars().next())
                     .is_some_and(char::is_uppercase)
                 && matches!(self.peek(), Token::LeftParen)
-                && let Some(tokens) = self.path_method_call(&member, member_span)
+                && let Some(tokens) =
+                    self.path_method_call(&member, member_span, Some(binding.qualified.clone()))
             {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
@@ -43106,7 +43180,8 @@ impl<'a> Parser<'a> {
                 .and_then(|name| name.chars().next())
                 .is_some_and(char::is_uppercase)
                 && matches!(self.peek(), Token::LeftParen)
-                && let Some(tokens) = self.path_method_call(&member, member_span)
+                && let Some(tokens) =
+                    self.path_method_call(&member, member_span, Some(owner.clone()))
             {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
@@ -43259,7 +43334,7 @@ impl<'a> Parser<'a> {
             // argument, as Rust's path call is.
             if definition.receiver().is_some()
                 && matches!(self.peek(), Token::LeftParen)
-                && let Some(tokens) = self.path_method_call(&member, member_span)
+                && let Some(tokens) = self.path_method_call(&member, member_span, None)
             {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
