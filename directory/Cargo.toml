@@ -1,6 +1,6 @@
 [package]
 name = "rawr-directory"
-version = "0.2.8"
+version = "0.2.9"
 rust-version = "1.91.0"
 edition = "2024"
 publish = false

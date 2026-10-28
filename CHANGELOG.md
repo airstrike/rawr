@@ -7,6 +7,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
 
+## 0.2.9 (2026-10-27)
+
+- Upstream iced's `checkbox`, `slider` and `tooltip` examples run under `rawr run` without rawr-iced, with iced's own titles and theme.
+- An `Option` of a closure, and a crate's function passed where a closure or function type goes, such as `.style(checkbox::primary)`, work.
+- A crate function that returns `impl Trait`, such as `iced::application(..)`, runs, and its value takes the trait's methods.
+- A number literal passed to an `impl Into<T>` parameter takes the type `T`, as in Rust.
+- A struct that derives `Default` may hold a field of a crate's type.
+
 ## 0.2.8 (2026-10-27)
 
 - The `// rawr` marker may follow a shebang line and a cargo-script frontmatter block. rawr parses such a file with its lines and columns kept.
