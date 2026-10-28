@@ -18,7 +18,7 @@ pub struct Definition {
     /// The receiver's type a method's impl fixes, in the item's type
     /// parameters, as iced's `impl<T> Task<Option<T>>` fixes `Task<Option<T>>`
     /// for its `and_then`: a receiver of another type takes another form.
-    instance: Option<host::type_ref::Type>,
+    instance: Option<Box<host::type_ref::Type>>,
 }
 
 /// A bound `R: Trait<A..>` on an imported generic item's type parameter
@@ -259,7 +259,7 @@ impl Builder {
             output: self.output.unwrap_or_else(host::type_ref::Type::unit),
             relations: self.relations.into_boxed_slice(),
             crossing: self.crossing,
-            instance: self.instance,
+            instance: self.instance.map(Box::new),
         }
     }
 }
@@ -340,7 +340,7 @@ impl Definition {
             instance: self
                 .instance
                 .as_ref()
-                .map(host::type_ref::Type::try_clone)
+                .map(|ty| ty.try_clone().map(Box::new))
                 .transpose()?,
         })
     }
@@ -513,7 +513,10 @@ impl Definition {
         let instance = self
             .instance
             .as_ref()
-            .map(|ty| ty.resolve(root, types, supports, &self.type_parameters, imported, item))
+            .map(|ty| {
+                ty.resolve(root, types, supports, &self.type_parameters, imported, item)
+                    .map(Box::new)
+            })
             .transpose()?;
         Ok(Self {
             type_parameters,
@@ -573,8 +576,8 @@ impl Definition {
 
     /// The receiver's type a method's impl fixes, when it does.
     #[cfg(feature = "rust-import")]
-    pub(crate) const fn instance(&self) -> Option<&host::type_ref::Type> {
-        self.instance.as_ref()
+    pub(crate) fn instance(&self) -> Option<&host::type_ref::Type> {
+        self.instance.as_deref()
     }
 
     pub(crate) fn external_types(&self) -> Vec<&host::type_def::Export> {
