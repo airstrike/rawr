@@ -756,6 +756,7 @@ impl<'a> Resolver<'a> {
             entry_crate,
             aliases,
             scripts,
+            instances: super::Instances::default(),
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
         program.widgets =
@@ -2123,6 +2124,47 @@ fn qualify_opaque_bounds(
     for function in functions {
         if let Some(output) = &mut function.output {
             qualify(output, modules);
+        }
+        // `fn modal(base: impl Widget<Message>)`, whose parameter's `impl`
+        // is lifted to a generic parameter bounded by `Widget<Message>`,
+        // or `W: Widget<Message>`: a dependency's trait by a module the
+        // unit's `use`s bind, written from the crate's root (D629).
+        for generic in function.generics.iter_mut() {
+            let mut bounds = generic.bounds.to_vec();
+            for bound in &mut bounds {
+                if bound.global {
+                    continue;
+                }
+                let Some(module) = bound
+                    .segments
+                    .first()
+                    .and_then(|first| modules.get(&first.name.text))
+                else {
+                    continue;
+                };
+                let (at, span) = (bound.segments[0].name.span, bound.segments[0].span);
+                let written = bound.segments[0].arguments.clone();
+                let single = bound.segments.len() == 1;
+                let count = module.split("::").count();
+                bound.segments = module
+                    .split("::")
+                    .enumerate()
+                    .map(|(index, text)| Segment {
+                        name: crate::item::Name {
+                            text: text.into(),
+                            span: at,
+                        },
+                        arguments: if single && index + 1 == count {
+                            written.clone()
+                        } else {
+                            Box::default()
+                        },
+                        span,
+                    })
+                    .chain(bound.segments.iter().skip(1).cloned())
+                    .collect();
+            }
+            generic.bounds = bounds.into_boxed_slice();
         }
     }
 }
