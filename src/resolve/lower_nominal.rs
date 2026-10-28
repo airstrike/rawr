@@ -40467,7 +40467,12 @@ impl<'a> Parser<'a> {
         if function.is_none()
             && let Some(error) = self.unknown_function(&name, name_span)
         {
-            return Err(error);
+            // A `use` of a crate module with a function of its name beside
+            // it, as iced's `combo_box`, names the function rawr can't
+            // call, and the import says why.
+            let written = crate::tokenizer::demangle_names(&name);
+            let reference = Span::new(name_span.start(), text_end(name_span.start(), &written));
+            return Err(self.module_value(&name, reference).unwrap_or(error));
         }
         // A non-generic function's parameter types are each argument's
         // expected type.

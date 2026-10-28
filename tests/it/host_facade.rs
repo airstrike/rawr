@@ -108,6 +108,34 @@ pub fn qualified() -> i64 {
     assert!(error.to_string().contains("`make` is a function here; write `make(..)`"), "{error}");
 }
 
+/// A `use` of a module whose function of the same name rawr has no binding
+/// for, as iced's `combo_box`, is an unknown import where it is called, so
+/// the importer can say why the function is missing.
+#[test]
+fn a_call_of_a_module_without_its_function_names_the_import() {
+    let mut builder = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    builder.module("widget").unwrap();
+    builder.module("widget::picker").unwrap();
+    builder
+        .item(item::Definition::value("widget::picker::LIMIT", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap())
+        .unwrap();
+    let mut engine = Engine::new();
+    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    engine.compile("use api::widget::picker; pub fn f() -> i64 { picker::LIMIT }").unwrap();
+
+    let called = "use api::widget::picker; pub fn f() -> i64 { picker(1) }";
+    let error = engine.compile(called).unwrap_err();
+    assert!(
+        matches!(
+            error.err_type(),
+            ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
+                if path == "api::widget::picker"
+        ),
+        "{error}"
+    );
+    assert_eq!(error.primary_span().start(), position_of(called, "picker(1)"));
+}
+
 #[test]
 fn a_macro_and_a_function_of_one_name_are_not_overloads() {
     let mut builder = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
