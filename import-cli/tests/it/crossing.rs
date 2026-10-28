@@ -361,6 +361,21 @@ fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
     );
 }
 
+/// iced's table: `table(columns, &self.events)` takes a borrowed `Vec` as
+/// rows of `impl IntoIterator<Item = T>`, whose items are the `&Event` the
+/// columns' `|event: &Event|` closures take, so `T: Clone` holds of a
+/// script type that isn't `Clone`. The script's `Event` is also a name the
+/// runner's own code used. The output is `cargo run`'s.
+#[test]
+fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
+    let (rawr, cargo) = both_printed("crossing-table", "table.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 \"Events\" |Name|Time|Talk|45 min|Workshop|120 min|"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,

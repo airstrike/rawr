@@ -51,7 +51,7 @@ impl Conversions {
             frame("one").padding(4),
             frame("floats").padding([1.5, 2.5]),
             slider(1.0..=30.0, self.timeout, Message::Timeout),
-            slider(0.0..=1.0, self.level, Message::Level),
+            slider(0.0..=1.0, self.level, move |level| Message::Level(level)),
             frame("dim").style(|_theme| Style {
                 background: Some(
                     Color {

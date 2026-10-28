@@ -2598,18 +2598,20 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
 }
 
 /// What the protocol thread waits for: the parent's next frame, or a call
-/// from the program's native `main` into marked code (D501).
-enum Event {
+/// from the program's native `main` into marked code (D501). Its name is
+/// one no script type takes, since a script type's proxy is declared at the
+/// crate root beside it (`table`'s `Event`).
+enum __RawrProtocolEvent {
     Frame(std::io::Result<(u8, Vec<u8>)>),
     Call(__rawr_internal::island::Call),
 }
 
 /// The parent's next frame, answering the native calls that come first.
-fn next_frame(events: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<(u8, Vec<u8>)> {
+fn next_frame(events: &std::sync::mpsc::Receiver<__RawrProtocolEvent>) -> std::io::Result<(u8, Vec<u8>)> {
     loop {
         match events.recv() {
-            Ok(Event::Frame(frame)) => return frame,
-            Ok(Event::Call(call)) => call.answer(),
+            Ok(__RawrProtocolEvent::Frame(frame)) => return frame,
+            Ok(__RawrProtocolEvent::Call(call)) => call.answer(),
             Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
         }
     }
@@ -2662,7 +2664,7 @@ fn admitted() {
 /// restarts the program with it.
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
-    received: std::sync::mpsc::Receiver<Event>,
+    received: std::sync::mpsc::Receiver<__RawrProtocolEvent>,
     mut key: [u8; 32],
     mut live: Option<Live>,
 ) {
@@ -2801,13 +2803,13 @@ fn run_protocol(
     let mut prepared = false;
     let mut admitted = false;
     let mut first = Some(first);
-    let (events, received) = std::sync::mpsc::channel::<Event>();
+    let (events, received) = std::sync::mpsc::channel::<__RawrProtocolEvent>();
     let mut reader = stream.try_clone()?;
     let frames = events.clone();
     std::thread::spawn(move || loop {
         let frame = receive_frame(&mut reader);
         let end = frame.is_err();
-        if frames.send(Event::Frame(frame)).is_err() || end {
+        if frames.send(__RawrProtocolEvent::Frame(frame)).is_err() || end {
             break;
         }
     });
@@ -2997,7 +2999,7 @@ fn run_protocol(
                 }
                 let calls = events.clone();
                 let forward = move |call| {
-                    let _ = calls.send(Event::Call(call));
+                    let _ = calls.send(__RawrProtocolEvent::Call(call));
                 };
                 let started = match &mut program {
                     Some(program) => __rawr_profile::run(program, forward),
@@ -6916,7 +6918,14 @@ fn render_anchored_opening(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
-    if !functions.is_empty() || !mappers.is_empty() {
+    // A script closure, as `table::column(header, |event| ..)` takes with
+    // its `&str` header, is made by the call's own slot, outside this path.
+    if !functions.is_empty()
+        || !mappers.is_empty()
+        || signature.parameters().iter().any(|parameter| {
+            parameter.kind() == crate::classify::representability::signature::Kind::Callable
+        })
+    {
         return Ok(());
     }
     let mut call = Vec::new();
@@ -13306,7 +13315,7 @@ mod tests {
         assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
         assert!(runner.contains("__rawr_profile::run(program, forward)"));
         assert!(runner.contains("__rawr_profile::publish(program)"));
-        assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
+        assert!(runner.contains("Ok(__RawrProtocolEvent::Call(call)) => call.answer(),"));
         // The process's main thread is kept for a native `main`, and the
         // protocol runs beside it. A marked `main` runs the protocol, and
         // then itself, on the main thread.

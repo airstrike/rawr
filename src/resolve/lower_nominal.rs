@@ -17339,6 +17339,57 @@ impl<'a> Parser<'a> {
                     )?;
                     return Ok(self.inclusive_range_of(&element, Some(float)));
                 }
+                // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
+                // as an array of `T`, takes a shared borrow of an array too,
+                // as `table(columns, &self.events)` passes `&Vec<Event>`,
+                // whose items the columns' `|event: &Event|` read.
+                #[cfg(feature = "rust-import")]
+                if let crate::host::type_ref::Shape::Array {
+                    element,
+                    length: None,
+                } = ty.shape()
+                    && matches!(element.shape(), crate::host::type_ref::Shape::Parameter(_))
+                    && item.imported_identity().is_some()
+                    && arguments
+                        .and_then(|arguments| arguments.get(index))
+                        .is_some_and(|argument| {
+                            matches!(
+                                self.inference.resolve(&argument.ty),
+                                Ty::Reference { mutable: false, target }
+                                    if matches!(*target, Ty::Array { length: None, .. })
+                            )
+                        })
+                {
+                    let item = self.instantiate_host_type(
+                        element,
+                        &mut parameters,
+                        &item_path,
+                        item_owner.as_ref(),
+                        originating,
+                    )?;
+                    let borrowed = arguments
+                        .and_then(|arguments| arguments.get(index))
+                        .map(|argument| self.inference.resolve(&argument.ty))
+                        .unwrap_or(Ty::Unknown);
+                    // Its items are borrows of the array's elements; one
+                    // that can't be `T` is the mismatch rustc reports.
+                    if let Ty::Reference { target, .. } = &borrowed
+                        && let Ty::Array { element, .. } = target.as_ref()
+                        && self.unify_type(
+                            &item,
+                            &Ty::Reference {
+                                mutable: false,
+                                target: element.clone(),
+                            },
+                        )
+                    {
+                        return Ok(borrowed);
+                    }
+                    return Ok(Ty::Array {
+                        element: Box::new(item),
+                        length: None,
+                    });
+                }
                 self.instantiate_host_type(
                     ty,
                     &mut parameters,
@@ -17499,8 +17550,14 @@ impl<'a> Parser<'a> {
     /// `RangeInclusive<i64>` otherwise. `T` takes the range's kind of
     /// number, as rustc's `{float}` or `{integer}`.
     fn inclusive_range_of(&mut self, element: &Ty, float: Option<bool>) -> Ty {
-        let float =
-            float.unwrap_or_else(|| matches!(self.inference.resolve(element), Ty::Float(_)));
+        // With no argument to read, as a closure's hint is made, an open
+        // `T` stays open for the call's own arguments to settle.
+        let float = match (float, self.inference.resolve(element)) {
+            (Some(float), _) => float,
+            (None, Ty::Float(_)) => true,
+            (None, Ty::Int(_)) => false,
+            (None, _) => return Ty::InclusiveRange,
+        };
         let id = self.inference.fresh_id();
         let number = if float {
             Ty::Float(Float::Var(id))
@@ -37080,13 +37137,18 @@ impl<'a> Parser<'a> {
                 source: self.lifted[index].span,
             });
         }
+        // A shared borrow of a script value stays one, as `|event: &Event|`
+        // makes a crate's `impl Fn(T)` take `T = &Event`, which is `Clone`
+        // where `Event` isn't; its proxy shares the value either way.
         let inputs: Box<[Ty]> = inputs
             .iter()
             .map(|input| match input {
                 Ty::Reference {
                     mutable: false,
                     target,
-                } => (**target).clone(),
+                } if !matches!(self.inference.resolve(target), Ty::Script(..)) => {
+                    (**target).clone()
+                }
                 input => input.clone(),
             })
             .collect();
