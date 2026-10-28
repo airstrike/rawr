@@ -70,13 +70,28 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
         text(&run.stdout),
         "parsed: 1.2.3\nmajor: 1\nwidest: 18446744073709551615.0.9223372036854775808\n"
     );
+    // The runner links rawr's runtime, compiled once in rawr's home, and
+    // compiles no rawr crate in the project (D620).
     let runner = fs::read_to_string(root.join("target/rawr/runner/Cargo.toml")).unwrap();
-    assert!(
-        runner.contains("__rawr_internal = { package = \"rawr\""),
-        "{runner}"
-    );
+    assert!(!runner.contains("__rawr_internal"), "{runner}");
     assert!(runner.contains("semver = "), "{runner}");
     assert!(!runner.contains("iced"), "{runner}");
+    let main = fs::read_to_string(root.join("target/rawr/runner/src/main.rs")).unwrap();
+    assert!(
+        main.contains("extern crate rawr as __rawr_internal;"),
+        "{main}"
+    );
+    let script = fs::read_to_string(root.join("target/rawr/runner/build.rs")).unwrap();
+    assert!(
+        script.contains("cargo:rustc-link-search=crate=") && script.contains("/runtime/"),
+        "{script}"
+    );
+    let compiled = fs::read_dir(root.join("target/debug/deps"))
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("librawr-") || name.starts_with("librawr_import-"))
+        .collect::<Vec<_>>();
+    assert!(compiled.is_empty(), "{compiled:?}");
 
     let checked = rawr_import(&root, &["check"]);
     assert!(checked.status.success(), "{}", text(&checked.stderr));
