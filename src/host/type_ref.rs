@@ -41,6 +41,8 @@ pub enum Builtin {
     F32,
     /// `std::time::Duration`, Rawr's own `Duration` at runtime.
     Duration,
+    /// `std::time::Instant`, Rawr's own `Instant` at runtime.
+    Instant,
 }
 
 impl Builtin {
@@ -62,7 +64,9 @@ impl Builtin {
             Self::U16 => "u16",
             Self::Usize => "usize",
             Self::F32 => "f32",
-            Self::InclusiveRange | Self::FloatInclusiveRange | Self::Duration => return None,
+            Self::InclusiveRange | Self::FloatInclusiveRange | Self::Duration | Self::Instant => {
+                return None
+            }
         })
     }
 
@@ -1104,6 +1108,7 @@ impl crate::preview::digest::Write for Type {
                 Builtin::Usize => 0x2330,
                 Builtin::F32 => 0x2331,
                 Builtin::Duration => 0x2333,
+                Builtin::Instant => 0x2334,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

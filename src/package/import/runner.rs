@@ -469,6 +469,11 @@ impl Profile for Ordinary {
                 host::type_ref::Builtin::Duration,
             )));
         }
+        if identity == Definition::instant().as_bytes() && arguments.is_empty() {
+            return Ok(Some(host::type_ref::Type::builtin(
+                host::type_ref::Builtin::Instant,
+            )));
+        }
         Ok(None)
     }
 
@@ -1077,6 +1082,14 @@ fn build(
         builder
             .builtin_alias(path, builtin)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
+    // A crate's re-export of a std item, as iced's `time::Duration`.
+    for (path, std) in facade.std_reexports() {
+        match builder.std_alias(path, std) {
+            // A path the crate also declares something at keeps that.
+            Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+            Err(source) => return Err(entry_error(facade.root(), path, source.into())),
+        }
     }
     // A crate's type alias, as `pub type Result = std::result::Result<(),
     // Error>;`.
