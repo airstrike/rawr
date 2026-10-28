@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 50;
+const CLASSIFIER_VERSION: u32 = 51;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4040,6 +4040,13 @@ impl<P: api::Phase> Context<'_, P> {
             .map(|parameter| parameter.index().saturating_add(1))
             .max()
             .unwrap_or(0);
+        // The method's parameters join the function's, and a name both
+        // use, as warp's `form<T>()` and `Filter::untuple_one<T>` do, would
+        // be declared twice: the method's is renamed `T1`, `T2`, ...
+        let mut names = container
+            .parameters()
+            .map(|parameter| Box::<str>::from(parameter.name()))
+            .collect::<Vec<_>>();
         let mut own = Vec::new();
         for (position, parameter) in generics.parameters().enumerate() {
             let index = first
@@ -4054,10 +4061,17 @@ impl<P: api::Phase> Context<'_, P> {
                     },
                 ));
             }
+            let mut name = Box::<str>::from(parameter.name());
+            let mut suffix = 1_u32;
+            while names.contains(&name) {
+                name = format!("{}{suffix}", parameter.name()).into();
+                suffix = suffix.saturating_add(1);
+            }
+            names.push(name.clone());
             own.push(model::Parameter::new(
                 parameter.owner().clone(),
                 index,
-                parameter.name().into(),
+                name,
                 parameter.kind().clone(),
             ));
         }
