@@ -15,7 +15,7 @@ const MAGIC: &[u8; 8] = b"RAWRRUN3";
 const BUNDLE_MAGIC: &[u8; 8] = b"RAWRBNDL";
 const SCHEMA: u32 = 3;
 const BUNDLE_SCHEMA: u32 = 2;
-const COMMAND_SCHEMA: u32 = 5;
+const COMMAND_SCHEMA: u32 = 6;
 const PRODUCT_BYTES: usize = 288;
 const BUNDLE_HEADER_BYTES: usize = 296;
 
@@ -42,7 +42,7 @@ pub(super) fn build<B>(
     let toolchain = crate::cargo::toolchain::cached(&context, &crate::metrics::Current)?;
     let parallelism = crate::process::parallelism::Proof::discover()?;
     let inputs = Inputs::capture(&manifest)?;
-    let authority = authority(&inputs, toolchain.as_ref(), parallelism)?;
+    let authority = authority(&inputs, toolchain.as_ref(), parallelism, &context)?;
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
     let recipe = context.discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)?;
     let validation = inputs.clone();
@@ -132,7 +132,7 @@ pub(super) fn replay_hot<B>(
     let inputs = Inputs::capture(manifest)?;
     let parallelism = crate::process::parallelism::Proof::discover()
         .map_err(|error| node::Error::Importer(Box::new(error)))?;
-    let authority = authority(&inputs, &toolchain, parallelism)?;
+    let authority = authority(&inputs, &toolchain, parallelism, context)?;
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
     let recipe = context.discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)?;
     let store = context.open_store()?;
@@ -188,11 +188,16 @@ fn authority(
     inputs: &Inputs,
     toolchain: &node::Validated<crate::cargo::toolchain::Attestation>,
     parallelism: crate::process::parallelism::Proof,
+    context: &crate::context::Context,
 ) -> Result<Box<[u8]>, node::Error> {
+    // The runtime's opt-level setting changes the runner it links (T302).
+    let level = crate::runner::runtime::opt_level(context.environment())
+        .map_err(|reason| node::Error::Transform(reason.into_boxed_str()))?
+        .to_string();
     let retained = DOMAIN
         .len()
         .checked_add(32 * 3)
-        .and_then(|length| length.checked_add(12))
+        .and_then(|length| length.checked_add(12 + level.len()))
         .ok_or(node::Error::Allocation)?;
     let mut bytes = Vec::new();
     bytes
@@ -205,6 +210,7 @@ fn authority(
     bytes.extend_from_slice(&COMMAND_SCHEMA.to_le_bytes());
     bytes.extend_from_slice(&parallelism.schema().to_le_bytes());
     bytes.extend_from_slice(&(parallelism.jobs().get() as u32).to_le_bytes());
+    bytes.extend_from_slice(level.trim().as_bytes());
     Ok(bytes.into_boxed_slice())
 }
 
@@ -281,34 +287,66 @@ fn compile<B>(
         .generated
         .carrier()
         .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-    // The project's path packages keep their paths under the workspace root,
-    // so Cargo hashes them as the project's `cargo build` does (T277).
-    let workspace = rawr_location::workspace_root(context.project());
-    let mirrored = manifest
-        .files
-        .iter()
-        .find(|file| file.path() == "Cargo.toml")
-        .and_then(|file| std::str::from_utf8(file.bytes()).ok())
-        .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
-    crate::bridge::generate::sync_sources(
-        &work,
+    let file_of = |path: &str| {
         manifest
             .files
             .iter()
-            .map(|file| match (&mirrored, file.path()) {
-                (Some(mirrored), "Cargo.toml") => (file.path(), mirrored.as_bytes()),
-                _ => (file.path(), file.bytes()),
-            })
-            .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
-    )
-    .map_err(|source| node::Error::Io {
-        operation: "update the stable generated runner sources",
-        path: work.clone(),
-        source,
-    })?;
+            .find(|file| file.path() == path)
+            .map_or(&[][..], |file| file.bytes())
+    };
+    let (generated_manifest, generated_lock) = (file_of("Cargo.toml"), file_of("Cargo.lock"));
+    // rawr's own runtime, compiled once per machine, unless this runner
+    // can't link it (D620).
+    let mut runtime = crate::runner::runtime::prepare(context, generated_manifest, generated_lock)?;
+    let level = crate::runner::runtime::opt_level(context.environment())
+        .map_err(|reason| node::Error::Transform(reason.into_boxed_str()))?;
+    // The project's path packages keep their paths under the workspace root,
+    // so Cargo hashes them as the project's `cargo build` does (T277).
+    let workspace = rawr_location::workspace_root(context.project());
+    let mirrored = std::str::from_utf8(generated_manifest)
+        .ok()
+        .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
+    let sync = |runtime: Option<&crate::runner::runtime::Runtime>| {
+        let sources = runner_sources(manifest, mirrored.as_deref(), runtime, &level);
+        crate::bridge::generate::sync_sources(
+            &work,
+            sources
+                .iter()
+                .map(|(path, bytes)| (*path, bytes.as_ref()))
+                .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
+        )
+        .map_err(|source| node::Error::Io {
+            operation: "update the stable generated runner sources",
+            path: work.clone(),
+            source,
+        })
+    };
+    sync(runtime.as_ref())?;
     let started = std::time::SystemTime::now();
-    let result = crate::process::project_cargo(&command, context.limits().process_limits())
+    let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
         .and_then(|output| output.checked(crate::process::Program::Cargo));
+    // A runner that can't link the shared runtime, such as through a native
+    // symbol both define, builds rawr in the project as before. It says so
+    // once, and the project's next build goes there directly.
+    let local = match (&runtime, &result) {
+        (Some(_), Err(crate::Error::Process { stderr, .. })) => {
+            crate::runner::runtime::link_failure(stderr)
+        }
+        (Some(shared), Ok(messages)) => shared.native_clash(messages),
+        _ => None,
+    };
+    if let Some(reason) = local {
+        crate::runner::runtime::record_local(
+            context.rawr(),
+            generated_manifest,
+            generated_lock,
+            &reason,
+        );
+        runtime = None;
+        sync(None)?;
+        result = crate::process::project_cargo(&command, context.limits().process_limits())
+            .and_then(|output| output.checked(crate::process::Program::Cargo));
+    }
     let name = if cfg!(windows) {
         "rawr-generated-runner.exe"
     } else {
@@ -317,6 +355,11 @@ fn compile<B>(
     let copied = result.as_ref().ok().map(|messages| {
         // Cargo's JSON names the rawr crate's sources and the executable.
         crate::deps::prune_rawr(&build, messages);
+        // Linked to the shared runtime, the copies of rawr that earlier
+        // builds compiled in the project are stale.
+        if runtime.is_some() {
+            crate::deps::prune_rawr_from(&build, &crate::runner::runtime::host_sources());
+        }
         crate::deps::prune_superseded(
             &build,
             messages,
@@ -338,7 +381,7 @@ fn compile<B>(
                 source,
             })
     });
-    drop((shared, acquired));
+    drop((shared, acquired, runtime));
     result?;
     copied.transpose()?;
     let executable = crate::store::bundle::path(
@@ -424,6 +467,45 @@ fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
                 .and_then(serde_json::Value::as_str)
                 .map(PathBuf::from)
         })
+}
+
+/// The runner's sources as Cargo builds them: the generated files with the
+/// mirrored manifest, linked to the shared `runtime` when there is one, else
+/// with the `rawr` crate at the opt-level setting (T302).
+fn runner_sources<'a, B>(
+    manifest: &'a super::super::Manifest<super::super::Generated, B>,
+    mirrored: Option<&'a str>,
+    runtime: Option<&crate::runner::runtime::Runtime>,
+    level: &toml_edit::Item,
+) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
+    use std::borrow::Cow;
+    manifest
+        .files
+        .iter()
+        .map(|file| {
+            let path = file.path();
+            let text = match (path, mirrored) {
+                ("Cargo.toml", Some(mirrored)) => Some(mirrored),
+                _ => std::str::from_utf8(file.bytes()).ok(),
+            };
+            let rewired = match (runtime, path, text) {
+                (Some(runtime), "Cargo.toml", Some(text)) => runtime.manifest(text),
+                (Some(runtime), "Cargo.lock", Some(text)) => runtime.lock(text),
+                (Some(runtime), "build.rs", Some(text)) => runtime.build_script(text),
+                (Some(runtime), "src/main.rs", Some(text)) => Some(runtime.main(text)),
+                (None, "Cargo.toml", Some(text)) => {
+                    crate::runner::runtime::with_opt_level(text, level)
+                }
+                _ => None,
+            };
+            let bytes = match (rewired, path, mirrored) {
+                (Some(text), _, _) => Cow::Owned(text.into_bytes()),
+                (None, "Cargo.toml", Some(mirrored)) => Cow::Borrowed(mirrored.as_bytes()),
+                (None, _, _) => Cow::Borrowed(file.bytes()),
+            };
+            (path, bytes)
+        })
+        .collect()
 }
 
 fn materialize<B>(

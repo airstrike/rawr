@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Embed the host sources a generated harness compiles (every package's
 /// library: its manifest, build script, a `manifest.toml` its library
 /// includes and `src`, less `#[cfg(test)]` module
-/// files and binary sources) and their digest, which is also this Rawr's source
+/// files and binary sources, with the root's lockfile) and their digest, which is also this Rawr's source
 /// identity. Tests, benches, examples and binaries are never built for a
 /// dependency, so editing them keeps the host.
 fn embed_host() -> Result<(), Box<dyn Error>> {
@@ -96,7 +96,13 @@ fn embed_host() -> Result<(), Box<dyn Error>> {
     for package in HOST_PACKAGES {
         let root = repository.join(package);
         let mut files = Vec::new();
-        for name in ["build.rs", "build.template", "manifest.toml"] {
+        // The root's lockfile is the one rawr's runtime resolves from, so a
+        // release's runtime has the dependencies it was tested with (D620).
+        let lock = if package == "." { "Cargo.lock" } else { "" };
+        for name in ["build.rs", "build.template", "manifest.toml", lock] {
+            if name.is_empty() {
+                continue;
+            }
             let path = root.join(name);
             if path.is_file() {
                 println!("cargo:rerun-if-changed={}", path.display());

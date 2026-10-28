@@ -30,14 +30,49 @@ pub(crate) fn lock(rawr: &Path) -> io::Result<File> {
 /// names the `rawr` crate's `src/lib.rs`. Third-party crates and per-project
 /// generated crates are kept. Best effort; the caller holds the build lock.
 pub(crate) fn prune_rawr(shared: &Path, used: &[u8]) {
+    let contains = |needle: &str| {
+        used.windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    };
+    let (profiles, units) = rawr_units(shared);
+    let Some(root) = units
+        .iter()
+        .find(|(krate, _, source)| krate == "rawr" && contains(&source.to_string_lossy()))
+        .and_then(|(_, _, source)| source.parent()?.parent())
+        .map(Path::to_path_buf)
+    else {
+        return;
+    };
+    let stale = units
+        .iter()
+        .filter(|(_, _, source)| !source.starts_with(&root))
+        .map(|(_, hash, _)| hash.as_str())
+        .collect::<Vec<_>>();
+    remove_units(&profiles, &stale);
+}
+
+/// Remove Rawr's own units in `shared` whose sources lie under any of
+/// `sources`: the copies of rawr a runner compiled in the project before it
+/// linked rawr's shared runtime (D620). A crate the project itself takes
+/// from a registry is kept. Best effort; the caller holds the build lock.
+pub(crate) fn prune_rawr_from(shared: &Path, sources: &[PathBuf]) {
+    let (profiles, units) = rawr_units(shared);
+    let stale = units
+        .iter()
+        .filter(|(_, _, source)| sources.iter().any(|root| source.starts_with(root)))
+        .map(|(_, hash, _)| hash.as_str())
+        .collect::<Vec<_>>();
+    remove_units(&profiles, &stale);
+}
+
+/// The profile directories in `shared` and Rawr's own units in them: each
+/// unit's crate, hash and first source file, from `deps/<crate>-<hash>.d`.
+#[allow(clippy::type_complexity)]
+fn rawr_units(shared: &Path) -> (Vec<PathBuf>, Vec<(String, String, PathBuf)>) {
     let own = |name: &str| {
         name == "rawr"
             || (name.starts_with("rawr_")
                 && !matches!(name, "rawr_generated_runner" | "rawr_resolution_harness"))
-    };
-    let contains = |needle: &str| {
-        used.windows(needle.len())
-            .any(|window| window == needle.as_bytes())
     };
     // Profile directories: `<shared>/<profile>` and `<shared>/<target>/<profile>`.
     let mut profiles = Vec::new();
@@ -52,7 +87,6 @@ pub(crate) fn prune_rawr(shared: &Path, used: &[u8]) {
             }
         }
     }
-    // Each Rawr unit's hash and its first source file, from `deps/<crate>-<hash>.d`.
     let mut units = Vec::new();
     for profile in &profiles {
         for entry in fs::read_dir(profile.join("deps"))
@@ -76,23 +110,15 @@ pub(crate) fn prune_rawr(shared: &Path, used: &[u8]) {
             }
         }
     }
-    let Some(root) = units
-        .iter()
-        .find(|(krate, _, source)| krate == "rawr" && contains(&source.to_string_lossy()))
-        .and_then(|(_, _, source)| source.parent()?.parent())
-        .map(Path::to_path_buf)
-    else {
-        return;
-    };
-    let stale = units
-        .iter()
-        .filter(|(_, _, source)| !source.starts_with(&root))
-        .map(|(_, hash, _)| hash.as_str())
-        .collect::<Vec<_>>();
+    (profiles, units)
+}
+
+/// Remove the Rawr units with the `stale` hashes from each profile.
+fn remove_units(profiles: &[PathBuf], stale: &[&str]) {
     if stale.is_empty() {
         return;
     }
-    for profile in &profiles {
+    for profile in profiles {
         for directory in ["deps", ".fingerprint", "incremental"] {
             for entry in fs::read_dir(profile.join(directory))
                 .into_iter()
