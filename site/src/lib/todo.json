@@ -336,8 +336,8 @@
           "name": "Time types",
           "start": 40,
           "size": 2,
-          "state": "now",
-          "note": "7 examples. T312, T338",
+          "state": "done",
+          "note": "0.3.12. 8 examples past it. T312, T338",
           "issues": [
             {"number":312,"t":"T312","title":"T312: No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
             {"number":338,"t":"T338","title":"T338: clock, the_matrix: `time::every` has no binding, likely with T312","state":"closed"}
@@ -355,6 +355,20 @@
             {"number":300,"t":"T300","title":"T300: Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"open"}
           ],
           "refs": {"T300":300}
+        },
+        {
+          "id": "boundary-conversions",
+          "name": "Boundary conversions",
+          "start": 41,
+          "size": 3,
+          "state": "now",
+          "note": "Float ranges, padding, &Vec, From in Some. T336, T340, T345",
+          "issues": [
+            {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"open"},
+            {"number":340,"t":"T340","title":"T340: modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"open"},
+            {"number":345,"t":"T345","title":"T345: No-glue stops after T312 and T338","state":"open"}
+          ],
+          "refs": {"T336":336,"T340":340,"T345":345}
         }
       ]
     },
