@@ -4982,8 +4982,12 @@ impl<P: api::Phase> Context<'_, P> {
         let ty = self.convert_value(ty)?;
         // A constant of another type, as Freya's `Color::WHITE: Color =
         // Color::new(..)`, is read by its path where the bridge runs, as a
-        // static is: each read is a new value, as Rust's is.
-        if !matches!(ty, Type::Unit | Type::Builtin(_)) {
+        // static is: each read is a new value, as Rust's is. So is one
+        // whose value is its own, which rustc evaluates to no scalar
+        // (`&'static str`).
+        if !matches!(ty, Type::Unit | Type::Builtin(_))
+            || matches!(value, model::Const::Unevaluated { arguments, .. } if arguments.is_empty())
+        {
             return Ok(representability::constant::Plan::new(ty, None));
         }
         if let model::Const::Literal { ty, value } = value {

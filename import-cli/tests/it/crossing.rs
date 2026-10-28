@@ -185,6 +185,21 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
+/// iced's styling and delineate: crate constants that aren't scalars, a
+/// struct (`Font::MONOSPACE`) and a `&'static [Self]` (`Theme::ALL`), are
+/// read by their paths, and a macro's `$crate::Alias::new(..)` reaches the
+/// associated function of a type whose only name is that alias. The output
+/// is `cargo run`'s.
+#[test]
+fn constants_of_no_scalar_and_a_sole_alias_run() {
+    let (rawr, cargo) = both_printed("crossing-styling", "styling.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 \"2 looks\"/mono0 \"mono0\" \"0\"/plain0"),
+        "{rawr}"
+    );
+}
+
 /// iced's tooltip: a derived `Default` builds a field of a crate enum by the
 /// crate's own `Default`, a `match` reads it, and a box of a string hint
 /// takes a crate function `fn(&Theme) -> Style` as its style. The output
