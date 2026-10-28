@@ -170,3 +170,72 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
         "0 3 22\n8\n40 8\n116\n(\"0x123\", 5)\n220 220\n"
     );
 }
+
+/// A cargo script that declares a dependency runs as `cargo -Zscript`
+/// runs it (D608 point 6). Nothing is kept beside it: its manifest and
+/// lockfile are in rawr's area, keyed by its path, and a second script
+/// with the same dependency reuses the crate cargo compiled for the first.
+#[test]
+fn a_script_with_a_dependency_runs_from_its_frontmatter() {
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-scripts");
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).unwrap();
+    let script = |name: &str, line: &str| {
+        let path = directory.join(name);
+        fs::write(
+            &path,
+            format!(
+                "#!/usr/bin/env -S cargo +nightly -Zscript\n---cargo\n[dependencies]\n\
+                 semver = \"1\"\n---\n// rawr\nuse semver::Version;\n\nfn main() {{\n    \
+                 let version = Version::parse(\"1.2.3\").unwrap();\n    {line}\n}}\n"
+            ),
+        )
+        .unwrap();
+        path
+    };
+    let first = script("parse.rs", "println!(\"parsed: {version}\");");
+    let second = script("major.rs", "println!(\"major: {}\", version.major);");
+
+    let run = rawr_import(&first, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "parsed: 1.2.3\n");
+    let run = rawr_import(&second, &["run"]);
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(text(&run.stdout), "major: 1\n");
+
+    let mut beside = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    beside.sort();
+    assert_eq!(beside, ["major.rs", "parse.rs"]);
+    let area = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home/scripts");
+    for stem in ["parse", "major"] {
+        let own = fs::read_dir(&area)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(&format!("{stem}-"))
+            })
+            .unwrap_or_else(|| panic!("no directory for {stem}.rs in {}", area.display()));
+        let lock = fs::read_to_string(own.join("Cargo.lock")).unwrap();
+        assert!(lock.contains("name = \"semver\""), "{lock}");
+    }
+    let semver = fs::read_dir(area.join("build/debug/deps"))
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libsemver-") && name.ends_with(".rlib")
+        })
+        .count();
+    assert_eq!(semver, 1);
+}
