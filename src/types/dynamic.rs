@@ -641,7 +641,8 @@ impl fmt::Debug for Dynamic {
             Union::FnPtr(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Struct(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Enum(ref v, ..) => fmt::Debug::fmt(v, f),
-            Union::TimeStamp(..) => write!(f, "<timestamp>"),
+            // As Rust's `{:?}` of an `Instant` shows it.
+            Union::TimeStamp(ref v, ..) => fmt::Debug::fmt(v.as_ref(), f),
 
             Union::Variant(ref v, ..) => {
                 let _value_any = (***v).as_any();

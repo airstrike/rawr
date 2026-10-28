@@ -1277,6 +1277,16 @@ impl<'a> Resolver<'a> {
                         },
                     });
                 }
+                // A std type imported under another name, as iced's `Never`
+                // is std's `Infallible`, names Rawr's type for that std path.
+                if matches!(import, item::Import::Module)
+                    && let Some(builtin) = super::renamed_std_type(&qualified, &name.text)
+                {
+                    types.insert(
+                        name.text.clone(),
+                        type_ref::Target::Alias(type_ref::Alias::builtin(builtin, name.span)),
+                    );
+                }
                 bindings.push(item::Binding {
                     name,
                     qualified,

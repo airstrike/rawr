@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 20;
+const SCHEMA: u32 = 21;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -167,6 +167,11 @@ pub struct Facade {
     /// The crate's trait impls whose types the facade names (D604).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     impls: Box<[ImplHeader]>,
+    /// The root's re-exports of std items, as iced's `time::Duration`:
+    /// each path, relative to the root, and the std path it names
+    /// (`std::time::Duration`), in path order (`std_reexports`).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    std_reexports: Box<[(Box<str>, Box<str>)]>,
 }
 
 /// A trait Rawr code names (D604): its path, relative to the root, its
@@ -375,6 +380,71 @@ pub fn macros(
         left_root == right_root && left.path == right.path
     });
     Ok(macros)
+}
+
+/// A crate's re-export of an item of the standard library, as iced's
+/// `time::Duration` is `core::time::Duration`.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct StdReexport {
+    /// The crate's root alias (`iced`).
+    pub root: Box<str>,
+    /// The path under that root (`time::Duration`).
+    pub path: Box<str>,
+    /// The std path the item has (`std::time::Duration`).
+    pub std: Box<str>,
+}
+
+/// The paths at which `graph`'s crates re-export an item of the standard
+/// library, sorted by root and path. A re-export is the item it names, so
+/// Rawr resolves the path as that item's std path.
+pub fn std_reexports(
+    graph: &crate::api::Graph<impl crate::api::Phase>,
+) -> Result<Vec<StdReexport>, super::Error> {
+    let mut sysroot = graph
+        .definitions()
+        .filter(|definition| matches!(definition.kind(), crate::api::model::Kind::Sysroot { .. }))
+        .map(|definition| (definition.id(), definition))
+        .collect::<Vec<_>>();
+    sysroot.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut reexports = Vec::new();
+    for export in graph.exports() {
+        let crate::api::ledger::Path::Imported(export) = export else {
+            continue;
+        };
+        if export.variant().is_some() {
+            continue;
+        }
+        let Ok(index) = sysroot.binary_search_by(|(id, _)| (*id).cmp(export.target())) else {
+            continue;
+        };
+        // std re-exports `core` and `alloc` at the same paths, so the path
+        // a program writes is under `std`.
+        let mut segments = sysroot[index].1.display_path();
+        let Some(_) = segments
+            .next()
+            .filter(|root| matches!(*root, "std" | "core" | "alloc"))
+        else {
+            continue;
+        };
+        let mut std = String::from("std");
+        for segment in segments {
+            std.push_str("::");
+            std.push_str(segment);
+        }
+        let std = std.into_boxed_str();
+        let key = export.key();
+        reexports
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
+        reexports.push(StdReexport {
+            root: copy(key.root_alias())?,
+            path: path(key.path())?,
+            std,
+        });
+    }
+    reexports.sort_unstable();
+    reexports.dedup();
+    Ok(reexports)
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -774,6 +844,7 @@ impl Plan {
                             macros: Box::default(),
                             trait_headers: Box::default(),
                             impls: Box::default(),
+                            std_reexports: Box::default(),
                         },
                     );
                     index
@@ -968,6 +1039,7 @@ impl Plan {
                             macros: Box::default(),
                             trait_headers: Box::default(),
                             impls: Box::default(),
+                            std_reexports: Box::default(),
                         },
                     );
                     index
@@ -978,6 +1050,40 @@ impl Plan {
             list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
             list.push(rules);
             facade.macros = list.into_boxed_slice();
+        }
+        // A crate's re-export of a std item names that item, which Rawr
+        // resolves by its std path.
+        for reexport in std_reexports(graph)? {
+            let index = match facades.binary_search_by(|facade| facade.root.cmp(&reexport.root)) {
+                Ok(index) => index,
+                Err(index) => {
+                    facades
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    facades.insert(
+                        index,
+                        Facade {
+                            root: reexport.root,
+                            types: Box::default(),
+                            items: Box::default(),
+                            traits: Box::default(),
+                            builtins: Box::default(),
+                            variants: Box::default(),
+                            type_aliases: Box::default(),
+                            macros: Box::default(),
+                            trait_headers: Box::default(),
+                            impls: Box::default(),
+                            std_reexports: Box::default(),
+                        },
+                    );
+                    index
+                }
+            };
+            let facade = &mut facades[index];
+            let mut list = std::mem::take(&mut facade.std_reexports).into_vec();
+            list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+            list.push((reexport.path, reexport.std));
+            facade.std_reexports = list.into_boxed_slice();
         }
         // An opaque `impl Trait` type a function gives is a type of its
         // own, declared beside the function (`surface::opaque`).
@@ -1484,6 +1590,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             macros: Box::default(),
             trait_headers: Box::default(),
             impls: Box::default(),
+            std_reexports: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -1609,6 +1716,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 macros: Box::default(),
                 trait_headers: Box::default(),
                 impls: Box::default(),
+                std_reexports: Box::default(),
             },
             iced,
         ]),
@@ -1742,6 +1850,14 @@ impl Facade {
     pub fn traits(&self) -> impl ExactSizeIterator<Item = &str> {
         self.traits.iter().map(AsRef::as_ref)
     }
+    /// Iterate the root's re-exports of std items: each path, relative to
+    /// the root, and the std path it names, in path order.
+    pub fn std_reexports(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.std_reexports
+            .iter()
+            .map(|(path, std)| (path.as_ref(), std.as_ref()))
+    }
+
     /// Iterate the type aliases of builtins: each path, relative to the
     /// root, and the builtin's Rust name (`String`, `u32`).
     pub fn builtins(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {

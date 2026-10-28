@@ -763,7 +763,7 @@ fn plan() -> rawr_import::surface::facade::Plan {
     let source = [11; 32];
     let target = [12; 32];
     let bytes = serde_json::to_vec(&serde_json::json!({
-        "schema": 20, "aliases": [], "sources": [], "abis": [], "operations": [],
+        "schema": 21, "aliases": [], "sources": [], "abis": [], "operations": [],
         "facades": [
             {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false, "debug": false, "clone": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": constructor, "fields": [], "constructible": true}}}],
