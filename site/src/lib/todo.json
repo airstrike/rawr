@@ -2,7 +2,7 @@
   "repo": "airstrike/rawr",
   "updated": "2026-10-28",
   "version": "0.3.12",
-  "examples": {"running":7,"total":56,"note":"Most others now stop further along"},
+  "examples": {"running":8,"total":56,"note":"Most others now stop further along"},
   "groups": [
     {
       "id": "v000",
@@ -349,10 +349,10 @@
           "name": "Boot returning a task",
           "start": 40,
           "size": 3,
-          "state": "now",
-          "note": "text, system_information, multi_window. T300",
+          "state": "done",
+          "note": "system_information runs; text to its runner build. T300",
           "issues": [
-            {"number":300,"t":"T300","title":"T300: Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"open"}
+            {"number":300,"t":"T300","title":"T300: Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
           ],
           "refs": {"T300":300}
         },

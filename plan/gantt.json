@@ -2,7 +2,7 @@
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-10-28",
   "version": "0.3.12",
-  "examples": {"running":7,"total":56,"note":"Most others now stop further along"},
+  "examples": {"running":8,"total":56,"note":"Most others now stop further along"},
   "groups": [
     {
       "id": "v000",
@@ -98,7 +98,7 @@
       "open": true,
       "rows": [
         {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. T312, T338","issues":[312,338]},
-        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"now","note":"text, system_information, multi_window. T300","issues":[300]},
+        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. T300","issues":[300]},
         {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"now","note":"Float ranges, padding, &Vec, From in Some. T336, T340, T345","issues":[336,340,345]}
       ]
     },
