@@ -305,7 +305,7 @@ impl Prepared {
     pub fn retain_api(self, limits: &Limits) -> Result<crate::api::Continuation> {
         match self.owner {
             resolution::owner::Resolved::Owner(owner) => owner.retain_api(limits),
-            resolution::owner::Resolved::Shared(shared) => shared.retain_api(limits),
+            resolution::owner::Resolved::Shared(shared) => (*shared).retain_api(limits),
         }
     }
 }

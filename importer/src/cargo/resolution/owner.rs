@@ -62,6 +62,8 @@ use crate::cargo::{self, Limits, Request};
 use crate::input::{self, stored};
 use crate::{metrics, store};
 
+mod memo;
+
 /// The exact admitted node and the successful replay that admitted its bytes.
 pub(crate) struct Ready {
     node: node::Validated<Product>,
@@ -570,6 +572,21 @@ fn evaluate(
         settled: Mutex::new(Vec::new()),
         shared: Mutex::new(None),
     });
+    // A shared resolution whose request, toolchain, files and entries are
+    // as they were: no Cargo and no tables (`memo`).
+    let bindings = crate::bindings::directory(state.cached.context.cargo_home());
+    let attestation = state.cached.attestation.content().digest().as_bytes();
+    if let Some(remembered) = memo::recall(
+        state.cached.context.rawr(),
+        &bindings,
+        state.identity.as_bytes(),
+        &attestation,
+    ) {
+        return Ok(Resolved::Shared(Box::new(SharedReady {
+            evaluation: state,
+            parts: Parts::Remembered(remembered),
+        })));
+    }
     let validator = Arc::clone(&state);
     let executor = Arc::clone(&state);
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -585,10 +602,24 @@ fn evaluate(
                 .ok()
                 .and_then(|mut shared| shared.take());
             return match shared {
-                Some(parts) => Ok(Resolved::Shared(Box::new(SharedReady {
-                    evaluation: state,
-                    parts,
-                }))),
+                Some(parts) => {
+                    memo::remember(
+                        state.cached.context.rawr(),
+                        &bindings,
+                        &memo::Resolution {
+                            request: state.identity.as_bytes(),
+                            attestation: &attestation,
+                            identity: &parts.identity,
+                            native: &parts.native,
+                            files: &parts.files,
+                            settled: &parts.settled,
+                        },
+                    );
+                    Ok(Resolved::Shared(Box::new(SharedReady {
+                        evaluation: state,
+                        parts: Parts::Read(Box::new(parts)),
+                    })))
+                }
                 None => Err(error),
             };
         }
@@ -1142,15 +1173,24 @@ fn refusal(mut error: &node::Error) -> bool {
 /// the sidecar document the tables replay, what binds it, the resolution
 /// it was read under, and the proof of the files that run read.
 pub(crate) struct Shared {
-    document: Vec<u8>,
-    external: Vec<crate::extract::ExternalBinding>,
+    materials: Materials,
     identity: [u8; 32],
     settled: Vec<crate::bindings::Settled>,
+    proof: input::proof::Proof,
+    /// The files `proof` names, and the digest of the run's native inputs,
+    /// as the next run remembers them (`memo`).
+    files: Vec<memo::File>,
+    native: [u8; 32],
+}
+
+/// What the API is built from, when a consumer rebuilds it.
+struct Materials {
+    document: Vec<u8>,
+    external: Vec<crate::extract::ExternalBinding>,
     metadata: cargo::unit::Metadata,
     build_unit: cargo::unit::BuildGraph,
     selected: Box<[cargo::Selection]>,
     toolchain: cargo::toolchain::Proof,
-    proof: input::proof::Proof,
 }
 
 impl Evaluation {
@@ -1165,6 +1205,7 @@ impl Evaluation {
         let kept = self.cached.context.rawr().join("shared");
         std::fs::create_dir_all(&kept).ok()?;
         let mut entries = Vec::new();
+        let mut files = Vec::new();
         let mut native = Sha256::new();
         native.update(b"rawr.bindings.native/v1");
         native.update(shared.identity);
@@ -1176,6 +1217,7 @@ impl Evaluation {
                 Ok(bytes) => {
                     let digest: [u8; 32] = Sha256::digest(&bytes).into();
                     native.update(digest);
+                    files.push(memo::File::new(role, text, Some((bytes.len(), digest))));
                     entries.push(input::proof::Entry::File {
                         role,
                         package_id: None,
@@ -1186,6 +1228,7 @@ impl Evaluation {
                 }
                 Err(_) => {
                     native.update(text.as_bytes());
+                    files.push(memo::File::new(role, text, None));
                     entries.push(input::proof::Entry::Missing {
                         role,
                         package_id: None,
@@ -1207,35 +1250,75 @@ impl Evaluation {
         for authority in &self.request.inputs {
             file(input::proof::Role::Authority, authority.path())?;
         }
+        let native: [u8; 32] = native.finalize().into();
         Some(Shared {
-            document: shared.document,
-            external: shared.external,
+            materials: Materials {
+                document: shared.document,
+                external: shared.external,
+                metadata: harness.metadata.clone(),
+                build_unit: harness.initial.clone(),
+                selected: harness.selected.clone(),
+                toolchain: harness.toolchain.clone(),
+            },
             identity: shared.identity,
             settled: shared.settled,
-            metadata: harness.metadata.clone(),
-            build_unit: harness.initial.clone(),
-            selected: harness.selected.clone(),
-            toolchain: harness.toolchain.clone(),
-            proof: input::proof::Proof::shared(
-                entries.into_boxed_slice(),
-                native.finalize().into(),
-            ),
+            proof: input::proof::Proof::shared(entries.into_boxed_slice(), native),
+            files,
+            native,
         })
+    }
+
+    /// The parts of a remembered shared resolution, for a consumer that
+    /// rebuilds its API: the cold attempt runs again, and stops at the
+    /// shared tables as it did.
+    fn shared_again(self: &Arc<Self>) -> Result<Shared, node::Error> {
+        let recipe = self.cached.context.discover_with_parents::<Product>(
+            self.identity.as_bytes(),
+            BYTES,
+            &[node::Parent::validated(self.cached.attestation.as_ref())],
+        )?;
+        let validator = Arc::clone(self);
+        let executor = Arc::clone(self);
+        let outcome = node::Evaluator::new(&self.store, &metrics::Current)
+            .discover_bundled_budgeted(
+                &recipe,
+                move |value, graph| validator.validate(value, graph),
+                move |attempt| executor.execute(attempt),
+            );
+        let shared = self.shared.lock().ok().and_then(|mut shared| shared.take());
+        match (shared, outcome) {
+            (Some(parts), _) => Ok(parts),
+            (None, Err(error)) => Err(error),
+            (None, Ok(_)) => Err(node::Error::State(
+                "shared bindings no longer answer this resolution",
+            )),
+        }
     }
 }
 
 /// Shared bindings ready for the API (`Resolved::Shared`).
 pub(crate) struct SharedReady {
     evaluation: Arc<Evaluation>,
-    parts: Shared,
+    parts: Parts,
+}
+
+/// What a shared resolution answered with: the tables this run read, or
+/// what an earlier run remembered (`memo`).
+enum Parts {
+    Read(Box<Shared>),
+    Remembered(memo::Memo),
 }
 
 impl SharedReady {
     /// The shared tables this run used, whose build scripts the runner's
     /// build settles.
     pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {
+        let entries = match &mut self.parts {
+            Parts::Read(parts) => std::mem::take(&mut parts.settled),
+            Parts::Remembered(memo) => memo.settled(),
+        };
         crate::bindings::Settlement {
-            entries: std::mem::take(&mut self.parts.settled),
+            entries,
             bindings: Some(crate::bindings::directory(
                 self.evaluation.cached.context.cargo_home(),
             )),
@@ -1243,24 +1326,30 @@ impl SharedReady {
         }
     }
 
-    pub(crate) fn retain_api(
-        self: Box<Self>,
-        limits: &Limits,
-    ) -> crate::Result<crate::api::Continuation> {
+    pub(crate) fn retain_api(self, limits: &Limits) -> crate::Result<crate::api::Continuation> {
         use sha2::{Digest as _, Sha256};
-        let Self { evaluation, parts } = *self;
+        let Self { evaluation, parts } = self;
         evaluation.request.require_limits(limits)?;
-        let Shared {
-            document,
-            external,
-            identity,
-            settled: _,
-            metadata,
-            build_unit,
-            selected,
-            toolchain,
-            proof,
-        } = parts;
+        let stale = || crate::Error::Request {
+            field: "shared bindings",
+            reason: "the remembered resolution is unreadable".into(),
+        };
+        let (identity, proof, materials) = match parts {
+            Parts::Read(parts) => {
+                let Shared {
+                    materials,
+                    identity,
+                    proof,
+                    ..
+                } = *parts;
+                (identity, proof, Some(materials))
+            }
+            Parts::Remembered(memo) => (
+                memo.identity().ok_or_else(stale)?,
+                memo.proof().ok_or_else(stale)?,
+                None,
+            ),
+        };
         let mut request = Sha256::new();
         request.update(b"rawr.bindings.api/v1");
         request.update(evaluation.identity.as_bytes());
@@ -1275,14 +1364,28 @@ impl SharedReady {
             proof,
             &evaluation.request.policy,
             move |stored| {
+                // A remembered resolution reads the tables again only for
+                // a consumer that rebuilds the API.
+                let materials = match materials {
+                    Some(materials) => materials,
+                    None => {
+                        source
+                            .shared_again()
+                            .map_err(|error| crate::Error::Node {
+                                operation: "shared bindings",
+                                source: Box::new(error),
+                            })?
+                            .materials
+                    }
+                };
                 crate::extract::materialize_shared(
                     stored,
-                    &document,
-                    external,
-                    &metadata,
-                    &build_unit,
-                    &selected,
-                    &toolchain,
+                    &materials.document,
+                    materials.external,
+                    &materials.metadata,
+                    &materials.build_unit,
+                    &materials.selected,
+                    &materials.toolchain,
                     &source.request.target,
                     &source.request.profile,
                     &source.request.policy,

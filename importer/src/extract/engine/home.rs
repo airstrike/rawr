@@ -31,9 +31,19 @@ pub(crate) fn read(bindings: &Path, key: &str) -> Option<(Lease, Vec<u8>)> {
     let lock = File::open(entry.join(LOCK)).ok()?;
     lock.try_lock_shared().ok()?;
     let bytes = fs::read(entry.join(TABLE)).ok()?;
-    // The last use, which removal orders entries by.
-    let _ = File::open(&entry).and_then(|directory| directory.set_modified(SystemTime::now()));
+    touch(bindings, key);
     Some((Lease { _lock: lock }, bytes))
+}
+
+/// Mark a use of `key`'s entry, which removal by last use orders entries by.
+pub(crate) fn touch(bindings: &Path, key: &str) {
+    let _ = File::open(bindings.join(key))
+        .and_then(|directory| directory.set_modified(SystemTime::now()));
+}
+
+/// Where `key`'s table is, published or not.
+pub(crate) fn table(bindings: &Path, key: &str) -> PathBuf {
+    bindings.join(key).join(TABLE)
 }
 
 /// Publish `files` as `key`'s entry, replacing any entry before it. The
