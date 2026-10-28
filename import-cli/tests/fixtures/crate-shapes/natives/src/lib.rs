@@ -258,3 +258,31 @@ pub mod guard {
         }
     }
 }
+
+/// A function generic over `T` that gives an opaque `impl Trait` whose
+/// trait has a method generic over its own `T`, as warp's `form<T>()`
+/// gives an `impl Filter` with `untuple_one<T>`.
+pub mod form {
+    pub trait Filter {
+        fn value(self) -> u32;
+
+        fn label<T: std::fmt::Display>(self, prefix: T) -> String
+        where
+            Self: Sized,
+        {
+            format!("{prefix} {}", self.value())
+        }
+    }
+
+    struct Plain(u32);
+
+    impl Filter for Plain {
+        fn value(self) -> u32 {
+            self.0
+        }
+    }
+
+    pub fn form<T: Into<u32>>(value: T) -> impl Filter {
+        Plain(value.into())
+    }
+}

@@ -121,3 +121,12 @@ fn a_generic_traits_provided_method_is_each_implementors() {
 fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
     runs_as_cargo_does("guard", "3\n");
 }
+
+/// A trait method generic over `T` is a member of the opaque `impl Trait`
+/// that a function generic over its own `T` gives, as warp's `form<T>()`
+/// gives an `impl Filter` with `untuple_one<T>`. The two `T`s used to be
+/// declared twice in one signature, which failed the crate's import.
+#[test]
+fn an_opaque_types_method_may_reuse_its_functions_parameter_name() {
+    runs_as_cargo_does("opaque", "7\nvalue 8\n");
+}
