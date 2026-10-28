@@ -214,7 +214,7 @@ impl Graph {
     pub fn root_of(target: &project::Target) -> PathBuf {
         match target {
             project::Target::File(source) => {
-                file_root(source.path(), |manifest| manifest.is_file())
+                file_root(source.path(), source.text(), |manifest| manifest.is_file())
             }
             project::Target::Project(project) => project.root().as_path().to_path_buf(),
         }
@@ -360,12 +360,17 @@ impl Graph {
 
 /// The package root of a source file target: its directory, or for
 /// `src/<file>.rs` of a Cargo package, the directory holding
-/// `Cargo.toml`, as project discovery chooses.
-fn file_root(source: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
+/// `Cargo.toml`, as project discovery chooses. A file with a frontmatter
+/// block is a script wherever it sits, as cargo reads it (D608 point 6),
+/// so its root is its directory.
+fn file_root(source: &Path, text: &str, exists: impl Fn(&Path) -> bool) -> PathBuf {
     let parent = source
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    if crate::project::frontmatter::is_script(text) {
+        return parent;
+    }
     parent
         .parent()
         .filter(|root| {
@@ -416,7 +421,7 @@ impl<'a> Builder<'a> {
     fn load(mut self, target: &project::Target) -> Result<Graph, Error> {
         let request = match target {
             project::Target::File(source) => Request {
-                root: file_root(source.path(), |manifest| manifest.is_file()),
+                root: file_root(source.path(), source.text(), |manifest| manifest.is_file()),
                 source: source.path().to_path_buf(),
             },
             project::Target::Project(project) => Request {
@@ -441,7 +446,11 @@ impl<'a> Builder<'a> {
             .expect("snapshot builder retains its immutable input");
         let entry = snapshot.entry().to_path_buf();
         let request = Request {
-            root: file_root(&entry, |manifest| snapshot.read(manifest).is_some()),
+            root: file_root(
+                &entry,
+                snapshot.read(&entry).unwrap_or_default(),
+                |manifest| snapshot.read(manifest).is_some(),
+            ),
             source: entry,
         };
         let entry_package = self.load_package(request)?;
@@ -504,6 +513,17 @@ impl<'a> Builder<'a> {
                 None,
             )
         })?;
+        if let Err(error) = manifest::script::check(&text) {
+            let source = diagnostic::Source::new(canonical.to_string_lossy().into_owned(), text)
+                .map_err(Error::diagnostic)?;
+            let evidence = self.push_evidence(source);
+            return Err(Error::manifest(
+                self.evidence.clone(),
+                evidence,
+                error.message,
+                error.span,
+            ));
+        }
         let read = if !crate::project::is_marked(&text) && self.reaches_marked(&module_root, &text)
         {
             let declarations = super::island::root_text(&text);

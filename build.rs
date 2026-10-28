@@ -50,6 +50,7 @@ const PARSER_SOURCES: &[&str] = &[
     "src/parser",
     "src/parser.rs",
     "src/preview.rs",
+    "src/project/frontmatter.rs",
     "src/source.rs",
     "src/tokenizer.rs",
     "src/types/position.rs",

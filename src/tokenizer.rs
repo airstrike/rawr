@@ -2168,22 +2168,11 @@ fn get_next_token_inner(
                 stream.eat_next_and_advance(pos);
                 return (Token::MapStart, start_pos);
             }
-            // `#!` opens an inner attribute (`#![allow(..)]`), except that a
-            // first line starting `#!` and not `#![` is a shebang, which Rust
-            // skips.
+            // `#!` opens an inner attribute (`#![allow(..)]`). A shebang
+            // line is stepped over before the first token (`lex_raw`).
             ('#', '!') => {
                 stream.eat_next_and_advance(pos);
-                let first = start_pos.line() == Some(1) && start_pos.position() == Some(1);
-                if !first || stream.peek_next() == Some('[') {
-                    return (Token::Reserved(Box::new("#!".into())), start_pos);
-                }
-                while let Some(c) = stream.get_next() {
-                    if c == '\n' {
-                        pos.new_line();
-                        break;
-                    }
-                    pos.advance();
-                }
+                return (Token::Reserved(Box::new("#!".into())), start_pos);
             }
 
             ('#', ..) => return (Token::Hash, start_pos),
@@ -3002,12 +2991,18 @@ pub struct TokenIterator<'a> {
     pub stream: MultiInputsStream<'a>,
     /// A processor function that maps a token to another.
     pub token_mapper: Option<&'a OnParseTokenCallback>,
+    /// A token to give before reading the stream: the error for a
+    /// frontmatter block cargo refuses.
+    pub pending: Option<(Token, Position)>,
 }
 
 impl Iterator for TokenIterator<'_> {
     type Item = (Token, Position);
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(pending) = self.pending.take() {
+            return Some(pending);
+        }
         let (within_interpolated, _char_mode, compress_script) = {
             let control = &mut *self.state.tokenizer_control.borrow_mut();
 
@@ -3261,6 +3256,36 @@ impl Engine {
     ) -> (TokenIterator<'a>, TokenizerControl) {
         let buffer: TokenizerControl = RefCell::new(TokenizerControlBlock::new()).into();
         let buffer2 = buffer.clone();
+        let inputs: StaticVec<&'a str> = inputs.into_iter().map(AsRef::as_ref).collect();
+        let mut streams: StaticVec<_> = inputs.iter().map(|s| s.chars().peekable()).collect();
+        let mut pos = Position::new(1, 0);
+        let mut pending = None;
+        // rustc reads a file's Rust source after its byte order mark,
+        // shebang line and frontmatter block. The tokenizer steps over them
+        // so positions stay the file's.
+        if let (Some(text), Some(stream)) = (inputs.first(), streams.first_mut()) {
+            let skip = match crate::project::frontmatter::read(text) {
+                Ok(lead) => lead.source,
+                Err(malformed) if !malformed.opens() => malformed.after_shebang(),
+                Err(malformed) => {
+                    pending = Some((
+                        Token::LexError(
+                            LERR::ImproperSymbol("---".into(), malformed.message.clone()).into(),
+                        ),
+                        position_at(text, malformed.span.start),
+                    ));
+                    0
+                }
+            };
+            for ch in text[..skip].chars() {
+                stream.next();
+                match ch {
+                    '\n' => pos.new_line(),
+                    '\u{feff}' => {}
+                    _ => pos.advance(),
+                }
+            }
+        }
 
         (
             TokenIterator {
@@ -3274,20 +3299,33 @@ impl Engine {
                     is_within_text_terminated_by: None,
                     last_token: None,
                 },
-                pos: Position::new(1, 0),
+                pos,
                 stream: MultiInputsStream {
                     buf: [None, None],
-                    streams: inputs
-                        .into_iter()
-                        .map(|s| s.as_ref().chars().peekable())
-                        .collect(),
+                    streams,
                     index: 0,
                 },
                 token_mapper,
+                pending,
             },
             buffer2,
         )
     }
+}
+
+/// The position of the character at byte `offset` of `text`, as the
+/// tokenizer counts it: a byte order mark takes no column.
+fn position_at(text: &str, offset: usize) -> Position {
+    let mut pos = Position::new(1, 0);
+    for ch in text[..offset].chars() {
+        match ch {
+            '\n' => pos.new_line(),
+            '\u{feff}' => {}
+            _ => pos.advance(),
+        }
+    }
+    pos.advance();
+    pos
 }
 
 #[cfg(test)]
@@ -3337,5 +3375,60 @@ mod tests {
             tokens("a<-b"),
             [id("a"), Token::LessThan, Token::UnaryMinus, id("b")]
         );
+    }
+
+    fn positioned(source: &str) -> Vec<(Token, (usize, usize))> {
+        let engine = Engine::new();
+        let inputs = [source];
+        let (stream, _) = engine.lex_raw(&inputs, None);
+        stream
+            .take_while(|(token, _)| *token != Token::EOF)
+            .map(|(token, pos)| {
+                (
+                    token,
+                    (pos.line().unwrap(), pos.position().unwrap_or_default()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_source_starts_after_a_shebang_and_frontmatter() {
+        let id = |name: &str| Token::Identifier(Box::new(name.into()));
+        let attribute = Token::Reserved(Box::new("#!".into()));
+        assert_eq!(positioned("#!/usr/bin/env rawr\nx"), [(id("x"), (2, 1))]);
+        assert_eq!(
+            positioned("---cargo\n[dependencies]\nrand = \"0.9\"\n---\n// rawr\n  x"),
+            [(id("x"), (6, 3))]
+        );
+        assert_eq!(
+            positioned("\u{feff}#!/x\n\n---\n---\nx"),
+            [(id("x"), (5, 1))]
+        );
+        assert_eq!(positioned("\u{feff}x"), [(id("x"), (1, 1))]);
+        // An inner attribute is not a shebang, with or without a space.
+        assert_eq!(positioned("#![a]")[0], (attribute.clone(), (1, 1)));
+        assert_eq!(positioned("#! [a]")[0], (attribute, (1, 1)));
+        // One or two dashes are Rust's.
+        assert_eq!(positioned("-x")[1], (id("x"), (1, 2)));
+    }
+
+    #[test]
+    fn malformed_frontmatter_is_cargo_s_error() {
+        let tokens = positioned("---cargo\n[dependencies]\n");
+        let (Token::LexError(error), position) = &tokens[0] else {
+            panic!("{tokens:?}");
+        };
+        assert_eq!(error.to_string(), "unclosed frontmatter; expected `---`");
+        assert_eq!(*position, (3, 1));
+        let tokens = positioned("---toml\n---\n");
+        let (Token::LexError(error), position) = &tokens[0] else {
+            panic!("{tokens:?}");
+        };
+        assert_eq!(
+            error.to_string(),
+            "unsupported frontmatter infostring `toml`; specify `cargo` for embedding a manifest"
+        );
+        assert_eq!(*position, (1, 4));
     }
 }
