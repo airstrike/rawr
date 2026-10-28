@@ -333,10 +333,26 @@ impl Settlement {
             return Ok(());
         };
         let mut refused = None;
-        let mut entries = self.entries;
-        // The preparation loop may settle the same table more than once.
-        entries.sort_by(|left, right| left.key().cmp(right.key()));
-        entries.dedup_by(|later, earlier| later.key() == earlier.key());
+        // The preparation loop settles a table once for each demand it
+        // extracts, and each probe names the external crates its demand
+        // reached: the entry keeps them all, as its table keeps every
+        // demand's units.
+        let mut entries = Vec::<Settled>::with_capacity(self.entries.len());
+        for entry in self.entries {
+            let Some(kept) = entries.iter_mut().find(|kept| kept.key() == entry.key()) else {
+                entries.push(entry);
+                continue;
+            };
+            if let (Settled::Extracted { publish: kept, .. }, Settled::Extracted { publish, .. }) =
+                (kept, entry)
+            {
+                for external in publish.meta.externals {
+                    if !kept.meta.externals.contains(&external) {
+                        kept.meta.externals.push(external);
+                    }
+                }
+            }
+        }
         for entry in entries {
             match entry {
                 Settled::Extracted {
@@ -425,7 +441,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
-    use super::{home, Meta, Publish, Script, Settled, Settlement, META_SCHEMA};
+    use super::{home, External, Meta, Publish, Script, Settled, Settlement, META_SCHEMA};
 
     fn scratch(name: &str) -> PathBuf {
         let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
@@ -593,18 +609,27 @@ mod tests {
             &root.join("first"),
             &BTreeMap::from([(package.clone(), vec![script("first")])]),
         );
-        // Published once, though the preparation loop settled it twice.
-        let extracted = || Settled::Extracted {
-            key: "demo".to_owned(),
-            packages: vec![package.clone()],
-            publish: Publish {
-                bindings: bindings.clone(),
-                table: table.clone(),
-                meta: meta(BTreeMap::new()),
-            },
+        // Settled once for each of two demands, whose probes named
+        // different external crates: published once, with both.
+        let extracted = |external: &str| {
+            let mut meta = meta(BTreeMap::new());
+            meta.externals.push(External {
+                crate_name: external.to_owned(),
+                stable_crate_id: "0".to_owned(),
+                unit_key: None,
+            });
+            Settled::Extracted {
+                key: "demo".to_owned(),
+                packages: vec![package.clone()],
+                publish: Publish {
+                    bindings: bindings.clone(),
+                    table: table.clone(),
+                    meta,
+                },
+            }
         };
         Settlement {
-            entries: vec![extracted(), extracted()],
+            entries: vec![extracted("first"), extracted("second")],
             bindings: Some(bindings.clone()),
             rawr: Some(first.clone()),
         }
@@ -612,6 +637,13 @@ mod tests {
         .unwrap();
         let entry = super::read(&bindings, "demo").unwrap();
         assert_eq!(entry.table, b"units");
+        let externals = entry
+            .meta
+            .externals
+            .iter()
+            .map(|external| external.crate_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(externals, ["first", "second"]);
         let recorded = entry.meta.scripts.clone();
         assert_eq!(recorded[&package], [script("first")]);
         drop(entry);
