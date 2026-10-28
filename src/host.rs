@@ -1102,6 +1102,32 @@ impl Registry {
             .then(|| ty.path_ref().to_string().into())
     }
 
+    /// A crate type alias that passes its own parameters on, all and in
+    /// order, to the imported type `identity`, as iced's `canvas::Cache<
+    /// Renderer = ..>` does to `geometry::Cache<Renderer>`. Its path reaches
+    /// the type's associated functions when the type has no path of its own.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn passing_alias(
+        &self,
+        identity: &type_def::import::Identity,
+    ) -> Option<&facade::TypeAlias> {
+        self.type_aliases.iter().find(|alias| {
+            matches!(
+                alias.target().shape(),
+                type_ref::Shape::Imported { identity: target, arguments }
+                    if target == identity
+                        && arguments.len() == alias.parameters().len()
+                        && arguments.iter().zip(alias.parameters()).all(|(argument, parameter)| {
+                            matches!(
+                                argument.shape(),
+                                type_ref::Shape::Parameter(name)
+                                    if name.to_string() == parameter.as_str()
+                            )
+                        })
+            )
+        })
+    }
+
     /// The crate type alias at `path` (`Entry::TypeAlias`), or at the path
     /// a facade re-export of it names.
     pub(crate) fn type_alias(&self, path: &path::Path) -> Option<&facade::TypeAlias> {

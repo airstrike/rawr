@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 49;
+const CLASSIFIER_VERSION: u32 = 50;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4753,15 +4753,12 @@ impl<P: api::Phase> Context<'_, P> {
             constructible,
             declaration_only,
             self.implements_for_any(definition, "Copy"),
-            // A generic struct reached at its defaulted instance has the
-            // `Default` of an impl for any arguments, as palette's `impl<S,
-            // T: Stimulus> Default for Rgb<S, T>`: `cargo check` holds the
-            // instance to the impl's bounds.
-            if declaration_only {
-                self.implements(definition, "Default")
-            } else {
-                self.implements_for_any(definition, "Default")
-            },
+            // A generic struct has the `Default` of an impl for any
+            // arguments, as palette's `impl<S, T: Stimulus> Default for
+            // Rgb<S, T>` and iced's `impl<Renderer: geometry::Renderer>
+            // Default for Cache<Renderer>` are: `cargo check` holds each
+            // instance to the impl's bounds, as it does for `Copy`.
+            self.implements_for_any(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
             self.implements_for_any(definition, "PartialEq"),
@@ -4957,7 +4954,7 @@ impl<P: api::Phase> Context<'_, P> {
             admitted.into_boxed_slice(),
             declaration_only,
             self.implements_for_any(definition, "Copy"),
-            self.implements(definition, "Default"),
+            self.implements_for_any(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
             self.implements_for_any(definition, "PartialEq"),
@@ -6584,28 +6581,16 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
-    /// Whether the crate implements the `core` trait `name` (`Default`)
-    /// for the definition itself, without generics.
-    fn implements(&self, definition: usize, name: &str) -> bool {
-        self.core_implementation(definition, name, false)
-    }
-
     /// Whether the crate implements the `core` trait `name` for the
     /// definition with any arguments, as `impl<Tz> Debug for DateTime<Tz>`
     /// does. Bounds on the arguments are not read: `cargo check` holds the
     /// crate to them.
     fn implements_for_any(&self, definition: usize, name: &str) -> bool {
-        self.core_implementation(definition, name, true)
-    }
-
-    fn core_implementation(&self, definition: usize, name: &str, generic: bool) -> bool {
         let Some(definition) = self.graph.definitions().nth(definition) else {
             return false;
         };
         self.graph.implementations().any(|implementation| {
-            if implementation.polarity() != model::Polarity::Positive
-                || (!generic && !lifetime_only(implementation.generics()))
-            {
+            if implementation.polarity() != model::Polarity::Positive {
                 return false;
             }
             let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
@@ -6621,12 +6606,7 @@ impl<P: api::Phase> Context<'_, P> {
             let core_trait = id.unit().authority().sysroot().is_some()
                 && id.unit().crate_name() == "core"
                 && trait_definition.display_path().last() == Some(name);
-            core_trait
-                && if generic {
-                    any_arguments(implementation.self_type(), definition.id())
-                } else {
-                    exact_definition(implementation.self_type(), definition.id())
-                }
+            core_trait && any_arguments(implementation.self_type(), definition.id())
         })
     }
 }

@@ -38330,14 +38330,34 @@ impl<'a> Parser<'a> {
             }
             // A library type's own `Default`: `T::default()`, which for an
             // imported Rust type calls `<T as Default>::default()`.
+            // A generic one's is the impl's at the written arguments.
             Ty::Host { proof, arguments }
-                if arguments.is_empty()
-                    && proof
-                        .definition
-                        .capabilities()
-                        .contains(capability::Kind::Default) =>
+                if proof
+                    .definition
+                    .capabilities()
+                    .contains(capability::Kind::Default) =>
             {
-                let path = format!("{}::default", proof.definition.path());
+                let owner = proof.definition.path().to_string();
+                // A type only a crate's alias names, as iced's `canvas::Cache`
+                // names `geometry::Cache`, has its `default` under the alias.
+                #[cfg(feature = "rust-import")]
+                let owner = match proof
+                    .definition
+                    .identity()
+                    .imported()
+                    .and_then(|identity| self.models.host.passing_alias(identity))
+                {
+                    Some(alias)
+                        if self
+                            .models
+                            .host_items(&format!("{owner}::default"))
+                            .is_none() =>
+                    {
+                        alias.path().to_string()
+                    }
+                    _ => owner,
+                };
+                let path = format!("{owner}::default");
                 let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                     if proof.definition.native_identity().is_some() {
                         return Err(Error::MissingCapability {
@@ -38349,13 +38369,16 @@ impl<'a> Parser<'a> {
                     // An imported type's `default` comes from its crate's
                     // `impl Default`, demanded as `Type::default`.
                     return Err(Error::UnknownMember {
-                        owner: proof.definition.path().into(),
+                        owner: owner.into(),
                         member: "default".into(),
                         reference: span,
                     });
                 };
-                let owner = self.models.item_owner(&path).cloned();
-                let value = self.call_host_function(&items, owner, Vec::new(), span)?;
+                let item_owner = self.models.item_owner(&path).cloned();
+                let value = self.call_host_function(&items, item_owner, Vec::new(), span)?;
+                if !arguments.is_empty() {
+                    self.require_type(&ty, &value.ty, span)?;
+                }
                 value.rendered_source()
             }
             _ => {

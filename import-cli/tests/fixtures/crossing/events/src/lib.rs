@@ -243,6 +243,14 @@ pub mod widgets {
     pub mod fallback {
         /// A renderer over two backends.
         pub struct Renderer<A, B>(std::marker::PhantomData<(A, B)>);
+
+        /// What a renderer over two backends draws.
+        pub enum Geometry<A, B> {
+            /// Drawn by the first backend.
+            Primary(String, std::marker::PhantomData<A>),
+            /// Drawn by the second.
+            Secondary(String, std::marker::PhantomData<B>),
+        }
     }
 
     /// The only name of the renderer the crate draws with.
@@ -505,5 +513,50 @@ pub mod widgets {
         let mut labels = Vec::new();
         widget.labels(&mut labels);
         println!("last view {}", labels.join(" "));
+    }
+}
+
+// ---- iced's canvas: aliases of types only the aliases name ----
+
+/// iced's `widget::canvas` aliases. Their targets are in `parts`, which
+/// this crate depends on and re-exports none of, as iced names iced_core's
+/// and iced_graphics's types only through its aliases.
+pub mod canvas {
+    use crate::widgets::fallback;
+
+    /// A cache at the crate's renderer: an alias that passes its parameter
+    /// on, defaulted to another alias, as iced's `canvas::Cache<Renderer =
+    /// crate::Renderer> = geometry::Cache<Renderer>`.
+    pub type Cache<Renderer = crate::widgets::Renderer> = parts::geometry::Cache<Renderer>;
+
+    /// What a renderer draws: an alias of an associated type, as iced's
+    /// `canvas::Geometry<Renderer = crate::Renderer> = <Renderer as
+    /// geometry::Renderer>::Geometry`.
+    pub type Geometry<Renderer = crate::widgets::Renderer> =
+        <Renderer as parts::geometry::Renderer>::Geometry;
+
+    /// Text at the crate's theme: an alias that passes a lifetime and a
+    /// defaulted theme on, as iced's `widget::Text`.
+    pub type Note<'a, Theme = crate::Theme> = parts::Note<'a, Theme>;
+
+    impl<A, B> parts::geometry::Renderer for fallback::Renderer<A, B> {
+        type Geometry = fallback::Geometry<A, B>;
+
+        fn draw(label: &str) -> Self::Geometry {
+            fallback::Geometry::Primary(label.to_owned(), std::marker::PhantomData)
+        }
+    }
+
+    /// `label`, drawn by the crate's renderer.
+    pub fn sketch(label: &str) -> Geometry {
+        <crate::widgets::Renderer as parts::geometry::Renderer>::draw(label)
+    }
+
+    /// What `geometry` shows.
+    pub fn describe(geometry: &Geometry) -> String {
+        match geometry {
+            fallback::Geometry::Primary(label, _) => format!("primary {label}"),
+            fallback::Geometry::Secondary(label, _) => format!("secondary {label}"),
+        }
     }
 }

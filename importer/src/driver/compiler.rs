@@ -57,8 +57,10 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 20 adds the selected crate's name index for demanded units. Schema 21
 // keeps a Future impl's `Output`; schema 22 keeps an Iterator impl's `Item` and
 // `next`; schema 23 keeps an AsRef impl's `as_ref`. Schema 27 gives a
-// constant of no scalar value as its own.
-const PROTOCOL_SCHEMA: u32 = 27;
+// constant of no scalar value as its own. Schema 28 names a type only an
+// alias reaches under its crate's `$crate` segment, and gives an alias of an
+// associated type as the type it names at its defaults.
+const PROTOCOL_SCHEMA: u32 = 28;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -159,6 +161,9 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// The selected crate's public aliases that pass their own parameters
     /// on to a type, by that type (`passing_alias`).
     passing_aliases: HashMap<DefId, DefId>,
+    /// While a crate is walked only for the types aliases name
+    /// (`hidden_alias_targets`), those types.
+    only_names: Option<HashSet<DefId>>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
 }
@@ -1307,6 +1312,73 @@ fn defaulted_instance<'tcx>(tcx: TyCtxt<'tcx>, adt: DefId) -> Option<Ty<'tcx>> {
     complete.then(|| tcx.type_of(adt).instantiate(tcx, arguments).skip_norm_wip())
 }
 
+/// The struct or enum the type alias `alias` names with each of its own
+/// parameters, all and in order, as iced's `pub type Element<'a, Message,
+/// Theme = crate::Theme, Renderer = crate::Renderer> = core::Element<'a,
+/// Message, Theme, Renderer>` does.
+fn passed_on_target(tcx: TyCtxt<'_>, alias: DefId) -> Option<DefId> {
+    let generics = tcx.generics_of(alias);
+    let aliased = tcx.type_of(alias).instantiate_identity().skip_norm_wip();
+    let ty::Adt(definition, arguments) = aliased.kind() else {
+        return None;
+    };
+    (generics.parent_count == 0
+        && !generics.own_params.is_empty()
+        && arguments.len() == generics.own_params.len()
+        && arguments
+            .iter()
+            .enumerate()
+            .all(|(index, argument)| match argument.kind() {
+                ty::GenericArgKind::Type(ty) => matches!(
+                    ty.kind(),
+                    ty::Param(parameter) if parameter.index as usize == index
+                ),
+                ty::GenericArgKind::Lifetime(region) => matches!(
+                    region.kind(),
+                    ty::ReEarlyParam(parameter) if parameter.index as usize == index
+                ),
+                ty::GenericArgKind::Const(_) => false,
+            }))
+    .then(|| definition.did())
+}
+
+/// The type a generic alias whose target names an associated type gives
+/// at its defaults, as iced's `pub type Geometry<Renderer =
+/// crate::Renderer> = <Renderer as geometry::Renderer>::Geometry` is
+/// `fallback::Geometry<iced_wgpu::Geometry, iced_tiny_skia::Geometry>`:
+/// a generic struct or enum at arguments that name no parameter and no
+/// associated type. Rust code writes it as the alias with no arguments.
+/// `None` when a parameter has no default or the projection does not
+/// normalize to such a type.
+fn projected_alias_instance<'tcx>(tcx: TyCtxt<'tcx>, alias: DefId) -> Option<Ty<'tcx>> {
+    let generics = tcx.generics_of(alias);
+    if generics.parent_count != 0 || generics.own_params.is_empty() {
+        return None;
+    }
+    if !tcx
+        .type_of(alias)
+        .instantiate_identity()
+        .skip_norm_wip()
+        .has_aliases()
+    {
+        return None;
+    }
+    let instance = defaulted_instance(tcx, alias)?;
+    let instance = tcx
+        .try_normalize_erasing_regions(
+            ty::TypingEnv::fully_monomorphized(),
+            ty::Unnormalized::new(instance),
+        )
+        .ok()?;
+    (matches!(instance.kind(), ty::Adt(_, arguments) if !arguments.is_empty())
+        && !instance.has_aliases()
+        && !instance.has_param()
+        && !instance
+            .walk()
+            .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_))))
+    .then_some(instance)
+}
+
 fn extract<'tcx>(
     tcx: TyCtxt<'tcx>,
     invocation: &Invocation,
@@ -1347,6 +1419,7 @@ fn extract<'tcx>(
         applications: BTreeMap::new(),
         instance_aliases: None,
         passing_aliases: HashMap::new(),
+        only_names: None,
         budget,
         diagnostic,
     };
@@ -1377,9 +1450,22 @@ fn extract<'tcx>(
         builder.resolve_trait_member_demands()?;
         builder.drain_scheduler()?;
         builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, true)?;
+        let hidden = builder.hidden_alias_targets()?;
         // A macro's `$crate` paths, under the segment naming its crate.
         for (root, segment) in std::mem::take(&mut builder.crate_roots) {
             builder.collect_external_exports(root, vec![segment], &[], 1, true)?;
+        }
+        // Each type only an alias names, under the segment naming its
+        // crate; nothing else of that crate.
+        if !hidden.is_empty() {
+            let mut roots = hidden.iter().map(|target| target.krate).collect::<Vec<_>>();
+            roots.dedup();
+            builder.only_names = Some(hidden.into_iter().collect());
+            for krate in roots {
+                let segment = crate_segment(tcx, krate);
+                builder.collect_external_exports(krate.as_def_id(), vec![segment], &[], 1, true)?;
+            }
+            builder.only_names = None;
         }
     }
     let mut definitions = Vec::new();
@@ -2090,6 +2176,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if names_only {
                 match res {
                     Res::Def(DefKind::Mod, _) => {}
+                    Res::Def(_, def_id)
+                        if self
+                            .only_names
+                            .as_ref()
+                            .is_some_and(|only| !only.contains(&def_id)) =>
+                    {
+                        continue;
+                    }
                     Res::Def(kind, def_id)
                         if kind.ns().is_some_and(|ns| {
                             self.definitions.contains_key(&(def_id, namespace(ns)))
@@ -2383,12 +2477,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                                 default.instantiate_identity().skip_norm_wip().as_type()
                             })
                             .collect::<Vec<_>>();
+                        // An alias of an associated type names the type it
+                        // gives at its defaults (`projected_alias_instance`).
+                        let instance = projected_alias_instance(tcx, def_id);
                         let named = tcx
                             .type_of(def_id)
                             .instantiate_identity()
                             .skip_norm_wip()
                             .walk()
                             .chain(defaults.into_iter().flat_map(|default| default.walk()))
+                            .chain(instance.into_iter().flat_map(|instance| instance.walk()))
                             .filter_map(|argument| argument.as_type())
                             .filter_map(|ty| match ty.kind() {
                                 ty::Adt(definition, _) => Some(definition.did()),
@@ -2813,27 +2911,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             }
                         }
                         DefKind::TyAlias => {
-                            let generics = tcx.generics_of(def_id);
-                            let aliased =
-                                tcx.type_of(def_id).instantiate_identity().skip_norm_wip();
-                            if generics.parent_count == 0
-                                && let ty::Adt(definition, arguments) = aliased.kind()
-                                && arguments.len() == generics.own_params.len()
-                                && arguments.iter().enumerate().all(|(index, argument)| {
-                                    match argument.kind() {
-                                        ty::GenericArgKind::Type(ty) => matches!(
-                                            ty.kind(),
-                                            ty::Param(parameter) if parameter.index as usize == index
-                                        ),
-                                        ty::GenericArgKind::Lifetime(region) => matches!(
-                                            region.kind(),
-                                            ty::ReEarlyParam(parameter) if parameter.index as usize == index
-                                        ),
-                                        ty::GenericArgKind::Const(_) => false,
-                                    }
-                                })
-                            {
-                                passing.entry(definition.did()).or_insert(def_id);
+                            if let Some(target) = passed_on_target(tcx, def_id) {
+                                passing.entry(target).or_insert(def_id);
                             }
                         }
                         _ => {}
@@ -2843,6 +2922,53 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             self.instance_aliases = Some(found);
             self.passing_aliases = passing;
         }
+    }
+
+    /// The types exported aliases pass their parameters on to that no
+    /// public path of the root reaches, as `iced::Element` passes them to
+    /// `iced_core::Element` and `canvas::Cache` to
+    /// `iced_graphics::geometry::Cache`, in crate order. Each is named under
+    /// its defining crate's `$crate` segment (`crate_segment`), as a macro's
+    /// `$crate` path names it, so it is exported and generated code writes
+    /// it through the alias. A type in the root's own crate, or one whose
+    /// crate a macro's `$crate` already names, is left out.
+    fn hidden_alias_targets(&mut self) -> Result<Vec<DefId>, String> {
+        let tcx = self.tcx;
+        let exported = self
+            .reachable
+            .iter()
+            .filter_map(|export| match &export.target {
+                ExportTarget::Definition { id } => Some(id.def_path_hash.clone()),
+                ExportTarget::Unsupported { .. } => None,
+            })
+            .collect::<HashSet<_>>();
+        let mut targets = Vec::new();
+        for (alias, namespace) in self.definitions.keys() {
+            if *namespace != Namespace::Type
+                || tcx.def_kind(*alias) != DefKind::TyAlias
+                || !exported.contains(&def_hash(tcx, *alias)?)
+            {
+                continue;
+            }
+            let Some(target) = passed_on_target(tcx, *alias) else {
+                continue;
+            };
+            if target.krate != self.selected
+                && self.definitions.contains_key(&(target, Namespace::Type))
+                && !exported.contains(&def_hash(tcx, target)?)
+                && !self
+                    .crate_roots
+                    .iter()
+                    .any(|(root, _)| root.krate == target.krate)
+                && !self.is_sysroot_crate(target.krate)?
+            {
+                targets.push(target);
+            }
+        }
+        // In a fixed order, whatever the table's.
+        targets.sort_unstable_by_key(|target| (target.krate, tcx.def_path_hash(*target)));
+        targets.dedup();
+        Ok(targets)
     }
 
     fn ensure_with_demand(
@@ -4549,6 +4675,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 mutable: mutability.is_mut(),
                 thread_local: self.tcx.is_thread_local_static(def_id),
             },
+            // An alias that names an associated type is the type it gives
+            // at its defaults, with no parameters: Rust code writes it with
+            // none, and rustc normalizes it to that type.
+            DefKind::TyAlias if let Some(instance) = projected_alias_instance(self.tcx, def_id) => {
+                Shape::TypeAlias {
+                    ty: self.type_of(instance, def_id, 0)?,
+                    generics: Generics {
+                        parameters: Vec::new(),
+                        predicates: Vec::new(),
+                    },
+                }
+            }
             DefKind::TyAlias => Shape::TypeAlias {
                 ty: self.type_of(
                     self.tcx
@@ -4863,6 +5001,27 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }))
     }
 
+    /// What the projection `ty` normalizes to, when it names no parameter,
+    /// bound variable or lifetime, and the result names no associated or
+    /// opaque type and no lifetime.
+    fn normalized_projection(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        let has_lifetime = |ty: Ty<'tcx>| {
+            ty.walk()
+                .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)))
+        };
+        if ty.has_param() || ty.has_bound_vars() || has_lifetime(ty) {
+            return None;
+        }
+        let normalized = self
+            .tcx
+            .try_normalize_erasing_regions(
+                ty::TypingEnv::fully_monomorphized(),
+                ty::Unnormalized::new(ty),
+            )
+            .ok()?;
+        (!normalized.has_aliases() && !has_lifetime(normalized)).then_some(normalized)
+    }
+
     fn type_of(&mut self, ty: Ty<'tcx>, owner: DefId, depth: usize) -> Result<Type, String> {
         check_type_depth(depth)?;
         Ok(match ty.kind() {
@@ -5011,6 +5170,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 }
             }
             ty::Alias(_, alias) => match alias.kind {
+                // A projection on types that name no parameter, as a
+                // function's `-> canvas::Geometry` is `<iced::Renderer as
+                // geometry::Renderer>::Geometry`, is the type rustc
+                // normalizes it to.
+                ty::AliasTyKind::Projection { .. }
+                    if let Some(normalized) = self.normalized_projection(ty) =>
+                {
+                    return self.type_of(normalized, owner, depth.saturating_add(1));
+                }
                 ty::AliasTyKind::Projection { def_id } => {
                     let associated: DefId = def_id;
                     self.request_trait_obligation(
