@@ -23,6 +23,11 @@ type EnumConstruction = (
 pub(crate) struct Model {
     generation: GenerationId,
     definitions: BTreeMap<type_def::Identity, Definition>,
+    /// The type of each parameter of each function of a script's trait
+    /// impls, by its owner's path and member (`Arc::Program<Message>::draw`),
+    /// where it has a runtime type: what a native value native code gives
+    /// it is attested as (D594).
+    members: BTreeMap<String, Box<[Option<crate::host::runtime::type_ref::Type>]>>,
 }
 
 #[derive(Clone)]
@@ -162,10 +167,52 @@ impl Model {
             );
         }
 
-        Self {
+        let mut model = Self {
             generation,
             definitions: runtime,
+            members: BTreeMap::new(),
+        };
+        let mut members = BTreeMap::new();
+        for method in program.methods().iter().chain(program.builtin_methods()) {
+            if method.trait_name().is_none() {
+                continue;
+            }
+            let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
+                continue;
+            };
+            let path = owner
+                .modules()
+                .iter()
+                .map(ImmutableString::as_str)
+                .chain([owner.name(), method.key().name()])
+                .collect::<Vec<_>>()
+                .join("::");
+            let types = method
+                .parameters()
+                .iter()
+                .map(|parameter| {
+                    // A borrow's value is its referent's.
+                    let ty = match &parameter.ty {
+                        type_ref::Type::Reference { target, .. } => target,
+                        ty => ty,
+                    };
+                    crate::host::runtime::type_ref::Type::from_resolved_in(ty, &model, &[]).ok()
+                })
+                .collect();
+            members.insert(path, types);
         }
+        model.members = members;
+        model
+    }
+
+    /// The type of each parameter of the function of a script's trait impl
+    /// at `path` (D594), where it has one.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    pub(crate) fn member_types(
+        &self,
+        path: &str,
+    ) -> Option<&[Option<crate::host::runtime::type_ref::Type>]> {
+        self.members.get(path).map(|types| &**types)
     }
 
     pub(crate) const fn generation(&self) -> GenerationId {

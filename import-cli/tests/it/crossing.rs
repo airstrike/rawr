@@ -274,6 +274,92 @@ fn a_choice_of_script_values_beside_a_string_literal_runs() {
     );
 }
 
+/// iced's canvas examples: the program's own type implements the crate's
+/// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
+/// crate calls the impl's `draw` back while it lays the view out, lending
+/// it a pen and a theme whose methods it calls, and its `update` while it
+/// handles a press, with a script state lent `&mut` and an event it
+/// matches. A script color crosses into the crate's `impl Into<Color>`
+/// through the script's `impl From<Shade> for Color`, as lazy's does. The
+/// output is `cargo run`'s.
+#[test]
+fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
+    let (rawr, cargo) = both_printed("crossing-program", "program.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view canvas[primary plain 0#1, primary 40x30 after 0 rgb(10, 20, 30)#2]")
+            && rawr.contains(
+                "pressed Increment: canvas[primary plain 0#1, primary 40x30 after 1 rgb(10, 20, 30)#2]"
+            )
+            && rawr.contains("1 message Pressed(\"Increment\")")
+            && rawr.contains(
+                "last view canvas[primary plain 36#1, primary 40x30 after 0 rgb(10, 20, 30)#2]"
+            ),
+        "{rawr}"
+    );
+}
+
+/// An edit to the body of a script impl's function, which native code calls
+/// through the proxy, takes effect at its next call, in the same process
+/// with the state kept.
+#[test]
+fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
+    let root = root("crossing-program-swap");
+    fs::copy(
+        root.join("variants").join("program.rs"),
+        root.join("src/main.rs"),
+    )
+    .unwrap();
+    let main = root.join("src/main.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_COUNT", PathBuf::from("3000")),
+            ("EVENTS_STOP", root.join("stop")),
+        ],
+    );
+    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
+    run.until(Duration::from_secs(60), |line| {
+        line.starts_with("3 view canvas[primary plain 18#1")
+    });
+
+    let text = fs::read_to_string(&main).unwrap();
+    let written = "pen.stroke(&format!(\"{} {}\", theme.name(), self.presses)),";
+    assert!(text.contains(written), "{text}");
+    fs::write(
+        &main,
+        text.replace(
+            written,
+            "pen.stroke(&format!(\"{} {} edited\", theme.name(), self.presses)),",
+        ),
+    )
+    .unwrap();
+    // The presses go on from where they were: the state was kept.
+    let edited = run.until(Duration::from_secs(120), |line| line.contains(" edited#1"));
+    let presses = edited
+        .split("plain ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|presses| presses.parse::<i64>().ok())
+        .unwrap_or_else(|| panic!("{edited}"));
+    assert!(presses > 18, "{}", run.seen.join("\n"));
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+    assert_eq!(
+        run.seen
+            .iter()
+            .filter(|line| line.starts_with("pid "))
+            .count(),
+        1,
+        "{seen}"
+    );
+    assert!(run.seen.contains(&pid));
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// `event` and the count a `N view count X` line shows.
 fn parse(line: &str) -> Option<(i64, i64)> {
     let (event, count) = line.split_once(" view count ")?;

@@ -222,7 +222,9 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         offset = uses.len();
     }
 
-    for definition in &program.methods {
+    // An impl for a crate's or a builtin type is checked as the crate's own
+    // are, so the native items its body uses are demanded too.
+    for definition in program.methods.iter().chain(&program.builtin_methods) {
         let body_source = source_span(
             definition
                 .body_text()
@@ -291,9 +293,11 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     }
     uses.sort_unstable();
     uses.dedup();
+    let impls = native_impls(program, &models)?.into_boxed_slice();
     Ok(ImportedOutput {
         uses: uses.into_boxed_slice(),
         dependencies: dependencies.into_iter().collect(),
+        impls,
     })
 }
 
@@ -642,6 +646,9 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
 pub(crate) struct ImportedOutput {
     pub(crate) uses: Box<[ImportedUse]>,
     pub(crate) dependencies: Box<[crate::host::facade::Dependency]>,
+    /// The script's impls of dependencies' traits, by the script path of
+    /// the type each is for (D594).
+    pub(crate) impls: Box<[(Box<str>, rawr_import::surface::instance::ScriptImpl)]>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -662,6 +669,238 @@ fn imported_result<T>(
             error.into(),
         ))),
     }
+}
+
+/// The script's impls of a dependency's traits for its own types (D594),
+/// each with the script path of its owner, which crosses into native code
+/// as its proxy: `impl canvas::Program<Message> for Arc`. Native code calls
+/// each function through the runner's impl for the proxy.
+#[cfg(feature = "rust-import")]
+fn native_impls(
+    program: &Program,
+    models: &Models,
+) -> Result<Vec<(Box<str>, rawr_import::surface::instance::ScriptImpl)>, super::ImportedFailure> {
+    use rawr_import::surface::instance::{ImplReceiver, ScriptImpl, ScriptImplFunction};
+    let mut impls = Vec::new();
+    for shell in program.items.iter() {
+        let item::Kind::Impl(implementation) = &shell.kind else {
+            continue;
+        };
+        let script = |ty: &type_ref::Type| match ty {
+            type_ref::Type::Path(type_ref::Path {
+                target: type_ref::Target::Script { definition, .. },
+                ..
+            }) => Some(*definition),
+            _ => None,
+        };
+        // `impl canvas::Program<Message> for Arc`, of a dependency's trait
+        // for a script type; or `impl From<Shade> for iced::Color`, of the
+        // prelude's conversion from a script type into a crate's, which a
+        // crate's `impl Into<Color>` takes. Each crosses with its script
+        // type.
+        let (path, arguments, definition): (&str, &[type_ref::Type], _) =
+            match &implementation.trait_ {
+                Some(item::TraitImpl::Native {
+                    path, arguments, ..
+                }) => match script(&implementation.owner) {
+                    Some(definition) => (path.as_str(), arguments, definition),
+                    None => continue,
+                },
+                Some(item::TraitImpl::User { name, arguments })
+                    if name.text == "From"
+                        && script(&implementation.owner).is_none()
+                        && matches!(
+                            &implementation.owner,
+                            type_ref::Type::Path(type_ref::Path {
+                                target: type_ref::Target::Host { .. },
+                                ..
+                            })
+                        ) =>
+                {
+                    match arguments.as_ref() {
+                        [argument] => match script(argument) {
+                            Some(definition) => ("::core::convert::From", arguments, definition),
+                            None => continue,
+                        },
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            };
+        let generics = implementation
+            .generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect::<Vec<_>>();
+        // A type the impl names that has no Rust type in the runner can't
+        // cross, and rustc would refuse the runner without the impl.
+        let convert = |ty: &type_ref::Type| {
+            impl_surface_type(models, &Ty::from_resolved(ty), &generics).ok_or_else(|| {
+                super::ImportedFailure::Lowering(LoweringFailure::original(
+                    shell.source,
+                    Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "`{}` in an impl of `{path}`, whose functions native code calls: \
+                             the type has no Rust type for the impl to name",
+                            super::full_type_name(ty)
+                        )
+                        .into(),
+                        source: super::type_span(ty),
+                    }
+                    .into(),
+                ))
+            })
+        };
+        let script_path = models.script_path(definition);
+        let owner = convert(&implementation.owner)?;
+        let arguments = arguments
+            .iter()
+            .map(convert)
+            .collect::<Result<Box<[_]>, _>>()?;
+        let associated = implementation
+            .associated
+            .iter()
+            .map(|(name, ty)| {
+                let converted = convert(ty)?;
+                // A type Rust holds as a script value, as `RefCell<Vec<
+                // Cache>>` is, has none of the bounds the trait may ask of it,
+                // such as `Default`.
+                if is_erased(&converted) {
+                    return Err(super::ImportedFailure::Lowering(LoweringFailure::original(
+                        shell.source,
+                        Error::UnsupportedNominalSyntax {
+                            construct: format!(
+                                "`type {} = {}` in an impl of `{path}`: Rust code holds the \
+                                 type as a script value, which has none of the trait's bounds \
+                                 on it",
+                                name.text,
+                                super::full_type_name(ty)
+                            )
+                            .into(),
+                            source: super::type_span(ty),
+                        }
+                        .into(),
+                    )));
+                }
+                Ok((Box::<str>::from(name.text.as_str()), converted))
+            })
+            .collect::<Result<Box<[_]>, super::ImportedFailure>>()?;
+        let mut functions = Vec::new();
+        for function in implementation.functions.iter() {
+            let item::Lowering::NominalMethod(id) = function.body.lowering else {
+                continue;
+            };
+            // An impl for a crate's type numbers its functions apart
+            // (`resolve::BUILTIN_METHOD_IDS`).
+            let definition = match id.index().checked_sub(super::BUILTIN_METHOD_IDS) {
+                Some(index) => program.builtin_methods.get(index),
+                None => program.methods.get(id.index()),
+            };
+            let Some(definition) = definition else {
+                continue;
+            };
+            // The member as the running program holds it: its owner's path,
+            // then its name (`crate::island::shared`).
+            let owner_path = match definition.key().owner() {
+                Some(type_def::Identity::Script(owner)) => owner
+                    .modules()
+                    .iter()
+                    .map(ImmutableString::as_str)
+                    .chain([owner.name()])
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                _ => continue,
+            };
+            let receiver = match &function.receiver {
+                None => ImplReceiver::None,
+                Some(crate::item::Receiver::Shared(_)) => ImplReceiver::Shared,
+                Some(crate::item::Receiver::Mutable(_)) => ImplReceiver::Mutable,
+                Some(crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_)) => {
+                    ImplReceiver::Owned
+                }
+            };
+            let inputs = function
+                .parameters
+                .iter()
+                .map(|parameter| convert(&parameter.ty))
+                .collect::<Result<Box<[_]>, _>>()?;
+            let output = match &function.output {
+                Some(output) => convert(output)?,
+                None => rawr_import::classify::representability::convert::Type::Unit,
+            };
+            functions.push(ScriptImplFunction::new(
+                function.name.text.as_str().into(),
+                format!("{owner_path}::{}", definition.key().name()).into(),
+                receiver,
+                inputs,
+                output,
+            ));
+        }
+        impls.push((
+            script_path,
+            ScriptImpl::new(
+                owner,
+                path.into(),
+                arguments,
+                generics.iter().map(|name| name.as_str().into()).collect(),
+                associated,
+                functions.into_boxed_slice(),
+            ),
+        ));
+    }
+    Ok(impls)
+}
+
+/// `ty`, a type a script impl's header or signature writes, as an
+/// instance's surface type, with each of the impl's own parameters
+/// `generics` a [`Type::Parameter`] at its index.
+#[cfg(feature = "rust-import")]
+fn impl_surface_type(
+    models: &Models,
+    ty: &Ty,
+    generics: &[ImmutableString],
+) -> Option<rawr_import::classify::representability::convert::Type> {
+    use rawr_import::classify::representability::convert::Type;
+    let all = |types: &[Ty]| {
+        types
+            .iter()
+            .map(|ty| impl_surface_type(models, ty, generics))
+            .collect::<Option<Box<[_]>>>()
+    };
+    Some(match ty {
+        Ty::Param(name) => Type::Parameter(
+            u32::try_from(generics.iter().position(|generic| generic == name)?).ok()?,
+        ),
+        Ty::Unit => Type::Unit,
+        Ty::Reference { mutable, target } => Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(impl_surface_type(models, target, generics)?),
+        },
+        Ty::Option(element) => {
+            Type::Option(Box::new(impl_surface_type(models, element, generics)?))
+        }
+        Ty::Array {
+            element,
+            length: None,
+        } => Type::Sequence {
+            element: Box::new(impl_surface_type(models, element, generics)?),
+            owned: true,
+        },
+        Ty::Tuple(members) => Type::Tuple(all(members)?),
+        Ty::Script(definition, arguments) => Type::Script {
+            path: models.script_path(*definition),
+            arguments: all(arguments)?,
+        },
+        Ty::Host { proof, arguments } if proof.definition.identity().imported().is_some() => {
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::authenticated(
+                    *proof.definition.identity().imported()?.as_bytes(),
+                ),
+                arguments: all(arguments)?,
+            }
+        }
+        ty => instance_surface_type(&Inference::default(), models, ty)?,
+    })
 }
 
 #[cfg(feature = "rust-import")]
@@ -852,6 +1091,16 @@ fn imported_surface_type(
         // view's widget gives: rustc infers it where the bridge calls the
         // item (D594).
         Ty::Infer(_) => Type::Inferred,
+        // A shared borrow of a script value, as `Canvas::new(self)` takes
+        // `&Arc` for its `P: Program`: the proxy shares the value's handle,
+        // so it is the borrow, and the impls the program writes for the
+        // script type are the proxy's (D594).
+        Ty::Reference {
+            mutable: false,
+            target,
+        } if matches!(inference.resolved_ref(target), Ty::Script(..)) => {
+            imported_surface_type(inference, models, target, operation, imported)?
+        }
         // A script type is its proxy in the runner, named as the script
         // names it, so Rust's bounds, `TypeId` and `type_name` are its own
         // (D594).
@@ -994,6 +1243,13 @@ fn instance_surface_type(
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
         },
+        // A shared borrow of a script value is its proxy, which shares it.
+        Ty::Reference {
+            mutable: false,
+            target,
+        } if matches!(inference.resolved_ref(target), Ty::Script(..)) => {
+            instance_surface_type(inference, models, target)?
+        }
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference {
@@ -1118,6 +1374,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
+    let impls = native_impls(program, &models)?.into_boxed_slice();
     let lowered = lower_with_context(
         engine,
         program,
@@ -1144,6 +1401,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         ImportedOutput {
             uses: uses.into_boxed_slice(),
             dependencies: dependencies.into_iter().collect(),
+            impls,
         },
     ))
 }
@@ -10847,12 +11105,14 @@ impl<'a> Parser<'a> {
         if !open || matches!(ty, Ty::Infer(_)) || depth > 32 {
             return Ok(());
         }
-        let headers = self
-            .models
-            .host
-            .impl_headers(identity)
-            .cloned()
-            .collect::<Vec<_>>();
+        // One impl reached through several of a crate's paths is one impl,
+        // as iced's blanket `impl<T: core::Widget> Widget for T` is.
+        let mut headers = Vec::<crate::host::facade::ImplHeader>::new();
+        for header in self.models.host.impl_headers(identity) {
+            if !headers.contains(header) {
+                headers.push(header.clone());
+            }
+        }
         let mut named = Vec::new();
         let mut blanket = Vec::new();
         for (index, header) in headers.iter().enumerate() {

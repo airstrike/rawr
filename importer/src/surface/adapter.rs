@@ -19,6 +19,10 @@ pub(crate) struct Plan {
     name: Box<str>,
     origin: representability::origin::Set,
     operation: Operation,
+    /// The script's impls that cross with the instance's script types
+    /// (D594).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    impls: Box<[crate::surface::instance::ScriptImpl]>,
 }
 
 /// Stable private identity for one generated table entry.
@@ -254,6 +258,7 @@ impl Plan {
             operation: Operation::Builder {
                 steps: steps.into_boxed_slice(),
             },
+            impls: Box::default(),
         })
     }
 
@@ -295,7 +300,14 @@ impl Plan {
             name: clone_str(outcome.name())?,
             origin: clone_origin(origin)?,
             operation: clone_operation(contract, outcome.representability(), selected)?,
+            impls: selected.impls().into(),
         })
+    }
+
+    /// The script's impls that cross with the instance's script types
+    /// (D594).
+    pub(crate) fn impls(&self) -> &[crate::surface::instance::ScriptImpl] {
+        &self.impls
     }
 
     pub(crate) const fn identity(&self) -> EntryIdentity {

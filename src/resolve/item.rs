@@ -254,6 +254,16 @@ pub(crate) enum TraitImpl {
         name: crate::item::Name,
         arguments: Box<[type_ref::Type]>,
     },
+    /// `impl canvas::Program<Message> for Arc` of a dependency's trait, by
+    /// its path from the crate's root (`iced::widget::canvas::Program`),
+    /// with the type arguments the header writes. Native code calls the
+    /// impl's functions through the runner's proxy of the owner (D594).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    Native {
+        path: crate::ImmutableString,
+        name: crate::item::Name,
+        arguments: Box<[type_ref::Type]>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

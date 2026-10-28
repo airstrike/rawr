@@ -374,8 +374,12 @@ impl crate::Engine {
             None => compiler,
         };
         let mut named = Vec::new();
+        let impls = symbolic.impls;
         for used in symbolic.uses {
             named.push(Box::<str>::from(used.path.as_str()));
+            // The script's impls for the script types the instance takes,
+            // which cross with them (D594).
+            let crossing = crossing_impls(&used.types, &impls);
             let source = program
                 .source()
                 .table()
@@ -588,6 +592,7 @@ impl crate::Engine {
                     limits,
                 )
             }
+            .map(|instance| instance.with_impls(crossing))
             .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
             .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
             .map_err(Error::from)
@@ -621,6 +626,52 @@ impl crate::Engine {
             named: named.into_boxed_slice(),
         })
     }
+}
+
+/// The impls in `impls` for the script types `types` name at any depth,
+/// each once.
+fn crossing_impls(
+    types: &[representability::convert::Type],
+    impls: &[(Box<str>, rawr_import::surface::instance::ScriptImpl)],
+) -> Box<[rawr_import::surface::instance::ScriptImpl]> {
+    fn paths<'a>(ty: &'a representability::convert::Type, found: &mut Vec<&'a str>) {
+        use representability::convert::Type;
+        match ty {
+            Type::Script { path, arguments } => {
+                found.push(path);
+                arguments.iter().for_each(|argument| paths(argument, found));
+            }
+            Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
+                arguments.iter().for_each(|argument| paths(argument, found));
+            }
+            Type::Option(inner)
+            | Type::Range(inner)
+            | Type::Borrowed { ty: inner, .. }
+            | Type::Sequence { element: inner, .. }
+            | Type::ProfileMessage { payload: inner, .. } => paths(inner, found),
+            Type::Result(ok, err) => {
+                paths(ok, found);
+                paths(err, found);
+            }
+            Type::FunctionItem { input, output } => {
+                paths(input, found);
+                paths(output, found);
+            }
+            Type::Unit | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {}
+        }
+    }
+    if impls.is_empty() {
+        return Box::default();
+    }
+    let mut found = Vec::new();
+    for ty in types {
+        paths(ty, &mut found);
+    }
+    impls
+        .iter()
+        .filter(|(owner, _)| found.contains(&owner.as_ref()))
+        .map(|(_, script)| script.clone())
+        .collect()
 }
 
 fn imported_resolution_report(

@@ -642,7 +642,12 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .flatten()
                 .flat_map(|used| used.bindings.iter())
-                .filter(|binding| matches!(binding.target, item::Import::Module))
+                .filter(|binding| {
+                    matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    )
+                })
                 .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
                 .collect::<BTreeMap<_, _>>();
             aliases.extend(super::source_aliases(
@@ -2076,6 +2081,39 @@ fn qualify_opaque_bounds(
             }
             Type::Unit(_) => {}
         }
+    }
+    // `impl canvas::Program<Message> for Arc`: a dependency's trait by a
+    // module the unit's `use`s bind, written from the crate's root, so the
+    // impl's header names the trait as the registry does.
+    if let crate::item::Parsed::Impl(item) = item
+        && let Some(path) = &mut item.trait_
+        && !path.global
+        && let Some(module) = path
+            .segments
+            .first()
+            .and_then(|first| modules.get(&first.name.text))
+    {
+        let (at, span) = (path.segments[0].name.span, path.segments[0].span);
+        let written = path.segments[0].arguments.clone();
+        let single = path.segments.len() == 1;
+        let count = module.split("::").count();
+        path.segments = module
+            .split("::")
+            .enumerate()
+            .map(|(index, text)| Segment {
+                name: crate::item::Name {
+                    text: text.into(),
+                    span: at,
+                },
+                arguments: if single && index + 1 == count {
+                    written.clone()
+                } else {
+                    Box::default()
+                },
+                span,
+            })
+            .chain(path.segments.iter().skip(1).cloned())
+            .collect();
     }
     let functions: Vec<&mut crate::item::Function> = match item {
         crate::item::Parsed::Function(function) => vec![function],

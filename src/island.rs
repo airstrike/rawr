@@ -507,6 +507,28 @@ pub(crate) fn shared(
             type_def::Identity::Host(_) => None,
         })
         .collect();
+    let members = authority
+        .items()
+        .filter(|item| {
+            matches!(
+                item.kind(),
+                item::Kind::Method | item::Kind::AssociatedFunction
+            ) && item.key().name().contains("::")
+        })
+        .filter_map(|item| match item.key().owner()? {
+            type_def::Identity::Script(owner) => {
+                let mut path = owner.modules().join("::");
+                if !path.is_empty() {
+                    path.push_str("::");
+                }
+                path.push_str(owner.name());
+                path.push_str("::");
+                path.push_str(item.key().name());
+                Some((path, item.clone()))
+            }
+            type_def::Identity::Host(_) => None,
+        })
+        .collect();
     let layouts = layouts(authority.items());
     std::sync::Arc::new(Shared {
         authority,
@@ -515,6 +537,7 @@ pub(crate) fn shared(
         equals,
         displays,
         defaults,
+        members,
         layouts,
     })
 }
@@ -754,6 +777,10 @@ struct Shared {
     displays: HashMap<type_def::Identity, item::Value>,
     /// Each script type's own `impl Default`, by its path (D594).
     defaults: HashMap<String, item::Value>,
+    /// Each function of a script type's trait impls, by its owner's path
+    /// and the member (`Arc::Program<Message>::draw`), which a runner's
+    /// impl for the owner's proxy calls (D594).
+    members: HashMap<String, item::Value>,
     /// The closures each function writes (D553.5).
     layouts: HashMap<String, Box<[item::Value]>>,
 }
@@ -825,6 +852,20 @@ impl crate::future::Remote for Shared {
                 crate::future::error(format!("rawr: `{path}`'s `Default`: {error}"))
             })
         })
+    }
+
+    fn member(&self, path: &str) -> Option<item::Value> {
+        self.members.get(path).cloned()
+    }
+
+    fn member_witnesses(&self, path: &str) -> Vec<Option<crate::host::runtime::Witness>> {
+        self.authority
+            .model()
+            .member_types(path)
+            .unwrap_or_default()
+            .iter()
+            .map(|ty| ty.as_ref().map(|ty| self.runtime.witness_for(ty)))
+            .collect()
     }
 
     fn rebinds(&self, function: &item::Value, from: &dyn crate::future::Remote) -> bool {
