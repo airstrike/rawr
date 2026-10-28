@@ -27,6 +27,29 @@ type Starter = Box<dyn FnOnce() -> Issued + Send + 'static>;
 #[cfg(not(feature = "sync"))]
 type Starter = Box<dyn FnOnce() -> Issued + 'static>;
 
+/// A native stream as rawr polls it. It is rawr's own trait, so a stream
+/// crosses into rawr's runtime through no other crate's trait. The runtime
+/// is compiled once per machine (D620), and a project's copy of a crate such
+/// as `futures_core` is not the runtime's. A runner adapts a project's stream
+/// to it with the project's own copy of that crate.
+pub trait Source {
+    /// What the stream yields.
+    type Item;
+
+    /// Poll for the next item, as `futures_core::Stream::poll_next` does.
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>>;
+}
+
+/// rawr-iced's streams, which share rawr's own `futures_core` because
+/// rawr-iced compiles rawr in each project (D601).
+impl<S: Stream + ?Sized> Source for S {
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Stream::poll_next(self, context)
+    }
+}
+
 /// Explicit version of a facade stream operation's canonical argument protocol.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Version(u32);
@@ -544,7 +567,7 @@ impl Stream for Issued {
     type Item = Arrival;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.stream.as_mut().poll_next(context) {
+        match Stream::poll_next(self.stream.as_mut(), context) {
             Poll::Ready(Some(value)) => Poll::Ready(Some(Arrival {
                 value,
                 mapper: self.mapper.clone(),

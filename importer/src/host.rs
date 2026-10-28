@@ -124,9 +124,9 @@ const HOST_IDLE: Duration = Duration::from_secs(60 * 60);
 /// How many recently used hosts are kept besides the ones in use.
 const HOSTS_KEPT: usize = 3;
 
-/// `rawr cache clean`: retire idle hosts beyond the most recently used ones;
-/// they are the only Rawr-wide cache under `$CARGO_HOME/rawr` (everything a
-/// project derives lives in its own target directory).
+/// `rawr cache clean`: retire idle hosts beyond the most recently used ones,
+/// and idle compiled runtimes the same way (everything else a project
+/// derives lives in its own target directory).
 pub fn clean(cargo_home: &Path) {
     prune(
         &crate::store::home(cargo_home).join("hosts"),
@@ -134,6 +134,7 @@ pub fn clean(cargo_home: &Path) {
         HOST_IDLE,
         HOSTS_KEPT,
     );
+    crate::runner::runtime::clean(cargo_home);
 }
 
 /// Best effort: remove host directories other than `keep` that are both

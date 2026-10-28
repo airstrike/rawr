@@ -8,6 +8,7 @@ pub(crate) use build::fixture_build;
 pub mod manifest;
 pub mod mirror;
 pub(crate) mod overlay;
+pub mod runtime;
 
 pub use build::Error as BuildError;
 

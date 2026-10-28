@@ -249,7 +249,7 @@ fn build_fixture(
     let toolchain = context.cached_toolchain().unwrap();
     let inputs = Inputs::capture(&manifest).unwrap();
     let parallelism = crate::process::parallelism::Proof::discover().unwrap();
-    let authority = authority(&inputs, &toolchain, parallelism).unwrap();
+    let authority = authority(&inputs, &toolchain, parallelism, context).unwrap();
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
     let recipe = context
         .discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)
