@@ -13,7 +13,12 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <h2 id="project">Project setup</h2>
 <p>A crate that <code>cargo run</code> runs needs only the marker. rawr-import adds no file to it.</p>
 <p>Your own <code>cargo</code> builds rawr&rsquo;s runner. It runs from the project&rsquo;s directory, with your shell&rsquo;s environment. It uses the project&rsquo;s toolchain, Cargo config and profiles, and it builds in the project&rsquo;s <code>target/</code>. So <code>rawr run</code> and <code>cargo build</code> share every compiled dependency, and each compiles a dependency only once. That holds for a path dependency inside the workspace too. rawr links each one into <code>target/rawr/runner</code> at the path it has in the workspace, because Cargo names a path package by that path.</p>
-<p>The first <code>rawr run</code> of a project also compiles rawr&rsquo;s own crates into its <code>target/</code>.</p>
+<h3 id="runtime">rawr&rsquo;s runtime</h3>
+<p>rawr&rsquo;s own crates are compiled once per machine, not once per project. The first <code>rawr run</code> on a toolchain compiles them into <code>runtime/</code> in rawr&rsquo;s home, which is <code>~/.cargo/rawr</code> unless <code>RAWR_HOME</code> says otherwise. Every project&rsquo;s runner links that copy, so a second project on the same toolchain compiles none of rawr&rsquo;s crates. Your own <code>cargo</code> compiles the copy, with the project&rsquo;s compiler.</p>
+<p>The copy is keyed by rawr&rsquo;s version and sources, the lockfile rawr was released with, the compiler&rsquo;s <code>rustc -vV</code>, and the runtime&rsquo;s features and profile. Nothing about a project goes in, so two projects with different dependencies share it. A new toolchain or a new rawr compiles a new copy, and a runner never links a copy compiled for another key. Copies unused for a day are removed, apart from the three used last. Removal never delays a run.</p>
+<p>A crate that both your project and rawr use, such as <code>futures-core</code>, compiles twice: once in your <code>target/</code> and once in rawr&rsquo;s runtime. The two copies never meet, because rawr&rsquo;s runtime takes no other crate&rsquo;s types from a runner.</p>
+<p>A project whose runner can&rsquo;t link the shared copy compiles rawr&rsquo;s crates in its own <code>target/</code>, as before, and rawr says so once. That happens when a native library or symbol is defined both by the project&rsquo;s crates and by rawr&rsquo;s. It also happens for an iced app that runs on rawr-iced, which compiles against the project&rsquo;s iced.</p>
+<p>The <code>rawr</code> crate compiles at <code>opt-level = 3</code>, so the interpreter inside the runner is fast. Set <code>RAWR_RUNTIME_OPT_LEVEL</code> to <code>0</code>, <code>1</code>, <code>2</code>, <code>s</code> or <code>z</code> to compile it at a lower level. The runtime compiles faster, and scripts run slower. Each level is a copy of its own.</p>
 <p>rawr reads your dependencies&rsquo; APIs with its own pinned nightly. That build runs in <code>target/rawr</code>, apart from the units <code>cargo build</code> uses. It is a check build. It runs build scripts and compiles proc macros, and for every other crate it writes only the metadata rawr reads.</p>
 <p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
@@ -47,7 +52,7 @@ fn main() {
 2 doubled is 4
 3 doubled is 6</span></div>
 </div>
-<p>The first run compiles the dependencies and the runner. That took about 80&nbsp;s for this crate on an Apple Silicon Mac. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
+<p>The first run compiles the dependencies and the runner. For a new project that uses semver, that took about 13&nbsp;s on an Apple Silicon Mac. The first project on a toolchain also compiles <a href="#runtime">rawr&rsquo;s runtime</a> once for every project, which took about 2 minutes. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
 <p>rawr uses the dependencies as Cargo resolves them. It reads only the items your code uses.</p>
 
 <h2 id="native">Native modules</h2>
