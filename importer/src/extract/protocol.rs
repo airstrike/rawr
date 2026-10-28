@@ -12,7 +12,7 @@ std::thread_local! {
     static ACCOUNTED_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) const SCHEMA: u32 = 27;
+pub(crate) const SCHEMA: u32 = 28;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
