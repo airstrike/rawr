@@ -6345,7 +6345,26 @@ fn render_adapter_body(
                 // does (D551.6), a crate function in its place, or a script
                 // function as a slot (D594), as iced's `Application::
                 // subscription(App::subscription)` takes it.
-                let crossed = Crossed { slots, crossings };
+                // A slot lends only script values by reference. A callable
+                // whose inputs borrow a native value, as a style's `&Theme`,
+                // crosses as the closure Rawr makes, as it did before
+                // methods took slots.
+                let lends = |crossing: &crate::classify::representability::callable::Call| {
+                    crossing.inputs().iter().all(|input| {
+                        match substituted(input, signature, substitutions) {
+                            Ok(convert::Type::Borrowed { ty, .. }) => {
+                                matches!(*ty, convert::Type::Script { .. })
+                            }
+                            Ok(_) => true,
+                            Err(_) => false,
+                        }
+                    })
+                };
+                let crossed = if call.is_some() && !crossings.iter().all(lends) {
+                    Crossed::default()
+                } else {
+                    Crossed { slots, crossings }
+                };
                 render_function_arguments(
                     signature,
                     substitutions,
