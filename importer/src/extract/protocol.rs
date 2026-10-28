@@ -12,6 +12,8 @@ std::thread_local! {
     static ACCOUNTED_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
+/// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
 pub(crate) const SCHEMA: u32 = 28;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]

@@ -28,6 +28,8 @@ pub const HOST: &str = include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"))
 const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 #[cfg(feature = "rustc-driver")]
 const SUPPORTED_PLAN_SCHEMA: u32 = 8;
+// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
+// `extract/protocol.rs`'s `SCHEMA` are the same number.
 const SUPPORTED_PROBE_PROTOCOL: u32 = 28;
 const SUPPORTED_UNIT_SCHEMA: u32 = 1;
 const SUPPORTED_GRAPH_SCHEMA: u32 = 1;
