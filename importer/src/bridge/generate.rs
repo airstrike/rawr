@@ -5930,9 +5930,32 @@ fn opaque_table_source(
         let Some((position, _)) = opaque_operand(consumer)? else {
             continue;
         };
+        // A call that gives a value of another opaque type, as iced's
+        // `Application::subscription` gives another `impl Program`, makes
+        // that value's own table here, where rustc knows its type. One that
+        // gives a value of the same type passes this table on.
+        let produced = match consumer.operation() {
+            Operation::Function {
+                signature,
+                substitutions,
+                ..
+            }
+            | Operation::Method {
+                signature,
+                substitutions,
+                ..
+            } => substituted(signature.output(), signature, substitutions)?,
+            _ => convert::Type::Unit,
+        };
+        let other = first_opaque(&produced).is_some_and(|produced| *produced != key);
+        let inner = if other {
+            opaque_table_source(consumer, cohort, profile, facade)?
+        } else {
+            None
+        };
         let body = {
-            let _producing = OpaqueProducing::enter(None);
-            let _consuming = OpaqueConsuming::enter(true);
+            let _producing = OpaqueProducing::enter(inner);
+            let _consuming = OpaqueConsuming::enter(!other);
             let mut body = Vec::new();
             let region = region_inputs(consumer)?;
             if !region.is_empty() {
@@ -6131,7 +6154,13 @@ fn render_adapter_body(
             }
             let crossed = Crossed { slots, crossings };
             let opens = instance_opens(signature, substitutions);
-            if opens && replay.is_none() {
+            // A `&str` the output borrows through a lifetime its type only
+            // carries, as iced's `text(url)` gives a `Text<'a>` of an `impl
+            // IntoFragment<'a>`: pinned in a slot's region, as an opening's
+            // strings are, and out of any region for the runner's life.
+            let pins = !opens && replay.is_none() && lends_str_to_output(signature, substitutions)?;
+            let _pins = PinnedStrings::enter(pins);
+            if (opens || pins) && replay.is_none() {
                 render_anchored_opening(
                     plan,
                     signature,
@@ -6271,7 +6300,7 @@ fn render_adapter_body(
                 .map_err(|_| request::Error::Encoding)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
                     render_give_sipper(sipped, progress, "output", output)?;
-                } else if let Some(element) = facade_task_output(returned, facade) {
+                } else if let Some(element) = facade_task_output(returned, facade, profile) {
                     render_give_task(element, "output", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
@@ -6306,24 +6335,53 @@ fn render_adapter_body(
             container_parameters,
             call,
             functions,
-            ..
+            slots,
+            crossings,
         } => {
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
-            } else if let Some(call) = call {
+            } else if call.is_some() || !slots.is_empty() {
                 // A script closure a method takes, as Freya's `on_press`
-                // does (D551.6), or a crate function in its place.
+                // does (D551.6), a crate function in its place, or a script
+                // function as a slot (D594), as iced's `Application::
+                // subscription(App::subscription)` takes it.
+                // A slot lends only script values by reference. A callable
+                // whose inputs borrow a native value, as a style's `&Theme`,
+                // crosses as the closure Rawr makes, as it did before
+                // methods took slots.
+                let lends = |crossing: &crate::classify::representability::callable::Call| {
+                    crossing.inputs().iter().all(|input| {
+                        match substituted(input, signature, substitutions) {
+                            Ok(convert::Type::Borrowed { ty, .. }) => {
+                                matches!(*ty, convert::Type::Script { .. })
+                            }
+                            Ok(_) => true,
+                            Err(_) => false,
+                        }
+                    })
+                };
+                let crossed = if call.is_some() && !crossings.iter().all(lends) {
+                    Crossed::default()
+                } else {
+                    Crossed { slots, crossings }
+                };
                 render_function_arguments(
                     signature,
                     substitutions,
                     functions,
                     &[],
                     None,
-                    Some(call),
-                    Crossed::default(),
+                    call.as_ref(),
+                    crossed,
                     1,
                     output,
                 )?;
+                for (position, ty) in signature.inputs().iter().enumerate() {
+                    if crossed.slot_at(position, ty).is_some() {
+                        writeln!(output, "    let argument_{position} = slot_{position};")
+                            .map_err(|_| request::Error::Encoding)?;
+                    }
+                }
             } else {
                 render_arguments_with(signature, substitutions, 1, output)?;
             }
@@ -6478,7 +6536,7 @@ fn render_adapter_body(
                     .map_err(|_| request::Error::Encoding)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 let element =
-                    facade_task_output(returned, facade).ok_or(request::Error::Drift {
+                    facade_task_output(returned, facade, profile).ok_or(request::Error::Drift {
                         field: "borrowed async method output",
                     })?;
                 render_give_task(element, "output", output)?;
@@ -6640,7 +6698,7 @@ fn render_adapter_body(
                 // A method that takes `self` by value may give a Rust
                 // future, as `Response::text` does.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
-                match facade_task_output(returned, facade) {
+                match facade_task_output(returned, facade, profile) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
                         render_give_task(element, "output", output)?;
                     }
@@ -7057,7 +7115,13 @@ fn lifetime_inputs(
             continue;
         }
         let ty = substituted(input, signature, substitutions)?;
-        if matches!(ty, convert::Type::Nominal { .. }) && carries_lifetime(&ty) {
+        // A native value, or a sequence of them, as `column(iterator)`
+        // takes a view's `Text`s.
+        let native = match &ty {
+            convert::Type::Sequence { element, .. } => element.as_ref(),
+            ty => ty,
+        };
+        if matches!(native, convert::Type::Nominal { .. }) && carries_lifetime(native) {
             return Ok(true);
         }
     }
@@ -9146,9 +9210,21 @@ fn render_slot(
         )
     };
     let values = if native {
+        // Each converted input is a `Result`, which the arena's closure
+        // gives back by `?`.
+        let values = values
+            .iter()
+            .map(|value| {
+                if value.starts_with('(') {
+                    format!("{value}?")
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>();
         format!(
             "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
-            in_arena(&format!("Ok([{}])", values.join(", ")))
+            in_arena(&format!("Ok::<_, Error>([{}])", values.join(", ")))
         )
     } else {
         let values = values
@@ -9471,11 +9547,8 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
             field: "generated static function item plan",
         });
     };
-    if !substitutions.is_empty()
-        || !constants.is_empty()
-        || !functions.is_empty()
-        || !mappers.is_empty()
-    {
+    // A generic function's turbofish names its instance's types.
+    if !constants.is_empty() || !functions.is_empty() || !mappers.is_empty() {
         return Err(request::Error::Drift {
             field: "generated nested static function item",
         });
@@ -9949,7 +10022,9 @@ fn render_take(
 ) -> Result<(), request::Error> {
     // A `&'static str` input pins the string taken from Rawr for as long as
     // the runner lives, as a string literal's is.
-    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr)) {
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr))
+        || (PINNED_STRINGS.get() && matches!(ty, convert::Type::Builtin(convert::Builtin::Str)))
+    {
         return writeln!(
             output,
             "    let argument_{local} = static_pins().pin(take_primitive::<ImmutableString>(arguments, {index})?);"
@@ -10575,6 +10650,7 @@ fn render_give_sipper(
 fn facade_task_output<'a>(
     ty: &'a convert::Type,
     facade: Option<&crate::surface::facade::Plan>,
+    profile: &crate::profile::Proof,
 ) -> Option<&'a convert::Type> {
     let convert::Type::Nominal {
         definition,
@@ -10588,6 +10664,12 @@ fn facade_task_output<'a>(
     };
     if *definition == crate::surface::identity::Definition::future() {
         return Some(element);
+    }
+    // Only a host profile has a `Task` of its own to project iced's into.
+    // With the neutral one, iced's `Task` is a crate type as any other,
+    // which iced takes back from `update` (D601).
+    if !profile.has_generated_projections() {
+        return None;
     }
     facade?
         .facades()
@@ -11060,6 +11142,44 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter takes its `&str` arguments pinned for the
+    /// runner's life, as its output borrows them (`lends_str_to_output`).
+    static PINNED_STRINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes an adapter's `&str` arguments pinned for the runner's life while
+/// it lives, when `pinned`.
+struct PinnedStrings(bool);
+
+impl PinnedStrings {
+    fn enter(pinned: bool) -> Self {
+        Self(PINNED_STRINGS.replace(pinned))
+    }
+}
+
+impl Drop for PinnedStrings {
+    fn drop(&mut self) {
+        PINNED_STRINGS.set(self.0);
+    }
+}
+
+/// Whether the call's output carries a lifetime and an input lends it a
+/// `&str` through a type parameter the output doesn't name, as iced's
+/// `text(impl IntoFragment<'a>) -> Text<'a>` does: the output may borrow
+/// the string.
+fn lends_str_to_output(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<bool, request::Error> {
+    if !signature
+        .inputs()
+        .iter()
+        .any(|input| lends_str(input, signature, substitutions))
+    {
+        return Ok(false);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    Ok(matches!(returned, convert::Type::Nominal { .. }) && carries_lifetime(&returned))
 }
 
 /// Takes an adapter's arguments that carry a lifetime from the region its

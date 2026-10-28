@@ -133,6 +133,54 @@ impl<Message> From<()> for Task<Message> {
     }
 }
 
+impl<T> Task<T> {
+    /// No work.
+    pub fn none() -> Self {
+        Task(None)
+    }
+
+    /// The work that gives `value`.
+    pub fn done(value: T) -> Self {
+        Task(Some(value))
+    }
+}
+
+/// The work of finding the latest window's id, as iced's
+/// `window::latest()`: there is none when no window is open.
+pub fn latest() -> Task<Option<u32>> {
+    Task(Some(Some(7)))
+}
+
+/// The work of closing the window `id`, as iced's `window::close`, which
+/// gives no message.
+pub fn close<T>(id: u32) -> Task<T> {
+    println!("close {id}");
+    Task(None)
+}
+
+impl<T> Task<Option<T>> {
+    /// The work `f` gives for the value, when this work gives `Some`, as
+    /// iced's `and_then` of a `Task<Option<T>>`.
+    pub fn and_then<A>(self, f: impl Fn(T) -> Task<A> + 'static) -> Task<A> {
+        match self.0 {
+            Some(Some(value)) => f(value),
+            _ => Task(None),
+        }
+    }
+}
+
+impl<T, E> Task<Result<T, E>> {
+    /// The work `f` gives for the value, when this work succeeds, as
+    /// iced's `and_then` of a `Task<Result<T, E>>`.
+    pub fn and_then<A>(self, f: impl Fn(T) -> Task<Result<A, E>> + 'static) -> Task<Result<A, E>> {
+        match self.0 {
+            Some(Ok(value)) => f(value),
+            Some(Err(error)) => Task(Some(Err(error))),
+            None => Task(None),
+        }
+    }
+}
+
 /// A message no program sends.
 pub enum Never {}
 

@@ -484,7 +484,8 @@ impl crate::Engine {
                             source_identity: source.identity().into(),
                         })
                         .map_err(super::Error::import)?;
-                functions.push(
+                // A generic function, at the types its use infers.
+                let item = if function.types.is_empty() {
                     rawr_import::surface::instance::FunctionItem::selected(
                         function.position,
                         selected,
@@ -492,9 +493,26 @@ impl crate::Engine {
                         function_start,
                         function_end,
                     )
-                    .map_err(Error::from)
-                    .map_err(super::Error::import)?,
-                );
+                } else {
+                    rawr_import::surface::instance::Arguments::new(
+                        function.types,
+                        Box::default(),
+                        Box::default(),
+                        None,
+                        limits,
+                    )
+                    .and_then(|instance| {
+                        rawr_import::surface::instance::FunctionItem::instantiated(
+                            function.position,
+                            selected,
+                            function.selector,
+                            instance,
+                            function_start,
+                            function_end,
+                        )
+                    })
+                };
+                functions.push(item.map_err(Error::from).map_err(super::Error::import)?);
             }
             let mut mappers = Vec::new();
             mappers
@@ -2814,6 +2832,9 @@ fn signature_with(
         builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;
     }
     builder.output(types.convert(signature.output(), signature.parameters(), allocation)?);
+    if let Some(instance) = fixed_instance(types, signature, allocation)? {
+        builder.instance(instance);
+    }
     let parameters = signature.parameters();
     for source in signature.relations() {
         let Some(parameter) = parameters
@@ -2991,7 +3012,49 @@ fn callable_signature(
         }
     }
     builder.output(convert(signature.output(), allocation)?);
+    if let Some(instance) = fixed_instance(types, signature, allocation)? {
+        builder.instance(instance);
+    }
     Ok(builder.finish())
+}
+
+/// The receiver's type a method's impl fixes, when one of its arguments
+/// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
+/// `Task<Option<T>>`: which form of an overloaded method a receiver takes.
+fn fixed_instance(
+    types: &Types,
+    signature: &representability::signature::Signature,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<Option<host::type_ref::Type>, Error> {
+    use representability::convert::Type;
+    fn names_parameter(ty: &Type) -> bool {
+        match ty {
+            Type::Parameter(_) => true,
+            Type::Nominal { arguments, .. }
+            | Type::Tuple(arguments)
+            | Type::Script { arguments, .. } => arguments.iter().any(names_parameter),
+            Type::Option(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Range(element)
+            | Type::Sequence { element, .. } => names_parameter(element),
+            Type::Result(ok, err) => names_parameter(ok) || names_parameter(err),
+            _ => false,
+        }
+    }
+    let Some(instance @ Type::Nominal { arguments, .. }) = signature.instance() else {
+        return Ok(None);
+    };
+    if !arguments
+        .iter()
+        .any(|argument| !matches!(argument, Type::Parameter(_)) && names_parameter(argument))
+    {
+        return Ok(None);
+    }
+    Ok(Some(types.convert(
+        instance,
+        signature.parameters(),
+        allocation,
+    )?))
 }
 
 fn type_usage(

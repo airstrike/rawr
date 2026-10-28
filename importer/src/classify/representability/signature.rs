@@ -64,6 +64,15 @@ pub const fn future_output(index: u32) -> u32 {
     FUTURE_OUTPUT | index
 }
 
+/// The synthetic parameter that stands for the `ordinal`th associated type
+/// a signature projects from the type parameter at `index`, as `P::State`
+/// and `P::Message` of iced's `Application<P>::subscription`. The first is
+/// [`future_output`]'s.
+#[must_use]
+pub const fn projection_output(index: u32, ordinal: u32) -> u32 {
+    FUTURE_OUTPUT | (ordinal << 20) | index
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Signature {
     parameters: Box<[Parameter]>,

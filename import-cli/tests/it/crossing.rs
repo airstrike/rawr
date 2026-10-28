@@ -234,6 +234,48 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
     );
 }
 
+/// iced's events and url_handler: the opaque `impl Program` that
+/// `application(..)` gives takes a script function as its subscription,
+/// which borrows the program's state as `&P::State` and gives a
+/// `Subscription<P::Message>`, both read through the opaque program's
+/// bounds. The call gives another opaque program, whose `fonts` and `run`
+/// are compiled where it was made, and the crate calls the subscription
+/// back with the booted state. As url_handler's `text(url)` does, the view
+/// gives a widget that borrows a string of the state through an `impl
+/// IntoLabel<'a>` its output keeps. The output is `cargo run`'s.
+#[test]
+fn an_opaque_program_takes_a_subscription_of_its_state() {
+    let (rawr, cargo) = both_printed("crossing-subscription", "subscription.rs", "Listen");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("heard Ticked(3)")
+            && rawr.contains("1 view pad 0 <Listen:0> 'tick 3 of 6'@48")
+            && rawr.contains("1 message Toggled(true)")
+            && rawr.contains("last view pad 0 <x Listen:0> 'tick 3 of 6'@48"),
+        "{rawr}"
+    );
+}
+
+/// iced's exit and events: `latest().and_then(..)` takes a script closure,
+/// or the generic crate function `close` as `and_then(window::close)` does,
+/// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's
+/// type argument across `impl<T> Task<Option<T>>` and `impl<T, E>
+/// Task<Result<T, E>>`, and the receiver's type picks the first, so
+/// `close` is `close::<Message>`. The crate delivers the message a task
+/// gives. The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
+    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit,Exit");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Confirm(true)")
+            && rawr.contains("task message Closed(7)")
+            && rawr.contains("2 message Confirm(false)\nclose 7")
+            && rawr.contains("last view pad 0 <Exit:0> \"7\""),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,

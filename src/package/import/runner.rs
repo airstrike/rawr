@@ -1399,6 +1399,9 @@ fn signature(
         builder.try_parameter(ty(facade, input, profile, installed)?)?;
     }
     builder.output(ty(facade, signature.output(), profile, installed)?);
+    if let Some(instance) = signature.instance() {
+        builder.instance(ty(facade, instance, profile, installed)?);
+    }
     for relation in signature.relations() {
         if let Some(relation) = super::relation(
             relation.parameter(),

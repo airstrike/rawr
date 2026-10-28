@@ -925,6 +925,8 @@ pub(crate) struct ImportedUse {
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedFunctionUse {
     pub(crate) position: u32,
+    /// A generic function's instance, in its declared parameter order.
+    pub(crate) types: Box<[rawr_import::classify::representability::convert::Type]>,
     pub(crate) path: ImmutableString,
     pub(crate) selector: rawr_import::surface::identity::Selector,
     pub(crate) span: Span,
@@ -944,6 +946,10 @@ struct ImportedFunctionProof {
     item: crate::host::item::Definition,
     owner: crate::host::facade::Dependency,
     span: Span,
+    /// A generic function's type parameters, in its declared order, with
+    /// the types the use infers for them, as `window::close::<T>` passed
+    /// where `and_then` takes `Fn(Id) -> Task<A>` takes `A`.
+    parameters: Box<[(ImmutableString, Ty)]>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -16772,13 +16778,21 @@ impl<'a> Parser<'a> {
                     operation: Span::NONE,
                 });
             }
-            parameters.extend(
-                definition
-                    .parameters()
-                    .iter()
-                    .zip(arguments)
-                    .map(|(name, argument)| (name.clone(), argument.clone())),
-            );
+            // A method whose impl fixes its receiver's type names the impl's
+            // parameters, not the type's: the instance gives them below.
+            #[cfg(feature = "rust-import")]
+            let fixed = item.signature().instance().is_some();
+            #[cfg(not(feature = "rust-import"))]
+            let fixed = false;
+            if !fixed {
+                parameters.extend(
+                    definition
+                        .parameters()
+                        .iter()
+                        .zip(arguments)
+                        .map(|(name, argument)| (name.clone(), argument.clone())),
+                );
+            }
         }
         let item_path = item.path();
         let receiver_origin = host_receiver.and_then(Ty::host_alias).cloned();
@@ -16798,6 +16812,31 @@ impl<'a> Parser<'a> {
             .and_then(|definition| self.models.host.type_owner(&definition.path()))
             .or_else(|| self.models.host.item_owner(&item_path))
             .cloned();
+        // A method whose impl fixes its receiver's type, as `and_then` of
+        // `impl<T> Task<Option<T>>`, takes only a receiver of that type, and
+        // the receiver gives the impl's parameters inside it.
+        #[cfg(feature = "rust-import")]
+        if let (Some(instance), Some(actual)) = (item.signature().instance(), host_receiver) {
+            let instance = self.instantiate_host_type(
+                instance,
+                &mut parameters,
+                &item_path,
+                item_owner.as_ref(),
+                associated_origin.as_ref(),
+            )?;
+            if !self.unify_type(&instance, actual) {
+                return Err(Error::InvalidHostOperation {
+                    item: item_path.as_str().into(),
+                    reason: format!(
+                        "receiver has type `{}`, expected `{}`",
+                        self.inference.resolve(actual).name(&self.models),
+                        self.inference.resolve(&instance).name(&self.models)
+                    )
+                    .into(),
+                    operation: Span::NONE,
+                });
+            }
+        }
         let inputs = item
             .signature()
             .parameters()
@@ -18385,12 +18424,28 @@ impl<'a> Parser<'a> {
             [] => Ty::Unit,
             inputs => Ty::Tuple(inputs.into()),
         };
-        if !signature.requirements.is_empty() {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "compile-time imported function item must be monomorphic".into(),
-                operation: expression,
-            });
+        // A generic function is reached at the types its use infers for its
+        // parameters, which the runner writes as its turbofish.
+        let declared = item
+            .signature()
+            .declared_type_parameters()
+            .collect::<Vec<_>>();
+        let mut parameters = declared
+            .iter()
+            .filter_map(|name| {
+                signature
+                    .requirements
+                    .iter()
+                    .find(|(candidate, _, _)| candidate == name)
+                    .map(|(name, ty, _)| (name.clone(), ty.clone()))
+            })
+            .collect::<Vec<_>>();
+        if parameters.len() != signature.requirements.len() {
+            parameters = signature
+                .requirements
+                .iter()
+                .map(|(name, ty, _)| (name.clone(), ty.clone()))
+                .collect();
         }
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
@@ -18402,6 +18457,7 @@ impl<'a> Parser<'a> {
                     item: item.clone(),
                     owner,
                     span: expression,
+                    parameters: parameters.into_boxed_slice(),
                 })),
             },
             span: expression,
@@ -47568,7 +47624,39 @@ impl<'a> Parser<'a> {
                 .as_mut()
                 .expect("imported lowering retains allocation authority")
                 .retain_checked(Some(0), bytes)?;
+            let mut instance = Vec::new();
+            instance
+                .try_reserve_exact(function.parameters.len())
+                .map_err(|_| Error::InvalidHostOperation {
+                    item: item.path().into(),
+                    reason: "imported function-item instance allocation failed".into(),
+                    operation: span,
+                })?;
+            for (name, ty) in &function.parameters {
+                instance.push(
+                    imported_surface_type(
+                        &self.inference,
+                        &self.models,
+                        ty,
+                        function.span,
+                        self.imported
+                            .as_mut()
+                            .expect("imported lowering retains allocation authority"),
+                    )
+                    .map_err(|error| match error {
+                        Error::InvalidHostOperation {
+                            reason, operation, ..
+                        } => Error::InvalidHostOperation {
+                            item: format!("{}'s `{name}`", function.item.path()).into(),
+                            reason,
+                            operation,
+                        },
+                        error => error,
+                    })?,
+                );
+            }
             functions.push(ImportedFunctionUse {
+                types: instance.into_boxed_slice(),
                 position: u32::try_from(position).map_err(|_| Error::InvalidHostOperation {
                     item: item.path().into(),
                     reason: "imported function-item position exceeds the bounded index".into(),
@@ -51876,7 +51964,7 @@ mod tests {
             std::mem::size_of::<super::Op>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::Op>(), 640);
+        assert_eq!(std::mem::size_of::<super::Op>(), 648);
         #[cfg(not(feature = "rust-import"))]
         assert!(
             std::mem::size_of::<super::ExecutableOp>() < 1_112,

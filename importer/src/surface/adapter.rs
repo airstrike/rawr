@@ -841,13 +841,11 @@ fn clone_function_items(
             .outcome(function.identity())
             .ok_or(Error::ForeignIdentity)?;
         let plan = Plan::try_new(contract, outcome, function.identity())?;
+        // A generic function is reached at its instance's types, as
+        // `window::close::<Message>` is.
         if !matches!(
             plan.operation(),
-            Operation::Function {
-                functions,
-                substitutions,
-                ..
-            } if functions.is_empty() && substitutions.is_empty()
+            Operation::Function { functions, .. } if functions.is_empty()
         ) {
             return Err(Error::InstanceMismatch);
         }
