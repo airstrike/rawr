@@ -56,8 +56,9 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 19 adds the separate complete query-candidate observation population.
 // Schema 20 adds the selected crate's name index for demanded units. Schema 21
 // keeps a Future impl's `Output`; schema 22 keeps an Iterator impl's `Item` and
-// `next`; schema 23 keeps an AsRef impl's `as_ref`.
-const PROTOCOL_SCHEMA: u32 = 26;
+// `next`; schema 23 keeps an AsRef impl's `as_ref`. Schema 27 gives a
+// constant of no scalar value as its own.
+const PROTOCOL_SCHEMA: u32 = 27;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -5133,13 +5134,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             .instantiate_identity()
             .skip_norm_wip();
         let typing = ty::TypingEnv::post_analysis(self.tcx, def_id);
+        let evaluated = self.tcx.const_eval_poly(def_id).ok();
         Ok(
-            match self
-                .tcx
-                .const_eval_poly(def_id)
-                .ok()
-                .and_then(|value| value.try_to_bits_for_ty(self.tcx, typing, ty))
-            {
+            match evaluated.and_then(|value| value.try_to_bits_for_ty(self.tcx, typing, ty)) {
                 Some(value) => {
                     let ty = primitive_name(ty).unwrap_or("scalar");
                     Constant::Literal {
@@ -5147,6 +5144,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         value: self.budget.formatted(format_args!("0x{value:x}"))?,
                     }
                 }
+                // A constant rustc evaluates to no scalar, as iced's
+                // `Font::MONOSPACE: Font` or `Theme::ALL: &[Theme]`, is
+                // the constant's own value: Rawr reads it by its path
+                // where the bridge runs.
+                None if evaluated.is_some() => Constant::Unevaluated {
+                    definition: self.id(def_id, Namespace::Value)?,
+                    arguments: Vec::new(),
+                },
                 None => Constant::Unknown {
                     compiler_kind: self.budget.owned("non-scalar-constant")?,
                 },

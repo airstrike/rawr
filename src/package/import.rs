@@ -913,6 +913,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::MissingCapability { owner, .. }
         | R::InvalidMatch { owner, .. } => Some((owner.to_string(), ImportedNamespace::Type)),
         R::InvalidHostOperation { item, .. } => Some((item.to_string(), ImportedNamespace::Either)),
+        // A module's path called as a function, as iced's `combo_box`: the
+        // function beside it says why rawr can't call it.
+        R::UnknownImport { path, .. } => Some((path.to_string(), ImportedNamespace::Either)),
         R::InvalidMethodCall { owner, method, .. }
         | R::InvalidMethodSignature { owner, method, .. } => {
             Some((format!("{owner}::{method}"), ImportedNamespace::Value))
@@ -933,7 +936,6 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnknownVariable { .. }
         | R::MovedValue { .. }
         | R::BorrowConflict { .. }
-        | R::UnknownImport { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }
         | R::InvalidDerive { .. }

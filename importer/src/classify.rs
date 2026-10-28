@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 48;
+const CLASSIFIER_VERSION: u32 = 49;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -301,6 +301,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// The crate type aliases that are the only name of the type they
     /// name, by definition index (`instance_aliases`).
     instance_aliases: std::cell::OnceCell<Box<[usize]>>,
+    /// Each type whose only name is a passing alias, with that alias, by
+    /// definition index (`sole_passing_aliases`).
+    sole_aliases: std::cell::OnceCell<Box<[(usize, usize)]>>,
     /// While a function's output is converted: the type parameters a
     /// script callable or future fills, which an opaque `impl Trait` type
     /// it gives does not take as arguments. `None` elsewhere, where an
@@ -455,7 +458,7 @@ fn type_late_input(
         model::Type::Reference { lifetime, ty, .. } => {
             Ok(lifetime_late_input(lifetime, binders)? || type_late_input(ty, binders)?)
         }
-        model::Type::Definition { arguments, .. } => {
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
             arguments.iter().try_fold(false, |late, argument| {
                 argument_late_input(argument, binders).map(|actual| late || actual)
             })
@@ -473,8 +476,7 @@ fn type_late_input(
         | model::Type::Never => Ok(false),
         model::Type::FunctionPointer(_)
         | model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. }
-        | model::Type::Projection { .. } => Err(representability::reject::Kind::CallableProtocol),
+        | model::Type::ImplTrait { .. } => Err(representability::reject::Kind::CallableProtocol),
     }
 }
 
@@ -559,9 +561,10 @@ fn type_has_late_lifetime(ty: &model::Type) -> bool {
             signature.inputs().any(type_has_late_lifetime)
                 || type_has_late_lifetime(signature.output())
         }
-        model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. }
-        | model::Type::Projection { .. } => true,
+        // A projection borrows where its arguments do: iced's
+        // `Subscription<P::Message>` borrows nothing.
+        model::Type::Projection { arguments, .. } => arguments.iter().any(argument),
+        model::Type::TraitObject { .. } | model::Type::ImplTrait { .. } => true,
         model::Type::Primitive(_)
         | model::Type::Parameter { .. }
         | model::Type::SelfType(_)
@@ -600,6 +603,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             scope_lifetimes: Cell::new(false),
             account: Account::new(),
             instance_aliases: std::cell::OnceCell::new(),
+            sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
             opaque_self: std::cell::RefCell::new(None),
         };
@@ -3153,6 +3157,13 @@ impl<'graph> Names<'graph> {
                     .insert(crate::surface::identity::Definition::of(export.target()));
             }
         }
+        // A type whose only name is a passing alias is named through it.
+        for (root, _, target) in sole_passing_aliases(graph) {
+            exported
+                .entry(root)
+                .or_default()
+                .insert(crate::surface::identity::Definition::of(target.id()));
+        }
         Self {
             plans,
             models,
@@ -3177,6 +3188,9 @@ fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [Defi
         if let ledger::Path::Imported(export) = path {
             exported.insert(crate::surface::identity::Definition::of(export.target()));
         }
+    }
+    for (_, _, target) in sole_passing_aliases(graph) {
+        exported.insert(crate::surface::identity::Definition::of(target.id()));
     }
     let nominal = graph
         .definitions()
@@ -3598,8 +3612,13 @@ impl<P: api::Phase> Context<'_, P> {
                     .nth(definition_index)
                     .ok_or(Error::Cardinality)?;
                 // `pub type Duration = TimeDelta;` is another path to the
-                // type it names, with that type's members.
-                let aliased = self.alias_target(definition);
+                // type it names, with that type's members. So is an alias
+                // that passes its parameters on to a type no import names
+                // otherwise, as iced's `widget::Text` is
+                // `core::widget::Text`'s only name.
+                let aliased = self
+                    .alias_target(definition)
+                    .or_else(|| self.sole_alias_target(definition));
                 let retargeted = aliased.map(|target| export.retargeted(target.id().clone()));
                 let export = retargeted.as_ref().unwrap_or(export);
                 let definition = aliased.unwrap_or(definition);
@@ -3698,47 +3717,91 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// The struct or enum a generic alias names with each of its own type
-    /// parameters, in order, and nothing else, as `pub type Text<'a, Theme =
-    /// crate::Theme> = core::widget::Text<'a, Theme>;` does.
+    /// parameters, in order, and nothing else (`passing_target`).
     fn passed_on_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
-        let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
-            return None;
+        passing_target(self.graph, definition)
+    }
+
+    /// The struct or enum whose only name is the passing alias
+    /// `definition` (`sole_passing_aliases`).
+    fn sole_alias_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
+        let target = passing_target(self.graph, definition)?;
+        let index = self.graph.definition_index(target.id())?;
+        self.sole_aliases()
+            .binary_search_by_key(&index, |(target, _)| *target)
+            .is_ok()
+            .then_some(target)
+    }
+
+    /// Each type whose only name is a passing alias, with that alias, by
+    /// definition index (`sole_passing_aliases`).
+    fn sole_aliases(&self) -> &[(usize, usize)] {
+        self.sole_aliases.get_or_init(|| {
+            let mut found = sole_passing_aliases(self.graph)
+                .into_iter()
+                .filter_map(|(_, alias, target)| {
+                    Some((
+                        self.graph.definition_index(target.id())?,
+                        self.graph.definition_index(alias.id())?,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            // The first alias in export order names the type, as the
+            // driver's walk takes the first.
+            found.sort_by_key(|(target, _)| *target);
+            found.dedup_by_key(|(target, _)| *target);
+            found.into_boxed_slice()
+        })
+    }
+
+    /// A type's parameters with the defaults of the passing alias that is
+    /// its only name: Rust code writes the type through the alias, so
+    /// `widget::Text` takes `Theme = crate::Theme` though
+    /// `core::widget::Text` has no default.
+    fn sole_alias_defaults(
+        &self,
+        definition: usize,
+        parameters: Box<[representability::signature::Parameter]>,
+    ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
+        let Ok(found) = self
+            .sole_aliases()
+            .binary_search_by_key(&definition, |(target, _)| *target)
+        else {
+            return Ok(parameters);
         };
-        let model::Type::Definition { id, arguments } = ty else {
-            return None;
+        let alias = self.sole_aliases()[found].1;
+        let Some(model::Kind::TypeAlias { generics, .. }) = self
+            .graph
+            .definitions()
+            .nth(alias)
+            .map(model::Definition::kind)
+        else {
+            return Ok(parameters);
         };
-        if generics.predicates().len() != 0 {
-            return None;
-        }
-        let parameters = generics
+        let defaults = generics
             .parameters()
-            .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
-            .collect::<Vec<_>>();
-        let types = arguments
-            .iter()
-            .filter_map(|argument| match argument {
-                model::Argument::Type(ty) => Some(ty),
+            .filter_map(|parameter| match parameter.kind() {
+                model::ParameterKind::Type { default, .. } => Some(default),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if parameters.is_empty()
-            || parameters.len() != types.len()
-            || !parameters.iter().zip(&types).all(|(parameter, ty)| {
-                matches!(ty, model::Type::Parameter { owner, index }
-                    if owner == parameter.owner() && *index == parameter.index())
-            })
-        {
-            return None;
+        if defaults.len() != parameters.len() {
+            return Ok(parameters);
         }
-        let target = self
-            .graph
-            .definitions()
-            .nth(self.graph.definition_index(id)?)?;
-        matches!(
-            target.kind(),
-            model::Kind::Struct { .. } | model::Kind::Enum { .. }
-        )
-        .then_some(target)
+        let mut parameters = parameters.into_vec();
+        for (parameter, default) in parameters.iter_mut().zip(defaults) {
+            // A default Rawr cannot hold leaves the argument required.
+            let default = match default {
+                model::Default::Present(ty) => match self.convert(ty) {
+                    Ok(ty) => Some(ty),
+                    Err(Failure::Reject(_)) => None,
+                    Err(error) => return Err(error),
+                },
+                model::Default::Absent => None,
+            };
+            *parameter = parameter.clone().with_default(default);
+        }
+        Ok(parameters.into_boxed_slice())
     }
 
     fn implementations(
@@ -4634,7 +4697,7 @@ impl<P: api::Phase> Context<'_, P> {
         fields: &model::FieldSet,
         generics: &model::Generics,
     ) -> Result<representability::structure::Plan, Failure> {
-        let parameters = self.parameters(generics)?;
+        let parameters = self.sole_alias_defaults(definition, self.parameters(generics)?)?;
         // A struct whose every parameter has a default, as palette's
         // `Rgb<S = Srgb, T = f32>`, is made and read at that instance,
         // which its path names as a Rust type.
@@ -4823,7 +4886,7 @@ impl<P: api::Phase> Context<'_, P> {
         variants: &[model::Variant],
         generics: &model::Generics,
     ) -> Result<representability::enumeration::Plan, Failure> {
-        let parameters = self.parameters(generics)?;
+        let parameters = self.sole_alias_defaults(definition, self.parameters(generics)?)?;
         let declaration_only = !parameters.is_empty();
         let mut admitted = Vec::new();
         self.retain_array::<representability::enumeration::Variant>(variants.len())?;
@@ -4919,8 +4982,12 @@ impl<P: api::Phase> Context<'_, P> {
         let ty = self.convert_value(ty)?;
         // A constant of another type, as Freya's `Color::WHITE: Color =
         // Color::new(..)`, is read by its path where the bridge runs, as a
-        // static is: each read is a new value, as Rust's is.
-        if !matches!(ty, Type::Unit | Type::Builtin(_)) {
+        // static is: each read is a new value, as Rust's is. So is one
+        // whose value is its own, which rustc evaluates to no scalar
+        // (`&'static str`).
+        if !matches!(ty, Type::Unit | Type::Builtin(_))
+            || matches!(value, model::Const::Unevaluated { arguments, .. } if arguments.is_empty())
+        {
             return Ok(representability::constant::Plan::new(ty, None));
         }
         if let model::Const::Literal { ty, value } = value {
@@ -6565,6 +6632,85 @@ impl<P: api::Phase> Context<'_, P> {
 }
 
 /// Whether every definition `ty` names is the target of an import.
+/// The struct or enum a generic alias names with each of its own type
+/// parameters, in order, and nothing else, as `pub type Text<'a, Theme =
+/// crate::Theme> = core::widget::Text<'a, Theme>;` does.
+fn passing_target<'graph>(
+    graph: &'graph api::Graph<impl api::Phase>,
+    definition: &model::Definition,
+) -> Option<&'graph model::Definition> {
+    let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
+        return None;
+    };
+    let model::Type::Definition { id, arguments } = ty else {
+        return None;
+    };
+    if generics.predicates().len() != 0 {
+        return None;
+    }
+    let parameters = generics
+        .parameters()
+        .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+        .collect::<Vec<_>>();
+    let types = arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            model::Argument::Type(ty) => Some(ty),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if parameters.is_empty()
+        || parameters.len() != types.len()
+        || !parameters.iter().zip(&types).all(|(parameter, ty)| {
+            matches!(ty, model::Type::Parameter { owner, index }
+                if owner == parameter.owner() && *index == parameter.index())
+        })
+    {
+        return None;
+    }
+    let target = graph.definitions().nth(graph.definition_index(id)?)?;
+    matches!(
+        target.kind(),
+        model::Kind::Struct { .. } | model::Kind::Enum { .. }
+    )
+    .then_some(target)
+}
+
+/// The types no import names but through a crate's alias that passes its
+/// own parameters on, as iced's `widget::Text<'a, Theme = crate::Theme>`
+/// is the only name of `core::widget::Text<'a, Theme>` while `iced::
+/// advanced` is off: each with the root and alias of an import that names
+/// it. Rust code writes such a type through the alias, so the alias's path
+/// declares the type, as the generated code spells it.
+fn sole_passing_aliases(
+    graph: &api::Graph<impl api::Phase>,
+) -> Vec<(&str, &model::Definition, &model::Definition)> {
+    let exported = graph
+        .exports()
+        .filter_map(|path| match path {
+            ledger::Path::Imported(export) => {
+                Some(crate::surface::identity::Definition::of(export.target()))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    graph
+        .exports()
+        .filter_map(|path| match path {
+            ledger::Path::Imported(export) => Some(export),
+            _ => None,
+        })
+        .filter_map(|export| {
+            let alias = graph
+                .definitions()
+                .nth(graph.definition_index(export.target())?)?;
+            let target = passing_target(graph, alias)?;
+            (!exported.contains(&crate::surface::identity::Definition::of(target.id())))
+                .then_some((export.key().root_alias(), alias, target))
+        })
+        .collect()
+}
+
 fn reaches_only_exported(
     ty: &model::Type,
     exported: &std::collections::BTreeSet<crate::surface::identity::Definition>,
