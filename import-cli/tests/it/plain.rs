@@ -105,6 +105,52 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     );
 }
 
+/// A crate's bindings are shared per machine: a second project that uses
+/// another part of the same dependency reads them from rawr's home, with
+/// no nightly build and no probe (D609.4).
+#[test]
+fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
+    let first = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-first");
+    let second = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-second");
+    for root in [&first, &second] {
+        let _ = fs::remove_dir_all(root);
+        copy(Path::new(FIXTURE), root);
+    }
+    fs::write(
+        second.join("src/main.rs"),
+        "// rawr\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let requirement = VersionReq::parse(\">=1.2.0, <2\").unwrap();\n    println!(\"{}\", requirement.matches(&Version::parse(\"1.4.0\").unwrap()));\n}\n",
+    )
+    .unwrap();
+
+    let run = rawr_import(&first, &["run"]);
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let bindings = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home/bindings");
+    let published = fs::read_dir(&bindings)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let meta = fs::read_to_string(path.join("meta.json")).ok()?;
+            meta.contains("\"crate_name\":\"semver\"").then_some(path)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(published.len(), 1, "{published:?}");
+
+    let run = rawr_import(&second, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "true\n");
+    // No nightly build directory, and no probe's tables.
+    assert!(!second.join("target/rawr/build").exists());
+    let probed = fs::read_dir(second.join("target/rawr/extraction"))
+        .map(|entries| entries.count())
+        .unwrap_or_default();
+    assert_eq!(probed, 0);
+}
+
 /// A marked `main` gets the arguments after `--` and stdin, as under
 /// `cargo run`, and a save while it waits on stdin restarts it on the same
 /// stdin (D500.1).

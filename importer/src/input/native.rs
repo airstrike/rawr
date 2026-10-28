@@ -24,6 +24,13 @@ impl Inputs {
         &self.0
     }
 
+    /// The native inputs of a run that replayed shared bindings: a digest
+    /// in its own domain, so its runners never share a key with built ones.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) const fn shared(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(in crate::input) const fn fixture(bytes: [u8; 32]) -> Self {
         Self(bytes)

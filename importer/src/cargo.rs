@@ -270,25 +270,43 @@ pub(crate) const REQUEST_STRING_RESOURCE: &str = "request retained string bytes"
 /// A currently validated semantic resolution owner ready for API publication.
 #[cfg(feature = "rustc-driver")]
 pub struct Prepared {
-    owner: resolution::owner::Ready,
+    owner: resolution::owner::Resolved,
 }
 
 #[cfg(feature = "rustc-driver")]
 impl Prepared {
-    /// The shared tables this preparation extracted, to publish once the
-    /// runner builds (`crate::bindings`).
+    /// The shared tables this preparation used or extracted, to settle
+    /// once the runner builds (`crate::bindings`).
     pub fn settlement(&mut self) -> crate::bindings::Settlement {
-        self.owner.settlement()
+        match &mut self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.settlement(),
+            resolution::owner::Resolved::Shared(shared) => shared.settlement(),
+        }
+    }
+
+    /// Whether every selected crate replayed shared bindings, so no nightly
+    /// build or probe ran.
+    pub fn is_shared(&self) -> bool {
+        matches!(self.owner, resolution::owner::Resolved::Shared(_))
     }
 
     /// Publish this currently validated owner through the extraction API node.
     pub fn publish(self, limits: &Limits) -> Result<crate::api::Graph<crate::api::Extracted>> {
-        self.owner.publish(limits)
+        match self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.publish(limits),
+            resolution::owner::Resolved::Shared(_) => Err(Error::Request {
+                field: "API publication",
+                reason: "shared bindings publish through the retained API".into(),
+            }),
+        }
     }
 
     /// Retain API data for audited classification before its current consumer union.
     pub fn retain_api(self, limits: &Limits) -> Result<crate::api::Continuation> {
-        self.owner.retain_api(limits)
+        match self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.retain_api(limits),
+            resolution::owner::Resolved::Shared(shared) => shared.retain_api(limits),
+        }
     }
 }
 

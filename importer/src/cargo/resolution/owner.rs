@@ -376,6 +376,8 @@ struct Evaluation {
     captured: Mutex<Captured>,
     /// The shared tables a cold extraction of this evaluation left.
     settled: Mutex<Vec<crate::bindings::Settled>>,
+    /// What shared bindings gave in place of a cold extraction.
+    shared: Mutex<Option<Shared>>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -472,11 +474,11 @@ pub(in crate::cargo) fn prepare_cached_in(
     limits: &Limits,
     scope: &crate::supervisor::snapshot::attempt::Scope,
     sink: &dyn metrics::Sink,
-) -> Result<Ready, node::Error> {
+) -> Result<Resolved, node::Error> {
     let context = scoped_context(&request, limits, scope)?;
     let preflight = preflight(request, context, limits)?;
     let attestation = cargo::toolchain::cached(&preflight.context, sink)?;
-    evaluate_preflight(
+    evaluate(
         preflight,
         attestation,
         limits,
@@ -485,6 +487,16 @@ pub(in crate::cargo) fn prepare_cached_in(
         None,
     )
 }
+
+/// A resolution ready for its API: a complete owner, or shared bindings
+/// that every selected crate replayed (`crate::bindings`).
+pub(crate) enum Resolved {
+    Owner(Box<Ready>),
+    Shared(Box<SharedReady>),
+}
+
+/// The marker a cold attempt stops with when shared bindings answer it.
+const SHARED: &str = "every selected crate replayed shared bindings";
 
 #[cfg(test)]
 pub(in crate::cargo) fn evaluate_scripted(
@@ -501,16 +513,19 @@ pub(in crate::cargo) fn evaluate_scripted(
         ));
     }
     let preflight = preflight(request, cached.context, limits)?;
-    evaluate_preflight(preflight, cached.attestation, limits, sink, Some(script))
+    match evaluate(preflight, cached.attestation, limits, sink, Some(script))? {
+        Resolved::Owner(ready) => Ok(*ready),
+        Resolved::Shared(_) => Err(node::Error::State(SHARED)),
+    }
 }
 
-fn evaluate_preflight(
+fn evaluate(
     preflight: Preflight,
     attestation: Arc<node::Validated<cargo::toolchain::Attestation>>,
     limits: &Limits,
     sink: &dyn metrics::Sink,
     #[cfg(test)] script: Option<ScriptFactory>,
-) -> Result<Ready, node::Error> {
+) -> Result<Resolved, node::Error> {
     let Preflight {
         request,
         context,
@@ -553,14 +568,31 @@ fn evaluate_preflight(
             current: None,
         }),
         settled: Mutex::new(Vec::new()),
+        shared: Mutex::new(None),
     });
     let validator = Arc::clone(&state);
     let executor = Arc::clone(&state);
-    let node = node::Evaluator::new(&store, sink).discover_bundled_budgeted(
+    let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
         move |value, graph| validator.validate(value, graph),
         move |attempt| executor.execute(attempt),
-    )?;
+    ) {
+        Ok(node) => node,
+        Err(error) => {
+            let shared = state
+                .shared
+                .lock()
+                .ok()
+                .and_then(|mut shared| shared.take());
+            return match shared {
+                Some(parts) => Ok(Resolved::Shared(Box::new(SharedReady {
+                    evaluation: state,
+                    parts,
+                }))),
+                None => Err(error),
+            };
+        }
+    };
     let mut captured = state
         .captured
         .lock()
@@ -579,11 +611,11 @@ fn evaluate_preflight(
         .require_account(store.graph_budget())
         .map_err(error)?;
     drop(captured);
-    Ok(Ready {
+    Ok(Resolved::Owner(Box::new(Ready {
         node,
         replay,
         evaluation: state,
-    })
+    })))
 }
 
 impl Evaluation {
@@ -961,6 +993,14 @@ impl Evaluation {
             &mut accounts.request,
             cargo_account,
         )?;
+        // Every selected crate's table in the home: no nightly build and no
+        // probe. The attempt is abandoned; the API is read from the tables.
+        if let Some(parts) = self.shared_parts(&harness, &layout)
+            && let Ok(mut shared) = self.shared.lock()
+        {
+            *shared = Some(parts);
+            return Err(node::Error::State(SHARED));
+        }
         let built = self.request.build_harness_in(
             &self.cached,
             &layout,
@@ -1095,6 +1135,161 @@ fn refusal(mut error: &node::Error) -> bool {
             },
             _ => return false,
         }
+    }
+}
+
+/// What shared bindings gave a run in place of its nightly build and probe:
+/// the sidecar document the tables replay, what binds it, the resolution
+/// it was read under, and the proof of the files that run read.
+pub(crate) struct Shared {
+    document: Vec<u8>,
+    external: Vec<crate::extract::ExternalBinding>,
+    identity: [u8; 32],
+    settled: Vec<crate::bindings::Settled>,
+    metadata: cargo::unit::Metadata,
+    build_unit: cargo::unit::BuildGraph,
+    selected: Box<[cargo::Selection]>,
+    toolchain: cargo::toolchain::Proof,
+    proof: input::proof::Proof,
+}
+
+impl Evaluation {
+    /// The shared bindings of every selected crate, when the home has them
+    /// all and they replay this demand. The final-form harness is kept under
+    /// the project's Rawr directory, where the runner reads it.
+    fn shared_parts(&self, harness: &cargo::Harness, layout: &layout::Layout) -> Option<Shared> {
+        use sha2::{Digest as _, Sha256};
+        let shared = harness
+            .extraction_plan
+            .shared_document(&harness.initial, &harness.metadata)?;
+        let kept = self.cached.context.rawr().join("shared");
+        std::fs::create_dir_all(&kept).ok()?;
+        let mut entries = Vec::new();
+        let mut native = Sha256::new();
+        native.update(b"rawr.bindings.native/v1");
+        native.update(shared.identity);
+        // A file not there yet, as a lock cargo has not written, is watched
+        // for its appearance.
+        let mut file = |role: input::proof::Role, path: &Path| -> Option<()> {
+            let text = path.to_str()?;
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+                    native.update(digest);
+                    entries.push(input::proof::Entry::File {
+                        role,
+                        package_id: None,
+                        path: text.into(),
+                        bytes: bytes.len(),
+                        digest,
+                    });
+                }
+                Err(_) => {
+                    native.update(text.as_bytes());
+                    entries.push(input::proof::Entry::Missing {
+                        role,
+                        package_id: None,
+                        path: text.into(),
+                    });
+                }
+            }
+            Some(())
+        };
+        let final_form = layout.final_form();
+        for (from, name) in [
+            (final_form.manifest(), "Cargo.toml"),
+            (final_form.lock(), "Cargo.lock"),
+        ] {
+            let to = kept.join(name);
+            std::fs::copy(from, &to).ok()?;
+            file(input::proof::Role::Harness, &to)?;
+        }
+        for authority in &self.request.inputs {
+            file(input::proof::Role::Authority, authority.path())?;
+        }
+        Some(Shared {
+            document: shared.document,
+            external: shared.external,
+            identity: shared.identity,
+            settled: shared.settled,
+            metadata: harness.metadata.clone(),
+            build_unit: harness.initial.clone(),
+            selected: harness.selected.clone(),
+            toolchain: harness.toolchain.clone(),
+            proof: input::proof::Proof::shared(
+                entries.into_boxed_slice(),
+                native.finalize().into(),
+            ),
+        })
+    }
+}
+
+/// Shared bindings ready for the API (`Resolved::Shared`).
+pub(crate) struct SharedReady {
+    evaluation: Arc<Evaluation>,
+    parts: Shared,
+}
+
+impl SharedReady {
+    /// The shared tables this run used, whose build scripts the runner's
+    /// build settles.
+    pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {
+        crate::bindings::Settlement {
+            entries: std::mem::take(&mut self.parts.settled),
+            bindings: Some(crate::bindings::directory(
+                self.evaluation.cached.context.cargo_home(),
+            )),
+            rawr: Some(self.evaluation.cached.context.rawr().to_path_buf()),
+        }
+    }
+
+    pub(crate) fn retain_api(
+        self: Box<Self>,
+        limits: &Limits,
+    ) -> crate::Result<crate::api::Continuation> {
+        use sha2::{Digest as _, Sha256};
+        let Self { evaluation, parts } = *self;
+        evaluation.request.require_limits(limits)?;
+        let Shared {
+            document,
+            external,
+            identity,
+            settled: _,
+            metadata,
+            build_unit,
+            selected,
+            toolchain,
+            proof,
+        } = parts;
+        let mut request = Sha256::new();
+        request.update(b"rawr.bindings.api/v1");
+        request.update(evaluation.identity.as_bytes());
+        request.update(identity);
+        let request: [u8; 32] = request.finalize().into();
+        let owned_limits = *limits;
+        let source = Arc::clone(&evaluation);
+        crate::extract::retain_shared(
+            &evaluation.cached.context,
+            &request,
+            Arc::clone(&evaluation.cached.attestation),
+            proof,
+            &evaluation.request.policy,
+            move |stored| {
+                crate::extract::materialize_shared(
+                    stored,
+                    &document,
+                    external,
+                    &metadata,
+                    &build_unit,
+                    &selected,
+                    &toolchain,
+                    &source.request.target,
+                    &source.request.profile,
+                    &source.request.policy,
+                    &owned_limits,
+                )
+            },
+        )
     }
 }
 

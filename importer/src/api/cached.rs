@@ -98,8 +98,39 @@ pub(crate) fn retain_owner<O>(
         super::retained::Lazy,
     ) -> Result<O, node::Error>,
 ) -> Result<O, node::Error> {
+    let parent = Parent::validated(&owner);
+    retain_under(
+        context,
+        request,
+        policy,
+        parent,
+        retention,
+        memo,
+        materialize,
+        |product, retained, graph| finish(owner, product, retained, graph),
+    )
+}
+
+/// Retain the API under one validated `parent`, as `retain_owner` does under
+/// a resolution owner; shared bindings retain it under the toolchain's
+/// attestation (`crate::bindings`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retain_under<O>(
+    context: &Context,
+    request: &[u8; 32],
+    policy: &[u8; 32],
+    parent: Parent,
+    retention: &node::read_set::Retention,
+    memo: Option<[u8; 32]>,
+    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
+    finish: impl FnOnce(
+        node::staging::Owned<Product>,
+        node::read_set::Retention,
+        super::retained::Lazy,
+    ) -> Result<O, node::Error>,
+) -> Result<O, node::Error> {
     use node::staging::{Outcome, Owned, Recipe};
-    let direct = recipe(context, request, policy, &[Parent::validated(&owner)])?;
+    let direct = recipe(context, request, policy, &[parent])?;
     let store = context.open_store()?;
     let evaluator = node::Evaluator::new(&store, &metrics::Current);
     let recipe = Recipe::from_current_direct(direct);
@@ -113,7 +144,7 @@ pub(crate) fn retain_owner<O>(
                 .take()
                 .ok_or(node::Error::Codec("API capture was already consumed"))?;
             let graph = super::retained::Lazy::Pending(Box::new(materialize));
-            finish(owner, Owned::Current(product), retained, graph)
+            finish(Owned::Current(product), retained, graph)
         }
         outcome => store.with_staged_batch(retention, &metrics::Current, |batch| {
             // Inputs whose content is remembered stage that content;
@@ -130,12 +161,7 @@ pub(crate) fn retain_owner<O>(
                         .take()
                         .ok_or(node::Error::Codec("API capture was already consumed"))?;
                     let graph = super::retained::Lazy::Pending(Box::new(materialize));
-                    return finish(
-                        owner,
-                        Owned::Staged(staged),
-                        batch.retention().try_clone()?,
-                        graph,
-                    );
+                    return finish(Owned::Staged(staged), batch.retention().try_clone()?, graph);
                 }
                 (Outcome::Miss(miss), None) => {
                     let staged = recipe.resume(batch, miss, || {
@@ -154,7 +180,7 @@ pub(crate) fn retain_owner<O>(
             };
             let graph = current_graph(context, &mut materialize, current, product.value())?;
             let graph = super::retained::Lazy::Ready(graph);
-            finish(owner, product, batch.retention().try_clone()?, graph)
+            finish(product, batch.retention().try_clone()?, graph)
         }),
     }
 }

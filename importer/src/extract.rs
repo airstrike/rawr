@@ -610,6 +610,83 @@ pub(crate) fn retain_from_owner_parts(
     })
 }
 
+/// The API graph of a run that replayed shared bindings: the sidecar
+/// `document` it gave, with the external crates bound through this
+/// project's unit graph instead of a build (`crate::bindings`).
+#[cfg(feature = "rustc-driver")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "materialization consumes the replayed document with the resolution it binds to"
+)]
+pub(crate) fn materialize_shared(
+    stored: Option<&api::cached::Product>,
+    document: &[u8],
+    external: Vec<ExternalBinding>,
+    metadata: &cargo::unit::Metadata,
+    build_unit: &cargo::unit::BuildGraph,
+    selected: &[cargo::Selection],
+    toolchain: &cargo::toolchain::Proof,
+    target: &str,
+    profile: &str,
+    policy: &Policy,
+    limits: &cargo::Limits,
+) -> Result<api::Graph<api::Captured>> {
+    let mut allocation = Allocation::new(limits);
+    let context = api::Context::from_resolution_parts(
+        metadata,
+        build_unit,
+        selected,
+        toolchain,
+        target,
+        profile,
+        None,
+        &mut allocation,
+    )?;
+    let document = protocol::decode_accounted(document, limits, &mut allocation)?;
+    let invocations = Invocations::seal_document_with_allocation(&document, allocation, limits)?
+        .bind_external(external, limits)?;
+    materialize_document(stored, document, invocations, policy, &context, limits)
+}
+
+/// Retain the API of a run that replayed shared bindings, under the
+/// toolchain attestation; a current API hit defers `materialize`.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn retain_shared(
+    context: &crate::context::Context,
+    request: &[u8; 32],
+    parent: std::sync::Arc<crate::node::Validated<cargo::toolchain::Attestation>>,
+    proof: crate::input::proof::Proof,
+    policy: &Policy,
+    materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
+        + Send
+        + 'static,
+) -> Result<api::Continuation> {
+    let node_error = |operation: &'static str| {
+        move |source| Error::Node {
+            operation,
+            source: Box::new(source),
+        }
+    };
+    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let retention = crate::node::read_set::Retention::from_validated(parent.as_ref(), None)
+        .map_err(node_error("shared bindings retention"))?;
+    api::cached::retain_under(
+        context,
+        request,
+        &policy_identity,
+        crate::node::Parent::validated(parent.as_ref()),
+        &retention,
+        None,
+        materialize,
+        |product, retained, graph| {
+            api::retained::Continuation::capture_shared(
+                context, parent, proof, product, retained, graph,
+            )
+        },
+    )
+    .map_err(node_error("retained API from shared bindings"))
+}
+
 /// Measure one complete canonicalization without granting publication authority.
 #[cfg(feature = "rustc-driver")]
 pub fn measure_canonicalization(

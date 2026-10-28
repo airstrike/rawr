@@ -48,6 +48,16 @@ pub(crate) struct Plan {
     graph_budget: Option<crate::node::GraphBudget>,
 }
 
+/// The sidecar document shared bindings gave, with what binds it.
+pub(crate) struct SharedDocument {
+    pub(crate) document: Vec<u8>,
+    pub(crate) external: Vec<crate::extract::ExternalBinding>,
+    pub(crate) settled: Vec<crate::bindings::Settled>,
+    /// What the replayed API is a function of: each crate's key, table
+    /// and replayed body.
+    pub(crate) identity: [u8; 32],
+}
+
 /// The selected crates whose extraction tables are shared per machine, by
 /// unit correlation, and where the home keeps them (`crate::bindings`).
 #[derive(Default)]
@@ -480,6 +490,225 @@ impl Plan {
         }
         self.sharing.bindings = Some(bindings);
         self
+    }
+
+    /// The sidecar document shared bindings give, as the probe would write
+    /// it: each selected crate's handshake around the body its table
+    /// replays for this plan's demand, and the external crates the tables
+    /// name, bound through this project's unit `graph`. `None` when a
+    /// selected crate is not shared, its entry is not in the home, or its
+    /// table lacks a unit the demand needs: the probe extracts then.
+    pub(crate) fn shared_document(
+        &self,
+        graph: &unit::BuildGraph,
+        metadata: &unit::Metadata,
+    ) -> Option<SharedDocument> {
+        use crate::extract::engine;
+        if self.entries.is_empty() || self.sharing.keys.len() != self.entries.len() {
+            return None;
+        }
+        let bindings = self.sharing.bindings.as_ref()?;
+        let session = engine::session_key(self.entries.iter().map(|entry| entry.unit_key.as_ref()));
+        let mut fragments = Vec::new();
+        let mut external = BTreeMap::new();
+        let mut settled = Vec::new();
+        let mut identity = Sha256::new();
+        let mut leases = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            let shared = self.sharing.keys.get(&entry.unit_correlation)?;
+            let read = crate::bindings::read(bindings, &shared.key)?;
+            let table = serde_json::from_slice::<engine::Table>(&read.table).ok()?;
+            if table.schema != engine::TABLE_SCHEMA {
+                return None;
+            }
+            let root = table.root.clone();
+            let memo = engine::Memo::from_table(table);
+            let Root::Selected { aliases } = &entry.root;
+            let aliases = aliases.iter().map(ToString::to_string).collect::<Vec<_>>();
+            let demand = self
+                .demand
+                .iter()
+                .filter(|path| {
+                    path.first()
+                        .is_some_and(|first| aliases.iter().any(|alias| **alias == **first))
+                })
+                .map(|path| path.iter().map(ToString::to_string).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let extracted = engine::Engine::new(
+                &mut engine::Replay(&memo),
+                root,
+                aliases.clone(),
+                session.clone(),
+            )
+            .run(&demand)
+            .ok()?;
+            let body = extracted.body().ok()?;
+            let entry_root = bindings.join(shared.key.as_ref());
+            let artifact = entry_root.join("table.json").to_str()?.to_owned();
+            let profile = graph
+                .artifacts()
+                .iter()
+                .find(|output| output.semantic_key() == entry.unit_key.as_ref())
+                .and_then(|output| std::str::from_utf8(output.artifact_profile().as_bytes()).ok())?
+                .to_owned();
+            let meta = &read.meta;
+            let path_of = |crate_name: &str, stable_crate_id: &str| {
+                if crate_name == meta.crate_name && stable_crate_id == meta.stable_crate_id {
+                    artifact.clone()
+                } else {
+                    entry_root
+                        .join(format!("{crate_name}-{stable_crate_id}.rmeta"))
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            };
+            let mut sysroot = Vec::new();
+            let mut externals = Vec::new();
+            for krate in &extracted.crates {
+                if krate.sysroot {
+                    sysroot.push(serde_json::json!({
+                        "compiler_commit": self.compiler_commit.as_ref(),
+                        "selected_target": self.selected_target.as_ref(),
+                        "crate_name": krate.crate_name,
+                        "stable_crate_id": krate.stable_crate_id,
+                    }));
+                } else {
+                    externals.push((krate.crate_name.clone(), krate.stable_crate_id.clone()));
+                }
+            }
+            let mut loaded = externals.clone();
+            if !loaded
+                .iter()
+                .any(|(name, id)| *name == meta.crate_name && *id == meta.stable_crate_id)
+            {
+                loaded.push((meta.crate_name.clone(), meta.stable_crate_id.clone()));
+            }
+            loaded.sort_unstable();
+            let render = |crates: &[(String, String)]| {
+                crates
+                    .iter()
+                    .map(|(name, id)| {
+                        serde_json::json!({
+                            "crate_name": name,
+                            "stable_crate_id": id,
+                            "artifacts": [path_of(name, id)],
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (name, id) in &externals {
+                if external.contains_key(&(name.clone(), id.clone())) {
+                    continue;
+                }
+                let recorded = meta.externals.iter().find(|recorded| {
+                    recorded.crate_name == *name && recorded.stable_crate_id == *id
+                })?;
+                let authority = match &recorded.unit_key {
+                    Some(unit_key) => {
+                        let output = graph
+                            .artifacts()
+                            .iter()
+                            .find(|output| output.semantic_key() == unit_key.as_str())?;
+                        Some(crate::input::ArtifactAuthority {
+                            semantic_key: output.semantic_key().into(),
+                            package_id: output.package_id().into(),
+                            target: output.target().to_path_buf(),
+                            target_kinds: output.target_kinds().into(),
+                            crate_types: output.crate_types().into(),
+                            crate_name: output.crate_name().into(),
+                            features: output.features().into(),
+                        })
+                    }
+                    None => None,
+                };
+                let package = authority
+                    .as_ref()
+                    .and_then(|authority| metadata.package_identity(&authority.package_id))
+                    .map(|(name, version, source)| (name.into(), version.into(), source.into()));
+                external.insert(
+                    (name.clone(), id.clone()),
+                    crate::extract::ExternalBinding {
+                        crate_name: name.as_str().into(),
+                        stable_crate_id: id.as_str().into(),
+                        artifacts: Box::from([path_of(name, id).into_boxed_str()]),
+                        authority,
+                        package,
+                    },
+                );
+            }
+            let digest = crate::extract::engine::hex(&Sha256::digest(&read.table));
+            let handshake = serde_json::json!({
+                "schema": protocol::SCHEMA,
+                "package": {
+                    "cargo_id": entry.package.cargo_id.as_ref(),
+                    "name": entry.package.name.as_ref(),
+                    "version": entry.package.version.as_ref(),
+                    "source": entry.package.source.as_ref(),
+                },
+                "root": { "kind": "selected", "aliases": aliases },
+                "target": entry.target.as_ref(),
+                "target_kind": entry.target_kind.as_ref(),
+                "target_kinds": entry.target_kinds,
+                "crate_types": entry.crate_types,
+                "crate_name": entry.crate_name.as_ref(),
+                "edition": entry.edition.as_ref(),
+                "profile": entry.profile.as_ref(),
+                "compilation": "target",
+                "host": self.host.as_ref(),
+                "selected_target": self.selected_target.as_ref(),
+                "features": entry.features,
+                "probe_arguments_digest": crate::extract::engine::hex(&Sha256::digest(b"rawr.bindings.shared")),
+                "compiler_commit": self.compiler_commit.as_ref(),
+                "invocation_nonce": entry.invocation_nonce.as_ref(),
+                "unit_correlation": entry.unit_correlation.as_ref(),
+                "unit_key": entry.unit_key.as_ref(),
+                "dependencies": entry.dependencies,
+                "artifact": {
+                    "path": artifact,
+                    "length": read.table.len(),
+                    "digest": digest,
+                    "profile": profile,
+                    "fresh": true,
+                    "crate_hash": meta.crate_hash,
+                    "stable_crate_id": meta.stable_crate_id,
+                    "probe_alias": format!("rawr_selected_{index}"),
+                },
+                "sysroot": sysroot,
+                "loaded_crates": render(&loaded),
+                "external_crates": render(&externals),
+            });
+            let mut fragment = b"{\"handshake\":".to_vec();
+            fragment.extend(serde_json::to_vec(&handshake).ok()?);
+            fragment.push(b',');
+            fragment.extend_from_slice(body.get(1..)?);
+            identity.update(shared.key.as_bytes());
+            identity.update(digest.as_bytes());
+            identity.update(Sha256::digest(&body));
+            fragments.push(fragment);
+            settled.push(crate::bindings::Settled {
+                key: shared.key.to_string(),
+                crate_name: meta.crate_name.clone(),
+                scripts: meta.scripts.clone(),
+                publish: None,
+            });
+            leases.push(read);
+        }
+        let mut document =
+            format!("{{\"schema\":{},\"fragments\":[", protocol::SCHEMA).into_bytes();
+        for (index, fragment) in fragments.iter().enumerate() {
+            if index != 0 {
+                document.push(b',');
+            }
+            document.extend_from_slice(fragment);
+        }
+        document.extend_from_slice(b"]}");
+        drop(leases);
+        Some(SharedDocument {
+            document,
+            external: external.into_values().collect(),
+            settled,
+            identity: identity.finalize().into(),
+        })
     }
 
     pub(crate) fn target_directory(&self) -> &Path {

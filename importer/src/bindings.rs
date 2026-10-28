@@ -220,7 +220,6 @@ pub(crate) struct Meta {
 
 /// A shared entry, as a run reads it from the home.
 pub(crate) struct Entry {
-    #[allow(dead_code, reason = "read by the hit path, which replays an entry")]
     pub(crate) meta: Meta,
     pub(crate) table: Vec<u8>,
     _lease: home::Lease,
@@ -255,7 +254,6 @@ pub(crate) struct Settled {
 pub(crate) struct Publish {
     pub(crate) bindings: PathBuf,
     pub(crate) table: PathBuf,
-    #[allow(dead_code, reason = "read by the hit path, which replays an entry")]
     pub(crate) meta: Meta,
 }
 

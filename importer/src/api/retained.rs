@@ -38,8 +38,24 @@ pub(crate) struct Materialized {
 pub(crate) struct Publication {
     pub(crate) context: crate::context::Context,
     pub(crate) retention: node::read_set::Retention,
-    owner: node::Validated<crate::cargo::resolution::owner::Product>,
-    input: crate::input::stored::Completed,
+    source: Source,
+}
+
+/// What the API was read from: a complete resolution owner and its compared
+/// inputs, or shared bindings replayed under the toolchain's attestation
+/// with the proof of the files that run read (`crate::bindings`).
+// One publication per run, matched at once; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
+enum Source {
+    Owner {
+        owner: node::Validated<crate::cargo::resolution::owner::Product>,
+        input: crate::input::stored::Completed,
+    },
+    #[cfg(feature = "rustc-driver")]
+    Shared {
+        parent: std::sync::Arc<node::Validated<crate::cargo::toolchain::Attestation>>,
+        proof: crate::input::proof::Proof,
+    },
 }
 
 impl Continuation {
@@ -61,8 +77,30 @@ impl Continuation {
             publication: Publication {
                 context: context.clone(),
                 retention,
-                owner,
-                input,
+                source: Source::Owner { owner, input },
+            },
+        })
+    }
+
+    /// The API of a run that replayed shared bindings, under the toolchain
+    /// attestation it was keyed by.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn capture_shared(
+        context: &crate::context::Context,
+        parent: std::sync::Arc<node::Validated<crate::cargo::toolchain::Attestation>>,
+        proof: crate::input::proof::Proof,
+        product: node::staging::Owned<super::cached::Product>,
+        retention: node::read_set::Retention,
+        graph: Lazy,
+    ) -> Result<Self, node::Error> {
+        retention.covers_parents(std::slice::from_ref(&product))?;
+        Ok(Self {
+            product,
+            graph,
+            publication: Publication {
+                context: context.clone(),
+                retention,
+                source: Source::Shared { parent, proof },
             },
         })
     }
@@ -150,15 +188,22 @@ fn build(
 
 impl Publication {
     pub(crate) fn callback_observations(&self, graph: &super::Graph<super::Captured>) -> [u8; 96] {
-        graph.callback_observations(self.input.fingerprint())
+        match &self.source {
+            Source::Owner { input, .. } => graph.callback_observations(input.fingerprint()),
+            #[cfg(feature = "rustc-driver")]
+            Source::Shared { proof, .. } => graph.callback_observations(proof.fingerprint()),
+        }
     }
 
     fn check(&self, api: &node::Validated<super::cached::Product>) -> Result<(), node::Error> {
         self.retention
             .covers_parents(std::slice::from_ref(&node::Parent::validated(api)))?;
-        api.receipt()
-            .read_set()
-            .require_ancestor(self.owner.receipt().read_set())
+        let parent = match &self.source {
+            Source::Owner { owner, .. } => owner.receipt().read_set(),
+            #[cfg(feature = "rustc-driver")]
+            Source::Shared { parent, .. } => parent.receipt().read_set(),
+        };
+        api.receipt().read_set().require_ancestor(parent)
     }
 
     fn proof(
@@ -166,9 +211,13 @@ impl Publication {
         api: &node::Validated<super::cached::Product>,
     ) -> Result<crate::input::proof::Proof, node::Error> {
         self.check(api)?;
-        Ok(self
-            .input
-            .publish(&self.owner, self.context.graph_budget())?)
+        match self.source {
+            Source::Owner { owner, input } => {
+                Ok(input.publish(&owner, self.context.graph_budget())?)
+            }
+            #[cfg(feature = "rustc-driver")]
+            Source::Shared { proof, .. } => Ok(proof),
+        }
     }
 
     pub(crate) fn publish(
@@ -177,9 +226,11 @@ impl Publication {
         api: node::Validated<super::cached::Product>,
     ) -> Result<super::Graph<super::Extracted>, node::Error> {
         self.check(&api)?;
-        let input = self
-            .input
-            .publish(&self.owner, self.context.graph_budget())?;
+        let input = match self.source {
+            Source::Owner { owner, input } => input.publish(&owner, self.context.graph_budget())?,
+            #[cfg(feature = "rustc-driver")]
+            Source::Shared { proof, .. } => proof,
+        };
         let chain = node::Chain::validated_retained(self.context, &api, self.retention)?;
         Ok(graph.publish_with_chain(input, Some(chain))?)
     }

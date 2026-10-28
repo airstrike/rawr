@@ -703,6 +703,23 @@ impl Proof {
         }
     }
 
+    /// The proof of a run that replayed shared bindings: the files it read
+    /// (the project's manifest and lock, the final-form harness), which a
+    /// watcher observes, and its own native digest.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn shared(entries: Box<[Entry]>, native: [u8; 32]) -> Self {
+        let canonical = serde_json::to_vec(&(SCHEMA, &entries)).unwrap_or_default();
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(b"rawr.import.shared-bindings/v1");
+        fingerprint.update(&canonical);
+        Self {
+            schema: SCHEMA,
+            entries,
+            fingerprint: Fingerprint::from_bytes(fingerprint.finalize().into()),
+            native: Some(super::native::Inputs::shared(native)),
+        }
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn fixture() -> Self {
         Self {
