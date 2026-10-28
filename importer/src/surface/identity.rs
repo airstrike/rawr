@@ -332,6 +332,18 @@ impl Export {
 }
 
 impl Implementation {
+    /// The implementation of the trait `trait_id` that the opaque `impl
+    /// Trait` type `opaque` a function gives has, which no Rust item writes.
+    pub(crate) fn opaque(
+        opaque: &crate::api::identity::Definition,
+        trait_id: &crate::api::identity::Definition,
+    ) -> Self {
+        let mut framed = Framed::new(b"rawr.identity.opaque-implementation/v1");
+        framed.definition(opaque);
+        framed.definition(trait_id);
+        Self(framed.finish())
+    }
+
     pub(crate) fn of(
         implementation: &model::Implementation,
     ) -> Result<Self, crate::classify::Error> {

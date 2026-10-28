@@ -1395,6 +1395,7 @@ fn signature(
                 .cases()
                 .iter()
                 .map(|case| (case.this(), case.arguments())),
+            relation.trait_identity(),
             |source| {
                 pattern(source, &|nominal| {
                     ty(facade, nominal, profile, installed)

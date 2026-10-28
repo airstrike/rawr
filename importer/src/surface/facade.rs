@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 15;
+const SCHEMA: u32 = 17;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -525,6 +525,10 @@ pub struct Relation {
     parameter: Box<str>,
     arguments: Box<[Type]>,
     cases: Box<[Case]>,
+    /// The bound's trait, by its definition identity, whose impl headers
+    /// may fix what no case does (D604).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_identity: Option<[u8; 32]>,
 }
 
 /// One implementation of a [`Relation`]'s trait, its impl parameters
@@ -547,6 +551,10 @@ impl Relation {
     /// The trait's implementations.
     pub const fn cases(&self) -> &[Case] {
         &self.cases
+    }
+    /// The bound's trait, by its definition identity, when known.
+    pub const fn trait_identity(&self) -> Option<[u8; 32]> {
+        self.trait_identity
     }
 }
 
@@ -616,20 +624,29 @@ impl Signature {
     }
 }
 
+/// An opaque type a type names: its identity and the names of its
+/// parameters.
+type OpaqueUse = ([u8; 32], Box<[Box<str>]>);
+
 impl Type {
-    /// Each type among `opaque` this type names, with its arity.
-    fn opaque(
-        &self,
-        opaque: &std::collections::BTreeSet<[u8; 32]>,
-        found: &mut Vec<([u8; 32], usize)>,
-    ) {
+    /// Each type among `opaque` this type names, with the names of its
+    /// parameters: those of the item's parameters its arguments are.
+    fn opaque(&self, opaque: &std::collections::BTreeSet<[u8; 32]>, found: &mut Vec<OpaqueUse>) {
         match self {
             Self::Nominal {
                 identity,
                 arguments,
             } => {
                 if opaque.contains(identity) {
-                    found.push((*identity, arguments.len()));
+                    let names = arguments
+                        .iter()
+                        .enumerate()
+                        .map(|(position, argument)| match argument {
+                            Self::Parameter(name) => name.clone(),
+                            _ => format!("T{position}").into(),
+                        })
+                        .collect();
+                    found.push((*identity, names));
                 }
                 for argument in arguments.iter() {
                     argument.opaque(opaque, found);
@@ -852,7 +869,19 @@ impl Plan {
                 {
                     continue;
                 }
-                let associated_path = format!("{relative}::{}", associated.name());
+                // A function's members are those of the opaque type it
+                // gives (`surface::opaque`).
+                let owner = if matches!(
+                    outcome.representability(),
+                    Representability::Function(_)
+                        | Representability::FunctionItem(_)
+                        | Representability::Invocation(_)
+                ) {
+                    super::opaque::path(&relative, 0)
+                } else {
+                    relative.to_string()
+                };
+                let associated_path = format!("{owner}::{}", associated.name());
                 if let Some(item) = item(&associated_path, associated)? {
                     let mut items = std::mem::take(&mut facade.items).into_vec();
                     items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
@@ -902,17 +931,16 @@ impl Plan {
                 for item in facade.items.iter() {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque, &mut found);
-                    for (index, (identity, arity)) in found.into_iter().enumerate() {
-                        if types.iter().any(|ty| ty.identity == identity) {
+                    for (index, (identity, parameters)) in found.into_iter().enumerate() {
+                        let path = super::opaque::path(&item.path, index);
+                        if types.iter().any(|ty| *ty.path == *path) {
                             continue;
                         }
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         types.push(TypeDefinition {
-                            path: super::opaque::path(&item.path, index).into(),
+                            path: path.into(),
                             identity,
-                            parameters: (0..arity)
-                                .map(|index| format!("T{index}").into())
-                                .collect(),
+                            parameters,
                             defaults: Box::default(),
                             copy: false,
                             default: false,
@@ -2932,13 +2960,14 @@ fn relations(
                 arguments: implemented,
             });
         }
-        if cases.is_empty() {
+        if cases.is_empty() && relation.trait_identity().is_none() {
             continue;
         }
         output.push(Relation {
             parameter: copy(parameter.name())?,
             arguments,
             cases: cases.into_boxed_slice(),
+            trait_identity: relation.trait_identity(),
         });
     }
     Ok(output.into_boxed_slice())

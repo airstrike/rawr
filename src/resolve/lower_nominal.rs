@@ -15014,9 +15014,20 @@ impl<'a> Parser<'a> {
                 for (parameter, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     // A parameter no script value fixes is rustc's to infer
-                    // and to check (D594).
+                    // and to check (D594). So is one a crate's own type
+                    // fills, as a trait's default `Theme` does: the facade
+                    // knows its derives only where a program uses them, and
+                    // rustc checks the bound where it compiles the call.
                     #[cfg(feature = "rust-import")]
-                    if matches!(ty, Ty::Infer(_)) && item.imported_identity().is_some() {
+                    if item.imported_identity().is_some()
+                        && match &ty {
+                            Ty::Infer(_) => true,
+                            Ty::Host { proof, .. } => {
+                                proof.definition.identity().imported().is_some()
+                            }
+                            _ => false,
+                        }
+                    {
                         continue;
                     }
                     for capability in required.iter() {
@@ -16672,6 +16683,76 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// The type parameters an imported item's bounds leave open once its
+    /// call is checked, fixed by the bound trait's impl headers as D604
+    /// fixes an `impl Trait`'s: iced's `application(.., view)` has `W:
+    /// Widget<Message, Theme, Renderer>` for the `W` `view` gives, and when
+    /// that is `Column<Element<Message, Theme, Renderer>>` the impl for
+    /// `Column<W>` and its own `W: Widget<M, T, R>` fix `Theme` and
+    /// `Renderer`, as rustc's trait selection does. An argument the bound
+    /// leaves open stays rustc's to infer (D594).
+    #[cfg(feature = "rust-import")]
+    fn fix_bounds_by_impls(
+        &mut self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+    ) -> Result<(), Error> {
+        let signature = item.signature();
+        if item.imported_identity().is_none()
+            || signature
+                .relations()
+                .iter()
+                .all(|relation| relation.trait_identity().is_none())
+        {
+            return Ok(());
+        }
+        let item_path = item.path();
+        let owner = item_path
+            .rsplit_once("::")
+            .and_then(|(path, _)| self.models.host.type_owner(path))
+            .or_else(|| self.models.host.item_owner(&item_path))
+            .cloned();
+        let mut parameters = requirements
+            .iter()
+            .map(|(name, ty, _)| (name.clone(), ty.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for relation in signature.relations() {
+            let Some(identity) = relation.trait_identity() else {
+                continue;
+            };
+            let Some(bounded) = parameters.get(relation.parameter()).cloned() else {
+                continue;
+            };
+            let bounded = self.inference.resolve(&bounded);
+            if matches!(bounded, Ty::Infer(_)) {
+                continue;
+            }
+            let mut arguments = Vec::with_capacity(relation.arguments().len());
+            for argument in relation.arguments() {
+                arguments.push(self.pattern_type(
+                    argument,
+                    &mut BTreeMap::new(),
+                    &mut parameters,
+                    &item_path,
+                    owner.as_ref(),
+                )?);
+            }
+            if !arguments
+                .iter()
+                .any(|argument| contains_inference(&self.inference.resolve(argument)))
+            {
+                continue;
+            }
+            // No fit, or more than one, leaves them to rustc.
+            let checkpoint = self.inference.checkpoint();
+            match self.select_impl(&bounded, identity, &arguments, owner.as_ref(), 0) {
+                Ok(()) => self.inference.commit(checkpoint),
+                Err(_) => self.inference.rollback(checkpoint),
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `ty` is a type of `pattern`, binding its variables. An
     /// integer or float literal whose kind is still open is a type of each
     /// builtin of its kind, as rustc's `{integer}` is.
@@ -17221,6 +17302,8 @@ impl<'a> Parser<'a> {
                 true
             }
         });
+        #[cfg(feature = "rust-import")]
+        self.fix_bounds_by_impls(&item, &requirements)?;
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -17347,24 +17430,21 @@ impl<'a> Parser<'a> {
         definition: &method::Definition,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
-        let [parameter] = definition.parameters() else {
-            return Err(Error::InvalidMethodCall {
-                owner: definition.owner_name().into(),
-                method: definition.name().into(),
-                reason: format!(
-                    "symbolic callable requires exactly 1 owned parameter, found {}",
-                    definition.parameters().len()
-                )
-                .into(),
-                call: expression,
-            });
-        };
-        let input = symbolic_input_type(&parameter.ty).ok_or_else(|| Error::InvalidMethodCall {
-            owner: definition.owner_name().into(),
-            method: definition.name().into(),
-            reason: "symbolic callable input must be one owned, runtime-supported type".into(),
-            call: expression,
-        })?;
+        // Any number of inputs, as a hand-written `Default`'s `State::default`
+        // that `application(State::default, ..)` takes has none.
+        let inputs = definition
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                symbolic_input_type(&parameter.ty).ok_or_else(|| Error::InvalidMethodCall {
+                    owner: definition.owner_name().into(),
+                    method: definition.name().into(),
+                    reason: "symbolic callable inputs must be owned, runtime-supported types"
+                        .into(),
+                    call: expression,
+                })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
         let output =
             exact_symbolic_type(definition.output()).ok_or_else(|| Error::InvalidMethodCall {
                 owner: definition.owner_name().into(),
@@ -17384,7 +17464,7 @@ impl<'a> Parser<'a> {
                 .capabilities()
                 .fingerprint(),
         );
-        Ok(self.symbolic_expr(value, Box::new([input]), output, expression, Vec::new()))
+        Ok(self.symbolic_expr(value, inputs, output, expression, Vec::new()))
     }
 
     fn parse_host_function(
@@ -35518,7 +35598,9 @@ impl<'a> Parser<'a> {
                     crate::host::item::Kind::Function | crate::host::item::Kind::AssociatedFunction
                 )
             {
-                return self.parse_imported_function_item(items, owner, name_span);
+                // The name's own text, which the item's proof points at.
+                let named = span(name_span.start(), text_end(name_span.start(), &name));
+                return self.parse_imported_function_item(items, owner, named);
             }
             let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             let [item] = items.as_slice() else {
@@ -35949,6 +36031,11 @@ impl<'a> Parser<'a> {
             .find(|definition| definition.receiver().is_none() && definition.key() == &*key)
             .cloned()
         {
+            // So does an associated one, as a hand-written `Default`'s
+            // `State::default`.
+            if inputs.is_empty() && !nullary {
+                return Ok(());
+            }
             let symbolic = self.symbolic_associated(&definition, value.span)?;
             value.source = symbolic.source;
             value.prelude = symbolic.prelude;

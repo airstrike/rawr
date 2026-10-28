@@ -723,7 +723,7 @@ fn clone_operation(
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             functions: clone_function_items(contract, selected)?,
-            container_parameters: 0,
+            container_parameters: instance_parameters(plan.signature()),
             call: plan.call().cloned(),
             slots: selected.slots().into(),
             crossings: plan.crossings().into(),
@@ -790,6 +790,30 @@ fn event_mappers_bytes(selected: &identity::Identity) -> Option<usize> {
         .event_mappers()
         .len()
         .checked_mul(mem::size_of::<EventMapper>())
+}
+
+/// How many of a method's leading type parameters its receiver's instance
+/// names: those of the function whose opaque `impl Trait` type the method is
+/// a member of, which the receiver's value fixes, as `iced(..)`'s value
+/// fixes `Widget::_boxed`'s. A turbofish names only the ones after them.
+fn instance_parameters(signature: &signature::Signature) -> usize {
+    fn names(ty: &convert::Type, index: u32) -> bool {
+        match ty {
+            convert::Type::Parameter(parameter) => *parameter == index,
+            convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => {
+                arguments.iter().any(|argument| names(argument, index))
+            }
+            _ => false,
+        }
+    }
+    let Some(instance) = signature.instance() else {
+        return 0;
+    };
+    signature
+        .parameters()
+        .iter()
+        .take_while(|parameter| names(instance, parameter.index()))
+        .count()
 }
 
 fn clone_function_items(

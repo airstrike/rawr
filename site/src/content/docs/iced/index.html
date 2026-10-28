@@ -3,8 +3,20 @@
 <h1>iced</h1>
 <p class="lede">rawr-iced runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Saving a marked file reloads that code while the app keeps running.</p>
 <h2 id="when">When rawr-iced is used</h2>
-<p>The <code>rawr</code> command hands a program to rawr-iced when it names the <code>iced</code> crate. rawr-iced imports the app&rsquo;s other crates as <a href="/docs/imports">rawr-import</a> does. Set <code>RAWR_VERBOSE=1</code> to see which runner a program went to.</p>
+<p>The <code>rawr</code> command hands a program to rawr-iced when it names the <code>iced</code> crate and rawr-iced is installed. rawr-iced imports the app&rsquo;s other crates as <a href="/docs/imports">rawr-import</a> does. Set <code>RAWR_VERBOSE=1</code> to see which runner a program went to.</p>
 <p>rawr-iced is built against iced master at revision <code>be88873d</code>, which <code>rawr doctor</code> prints. A project on another revision is refused.</p>
+
+<h2 id="without">Without rawr-iced</h2>
+<p>With rawr-iced not installed, <code>rawr run</code> hands an iced app to <a href="/docs/imports">rawr-import</a>, which runs it as it runs any crate. It reads iced&rsquo;s API and generates the bindings your marked files call. Nothing in rawr is written for iced.</p>
+<p>Your <code>main</code> calls iced&rsquo;s own <code>iced::run(update, view)</code> or <code>iced::application(..).run()</code>, as an ordinary generic call. iced runs the event loop, the window and the drawing. Your <code>State</code> and <code>Message</code> cross into it as Rust types of their own, named as you name them, so the window&rsquo;s title is iced&rsquo;s default for your crate. Your <code>update</code> and <code>view</code> cross as Rust functions the runner makes, which call the version of your code that is current. <a href="/docs/imports#generics">Generic items</a> says how.</p>
+<p>What works today:</p>
+<ul>
+  <li>iced&rsquo;s <code>counter</code>, <code>checkbox</code>, <code>slider</code> and <code>tooltip</code> examples run unchanged but for the <code>// rawr</code> line, with the title, the theme and the widgets <code>cargo run</code> gives them.</li>
+  <li>A save of a marked file applies at the next message, with the state kept. iced builds the view again when a message arrives, so until then the window shows the last view.</li>
+  <li>A function of iced&rsquo;s that gives an <code>impl Widget</code> or an <code>impl Program</code>, as <code>iced::widget::iced(..)</code> and <code>iced::application(..)</code> do, works as a value you pass on to iced.</li>
+  <li>Most of iced&rsquo;s other examples stop with an error at a gap rawr-import doesn&rsquo;t fill yet.</li>
+  <li>Previews, widget reload and the window tools for agents come from rawr-iced.</li>
+</ul>
 
 
 <h2 id="install">Install</h2>

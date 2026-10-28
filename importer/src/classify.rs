@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 40;
+const CLASSIFIER_VERSION: u32 = 46;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -306,6 +306,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
+    /// While a trait's method is classified as a member of an opaque type a
+    /// function gives: that `impl Trait` type, which the method's `Self` is.
+    opaque_self: std::cell::RefCell<Option<model::Type>>,
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -598,6 +601,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             account: Account::new(),
             instance_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
+            opaque_self: std::cell::RefCell::new(None),
         };
         let initialized = (|| {
             context.retain(
@@ -1824,6 +1828,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 continue;
             }
+            // `P: Into<T>` of another type parameter, as iced's `Slider::
+            // default(impl Into<T>)`: core's `impl<T> From<T> for T` ties
+            // `P` to `T`, so a number literal is `T`'s number, as rustc
+            // infers `default(50)` a `u8` where `T` is one.
+            if let [Type::Parameter(_)] = &*converted
+                && self.is_core_trait(trait_id, "Into")
+            {
+                let reflexive = Type::Parameter(IMPL_PARAMETER);
+                self.retain_array::<Case>(1)?;
+                relations.push(Relation::new(
+                    *index,
+                    converted,
+                    Box::new([Case::new(reflexive.clone(), Box::new([reflexive]))]),
+                ));
+                continue;
+            }
             // `T: Mul<T>` ties nothing new; `R: SampleRange<T>` ties `T`.
             if !converted.iter().any(|ty| names_other_parameter(ty, *index)) {
                 continue;
@@ -1866,11 +1886,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     break;
                 }
             }
-            if cases.is_empty() || cases.len() > CASES {
+            if cases.len() > CASES {
                 continue;
             }
+            // With no case, the trait's impl headers may still fix the
+            // bound's arguments (D604).
             self.retain_array::<Case>(cases.len())?;
-            relations.push(Relation::new(*index, converted, cases.into_boxed_slice()));
+            relations.push(
+                Relation::new(*index, converted, cases.into_boxed_slice())
+                    .of_trait(*crate::surface::identity::Definition::of(trait_id).as_bytes()),
+            );
         }
         self.retain_array::<Relation>(relations.len())?;
         Ok(relations.into_boxed_slice())
@@ -3618,7 +3643,9 @@ impl<P: api::Phase> Context<'_, P> {
                 let implementations = if variant.is_some() {
                     Box::default()
                 } else {
-                    self.implementations(export, definitions)?
+                    let mut records = self.implementations(export, definitions)?.into_vec();
+                    records.extend(self.opaque_implementations(export, definition)?);
+                    records.into_boxed_slice()
                 };
                 Ok(OutcomeRecord {
                     export: export.key().clone(),
@@ -3725,6 +3752,217 @@ impl<P: api::Phase> Context<'_, P> {
             });
         }
         Ok(outcomes.into_boxed_slice())
+    }
+
+    /// The methods of each trait an opaque `impl Trait` type the function
+    /// `definition` gives implements, as members of that type: iced's
+    /// `iced(..) -> impl Widget<..>` gives a value whose `Widget::_boxed`
+    /// `column!` calls. Each is the trait's method with the trait's
+    /// arguments the bound's, `Self` the opaque type, and the function's
+    /// type parameters, which the opaque type's arguments are, its own.
+    fn opaque_implementations(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+    ) -> Result<Vec<ImplementationRecord>, Error> {
+        let model::Kind::Function {
+            signature,
+            generics,
+        } = definition.kind()
+        else {
+            return Ok(Vec::new());
+        };
+        let mut opaques = Vec::new();
+        impl_traits(signature.output(), &mut opaques);
+        let mut records = Vec::new();
+        for opaque in opaques {
+            let model::Type::ImplTrait { id, bounds, .. } = opaque else {
+                continue;
+            };
+            for predicate in bounds.iter() {
+                let model::Predicate::Bound {
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            binders,
+                        },
+                    ..
+                } = predicate
+                else {
+                    continue;
+                };
+                if !binders.is_empty() {
+                    continue;
+                }
+                let Some(trait_definition) = self
+                    .graph
+                    .definition_index(trait_id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                else {
+                    continue;
+                };
+                let model::Kind::Trait { associated, .. } = trait_definition.kind() else {
+                    continue;
+                };
+                let mut outcomes = Vec::new();
+                for method_id in associated.iter() {
+                    let Some(method) = self
+                        .graph
+                        .definition_index(method_id)
+                        .and_then(|index| self.graph.definitions().nth(index))
+                    else {
+                        continue;
+                    };
+                    let model::Kind::Function {
+                        signature: method_signature,
+                        generics: method_generics,
+                    } = method.kind()
+                    else {
+                        continue;
+                    };
+                    if matches!(method_signature.receiver(), model::Receiver::None) {
+                        continue;
+                    }
+                    let selector = selector(method)?;
+                    self.retain_selector(&selector)?;
+                    let identity =
+                        crate::surface::identity::Identity::imported(export, None, selector)?;
+                    let name = method.display_path().last().unwrap_or("<unnamed>");
+                    self.retain_outcome_common(export.key(), name)?;
+                    self.retain_span(export.span())?;
+                    self.retain_span(method.span())?;
+                    let origin = representability::origin::Set::new(
+                        export.span().clone(),
+                        method.span().clone(),
+                    );
+                    let evidence = self.classify_opaque_method(
+                        opaque,
+                        trait_id,
+                        arguments,
+                        generics,
+                        method,
+                        method_signature,
+                        method_generics,
+                    )?;
+                    outcomes.push(OutcomeRecord {
+                        export: export.key().clone(),
+                        identity,
+                        name: name.into(),
+                        origin: Some(origin),
+                        evidence,
+                        implementations: Box::default(),
+                        variant: None,
+                    });
+                }
+                // Charged as `implementations` charges a crate's own.
+                self.retain_items(1)?;
+                self.retain_items(outcomes.len())?;
+                self.retain_array::<ImplementationRecord>(1)?;
+                self.retain_array::<OutcomeRecord>(outcomes.len())?;
+                self.retain_span(definition.span())?;
+                records.push(ImplementationRecord {
+                    identity: crate::surface::identity::Implementation::opaque(id, trait_id),
+                    span: definition.span().clone(),
+                    associated: outcomes.into_boxed_slice(),
+                });
+            }
+        }
+        Ok(records)
+    }
+
+    /// `method` of the trait `trait_id` as a member of the opaque type
+    /// `opaque`, whose bound gives the trait `arguments`, within the
+    /// function whose generics are `container`.
+    #[allow(clippy::too_many_arguments)]
+    fn classify_opaque_method(
+        &self,
+        opaque: &model::Type,
+        trait_id: &api::identity::Definition,
+        arguments: &[model::Argument],
+        container: &model::Generics,
+        method: &model::Definition,
+        signature: &model::Signature,
+        generics: &model::Generics,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        // A bound's arguments leave out `Self`, the trait's parameter 0.
+        let mut substitutions = arguments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| match argument {
+                model::Argument::Type(ty) => Some((
+                    (trait_id.clone(), u32::try_from(index).ok()?.checked_add(1)?),
+                    ty.clone(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let first = container
+            .parameters()
+            .map(|parameter| parameter.index().saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        let mut own = Vec::new();
+        for (position, parameter) in generics.parameters().enumerate() {
+            let index = first
+                .checked_add(u32::try_from(position).map_err(|_| Error::IndexOverflow)?)
+                .ok_or(Error::IndexOverflow)?;
+            if matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                substitutions.push((
+                    (parameter.owner().clone(), parameter.index()),
+                    model::Type::Parameter {
+                        owner: parameter.owner().clone(),
+                        index,
+                    },
+                ));
+            }
+            own.push(model::Parameter::new(
+                parameter.owner().clone(),
+                index,
+                parameter.name().into(),
+                parameter.kind().clone(),
+            ));
+        }
+        let own = model::Generics::new(
+            own.into_boxed_slice(),
+            generics.predicates().cloned().collect(),
+        );
+        let signature = substituted_signature(signature, &substitutions);
+        let inherited =
+            model::Generics::inherited(container, &own).map_err(|_| Error::Allocation)?;
+        let outer = self.opaque_self.replace(Some(opaque.clone()));
+        let classified = self.function(&signature, &inherited).and_then(|plan| {
+            let instance = self.convert(&model::Type::SelfType(trait_id.clone()))?;
+            match plan {
+                Representability::FunctionItem(item) => {
+                    Ok(Representability::FunctionItem(item.with_instance(instance)))
+                }
+                _ => Err(Failure::from(reject::Kind::GenericImplementation)),
+            }
+        });
+        *self.opaque_self.borrow_mut() = outer;
+        match classified {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(method.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        method.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
+        }
     }
 
     fn classify_associated(
@@ -5218,6 +5456,15 @@ impl<P: api::Phase> Context<'_, P> {
                 }
             }
             model::Type::Parameter { index, .. } => Type::Parameter(*index),
+            // A trait method's `Self` where it is a member of an opaque type
+            // (`opaque_implementations`).
+            model::Type::SelfType(_) if self.opaque_self.borrow().is_some() => {
+                let opaque = self.opaque_self.borrow().clone();
+                let outer = self.opaque_output.replace(Some(Box::default()));
+                let converted = opaque.as_ref().map(|opaque| self.convert(opaque));
+                *self.opaque_output.borrow_mut() = outer;
+                converted.ok_or(representability::reject::Kind::OpaqueType)??
+            }
             model::Type::SelfType(id) => {
                 let index = self.graph.implementation_index(id).or_else(|| {
                     // A trait's `Self` in a default method classified as a
@@ -6713,6 +6960,28 @@ fn futurize(
 
 /// `signature` with each parameter in `substitutions` replaced in its
 /// receiver, inputs and output.
+/// The opaque `impl Trait` types `ty` holds, outermost first.
+fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Type>) {
+    match ty {
+        model::Type::ImplTrait { .. } => found.push(ty),
+        model::Type::Definition { arguments, .. } => {
+            for argument in arguments.iter() {
+                if let model::Argument::Type(ty) = argument {
+                    impl_traits(ty, found);
+                }
+            }
+        }
+        model::Type::Reference { ty, .. } | model::Type::Slice(ty) => impl_traits(ty, found),
+        model::Type::Array { element, .. } => impl_traits(element, found),
+        model::Type::Tuple(members) => {
+            for member in members.iter() {
+                impl_traits(member, found);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn substituted_signature(
     signature: &model::Signature,
     substitutions: &[((api::identity::Definition, u32), model::Type)],

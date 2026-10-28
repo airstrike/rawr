@@ -136,6 +136,12 @@ pub struct Relation {
     parameter: u32,
     arguments: Box<[super::convert::Type]>,
     cases: Box<[Case]>,
+    /// The bound's trait, by its definition identity, when its impls'
+    /// headers may fix what no case does (D604): `W: Widget<M, T, R>`
+    /// where `W` is `Column<Element<M, Theme, R>>` and the impl for
+    /// `Column<W>` has its own `W: Widget<M, T, R>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_identity: Option<[u8; 32]>,
 }
 
 /// One implementation of a [`Relation`]'s trait: its self type and its
@@ -157,7 +163,20 @@ impl Relation {
             parameter,
             arguments,
             cases,
+            trait_identity: None,
         }
+    }
+
+    /// The relation of the trait whose definition identity is `identity`.
+    pub(crate) const fn of_trait(mut self, identity: [u8; 32]) -> Self {
+        self.trait_identity = Some(identity);
+        self
+    }
+
+    /// The bound's trait, by its definition identity, when known.
+    #[must_use]
+    pub const fn trait_identity(&self) -> Option<[u8; 32]> {
+        self.trait_identity
     }
 
     /// The type parameter the bound is on.

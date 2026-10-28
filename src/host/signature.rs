@@ -29,6 +29,9 @@ pub struct Relation {
     parameter: ImmutableString,
     arguments: Box<[Pattern]>,
     cases: Box<[Case]>,
+    /// The bound's trait, by its definition identity, whose impl headers
+    /// fix what no case does (D604).
+    trait_identity: Option<[u8; 32]>,
 }
 
 /// One implementation of a [`Relation`]'s trait.
@@ -72,7 +75,20 @@ impl Relation {
             parameter: parameter.into(),
             arguments,
             cases,
+            trait_identity: None,
         }
+    }
+
+    /// The relation of the trait whose definition identity is `identity`.
+    #[must_use]
+    pub const fn of_trait(mut self, identity: Option<[u8; 32]>) -> Self {
+        self.trait_identity = identity;
+        self
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn trait_identity(&self) -> Option<[u8; 32]> {
+        self.trait_identity
     }
 
     pub(crate) fn parameter(&self) -> &str {

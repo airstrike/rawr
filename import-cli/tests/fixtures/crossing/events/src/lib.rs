@@ -5,6 +5,8 @@
 
 use std::fmt::Debug;
 
+pub mod controls;
+
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
 pub struct Widget<'a, M> {

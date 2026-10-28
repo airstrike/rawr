@@ -5767,6 +5767,14 @@ fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request
             functions,
             ..
         } => {
+            // A trait's method as a member of the opaque type itself, as
+            // `Widget::_boxed` of what `iced(..)` gives.
+            if let Some(instance) = signature.instance() {
+                let instance = substituted(instance, signature, substitutions)?;
+                if let Some(opaque) = first_opaque(&instance) {
+                    return Ok(Some((0, opaque.clone())));
+                }
+            }
             if let Some(opaque) = substitutions
                 .iter()
                 .take(*container_parameters)
@@ -11450,6 +11458,27 @@ impl TypePaths {
                                 identities
                                     .entry(format!("{}::{}", owner.root(), ty.path()))
                                     .or_insert(*ty.identity());
+                            });
+                        }
+                    }
+                    // An alias that passes its parameters on to a type, as
+                    // iced's `widget::Text`, is that type's path too: a method
+                    // reached through it finds the type's family.
+                    for owner in facade
+                        .into_iter()
+                        .flat_map(crate::surface::facade::Plan::facades)
+                    {
+                        for alias in owner.type_aliases() {
+                            let Some(identity) = passed_on(alias) else {
+                                continue;
+                            };
+                            let Some(lifetimes) = traits.get(&identity).copied() else {
+                                continue;
+                            };
+                            let path = format!("{}::{}", owner.root(), alias.path());
+                            paths.entry(path.clone()).or_insert(lifetimes);
+                            PATH_IDENTITIES.with_borrow_mut(|identities| {
+                                identities.entry(path).or_insert(identity);
                             });
                         }
                     }
