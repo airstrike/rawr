@@ -4,6 +4,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 ## Unreleased
 
+- The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.7 (2026-10-28)
+
 - Upstream iced's `slider` example runs under `rawr run` without rawr-iced again. Its `text(self.value)` was read as the `text!` macro, because the `text` function had no binding.
 - A crate type whose only public name is an alias that passes its parameters on is named through that alias, with the alias's defaults. iced's `widget::Text` is such an alias while `iced::advanced` is off. Functions that give such a type, such as `text(..)`, now have bindings.
 - A crate constant whose value isn't a scalar, such as iced's `Font::MONOSPACE` or `Theme::ALL`, is read by its path where the runner runs. Before, rawr said "the importer couldn't extract it".
@@ -12,9 +17,6 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A type alias of an associated type, such as iced's `canvas::Geometry`, is the type it names at its defaults. Before, it stopped with "(Projection)". It is written without arguments.
 - `#[derive(Default)]` works on a struct with a field of a generic crate type whose `Default` impl is generic, such as `canvas::Cache`.
 - Eleven upstream iced examples now get past these aliases: arc, bezier_tool, clock, sandpiles, vectorial_text, layout, tour, todos, multitouch, sierpinski_triangle and solar_system. Each still stops at a later gap.
-- The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
-- rawr-iced is being retired step by step, so that removing it ends up a no-op.
-
 ## 0.3.6 (2026-10-28)
 
 - A project that shares a crate with rawr at fewer features, as iced shares ahash, runs again with the shared copy. Before, the runner's build stopped with "cannot update the lock file because --locked was passed". The runner's lockfile is now what cargo resolves without rawr, with the project's versions kept.

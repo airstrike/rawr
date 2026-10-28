@@ -1,6 +1,6 @@
 [package]
 name = "rawr_codegen"
-version = "0.3.6"
+version = "0.3.7"
 rust-version = "1.91.0"
 edition = "2024"
 resolver = "3"
@@ -26,5 +26,5 @@ syn = { version = "2.0.0", features = ["full", "parsing", "printing", "proc-macr
 quote = "1.0.0"
 
 [dev-dependencies]
-rawr = { path = "..", version = "0.3.6", features = ["metadata"] }
+rawr = { path = "..", version = "0.3.7", features = ["metadata"] }
 trybuild = "1.0.0"
