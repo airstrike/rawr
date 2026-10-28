@@ -131,12 +131,19 @@ node --input-type=module -e '
       }
       if (!response.ok) {
         const message = (await response.text()).slice(0, 200);
-        if (response.status === 422 && message.includes("render time limit") && ++cold <= 3) {
-          console.log("the bot ran out of render time; retrying in 10 s");
+        // A fresh container can also crash or drop its first renders while
+        // it starts, as 0.3.4's and 0.3.6's checks did.
+        const cold_start =
+          (response.status === 422 &&
+            (message.includes("render time limit") || message.includes("out of memory or crashed"))) ||
+          (response.status === 500 && message.includes("Container suddenly disconnected"));
+        if (cold_start && ++cold <= 3) {
+          console.log("the bot stopped on a cold start (" + message + "); retrying in 10 s");
           await new Promise((resolve) => setTimeout(resolve, 10000));
           continue;
         }
-        throw new Error("run failed: " + response.status + " " + message);
+        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
+        throw new Error("run failed: " + response.status + " " + message + " on the snippet starting " + JSON.stringify(first));
       }
       console.log("ran a site snippet:", response.headers.get("content-type"));
       break;
