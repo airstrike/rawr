@@ -9755,7 +9755,8 @@ fn render_take_input(
     let ty = if matches!(
         ty,
         convert::Type::Sequence { .. } | convert::Type::Option(_)
-    ) {
+    ) || range_inclusive_element(ty).is_some()
+    {
         deep = substituted(ty, signature, substitutions)?;
         &deep
     } else {
@@ -10061,6 +10062,17 @@ fn render_take(
         }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
+        // Rawr's float or integer range, as the range of the number the
+        // instance gives.
+        ty if range_inclusive_element(ty).is_some() => {
+            let mut converted = String::new();
+            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).
@@ -10276,6 +10288,31 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
+        // `RangeInclusive<i64>` as one of the integer the instance gives.
+        ty if let Some(element) = range_inclusive_element(ty) => match element {
+            convert::Type::Builtin(convert::Builtin::F64) => {
+                cast(output, "std::ops::RangeInclusive<f64>")
+            }
+            convert::Type::Builtin(convert::Builtin::F32) => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::RangeInclusive<f64>>().map(|range| (*range.start() as f32)..=(*range.end() as f32)).map_err(|_| Error::TypeMismatch)"
+            ),
+            convert::Type::Builtin(builtin)
+                if *builtin == convert::Builtin::I64 || builtin.is_narrow_integer() =>
+            {
+                write!(
+                    output,
+                    "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from::<{}>)",
+                    builtin.rust_name().unwrap_or_default()
+                )
+            }
+            _ => {
+                return Err(request::Error::Drift {
+                    field: "an inclusive range of a type that is not a number",
+                })
+            }
+        },
         convert::Type::Builtin(convert::Builtin::StaticStr) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| static_pins().pin(value)).map_err(|_| Error::TypeMismatch)"
@@ -10593,6 +10630,23 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 fn is_duration(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
         if *definition == crate::surface::identity::Definition::duration())
+}
+
+/// `T` of Rust's `RangeInclusive<T>` of a float or of a type parameter,
+/// which crosses by value as Rawr's float or integer range.
+fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::range_inclusive() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The `Output` and `Progress` of an `impl Sipper<Output, Progress>` output.
@@ -12175,6 +12229,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             if *definition == crate::surface::identity::Definition::value() =>
         {
             "__rawr_internal::Value".to_owned()
+        }
+        ty if let Some(element) = range_inclusive_element(ty) => {
+            format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),

@@ -5721,6 +5721,24 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
+                } else if let Some(element) = range_inclusive_element(definition, arguments) {
+                    // A range of a type parameter or of a float, as a
+                    // crate's `slider(range: RangeInclusive<T>, value: T,
+                    // ..)` takes: Rawr's integer or float range as `T` is
+                    // an integer or a float.
+                    let element = self.convert(element)?;
+                    if !matches!(
+                        element,
+                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                    ) {
+                        return Err(
+                            representability::reject::Kind::UnsupportedGenericArgument.into()
+                        );
+                    }
+                    Type::Nominal {
+                        definition: crate::surface::identity::Definition::range_inclusive(),
+                        arguments: Box::new([element]),
+                    }
                 } else if let Some(element) = range_element(definition, arguments) {
                     // A float range, as rand's `random_range(0.5..1.0)` takes,
                     // or the impl parameter a relation case binds.
@@ -8049,23 +8067,36 @@ fn result_elements<'a>(
     }
 }
 
+/// Whether the type is core's `RangeInclusive` of a concrete integer:
+/// Rawr's `RangeInclusive<i64>`, converted to the integer type where the
+/// call takes it. A range of a type parameter is
+/// [`Definition::range_inclusive`](crate::surface::identity::Definition::range_inclusive)'s.
 fn is_i64_range(definition: &model::Definition, arguments: &[model::Argument]) -> bool {
+    matches!(
+        range_inclusive_element(definition, arguments),
+        Some(model::Type::Primitive(name)) if matches!(
+            name.as_ref(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+        )
+    )
+}
+
+/// `T` of core's `ops::RangeInclusive<T>`.
+fn range_inclusive_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
     let unit = definition.id().unit();
-    unit.authority().sysroot().is_some()
-        && unit.crate_name() == "core"
-        && definition.display_path().last() == Some("RangeInclusive")
-        && match arguments {
-            // Rawr's `RangeInclusive<i64>`, which a range of another integer
-            // type, or of a type parameter an integer fills, as iced's
-            // `slider(range: RangeInclusive<T>, value: T, ..)` takes, is
-            // converted to where the call takes it.
-            [model::Argument::Type(model::Type::Primitive(name))] => matches!(
-                name.as_ref(),
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
-            ),
-            [model::Argument::Type(model::Type::Parameter { .. })] => true,
-            _ => false,
-        }
+    if unit.authority().sysroot().is_none()
+        || unit.crate_name() != "core"
+        || definition.display_path().last() != Some("RangeInclusive")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Type(element)] => Some(element),
+        _ => None,
+    }
 }
 
 /// Classification failure that cannot expose a partial contract.

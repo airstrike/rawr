@@ -18,6 +18,7 @@ const RENDERER_DOMAIN: &[u8] = b"rawr.identity.renderer/v1";
 const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
+const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
@@ -249,6 +250,16 @@ impl Definition {
         Self(Framed::new(DURATION_DOMAIN).finish())
     }
 
+    /// Rust's `std::ops::RangeInclusive<T>` of a float or of a type
+    /// parameter, at its one argument `T`: Rawr's `RangeInclusive<f64>` or
+    /// `RangeInclusive<i64>` as `T` is a float or an integer, as a crate's
+    /// `slider(range: RangeInclusive<T>, value: T, ..)` takes either. It
+    /// lives in `core`, which no crate's facade declares.
+    #[must_use]
+    pub fn range_inclusive() -> Self {
+        Self(Framed::new(RANGE_INCLUSIVE_DOMAIN).finish())
+    }
+
     /// A script value where a generic item is instantiated at a script type
     /// (D513.2): the runner builds the item at `rawr::Value`, and each value
     /// that comes back is checked against the script type it stands for.
@@ -296,6 +307,7 @@ impl Definition {
         *bytes == Self::future().0
             || *bytes == Self::sipper().0
             || *bytes == Self::duration().0
+            || *bytes == Self::range_inclusive().0
             || *bytes == Self::value().0
             || *bytes == Self::element().0
             || *bytes == Self::theme().0

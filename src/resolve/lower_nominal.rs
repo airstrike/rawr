@@ -1547,6 +1547,29 @@ fn erased(ty: &Ty) -> bool {
     )
 }
 
+/// `T` of a crate's `RangeInclusive<T>` of a type parameter or a float,
+/// which the importer declares as a type of its own
+/// (`Definition::range_inclusive`).
+#[cfg(feature = "rust-import")]
+fn range_inclusive_element(
+    ty: &crate::host::type_ref::Type,
+) -> Option<&crate::host::type_ref::Type> {
+    match ty.shape() {
+        crate::host::type_ref::Shape::Imported {
+            identity,
+            arguments,
+        } if identity.as_bytes()
+            == rawr_import::surface::identity::Definition::range_inclusive().as_bytes() =>
+        {
+            match &arguments[..] {
+                [element] => Some(element),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// An instance type as `imported_surface_type` converts it, without
 /// allocation accounting: the key of a call's instance.
 #[cfg(feature = "rust-import")]
@@ -17249,6 +17272,28 @@ impl<'a> Parser<'a> {
                     .get(index)
                     .and_then(Option::as_ref)
                     .or(associated_origin.as_ref());
+                // A crate's `RangeInclusive<T>` takes the argument's range,
+                // of floats or of integers, and `T` that kind of number, as
+                // rustc infers `T` from `1.0..=30.0`.
+                #[cfg(feature = "rust-import")]
+                if let Some(element) = range_inclusive_element(ty)
+                    && let Some(float) = arguments
+                        .and_then(|arguments| arguments.get(index))
+                        .and_then(|argument| match self.inference.resolve(&argument.ty) {
+                            Ty::FloatRange => Some(true),
+                            Ty::InclusiveRange => Some(false),
+                            _ => None,
+                        })
+                {
+                    let element = self.instantiate_host_type(
+                        element,
+                        &mut parameters,
+                        &item_path,
+                        item_owner.as_ref(),
+                        originating,
+                    )?;
+                    return Ok(self.inclusive_range_of(&element, Some(float)));
+                }
                 self.instantiate_host_type(
                     ty,
                     &mut parameters,
@@ -17362,6 +17407,29 @@ impl<'a> Parser<'a> {
     /// range of floats, and `T` is that float, as rustc's trait selection
     /// infers it. Only a bound whose argument matches exactly one
     /// implementation ties anything.
+    /// Rawr's inclusive range where a crate takes `RangeInclusive<T>` of
+    /// `element`: `RangeInclusive<f64>` where `float` says the argument is
+    /// a range of floats, or with no argument where `T` is a float, and
+    /// `RangeInclusive<i64>` otherwise. `T` takes the range's kind of
+    /// number, as rustc's `{float}` or `{integer}`.
+    #[cfg(feature = "rust-import")]
+    fn inclusive_range_of(&mut self, element: &Ty, float: Option<bool>) -> Ty {
+        let float =
+            float.unwrap_or_else(|| matches!(self.inference.resolve(element), Ty::Float(_)));
+        let id = self.inference.fresh_id();
+        let number = if float {
+            Ty::Float(Float::Var(id))
+        } else {
+            Ty::Int(Int::Var(id))
+        };
+        let _ = self.unify_type(element, &number);
+        if float {
+            Ty::FloatRange
+        } else {
+            Ty::InclusiveRange
+        }
+    }
+
     fn apply_relations(
         &mut self,
         item: &crate::host::item::Definition,
@@ -17766,6 +17834,12 @@ impl<'a> Parser<'a> {
                         .collect::<Result<Vec<_>, _>>()?
                         .into_boxed_slice(),
                 }
+            }
+            #[cfg(feature = "rust-import")]
+            Shape::Imported { .. } if let Some(element) = range_inclusive_element(ty) => {
+                let element =
+                    self.instantiate_host_type(element, parameters, operation, owner, originating)?;
+                self.inclusive_range_of(&element, None)
             }
             #[cfg(feature = "rust-import")]
             Shape::Imported {
