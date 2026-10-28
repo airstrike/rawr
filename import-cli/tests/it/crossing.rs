@@ -179,7 +179,8 @@ fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
 /// value through an arena of the call's own, and then by a variant, whose
 /// message is made where it is delivered. `and_then` takes the bounded
 /// generic `Task::done`, `listen_with` takes a closure where it takes a
-/// function pointer, and `pick(..)` takes a slice of the crate enum with
+/// function pointer and calls it on another thread with crate values, and
+/// `pick(..)` takes a slice of the crate enum with
 /// `Family::to_string`, which borrows each option. The output is `cargo
 /// run`'s.
 #[test]
