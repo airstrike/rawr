@@ -4,7 +4,9 @@
 //! `impl Widget` a function gives, an application an opaque `impl Program`
 //! carries, a field of a type whose `Default` the crate derives, and, in
 //! the shape of iced's pick_list, a choice of script values and a string
-//! literal as a widget.
+//! literal as a widget, and, in the shape of iced's events and
+//! url_handler, an application's subscription to the messages the state
+//! listens for.
 
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -257,6 +259,74 @@ pub trait Program {
         label: &str,
         labels: &mut Vec<String>,
     ) -> Option<Self::Message>;
+    /// The messages the state listens for.
+    fn subscription(&self, _state: &Self::State) -> Subscription<Self::Message> {
+        Subscription::none()
+    }
+}
+
+/// The messages a program listens for, as iced's `Subscription`.
+pub struct Subscription<T> {
+    messages: Vec<T>,
+}
+
+impl<T> Subscription<T> {
+    /// No messages.
+    pub fn none() -> Self {
+        Subscription {
+            messages: Vec::new(),
+        }
+    }
+
+    /// The subscription with each message turned into another by `f`.
+    pub fn map<A>(self, f: impl Fn(T) -> A + 'static) -> Subscription<A> {
+        Subscription {
+            messages: self.messages.into_iter().map(f).collect(),
+        }
+    }
+}
+
+/// The first `count` ticks of a clock, as iced's `time::every`.
+pub fn ticks(count: u32) -> Subscription<u32> {
+    Subscription {
+        messages: (1..=count).collect(),
+    }
+}
+
+/// `program` with the subscription `subscription` of its state.
+struct WithSubscription<P, F> {
+    program: P,
+    subscription: F,
+}
+
+impl<P, F> Program for WithSubscription<P, F>
+where
+    P: Program,
+    F: Fn(&P::State) -> Subscription<P::Message>,
+{
+    type State = P::State;
+    type Message = P::Message;
+
+    fn boot(&self) -> Self::State {
+        self.program.boot()
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) {
+        self.program.update(state, message);
+    }
+
+    fn view(
+        &self,
+        state: &Self::State,
+        label: &str,
+        labels: &mut Vec<String>,
+    ) -> Option<Self::Message> {
+        self.program.view(state, label, labels)
+    }
+
+    fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+        (self.subscription)(state)
+    }
 }
 
 /// What makes a program's state: any `Fn()` whose output turns into it.
@@ -339,6 +409,22 @@ where
 }
 
 impl<P: Program> Application<P> {
+    /// The application with the subscription `f` of its state, as iced's
+    /// `Application::subscription`: its program is another one the caller
+    /// can't name, of the same state and message.
+    pub fn subscription(
+        self,
+        f: impl Fn(&P::State) -> Subscription<P::Message>,
+    ) -> Application<impl Program<State = P::State, Message = P::Message>> {
+        Application {
+            program: WithSubscription {
+                program: self.program,
+                subscription: f,
+            },
+            fonts: self.fonts,
+        }
+    }
+
     /// The application with `fonts` loaded.
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
@@ -355,6 +441,11 @@ impl<P: Program> Application<P> {
         );
         let presses = std::env::var("EVENTS_PRESS").unwrap_or_default();
         let mut state = self.program.boot();
+        // Each message the booted state listens for, before any press.
+        for message in self.program.subscription(&state).messages {
+            println!("heard {message:?}");
+            self.program.update(&mut state, message);
+        }
         for (event, label) in presses
             .split(',')
             .filter(|label| !label.is_empty())

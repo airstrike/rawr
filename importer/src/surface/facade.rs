@@ -2898,10 +2898,19 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 _ => return Err(super::Error::ForeignIdentity),
             },
             // A closure the item takes, as `PaneGrid::new(&state, view)`'s,
-            // is the closure's type, as a function item's is.
-            match plan.call() {
-                Some(call) => callable_signature(plan.signature(), &[call])?,
-                None => signature(plan.signature())?,
+            // is the closure's type, as a function item's is, and a script
+            // function fills it as a slot (D594), as iced's
+            // `Application::subscription` takes one.
+            if plan.crossings().is_empty() {
+                match plan.call() {
+                    Some(call) => callable_signature(plan.signature(), &[call])?,
+                    None => signature(plan.signature())?,
+                }
+            } else {
+                let calls = plan.crossings().iter().collect::<Vec<_>>();
+                let mut signature = callable_signature(plan.signature(), &calls)?;
+                signature.crossing = true;
+                signature
             },
         ),
     };

@@ -5930,9 +5930,32 @@ fn opaque_table_source(
         let Some((position, _)) = opaque_operand(consumer)? else {
             continue;
         };
+        // A call that gives a value of another opaque type, as iced's
+        // `Application::subscription` gives another `impl Program`, makes
+        // that value's own table here, where rustc knows its type. One that
+        // gives a value of the same type passes this table on.
+        let produced = match consumer.operation() {
+            Operation::Function {
+                signature,
+                substitutions,
+                ..
+            }
+            | Operation::Method {
+                signature,
+                substitutions,
+                ..
+            } => substituted(signature.output(), signature, substitutions)?,
+            _ => convert::Type::Unit,
+        };
+        let other = first_opaque(&produced).is_some_and(|produced| *produced != key);
+        let inner = if other {
+            opaque_table_source(consumer, cohort, profile, facade)?
+        } else {
+            None
+        };
         let body = {
-            let _producing = OpaqueProducing::enter(None);
-            let _consuming = OpaqueConsuming::enter(true);
+            let _producing = OpaqueProducing::enter(inner);
+            let _consuming = OpaqueConsuming::enter(!other);
             let mut body = Vec::new();
             let region = region_inputs(consumer)?;
             if !region.is_empty() {
@@ -6306,24 +6329,34 @@ fn render_adapter_body(
             container_parameters,
             call,
             functions,
-            ..
+            slots,
+            crossings,
         } => {
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
-            } else if let Some(call) = call {
+            } else if call.is_some() || !slots.is_empty() {
                 // A script closure a method takes, as Freya's `on_press`
-                // does (D551.6), or a crate function in its place.
+                // does (D551.6), a crate function in its place, or a script
+                // function as a slot (D594), as iced's `Application::
+                // subscription(App::subscription)` takes it.
+                let crossed = Crossed { slots, crossings };
                 render_function_arguments(
                     signature,
                     substitutions,
                     functions,
                     &[],
                     None,
-                    Some(call),
-                    Crossed::default(),
+                    call.as_ref(),
+                    crossed,
                     1,
                     output,
                 )?;
+                for (position, ty) in signature.inputs().iter().enumerate() {
+                    if crossed.slot_at(position, ty).is_some() {
+                        writeln!(output, "    let argument_{position} = slot_{position};")
+                            .map_err(|_| request::Error::Encoding)?;
+                    }
+                }
             } else {
                 render_arguments_with(signature, substitutions, 1, output)?;
             }

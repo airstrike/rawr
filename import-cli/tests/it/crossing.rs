@@ -234,6 +234,26 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
     );
 }
 
+/// iced's events and url_handler: the opaque `impl Program` that
+/// `application(..)` gives takes a script function as its subscription,
+/// which borrows the program's state as `&P::State` and gives a
+/// `Subscription<P::Message>`, both read through the opaque program's
+/// bounds. The call gives another opaque program, whose `fonts` and `run`
+/// are compiled where it was made, and the crate calls the subscription
+/// back with the booted state. The output is `cargo run`'s.
+#[test]
+fn an_opaque_program_takes_a_subscription_of_its_state() {
+    let (rawr, cargo) = both_printed("crossing-subscription", "subscription.rs", "Listen");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("heard Ticked(3)")
+            && rawr.contains("1 view pad 0 <Listen:0> \"6\"")
+            && rawr.contains("1 message Toggled(true)")
+            && rawr.contains("last view pad 0 <x Listen:0> \"6\""),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,
