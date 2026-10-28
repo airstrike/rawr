@@ -5767,6 +5767,7 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             convert::Type::Sequence {
                 element,
                 owned: true,
+                length: None,
             } => element,
             ty => ty,
         };
@@ -8997,6 +8998,17 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(|_| request::Error::Encoding)
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => {
+            output
+                .write_all(b"[")
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(element, facade, output)?;
+            write!(output, "; {length}]").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Sequence { element, .. } => {
             output
                 .write_all(b"Vec<")
@@ -9711,6 +9723,7 @@ fn render_take_input(
         && let convert::Type::Sequence {
             element,
             owned: true,
+            length: None,
         } = substituted(ty, signature, substitutions)?
         && let Some(family) = family_of(&element)
     {
@@ -9767,10 +9780,17 @@ fn render_take_input(
         Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
         None => render_take(local, index, ty, &mut taken)?,
     }
-    let annotation = generic
+    // A crate type of no arguments is written out too: a trait's function
+    // the call reaches through one impl, as `Background::from(color)` of
+    // `impl From<Color> for Background`, takes the impl's type, which
+    // rustc can't infer beside the reflexive `From<Background>`.
+    let plain = matches!(ty, convert::Type::Nominal { arguments, .. } if arguments.is_empty())
+        && !is_value(ty)
+        && !is_future(ty);
+    let annotation = (generic || plain)
         .then(|| concrete_type(ty))
         .flatten()
-        .filter(|_| !is_value(ty));
+        .filter(|annotation| !is_value(ty) && annotation != "_");
     let Some(annotation) = annotation else {
         return output
             .write_all(&taken)
@@ -10080,6 +10100,7 @@ fn render_take(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_take(local, index, &owned, output);
         }
@@ -10413,6 +10434,7 @@ fn render_from_dynamic(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_from_dynamic(&owned, value, depth, output);
         }
@@ -10443,14 +10465,23 @@ fn render_from_dynamic(
             }
             write!(output, ")) }})")
         }
-        // A Rawr array, as the `Vec` of its converted elements.
-        convert::Type::Sequence { element, .. } => {
+        // A Rawr array, as the `Vec` of its converted elements, or as the
+        // Rust array of its length.
+        convert::Type::Sequence {
+            element, length, ..
+        } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            let fixed = match length {
+                Some(length) => format!(
+                    ".and_then(|items| <[_; {length}]>::try_from(items).map_err(|_| Error::TypeMismatch))"
+                ),
+                None => String::new(),
+            };
             write!(
                 output,
-                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>())"
+                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>()){fixed}"
             )
         }
     }
@@ -10552,7 +10583,7 @@ fn render_to_dynamic(
             )
         }
         // A `Vec`'s elements are moved out, a slice's cloned.
-        convert::Type::Sequence { element, owned } => {
+        convert::Type::Sequence { element, owned, .. } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
@@ -10862,9 +10893,14 @@ fn substituted(
         },
         convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
-        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
             element: one(element)?,
             owned: *owned,
+            length: *length,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
@@ -12294,6 +12330,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 format!("crate::{path}<{}>", arguments.join(", "))
             }
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => format!("[{}; {length}]", concrete_type(element)?),
         convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
         convert::Type::Tuple(members) => format!(
             "({},)",
@@ -12326,6 +12367,7 @@ fn script_slice(ty: &convert::Type) -> Option<&convert::Type> {
         convert::Type::Sequence {
             element,
             owned: false,
+            ..
         } if matches!(element.as_ref(), convert::Type::Script { .. }) => Some(element),
         _ => None,
     }
@@ -12337,6 +12379,7 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
         convert::Type::Sequence {
             element,
             owned: false,
+            ..
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
         // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
@@ -13078,6 +13121,7 @@ mod tests {
                 Type::Sequence {
                     element: Box::new(Type::Builtin(Builtin::U8)),
                     owned: false,
+                    length: None,
                 },
                 "int_from::<u8>",
             ),

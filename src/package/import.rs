@@ -2731,6 +2731,14 @@ impl Types {
                         host::type_ref::Builtin::Instant,
                     ));
                 }
+                // core's `RangeInclusive<T>`: Rawr's range of `T`'s kind of
+                // number.
+                if *definition == rawr_import::surface::identity::Definition::range_inclusive()
+                    && converted.len() == 1
+                    && let Some(element) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::range_inclusive_of(element));
+                }
                 host::type_ref::Type::imported_boxed(
                     imported_identity(*definition),
                     converted.into_boxed_slice(),
@@ -2753,6 +2761,14 @@ impl Types {
             Type::Result(ok, err) => host::type_ref::Type::result(
                 Self::convert_charged(ok, parameters)?,
                 Self::convert_charged(err, parameters)?,
+            ),
+            Type::Sequence {
+                element,
+                length: Some(length),
+                ..
+            } => host::type_ref::Type::array(
+                Self::convert_charged(element, parameters)?,
+                usize::try_from(*length).map_err(|_| Error::Cardinality)?,
             ),
             Type::Sequence { element, .. } => {
                 host::type_ref::Type::slice(Self::convert_charged(element, parameters)?)
@@ -2920,7 +2936,10 @@ fn converted_pattern(
                 .map(|member| converted_pattern(member, parameters))
                 .collect::<Option<_>>()?,
         ),
-        Type::Nominal { .. } if !names_impl_parameter(ty) => {
+        Type::Nominal { .. }
+        | Type::Sequence {
+            length: Some(_), ..
+        } if !names_impl_parameter(ty) => {
             Pattern::Type(Types::convert_charged(ty, parameters).ok()?)
         }
         _ => return None,

@@ -1246,6 +1246,7 @@ fn impl_surface_type(
         } => Type::Sequence {
             element: Box::new(impl_surface_type(models, element, generics)?),
             owned: true,
+            length: None,
         },
         Ty::Tuple(members) => Type::Tuple(all(members)?),
         Ty::Script(definition, arguments) => Type::Script {
@@ -1456,6 +1457,7 @@ fn imported_surface_type(
                     inference, models, element, operation, imported,
                 )?),
                 owned: true,
+                length: None,
             }
         }
         // A type parameter no script value fixes, as iced's `Theme` that the
@@ -1551,25 +1553,29 @@ fn erased(ty: &Ty) -> bool {
     )
 }
 
-/// `T` of a crate's `RangeInclusive<T>` of a type parameter or a float,
-/// which the importer declares as a type of its own
-/// (`Definition::range_inclusive`).
+/// An instance's array as the Rust array of `length`, where a bound's case
+/// fixes it (`related_array_length`).
 #[cfg(feature = "rust-import")]
+fn fix_array_length(
+    surface: &mut rawr_import::classify::representability::convert::Type,
+    length: Option<u32>,
+) {
+    if let rawr_import::classify::representability::convert::Type::Sequence {
+        owned: true,
+        length: fixed @ None,
+        ..
+    } = surface
+    {
+        *fixed = length;
+    }
+}
+
+/// `T` of a crate's `RangeInclusive<T>` of a type parameter.
 fn range_inclusive_element(
     ty: &crate::host::type_ref::Type,
 ) -> Option<&crate::host::type_ref::Type> {
     match ty.shape() {
-        crate::host::type_ref::Shape::Imported {
-            identity,
-            arguments,
-        } if identity.as_bytes()
-            == rawr_import::surface::identity::Definition::range_inclusive().as_bytes() =>
-        {
-            match &arguments[..] {
-                [element] => Some(element),
-                _ => None,
-            }
-        }
+        crate::host::type_ref::Shape::RangeInclusive(element) => Some(element),
         _ => None,
     }
 }
@@ -1659,6 +1665,7 @@ fn instance_surface_type(
                 Ty::Array { element, .. } => Type::Sequence {
                     element: Box::new(instance_surface_type(inference, models, &element)?),
                     owned: false,
+                    length: None,
                 },
                 Ty::Str | Ty::String => Type::Builtin(Builtin::Str),
                 _ => return None,
@@ -1680,6 +1687,7 @@ fn instance_surface_type(
             Type::Sequence {
                 element: Box::new(element),
                 owned: true,
+                length: None,
             }
         }
         Ty::Infer(_) => Type::Inferred,
@@ -15323,6 +15331,15 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         let path = format!("{}::from", proof.definition.path());
+        // An imported type no alias of the program names, as a field's
+        // `Background` is, has its `from` at one of its crate's paths.
+        #[cfg(feature = "rust-import")]
+        let path = match self.imported_member_owner(target, "from") {
+            Some(owner) if self.models.host_items(&path).is_none() => {
+                format!("{}::from", owner.path())
+            }
+            _ => path,
+        };
         let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
             return Ok(None);
         };
@@ -15396,7 +15413,17 @@ impl<'a> Parser<'a> {
         let pending = std::mem::take(&mut self.pending_conversions);
         for conversion in pending {
             let target = self.inference.resolve(&conversion.target);
-            let helper = if matches!(target, Ty::Infer(_)) {
+            let helper = if matches!(target, Ty::Infer(_))
+                && conversion
+                    .host
+                    .as_ref()
+                    .is_some_and(|host| host.forms.is_empty())
+            {
+                // An imported value's `.into()` that no use fixes: itself,
+                // through rustc's reflexive `From<T> for T`.
+                self.unify_type(&conversion.target, &conversion.source);
+                String::new()
+            } else if matches!(target, Ty::Infer(_)) {
                 return Err(Error::InvalidMethodCall {
                     owner: conversion.source.name(&self.models),
                     method: "into".into(),
@@ -17283,7 +17310,6 @@ impl<'a> Parser<'a> {
                 // A crate's `RangeInclusive<T>` takes the argument's range,
                 // of floats or of integers, and `T` that kind of number, as
                 // rustc infers `T` from `1.0..=30.0`.
-                #[cfg(feature = "rust-import")]
                 if let Some(element) = range_inclusive_element(ty)
                     && let Some(float) = arguments
                         .and_then(|arguments| arguments.get(index))
@@ -17415,12 +17441,52 @@ impl<'a> Parser<'a> {
     /// range of floats, and `T` is that float, as rustc's trait selection
     /// infers it. Only a bound whose argument matches exactly one
     /// implementation ties anything.
+    /// The length of the Rust array that fills the imported item's type
+    /// parameter `name`, where the item's bound on it has a case of an
+    /// array of that length and `ty` is an array of it: `padding([10, 20])`
+    /// fills `impl Into<Padding>` with the `[u16; 2]` of `Padding`'s
+    /// `From<[u16; 2]>`, as rustc infers it, not with a `Vec`.
+    #[cfg(feature = "rust-import")]
+    fn related_array_length(
+        &self,
+        item: &crate::host::item::Definition,
+        name: &str,
+        ty: &Ty,
+    ) -> Option<u32> {
+        let Ty::Array {
+            length: Some(length),
+            ..
+        } = self.inference.resolved_ref(ty)
+        else {
+            return None;
+        };
+        item.signature()
+            .relations()
+            .iter()
+            .filter(|relation| relation.parameter() == name)
+            .flat_map(|relation| relation.cases())
+            .any(|case| {
+                matches!(
+                    case.this(),
+                    crate::host::signature::Pattern::Type(this)
+                        if matches!(
+                            this.shape(),
+                            crate::host::type_ref::Shape::Array {
+                                length: Some(case_length),
+                                ..
+                            } if case_length == length
+                        )
+                )
+            })
+            .then(|| u32::try_from(*length).ok())
+            .flatten()
+    }
+
     /// Rawr's inclusive range where a crate takes `RangeInclusive<T>` of
     /// `element`: `RangeInclusive<f64>` where `float` says the argument is
     /// a range of floats, or with no argument where `T` is a float, and
     /// `RangeInclusive<i64>` otherwise. `T` takes the range's kind of
     /// number, as rustc's `{float}` or `{integer}`.
-    #[cfg(feature = "rust-import")]
     fn inclusive_range_of(&mut self, element: &Ty, float: Option<bool>) -> Ty {
         let float =
             float.unwrap_or_else(|| matches!(self.inference.resolve(element), Ty::Float(_)));
@@ -17844,8 +17910,7 @@ impl<'a> Parser<'a> {
                         .into_boxed_slice(),
                 }
             }
-            #[cfg(feature = "rust-import")]
-            Shape::Imported { .. } if let Some(element) = range_inclusive_element(ty) => {
+            Shape::RangeInclusive(element) => {
                 let element =
                     self.instantiate_host_type(element, parameters, operation, owner, originating)?;
                 self.inclusive_range_of(&element, None)
@@ -18077,7 +18142,9 @@ impl<'a> Parser<'a> {
                 let (_, ty, _) = requirements
                     .iter()
                     .find(|(candidate, _, _)| *candidate == name)?;
-                instance_surface_type(&self.inference, &self.models, ty)
+                let mut surface = instance_surface_type(&self.inference, &self.models, ty)?;
+                fix_array_length(&mut surface, self.related_array_length(item, &name, ty));
+                Some(surface)
             })
             .collect::<Option<Vec<_>>>()?;
         Some(rawr_import::surface::instance::key_with_slots(
@@ -33452,6 +33519,19 @@ impl<'a> Parser<'a> {
                     }
                     continue;
                 }
+                // An imported crate type's `.into()`: the target the use
+                // site needs, through that type's `From` of it, as rustc
+                // infers `Some(color.into())` a `Background` where the
+                // field is an `Option<Background>`.
+                #[cfg(feature = "rust-import")]
+                if let Ty::Host { proof, .. } = &source
+                    && proof.definition.identity().imported().is_some()
+                    && self.host_witnesses.is_empty()
+                    && self.projected_host_types(&source).is_empty()
+                {
+                    value = self.parse_host_into(value, &source, end);
+                    continue;
+                }
                 value = if self.projected_host_types(&source).is_empty()
                     && self.converts_from(&source)
                 {
@@ -48134,28 +48214,29 @@ impl<'a> Parser<'a> {
             requirements.iter().collect()
         };
         for (name, ty, _) in ordered {
-            types.push(
-                imported_surface_type(
-                    &self.inference,
-                    &self.models,
-                    ty,
-                    span,
-                    self.imported
-                        .as_mut()
-                        .expect("imported lowering retains allocation authority"),
-                )
-                .map_err(|error| match error {
-                    // Which of the item's parameters it is.
-                    Error::InvalidHostOperation {
-                        reason, operation, ..
-                    } => Error::InvalidHostOperation {
-                        item: format!("{}'s `{name}`", item.path()).into(),
-                        reason,
-                        operation,
-                    },
-                    error => error,
-                })?,
-            );
+            let length = self.related_array_length(item, name, ty);
+            let mut surface = imported_surface_type(
+                &self.inference,
+                &self.models,
+                ty,
+                span,
+                self.imported
+                    .as_mut()
+                    .expect("imported lowering retains allocation authority"),
+            )
+            .map_err(|error| match error {
+                // Which of the item's parameters it is.
+                Error::InvalidHostOperation {
+                    reason, operation, ..
+                } => Error::InvalidHostOperation {
+                    item: format!("{}'s `{name}`", item.path()).into(),
+                    reason,
+                    operation,
+                },
+                error => error,
+            })?;
+            fix_array_length(&mut surface, length);
+            types.push(surface);
         }
         let types = types.into_boxed_slice();
         let function_count = arguments

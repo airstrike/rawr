@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 21;
+const SCHEMA: u32 = 22;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -678,6 +678,9 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// An output `Vec<T>` or slice, a Rawr array.
     Array(Box<Type>),
+    /// Rust's array `[T; length]`, a Rawr array of that length, as a
+    /// relation's case `From<[u16; 2]>` takes.
+    FixedArray { element: Box<Type>, length: u32 },
     /// An output tuple, a Rawr tuple.
     Tuple(Box<[Type]>),
     /// Rust's `Range<T>` of a float, a Rawr `Range<f64>` value.
@@ -736,7 +739,10 @@ impl Type {
                 left.opaque(opaque, found);
                 right.opaque(opaque, found);
             }
-            Self::Option(element) | Self::Array(element) | Self::Range(element) => {
+            Self::Option(element)
+            | Self::Array(element)
+            | Self::FixedArray { element, .. }
+            | Self::Range(element) => {
                 element.opaque(opaque, found);
             }
             Self::Tuple(members) => {
@@ -763,6 +769,7 @@ impl Type {
             | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
             Self::Option(element)
             | Self::Array(element)
+            | Self::FixedArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
                 target: element, ..
@@ -3369,6 +3376,14 @@ fn ty(
             Box::new(ty(ok, parameters)?),
             Box::new(ty(err, parameters)?),
         ),
+        Source::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => Type::FixedArray {
+            element: Box::new(ty(element, parameters)?),
+            length: *length,
+        },
         Source::Sequence { element, .. } => Type::Array(Box::new(ty(element, parameters)?)),
         Source::Tuple(members) => {
             let mut converted = Vec::new();

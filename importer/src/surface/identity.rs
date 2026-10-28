@@ -1440,8 +1440,20 @@ impl Framed {
                 self.converted_type(ok);
                 self.converted_type(err);
             }
-            convert::Type::Sequence { element, owned } => {
-                self.byte(8);
+            convert::Type::Sequence {
+                element,
+                owned,
+                length,
+            } => {
+                // A Rust array has its own tag and its length; a `Vec` or a
+                // slice hashes as it did.
+                match length {
+                    Some(length) => {
+                        self.byte(15);
+                        self.0.update(length.to_le_bytes());
+                    }
+                    None => self.byte(8),
+                }
                 self.byte(u8::from(*owned));
                 self.converted_type(element);
             }
