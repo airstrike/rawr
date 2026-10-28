@@ -56,15 +56,57 @@ impl Proxy {
         }
     }
 
+    /// The proxy of a value `make` gives where it can, which is made the
+    /// first time the value is used where `make` gives `Some`. A script
+    /// function native code calls on a thread with no arena for the native
+    /// values it takes, as iced's executor calls `Message::Loaded` for
+    /// `Task::map`, runs so on the owner thread, where its message is
+    /// delivered.
+    #[must_use]
+    pub fn deferred(make: impl FnMut() -> Option<Dynamic> + Send + 'static) -> Self {
+        Self::new(Dynamic::from(Deferred(std::sync::Arc::new(
+            std::sync::Mutex::new(Made::Pending(Box::new(make))),
+        ))))
+    }
+
+    /// Make a deferred value where it can be made, and hold it from then on.
+    fn settle(&self) {
+        let Some(deferred) = self.value.read_lock::<Deferred>().map(|held| held.clone()) else {
+            return;
+        };
+        let mut made = deferred
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let value = match &mut *made {
+            Made::Made(value) => value.clone(),
+            Made::Pending(make) => match make() {
+                Some(value) => {
+                    *made = Made::Made(value.clone());
+                    value
+                }
+                None => return,
+            },
+        };
+        drop(made);
+        // Another handle to the one shared value, which it writes.
+        let mut handle = self.value.clone();
+        if let Some(mut held) = handle.write_lock::<Dynamic>() {
+            *held = value.flatten();
+        }
+    }
+
     /// The value, given back to script code: the value itself when no
     /// handle to it remains elsewhere.
     pub fn into_dynamic(self) -> Dynamic {
+        self.settle();
         self.value.flatten()
     }
 
     /// The value, lent shared to a script function for one call, as
     /// `view(&state)` takes it.
     pub fn lend(&self) -> Dynamic {
+        self.settle();
         self.value.clone()
     }
 
@@ -72,6 +114,7 @@ impl Proxy {
     /// `update(&mut state, message)` takes it. No native value can borrow
     /// a string of it any longer, so its pins are let go.
     pub fn lend_mut(&mut self) -> Dynamic {
+        self.settle();
         self.pins.clear();
         self.value.clone()
     }
@@ -80,6 +123,7 @@ impl Proxy {
     /// its place: the value it changed in place through the lent handle,
     /// or one it assigned whole.
     pub fn restore(&mut self, value: Dynamic) {
+        self.settle();
         if shares(&self.value, &value) {
             return;
         }
@@ -110,6 +154,15 @@ impl Proxy {
     }
 }
 
+/// A value [`Proxy::deferred`] makes, shared by the proxy's copies.
+#[derive(Clone)]
+struct Deferred(std::sync::Arc<std::sync::Mutex<Made>>);
+
+enum Made {
+    Pending(Box<dyn FnMut() -> Option<Dynamic> + Send>),
+    Made(Dynamic),
+}
+
 /// Whether `a` and `b` are handles to one shared value.
 fn shares(a: &Dynamic, b: &Dynamic) -> bool {
     use crate::types::dynamic::Union;
@@ -124,6 +177,7 @@ impl Clone for Proxy {
     /// a copy, as a derived `Clone` makes. Rust code clones where it calls
     /// `clone`, so this copy is the one Rust makes.
     fn clone(&self) -> Self {
+        self.settle();
         let copy = self.value.flatten_clone();
         Self::new(match crate::future::clone_value(&copy) {
             Some(Ok(cloned)) => cloned,
@@ -138,6 +192,8 @@ impl PartialEq for Proxy {
     /// else as a derived one compares: Rawr's checker holds a script type
     /// a native bound asks `PartialEq` of to having it.
     fn eq(&self, other: &Self) -> bool {
+        self.settle();
+        other.settle();
         let (lhs, rhs) = (self.value.flatten_clone(), other.value.flatten_clone());
         match crate::future::equal(&lhs, &rhs) {
             Some(Ok(equal)) => equal,
@@ -155,6 +211,7 @@ impl Proxy {
     ///
     /// When the formatter fails.
     pub fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.settle();
         let value = self.value.flatten_clone();
         match crate::future::display(&value) {
             Some(Ok(text)) => f.write_str(&text),
@@ -167,6 +224,7 @@ impl Proxy {
 impl std::fmt::Debug for Proxy {
     /// The script type's derived `Debug` text.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.settle();
         match self.value.read_lock::<Dynamic>() {
             Some(value) => match crate::future::debug(&value) {
                 Some(text) => f.write_str(&text),

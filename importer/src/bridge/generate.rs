@@ -133,6 +133,41 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
+/// The inputs of a script function native code calls on a thread with no
+/// arena for the native values among them, as iced's executor calls
+/// `Message::Loaded` for `Task::map`. When they are `Send`, the call is
+/// made on the owner thread where its value is first used
+/// (`Proxy::deferred`); else it fails there, by method resolution on a
+/// concrete `T`.
+#[allow(dead_code)]
+struct DeferProbe<T>(std::cell::Cell<Option<T>>);
+
+#[allow(dead_code)]
+trait DeferSend<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
+}
+
+impl<T: Send + 'static> DeferSend<T> for DeferProbe<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy> {
+        let mut inputs = Some(self.0.take()?);
+        Some(__rawr_internal::crossing::Proxy::deferred(move || {
+            arena_access(|_| ())?;
+            inputs.take().map(call)
+        }))
+    }
+}
+
+#[allow(dead_code)]
+trait DeferNot<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
+}
+
+impl<T> DeferNot<T> for &DeferProbe<T> {
+    fn defer(&self, _: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy> {
+        None
+    }
+}
+
 fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(ToString::to_string)
 }
@@ -9197,9 +9232,18 @@ fn render_slot(
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
                 render_to_dynamic(input, &name, 0, &mut converted)?;
-                native |= matches!(input, convert::Type::Nominal { .. })
+                let crate_value = matches!(input, convert::Type::Nominal { .. })
                     && !is_value(input)
                     && !is_duration(input);
+                native |= crate_value;
+                // A native value takes the script function's parameter's
+                // witness, so script code reads it as its type, as a
+                // variant's field of an imported type is read.
+                if crate_value {
+                    converted = format!(
+                        "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
+                    );
+                }
                 values.push(format!("({converted})"));
             }
         }
@@ -9224,7 +9268,10 @@ fn render_slot(
             .collect::<Vec<_>>();
         format!(
             "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
-            in_arena(&format!("Ok::<_, Error>([{}])", values.join(", ")))
+            in_arena(&format!(
+                "let witnesses = WITNESSES_{local}.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone(); Ok::<_, Error>([{}])",
+                values.join(", ")
+            ))
         )
     } else {
         let values = values
@@ -9265,6 +9312,32 @@ fn render_slot(
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
             let native_output = holds_native(&returned);
+            // A script value made from native inputs on a thread with no
+            // arena is made where it is first used (`DeferProbe`).
+            let deferred = if native
+                && matches!(returned, convert::Type::Script { .. })
+                && !inputs
+                    .iter()
+                    .any(|input| matches!(input, convert::Type::Borrowed { .. }))
+            {
+                let names = (0..inputs.len())
+                    .map(|position| format!("input_{position},"))
+                    .collect::<String>();
+                format!(
+                    "let ({names}) = if arena_access(|_| ()).is_none() {{
+            let probe = DeferProbe(std::cell::Cell::new(Some(({names}))));
+            if let Some(proxy) = (&probe).defer(|({names})| slot_{local}({names}).0.into_dynamic()) {{
+                return <{rust}>::from_proxy(proxy);
+            }}
+            probe.0.take().expect(\"rawr: a slot's inputs are kept until deferred\")
+        }} else {{
+            ({names})
+        }};
+        "
+                )
+            } else {
+                String::new()
+            };
             let converted = if native_output {
                 in_arena(&converted)
             } else {
@@ -9274,19 +9347,31 @@ fn render_slot(
                 "",
                 rust,
                 format!(
-                    "let mut values = {values};
+                    "{deferred}let mut values = {values};
         let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
                 ),
             )
         }
     };
+    // The witnesses of the script function's parameters, read where
+    // script code passes it, which its native inputs take.
+    let witnesses = if native {
+        format!(
+            "
+    static WITNESSES_{local}: std::sync::RwLock<Vec<Option<__rawr_internal::host::runtime::Witness>>> = std::sync::RwLock::new(Vec::new());
+    *WITNESSES_{local}.write().unwrap_or_else(std::sync::PoisonError::into_inner) = closure_inputs({index}, {});",
+            inputs.len()
+        )
+    } else {
+        String::new()
+    };
     writeln!(
         output,
         "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
     SLOT_{local}
         .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())
-        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;
+        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}
     #[allow(unused_mut, clippy::needless_lifetimes)]
     fn slot_{local}{generics}({}) -> {rust} {{
         {body}

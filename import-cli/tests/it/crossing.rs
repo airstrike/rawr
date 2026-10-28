@@ -157,6 +157,23 @@ fn a_boot_function_giving_the_state_and_a_task_runs() {
     );
 }
 
+/// iced's system_information: `Task::map(Message::InformationReceived)`
+/// calls the variant on another thread, as iced's executor does, with a
+/// crate value native code made. The message is made where it is
+/// delivered, and the view reads the crate value's fields from a variant.
+/// The output is `cargo run`'s.
+#[test]
+fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
+    let (rawr, cargo) = both_printed("crossing-system", "system.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "boot message InformationReceived(Info { name: \"fixture\", cores: Some(4) })"
+        ) && rawr.ends_with("last view pad 0 <Refresh:0> \"fixture with 4 cores\""),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

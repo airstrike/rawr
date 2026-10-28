@@ -143,6 +143,38 @@ impl<T> Task<T> {
     pub fn done(value: T) -> Self {
         Task(Some(value))
     }
+
+    /// The work that gives `f` of this work's value, which `f` makes on
+    /// another thread, as iced's executor runs `Task::map`'s function.
+    pub fn map<A>(self, f: impl Fn(T) -> A + Send + 'static) -> Task<A>
+    where
+        T: Send + 'static,
+        A: Send + 'static,
+    {
+        Task(
+            std::thread::spawn(move || self.0.map(f))
+                .join()
+                .expect("the mapping thread finishes"),
+        )
+    }
+}
+
+/// What iced's `system::information()` gives: a crate value of fields.
+#[derive(Debug, Clone)]
+pub struct Info {
+    /// The system's name.
+    pub name: String,
+    /// Its processor cores, when known.
+    pub cores: Option<u32>,
+}
+
+/// The work of reading the system's information, as iced's
+/// `system::information()`.
+pub fn information() -> Task<Info> {
+    Task(Some(Info {
+        name: "fixture".to_string(),
+        cores: Some(4),
+    }))
 }
 
 /// The work of finding the latest window's id, as iced's
