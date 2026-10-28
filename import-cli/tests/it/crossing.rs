@@ -215,6 +215,23 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
     );
 }
 
+/// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
+/// type of another crate that no path of the root reaches, and defaults it
+/// to the root's `Renderer` alias. A derived `Default` builds a field of it,
+/// and its associated functions and methods run. `canvas::Geometry` names
+/// an associated type of that renderer, at its default a type of its own,
+/// and `Note<'a>` passes a lifetime and a defaulted theme on, as iced's
+/// `widget::Text` does. The output is `cargo run`'s.
+#[test]
+fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
+    let (rawr, cargo) = both_printed("crossing-canvas", "canvas.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\nnote 3"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's
