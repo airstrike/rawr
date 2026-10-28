@@ -293,7 +293,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     }
     uses.sort_unstable();
     uses.dedup();
-    let impls = native_impls(program, &models).into_boxed_slice();
+    let impls = native_impls(program, &models)?.into_boxed_slice();
     Ok(ImportedOutput {
         uses: uses.into_boxed_slice(),
         dependencies: dependencies.into_iter().collect(),
@@ -679,7 +679,7 @@ fn imported_result<T>(
 fn native_impls(
     program: &Program,
     models: &Models,
-) -> Vec<(Box<str>, rawr_import::surface::instance::ScriptImpl)> {
+) -> Result<Vec<(Box<str>, rawr_import::surface::instance::ScriptImpl)>, super::ImportedFailure> {
     use rawr_import::surface::instance::{ImplReceiver, ScriptImpl, ScriptImplFunction};
     let mut impls = Vec::new();
     for shell in program.items.iter() {
@@ -732,23 +732,59 @@ fn native_impls(
             .iter()
             .map(|generic| generic.name.text.clone())
             .collect::<Vec<_>>();
-        let convert =
-            |ty: &type_ref::Type| impl_surface_type(models, &Ty::from_resolved(ty), &generics);
+        // A type the impl names that has no Rust type in the runner can't
+        // cross, and rustc would refuse the runner without the impl.
+        let convert = |ty: &type_ref::Type| {
+            impl_surface_type(models, &Ty::from_resolved(ty), &generics).ok_or_else(|| {
+                super::ImportedFailure::Lowering(LoweringFailure::original(
+                    shell.source,
+                    Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "`{}` in an impl of `{path}`, whose functions native code calls: \
+                             the type has no Rust type for the impl to name",
+                            super::full_type_name(ty)
+                        )
+                        .into(),
+                        source: super::type_span(ty),
+                    }
+                    .into(),
+                ))
+            })
+        };
         let script_path = models.script_path(definition);
-        let Some(owner) = convert(&implementation.owner) else {
-            continue;
-        };
-        let Some(arguments) = arguments.iter().map(convert).collect::<Option<Box<[_]>>>() else {
-            continue;
-        };
-        let Some(associated) = implementation
+        let owner = convert(&implementation.owner)?;
+        let arguments = arguments
+            .iter()
+            .map(convert)
+            .collect::<Result<Box<[_]>, _>>()?;
+        let associated = implementation
             .associated
             .iter()
-            .map(|(name, ty)| Some((Box::<str>::from(name.text.as_str()), convert(ty)?)))
-            .collect::<Option<Box<[_]>>>()
-        else {
-            continue;
-        };
+            .map(|(name, ty)| {
+                let converted = convert(ty)?;
+                // A type Rust holds as a script value, as `RefCell<Vec<
+                // Cache>>` is, has none of the bounds the trait may ask of it,
+                // such as `Default`.
+                if is_erased(&converted) {
+                    return Err(super::ImportedFailure::Lowering(LoweringFailure::original(
+                        shell.source,
+                        Error::UnsupportedNominalSyntax {
+                            construct: format!(
+                                "`type {} = {}` in an impl of `{path}`: Rust code holds the \
+                                 type as a script value, which has none of the trait's bounds \
+                                 on it",
+                                name.text,
+                                super::full_type_name(ty)
+                            )
+                            .into(),
+                            source: super::type_span(ty),
+                        }
+                        .into(),
+                    )));
+                }
+                Ok((Box::<str>::from(name.text.as_str()), converted))
+            })
+            .collect::<Result<Box<[_]>, super::ImportedFailure>>()?;
         let mut functions = Vec::new();
         for function in implementation.functions.iter() {
             let item::Lowering::NominalMethod(id) = function.body.lowering else {
@@ -783,20 +819,14 @@ fn native_impls(
                     ImplReceiver::Owned
                 }
             };
-            let Some(inputs) = function
+            let inputs = function
                 .parameters
                 .iter()
                 .map(|parameter| convert(&parameter.ty))
-                .collect::<Option<Box<[_]>>>()
-            else {
-                continue;
-            };
+                .collect::<Result<Box<[_]>, _>>()?;
             let output = match &function.output {
-                Some(output) => convert(output),
-                None => Some(rawr_import::classify::representability::convert::Type::Unit),
-            };
-            let Some(output) = output else {
-                continue;
+                Some(output) => convert(output)?,
+                None => rawr_import::classify::representability::convert::Type::Unit,
             };
             functions.push(ScriptImplFunction::new(
                 function.name.text.as_str().into(),
@@ -818,7 +848,7 @@ fn native_impls(
             ),
         ));
     }
-    impls
+    Ok(impls)
 }
 
 /// `ty`, a type a script impl's header or signature writes, as an
@@ -1344,7 +1374,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
-    let impls = native_impls(program, &models).into_boxed_slice();
+    let impls = native_impls(program, &models)?.into_boxed_slice();
     let lowered = lower_with_context(
         engine,
         program,
