@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 19;
+const SCHEMA: u32 = 20;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -515,6 +515,11 @@ pub struct Signature {
     /// Its callable parameters take a script function as a slot (D594).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     crossing: bool,
+    /// The receiver's type a method's impl fixes, when one of its arguments
+    /// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
+    /// `Task<Option<T>>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instance: Option<Type>,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -620,7 +625,12 @@ pub enum Type {
 impl Signature {
     /// Whether every imported type the signature names is in `declared`.
     fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
-        self.inputs.iter().all(|ty| ty.declared(declared)) && self.output.declared(declared)
+        self.inputs.iter().all(|ty| ty.declared(declared))
+            && self.output.declared(declared)
+            && self
+                .instance
+                .as_ref()
+                .is_none_or(|instance| instance.declared(declared))
     }
 }
 
@@ -2672,6 +2682,13 @@ impl Signature {
     pub const fn crossing(&self) -> bool {
         self.crossing
     }
+
+    /// The receiver's type a method's impl fixes, when one of its
+    /// arguments holds the impl's own parameter.
+    #[must_use]
+    pub const fn instance(&self) -> Option<&Type> {
+        self.instance.as_ref()
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -2826,6 +2843,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 guard: None,
                 scope: None,
                 crossing: false,
+                instance: None,
             },
         ),
         Representability::Value(_)
@@ -2898,10 +2916,19 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 _ => return Err(super::Error::ForeignIdentity),
             },
             // A closure the item takes, as `PaneGrid::new(&state, view)`'s,
-            // is the closure's type, as a function item's is.
-            match plan.call() {
-                Some(call) => callable_signature(plan.signature(), &[call])?,
-                None => signature(plan.signature())?,
+            // is the closure's type, as a function item's is, and a script
+            // function fills it as a slot (D594), as iced's
+            // `Application::subscription` takes one.
+            if plan.crossings().is_empty() {
+                match plan.call() {
+                    Some(call) => callable_signature(plan.signature(), &[call])?,
+                    None => signature(plan.signature())?,
+                }
+            } else {
+                let calls = plan.crossings().iter().collect::<Vec<_>>();
+                let mut signature = callable_signature(plan.signature(), &calls)?;
+                signature.crossing = true;
+                signature
             },
         ),
     };
@@ -2940,6 +2967,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         guard: source.guard(),
         scope: source.scope(),
         crossing: false,
+        instance: fixed_instance(source)?,
     })
 }
 
@@ -3084,7 +3112,41 @@ fn callable_signature(
         guard: source.guard(),
         scope: source.scope(),
         crossing: false,
+        instance: fixed_instance(source)?,
     })
+}
+
+/// The receiver's type a method's impl fixes, when one of its arguments
+/// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
+/// `Task<Option<T>>`: which form of an overloaded method a receiver takes.
+fn fixed_instance(
+    source: &representability::signature::Signature,
+) -> Result<Option<Type>, super::Error> {
+    use representability::convert::Type as Converted;
+    fn names_parameter(ty: &Converted) -> bool {
+        match ty {
+            Converted::Parameter(_) => true,
+            Converted::Nominal { arguments, .. }
+            | Converted::Tuple(arguments)
+            | Converted::Script { arguments, .. } => arguments.iter().any(names_parameter),
+            Converted::Option(element)
+            | Converted::Borrowed { ty: element, .. }
+            | Converted::Range(element)
+            | Converted::Sequence { element, .. } => names_parameter(element),
+            Converted::Result(ok, err) => names_parameter(ok) || names_parameter(err),
+            _ => false,
+        }
+    }
+    let Some(instance @ Converted::Nominal { arguments, .. }) = source.instance() else {
+        return Ok(None);
+    };
+    if !arguments
+        .iter()
+        .any(|argument| !matches!(argument, Converted::Parameter(_)) && names_parameter(argument))
+    {
+        return Ok(None);
+    }
+    Ok(Some(ty(instance, source.parameters())?))
 }
 
 fn fields(

@@ -1396,6 +1396,36 @@ impl Builder {
                 incoming: "item",
             });
         }
+        // A method whose impl fixes its receiver's type, as `and_then` of
+        // `impl<T> Task<Option<T>>`, is a form the receiver picks. One that
+        // the facade can't hold beside another form of the same name, as
+        // one of another receiver mode or of the same inputs, gives way.
+        #[cfg(feature = "rust-import")]
+        if let Ok(index) = self.item_index(&path) {
+            let conflicts = |existing: &host::item::Definition| -> Result<bool, host::Error> {
+                Ok(same_namespace(existing, &item)
+                    && (!compatible_overload(existing, &item)
+                        || existing.signature().same_inputs(item.signature())?))
+            };
+            if item.signature().instance().is_some() {
+                for existing in &self.items[index].1 {
+                    if conflicts(existing)? {
+                        return Ok(self);
+                    }
+                }
+            } else {
+                let mut kept = Vec::new();
+                kept.try_reserve_exact(self.items[index].1.len())
+                    .map_err(|_| host::Error::Allocation)?;
+                for existing in std::mem::take(&mut self.items[index].1) {
+                    if existing.signature().instance().is_some() && conflicts(&existing)? {
+                        continue;
+                    }
+                    kept.push(existing);
+                }
+                self.items[index].1 = kept;
+            }
+        }
         if let Ok(index) = self.item_index(&path)
             && let Some(existing) = self.items[index]
                 .1

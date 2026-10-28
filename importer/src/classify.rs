@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 51;
+const CLASSIFIER_VERSION: u32 = 52;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1564,19 +1564,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// Each projection `W::Assoc` of a type parameter `W` an input names,
-    /// other than a future's `Output`, with a synthetic type parameter
-    /// appended to stand for it, as `render_stateful_widget`'s `&mut
-    /// W::State`: `(W, trait, associated name, synthetic index)`.
-    fn projected_parameters(
+    /// other than a future's `Output`, as `render_stateful_widget`'s `&mut
+    /// W::State`, or a callable parameter's bound names in its inputs or
+    /// output, as iced's `Application<P>::subscription(f: impl Fn(&P::State)
+    /// -> Subscription<P::Message>)`: each with the synthetic type parameter
+    /// that stands for it, numbered per parameter.
+    fn projections(
         &self,
         generics: &model::Generics,
         signature: &model::Signature,
-        futures: &[(u32, api::identity::Definition)],
-        parameters: &mut Box<[representability::signature::Parameter]>,
     ) -> Vec<Projected> {
         use representability::signature;
+        /// `deep`: also inside a type's arguments, as a callable's
+        /// `Subscription<P::Message>` names it.
         fn find(
             ty: &model::Type,
+            deep: bool,
             found: &mut Vec<(u32, api::identity::Definition, api::identity::Definition)>,
         ) {
             match ty {
@@ -1587,23 +1590,83 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 } => {
                     if let Some(model::Argument::Type(model::Type::Parameter { index, .. })) =
                         arguments.first()
-                        && !found.iter().any(|(known, ..)| known == index)
+                        && !found
+                            .iter()
+                            .any(|(known, _, named)| known == index && named == associated)
                     {
                         found.push((*index, trait_id.clone(), associated.clone()));
                     }
                 }
-                model::Type::Reference { ty, .. } => find(ty, found),
+                model::Type::Reference { ty, .. } => find(ty, deep, found),
+                model::Type::Definition { arguments, .. } if deep => {
+                    for argument in arguments.iter() {
+                        if let model::Argument::Type(ty) = argument {
+                            find(ty, deep, found);
+                        }
+                    }
+                }
+                model::Type::Tuple(members) if deep => {
+                    for member in members.iter() {
+                        find(member, deep, found);
+                    }
+                }
+                model::Type::Slice(element) | model::Type::Array { element, .. } if deep => {
+                    find(element, deep, found);
+                }
                 _ => {}
             }
         }
         let mut found = Vec::new();
         for input in signature.inputs() {
-            find(input, &mut found);
+            find(input, false, &mut found);
         }
-        let mut projected = Vec::new();
-        let mut extended = parameters.to_vec();
+        // A callable parameter's inputs and output, which a script function
+        // that fills it names as the types the projections are.
+        for predicate in generics.predicates() {
+            match predicate {
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { .. },
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            ..
+                        },
+                } if matches!(
+                    self.definition_name(trait_id),
+                    Some("Fn" | "FnMut" | "FnOnce")
+                ) =>
+                {
+                    for argument in arguments.iter() {
+                        if let model::Argument::Type(ty) = argument {
+                            find(ty, true, &mut found);
+                        }
+                    }
+                }
+                model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection { trait_id, .. },
+                    ty,
+                } if self.definition_name(trait_id) == Some("FnOnce") => {
+                    find(ty, true, &mut found);
+                }
+                _ => {}
+            }
+        }
+        let mut projected: Vec<Projected> = Vec::new();
         for (index, trait_id, associated) in found {
-            if futures.iter().any(|(future, _)| *future == index)
+            // A future's `Output` is its own synthetic parameter (D527), and
+            // a callable's is its output.
+            if self.is_core_trait(&trait_id, "Future")
+                || matches!(
+                    self.definition_name(&trait_id),
+                    Some("Fn" | "FnMut" | "FnOnce")
+                )
+                || generics.predicates().any(|predicate| {
+                    matches!(predicate, model::Predicate::Bound {
+                        ty: model::Type::Parameter { index: bounded, .. },
+                        bound: model::Bound::Trait { trait_id, .. },
+                    } if *bounded == index && self.is_core_trait(trait_id, "Future"))
+                })
                 || !generics
                     .parameters()
                     .any(|parameter| parameter.index() == index)
@@ -1613,25 +1676,97 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(name) = self.definition_name(&associated).map(str::to_owned) else {
                 continue;
             };
-            let Some(owner) = extended.iter().find(|parameter| parameter.index() == index) else {
+            let ordinal = projected
+                .iter()
+                .filter(|known| known.parameter == index)
+                .count();
+            let Ok(ordinal) = u32::try_from(ordinal) else {
                 continue;
             };
-            let synthetic = signature::future_output(index);
-            let declared = format!("{}{name}", owner.name());
-            extended.push(signature::Parameter::new(
-                synthetic,
-                declared.into_boxed_str(),
-                signature::Kind::Type,
-            ));
             projected.push(Projected {
                 parameter: index,
                 trait_id,
+                associated,
                 name,
-                synthetic,
+                synthetic: signature::projection_output(index, ordinal),
             });
         }
-        *parameters = extended.into_boxed_slice();
         projected
+    }
+
+    /// `generics` with each projection of `projected` its bounds name
+    /// written as its synthetic parameter, as a callable's `Fn(&P::State)`
+    /// is `Fn(&PState)`. `None` when there is none.
+    fn projected_generics(
+        generics: &model::Generics,
+        projected: &[Projected],
+    ) -> Option<model::Generics> {
+        if projected.is_empty() {
+            return None;
+        }
+        let argument = |argument: &model::Argument| match argument {
+            model::Argument::Type(ty) => model::Argument::Type(projected_parameters(ty, projected)),
+            other => other.clone(),
+        };
+        let predicates = generics
+            .predicates()
+            .map(|predicate| match predicate {
+                model::Predicate::Bound {
+                    ty,
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity,
+                            binders,
+                        },
+                } => model::Predicate::Bound {
+                    ty: ty.clone(),
+                    bound: model::Bound::Trait {
+                        trait_id: trait_id.clone(),
+                        arguments: arguments.iter().map(argument).collect(),
+                        polarity: *polarity,
+                        binders: binders.clone(),
+                    },
+                },
+                model::Predicate::ProjectionEquality { projection, ty } => {
+                    model::Predicate::ProjectionEquality {
+                        projection: projection.clone(),
+                        ty: projected_parameters(ty, projected),
+                    }
+                }
+                other => other.clone(),
+            })
+            .collect();
+        Some(model::Generics::new(
+            generics.parameters().cloned().collect(),
+            predicates,
+        ))
+    }
+
+    /// `parameters` with the synthetic type parameter of each projection
+    /// appended, named after its parameter and associated type (`PState`).
+    fn declare_projected(
+        projected: &[Projected],
+        parameters: &mut Box<[representability::signature::Parameter]>,
+    ) {
+        use representability::signature;
+        let mut extended = parameters.to_vec();
+        for projection in projected {
+            let Some(owner) = extended
+                .iter()
+                .find(|parameter| parameter.index() == projection.parameter)
+            else {
+                continue;
+            };
+            let declared = format!("{}{}", owner.name(), projection.name);
+            extended.push(signature::Parameter::new(
+                projection.synthetic,
+                declared.into_boxed_str(),
+                signature::Kind::Type,
+            ));
+        }
+        *parameters = extended.into_boxed_slice();
     }
 
     /// For each projection, the relation that infers its synthetic
@@ -4402,6 +4537,17 @@ impl<P: api::Phase> Context<'_, P> {
                     Err(reject::Kind::GenericImplementation)
                 }
             };
+            // A parameter inside an argument the impl fixes, as `T` of
+            // iced's `impl<T> Task<Option<T>>`, is the type's too: the
+            // receiver's instance gives it.
+            let mut nested = Vec::new();
+            for argument in &arguments {
+                if let model::Argument::Type(ty) = argument
+                    && !matches!(ty, model::Type::Parameter { .. })
+                {
+                    named_parameters(ty, implementation.id(), &mut nested);
+                }
+            }
             let mut own = parameters.iter();
             let mut fixed = false;
             for argument in arguments {
@@ -4416,14 +4562,18 @@ impl<P: api::Phase> Context<'_, P> {
                         {
                             break;
                         }
-                        infer(parameter)?;
+                        if !nested.contains(&parameter.index()) {
+                            infer(parameter)?;
+                        }
                     },
                     model::Argument::Type(_) => fixed = true,
                     _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
             }
             for parameter in own {
-                infer(parameter)?;
+                if !nested.contains(&parameter.index()) {
+                    infer(parameter)?;
+                }
             }
             if !implementation.relevance().any(|relevant| relevant == id)
                 || !implementation.retains_associated_owner(definition)
@@ -5247,6 +5397,12 @@ impl<P: api::Phase> Context<'_, P> {
         let generics = blanket.as_ref().unwrap_or(generics);
         let converted = self.callable_conversion(generics);
         let generics = converted.as_ref().unwrap_or(generics);
+        // `W::State` of a type parameter `W: StatefulWidget` is a synthetic
+        // type parameter the call infers from `W`'s implementation (D558.5),
+        // and so is `P::State` where a callable's bound names it.
+        let projected = self.projections(generics, signature);
+        let rewritten = Self::projected_generics(generics, &projected);
+        let generics = rewritten.as_ref().unwrap_or(generics);
         let strings = self.string_parameters(generics);
         let FunctionParameters {
             mut parameters,
@@ -5283,9 +5439,7 @@ impl<P: api::Phase> Context<'_, P> {
                 .filter(|bound| !futures.iter().any(|(index, _)| *index == bound.parameter()))
                 .collect();
         }
-        // `W::State` of a type parameter `W: StatefulWidget` is a synthetic
-        // type parameter the call infers from `W`'s implementation (D558.5).
-        let projected = self.projected_parameters(generics, signature, &futures, &mut parameters);
+        Self::declare_projected(&projected, &mut parameters);
         let rewrite = |ty: &model::Type| {
             projected_parameters(
                 &future_projections(ty, &futures, |trait_id| {
@@ -7675,23 +7829,64 @@ fn vec_element<'a>(
 struct Projected {
     parameter: u32,
     trait_id: api::identity::Definition,
+    associated: api::identity::Definition,
     name: String,
     synthetic: u32,
 }
 
+/// The indices of `owner`'s type parameters `ty` names, wherever they are
+/// inside it, added to `found` once each.
+fn named_parameters(ty: &model::Type, owner: &api::identity::Definition, found: &mut Vec<u32>) {
+    match ty {
+        model::Type::Parameter {
+            owner: named,
+            index,
+        } => {
+            if named == owner && !found.contains(index) {
+                found.push(*index);
+            }
+        }
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            for argument in arguments.iter() {
+                if let model::Argument::Type(ty) = argument {
+                    named_parameters(ty, owner, found);
+                }
+            }
+        }
+        model::Type::Tuple(members) => {
+            for member in members.iter() {
+                named_parameters(member, owner, found);
+            }
+        }
+        model::Type::Reference { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. } => named_parameters(ty, owner, found),
+        _ => {}
+    }
+}
+
 /// `ty` with each projection of `projected` written as its synthetic
-/// parameter.
+/// parameter, wherever it is inside `ty`.
 fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Type {
+    if projected.is_empty() {
+        return ty.clone();
+    }
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => model::Argument::Type(projected_parameters(ty, projected)),
+        other => other.clone(),
+    };
     match ty {
         model::Type::Projection {
             trait_id,
+            associated,
             arguments,
-            ..
         } => {
             if let Some(model::Argument::Type(model::Type::Parameter { owner, index })) =
                 arguments.first()
                 && let Some(projection) = projected.iter().find(|projection| {
-                    projection.parameter == *index && projection.trait_id == *trait_id
+                    projection.parameter == *index
+                        && projection.trait_id == *trait_id
+                        && projection.associated == *associated
                 })
             {
                 return model::Type::Parameter {
@@ -7709,6 +7904,23 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
             lifetime: lifetime.clone(),
             mutability: *mutability,
             ty: Box::new(projected_parameters(inner, projected)),
+        },
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| projected_parameters(member, projected))
+                .collect(),
+        ),
+        model::Type::Slice(element) => {
+            model::Type::Slice(Box::new(projected_parameters(element, projected)))
+        }
+        model::Type::Array { element, length } => model::Type::Array {
+            element: Box::new(projected_parameters(element, projected)),
+            length: length.clone(),
         },
         ty => ty.clone(),
     }

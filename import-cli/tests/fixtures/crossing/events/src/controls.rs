@@ -4,7 +4,9 @@
 //! `impl Widget` a function gives, an application an opaque `impl Program`
 //! carries, a field of a type whose `Default` the crate derives, and, in
 //! the shape of iced's pick_list, a choice of script values and a string
-//! literal as a widget.
+//! literal as a widget, and, in the shape of iced's events and
+//! url_handler, an application's subscription to the messages the state
+//! listens for.
 
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -68,6 +70,12 @@ pub trait IntoLabel<'a> {
 }
 
 impl<'a> IntoLabel<'a> for &'a str {
+    fn into_label(self) -> &'a str {
+        self
+    }
+}
+
+impl<'a> IntoLabel<'a> for &'a String {
     fn into_label(self) -> &'a str {
         self
     }
@@ -247,8 +255,9 @@ pub trait Program {
     type Message: Debug;
     /// The state the program starts from.
     fn boot(&self) -> Self::State;
-    /// Change the state for the message.
-    fn update(&self, state: &mut Self::State, message: Self::Message);
+    /// Change the state for the message, and give the message the work it
+    /// asks for gives, if any.
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message>;
     /// The labels showing the state, and the message a press on `label`
     /// sends.
     fn view(
@@ -257,6 +266,74 @@ pub trait Program {
         label: &str,
         labels: &mut Vec<String>,
     ) -> Option<Self::Message>;
+    /// The messages the state listens for.
+    fn subscription(&self, _state: &Self::State) -> Subscription<Self::Message> {
+        Subscription::none()
+    }
+}
+
+/// The messages a program listens for, as iced's `Subscription`.
+pub struct Subscription<T> {
+    messages: Vec<T>,
+}
+
+impl<T> Subscription<T> {
+    /// No messages.
+    pub fn none() -> Self {
+        Subscription {
+            messages: Vec::new(),
+        }
+    }
+
+    /// The subscription with each message turned into another by `f`.
+    pub fn map<A>(self, f: impl Fn(T) -> A + 'static) -> Subscription<A> {
+        Subscription {
+            messages: self.messages.into_iter().map(f).collect(),
+        }
+    }
+}
+
+/// The first `count` ticks of a clock, as iced's `time::every`.
+pub fn ticks(count: u32) -> Subscription<u32> {
+    Subscription {
+        messages: (1..=count).collect(),
+    }
+}
+
+/// `program` with the subscription `subscription` of its state.
+struct WithSubscription<P, F> {
+    program: P,
+    subscription: F,
+}
+
+impl<P, F> Program for WithSubscription<P, F>
+where
+    P: Program,
+    F: Fn(&P::State) -> Subscription<P::Message>,
+{
+    type State = P::State;
+    type Message = P::Message;
+
+    fn boot(&self) -> Self::State {
+        self.program.boot()
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message> {
+        self.program.update(state, message)
+    }
+
+    fn view(
+        &self,
+        state: &Self::State,
+        label: &str,
+        labels: &mut Vec<String>,
+    ) -> Option<Self::Message> {
+        self.program.view(state, label, labels)
+    }
+
+    fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+        (self.subscription)(state)
+    }
 }
 
 /// What makes a program's state: any `Fn()` whose output turns into it.
@@ -316,8 +393,8 @@ where
             self.boot.boot()
         }
 
-        fn update(&self, state: &mut State, message: Message) {
-            let _task = self.update.update(state, message);
+        fn update(&self, state: &mut State, message: Message) -> Option<Message> {
+            self.update.update(state, message).0
         }
 
         fn view(&self, state: &State, label: &str, labels: &mut Vec<String>) -> Option<Message> {
@@ -339,6 +416,22 @@ where
 }
 
 impl<P: Program> Application<P> {
+    /// The application with the subscription `f` of its state, as iced's
+    /// `Application::subscription`: its program is another one the caller
+    /// can't name, of the same state and message.
+    pub fn subscription(
+        self,
+        f: impl Fn(&P::State) -> Subscription<P::Message>,
+    ) -> Application<impl Program<State = P::State, Message = P::Message>> {
+        Application {
+            program: WithSubscription {
+                program: self.program,
+                subscription: f,
+            },
+            fonts: self.fonts,
+        }
+    }
+
     /// The application with `fonts` loaded.
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
@@ -355,6 +448,19 @@ impl<P: Program> Application<P> {
         );
         let presses = std::env::var("EVENTS_PRESS").unwrap_or_default();
         let mut state = self.program.boot();
+        // Each message the booted state listens for, before any press.
+        // A message the work an update asks for gives, delivered after it.
+        let deliver = |state: &mut P::State, message: P::Message| {
+            let mut next = self.program.update(state, message);
+            while let Some(message) = next {
+                println!("task message {message:?}");
+                next = self.program.update(state, message);
+            }
+        };
+        for message in self.program.subscription(&state).messages {
+            println!("heard {message:?}");
+            deliver(&mut state, message);
+        }
         for (event, label) in presses
             .split(',')
             .filter(|label| !label.is_empty())
@@ -365,7 +471,7 @@ impl<P: Program> Application<P> {
             println!("{} view {}", event + 1, labels.join(" "));
             if let Some(message) = pressed {
                 println!("{} message {message:?}", event + 1);
-                self.program.update(&mut state, message);
+                deliver(&mut state, message);
             }
         }
         let mut labels = Vec::new();
@@ -517,6 +623,41 @@ macro_rules! controls_caption {
 }
 
 pub use crate::controls_caption as caption;
+
+/// Text a widget borrows, as iced's `Text<'a>` borrows what `text(impl
+/// IntoFragment<'a>)` takes.
+pub struct Quote<'a, Theme> {
+    text: &'a str,
+    size: u32,
+    theme: std::marker::PhantomData<Theme>,
+}
+
+/// A quote of `text`, which it borrows.
+pub fn quote<'a, Theme>(text: impl IntoLabel<'a>) -> Quote<'a, Theme> {
+    Quote {
+        text: text.into_label(),
+        size: 16,
+        theme: std::marker::PhantomData,
+    }
+}
+
+impl<Theme> Quote<'_, Theme> {
+    /// The quote at `size`.
+    pub fn size(mut self, size: u32) -> Self {
+        self.size = size;
+        self
+    }
+}
+
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Quote<'_, Theme> {
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push(format!("'{}'@{}", self.text, self.size));
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
+    }
+}
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
     for caption_core::Caption<'_, Theme>

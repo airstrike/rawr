@@ -15,6 +15,10 @@ pub struct Definition {
     relations: Box<[Relation]>,
     /// Its callable parameters take a script function as a slot (D594).
     crossing: bool,
+    /// The receiver's type a method's impl fixes, in the item's type
+    /// parameters, as iced's `impl<T> Task<Option<T>>` fixes `Task<Option<T>>`
+    /// for its `and_then`: a receiver of another type takes another form.
+    instance: Option<Box<host::type_ref::Type>>,
 }
 
 /// A bound `R: Trait<A..>` on an imported generic item's type parameter
@@ -137,6 +141,7 @@ pub struct Builder {
     output: Option<host::type_ref::Type>,
     relations: Vec<Relation>,
     crossing: bool,
+    instance: Option<host::type_ref::Type>,
 }
 
 impl Builder {
@@ -150,6 +155,7 @@ impl Builder {
             output: None,
             relations: Vec::new(),
             crossing: false,
+            instance: None,
         }
     }
 
@@ -227,6 +233,13 @@ impl Builder {
         self
     }
 
+    /// Fix the receiver's type a method's impl fixes.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn instance(&mut self, ty: host::type_ref::Type) -> &mut Self {
+        self.instance = Some(ty);
+        self
+    }
+
     /// Add what a bound ties between the type parameters.
     pub fn relation(&mut self, relation: Relation) -> Result<&mut Self, host::Error> {
         self.relations
@@ -246,6 +259,7 @@ impl Builder {
             output: self.output.unwrap_or_else(host::type_ref::Type::unit),
             relations: self.relations.into_boxed_slice(),
             crossing: self.crossing,
+            instance: self.instance.map(Box::new),
         }
     }
 }
@@ -323,6 +337,11 @@ impl Definition {
             output: self.output.try_clone()?,
             relations: self.relations.clone(),
             crossing: self.crossing,
+            instance: self
+                .instance
+                .as_ref()
+                .map(|ty| ty.try_clone().map(Box::new))
+                .transpose()?,
         })
     }
 
@@ -491,6 +510,14 @@ impl Definition {
         };
         #[cfg(not(feature = "rust-import"))]
         let type_parameters = self.type_parameters.clone();
+        let instance = self
+            .instance
+            .as_ref()
+            .map(|ty| {
+                ty.resolve(root, types, supports, &self.type_parameters, imported, item)
+                    .map(Box::new)
+            })
+            .transpose()?;
         Ok(Self {
             type_parameters,
             declared: self.declared.clone(),
@@ -498,6 +525,7 @@ impl Definition {
             output,
             relations: self.relations.clone(),
             crossing: self.crossing,
+            instance,
         })
     }
 
@@ -531,8 +559,25 @@ impl Definition {
             item,
             allocation,
         )?;
+        if let Some(instance) = &mut self.instance {
+            instance.resolve_imported(
+                root,
+                types,
+                supports,
+                &self.type_parameters,
+                imported,
+                item,
+                allocation,
+            )?;
+        }
         validate_signature_support(item, &self.parameters, &self.output)?;
         Ok(self)
+    }
+
+    /// The receiver's type a method's impl fixes, when it does.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn instance(&self) -> Option<&host::type_ref::Type> {
+        self.instance.as_deref()
     }
 
     pub(crate) fn external_types(&self) -> Vec<&host::type_def::Export> {
@@ -541,6 +586,9 @@ impl Definition {
             parameter.collect_exports(&mut exports);
         }
         self.output.collect_exports(&mut exports);
+        if let Some(instance) = &self.instance {
+            instance.collect_exports(&mut exports);
+        }
         exports
     }
 
@@ -550,6 +598,9 @@ impl Definition {
             parameter.collect_support_exports(&mut exports);
         }
         self.output.collect_support_exports(&mut exports);
+        if let Some(instance) = &self.instance {
+            instance.collect_support_exports(&mut exports);
+        }
         exports
     }
 }

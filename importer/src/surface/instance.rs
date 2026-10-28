@@ -614,6 +614,29 @@ impl FunctionItem {
         })
     }
 
+    /// [`Self::selected`] of a generic function at the types `instance`
+    /// gives its parameters, as iced's `window::close::<Message>` passed
+    /// as `and_then(window::close)`.
+    #[doc(hidden)]
+    pub fn instantiated(
+        position: u32,
+        base: &super::identity::Identity,
+        selector: super::identity::Selector,
+        instance: Arguments,
+        byte_start: u32,
+        byte_end: u32,
+    ) -> Result<Self, super::Error> {
+        if byte_start >= byte_end {
+            return Err(super::Error::InstanceMismatch);
+        }
+        Ok(Self {
+            position,
+            identity: Box::new(base.instantiated(selector, instance)),
+            byte_start,
+            byte_end,
+        })
+    }
+
     #[must_use]
     pub const fn position(&self) -> u32 {
         self.position
