@@ -847,7 +847,7 @@ fn unavailable_evidence<'contract>(
             declaration: outcome.origin()?.declaration(),
         },
         R::Invocation(plan)
-            if !fills_callables(plan.signature(), plan.call(), plan.crossings()) =>
+            if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
         {
             UnavailableEvidence {
                 reason: representability::reject::Kind::CallableProtocol
@@ -1081,7 +1081,7 @@ fn augment_external(
         let reason = match outcome.representability() {
             Representability::Rejected(reason) => Some(reason.kind().describe()),
             Representability::Invocation(plan)
-                if !fills_callables(plan.signature(), plan.call(), plan.crossings()) =>
+                if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
             {
                 Some(representability::reject::Kind::CallableProtocol.describe())
             }
@@ -2001,7 +2001,7 @@ fn build(
         // parameter would be named undeclared.
         if plan.receiver()
             != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
-            || !fills_callables(plan.signature(), None, &[])
+            || !writes_declared(plan.signature(), None, &[])
             || !names_declared(*associated, declared)
         {
             continue;
@@ -2153,7 +2153,7 @@ fn imported_item(
         // U>` take, leaves the item uncallable: no binding, and the crate's
         // other items stay importable.
         Representability::Invocation(plan) => {
-            fills_callables(plan.signature(), plan.call(), plan.crossings())
+            writes_declared(plan.signature(), plan.call(), plan.crossings())
         }
         Representability::FunctionItem(plan) => callable_generic(plan),
         _ => false,
@@ -2464,7 +2464,7 @@ fn ty_ok(
 /// A generic item Rawr calls directly: every parameter a type, none a
 /// callable (those are function-item operands).
 fn callable_generic(plan: &representability::callable::Item) -> bool {
-    match plan.class() {
+    let kinds = match plan.class() {
         // A script function fills each callable parameter as a slot,
         // as `iced::run(update, view)` takes them (D594).
         None if !plan.crossings().is_empty() => {
@@ -2475,7 +2475,7 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
                         | representability::signature::Kind::Future
                         | representability::signature::Kind::Callable
                 )
-            }) && fills_callables(plan.signature(), plan.call(), plan.crossings())
+            })
         }
         // `F: Future` takes a script future (D527).
         None => plan.signature().parameters().iter().all(|parameter| {
@@ -2494,29 +2494,79 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
             | rawr_import::surface::callable::Class::Mutable(_),
         ) => plan.call().is_some(),
         Some(_) => false,
-    }
+    };
+    kinds && writes_declared(plan.signature(), plan.call(), plan.crossings())
 }
 
-/// Whether a script closure (`call`) or a script function's slot
-/// (`crossings`) fills each callable parameter of `signature`. A signature
-/// declares only its type parameters and writes a filled callable as the
-/// closure's type, so one left unfilled would be named undeclared. The
-/// classifier keeps such an item, as tokio's `MappedMutexGuard::map` and
-/// cosmic text's `with_buffer_mut` are, when it can't name what the
-/// callable takes or gives (T313).
-fn fills_callables(
+/// Whether the binding of `signature`, with a script closure (`call`) or a
+/// script function's slots (`crossings`) for its callables, names only the
+/// type parameters it declares. A signature declares only its type
+/// parameters and writes each filled callable as the closure's type. The
+/// classifier keeps items that break this when it can't name what a
+/// callable takes or gives, as tokio's `MappedMutexGuard::map` and cosmic
+/// text's `with_buffer_mut` are, or when a closure gives a future parameter,
+/// as warp's `Ws::on_upgrade(F) where F: FnOnce(WebSocket) -> U, U: Future`
+/// does. Such an item has no binding (T313).
+fn writes_declared(
     signature: &representability::signature::Signature,
     call: Option<&representability::callable::Call>,
     crossings: &[representability::callable::Call],
 ) -> bool {
-    signature
-        .parameters()
+    use representability::convert::Type;
+    use representability::signature::Kind;
+
+    fn declared(ty: &Type, parameters: &[representability::signature::Parameter]) -> bool {
+        match ty {
+            Type::Parameter(index) => parameters
+                .iter()
+                .find(|parameter| parameter.index() == *index)
+                .is_none_or(|parameter| parameter.kind() == Kind::Type),
+            Type::Nominal { arguments, .. }
+            | Type::Tuple(arguments)
+            | Type::Script { arguments, .. } => arguments.iter().all(|ty| declared(ty, parameters)),
+            Type::Option(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Range(element)
+            | Type::Sequence { element, .. }
+            | Type::ProfileMessage {
+                payload: element, ..
+            } => declared(element, parameters),
+            Type::Result(first, second)
+            | Type::FunctionItem {
+                input: first,
+                output: second,
+            } => declared(first, parameters) && declared(second, parameters),
+            Type::Unit | Type::Builtin(_) | Type::Inferred => true,
+        }
+    }
+
+    let parameters = signature.parameters();
+    let calls = || call.into_iter().chain(crossings);
+    let filled = parameters
         .iter()
-        .filter(|parameter| parameter.kind() == representability::signature::Kind::Callable)
-        .all(|parameter| {
-            call.into_iter()
-                .chain(crossings)
-                .any(|call| call.parameter() == parameter.index())
+        .filter(|parameter| parameter.kind() == Kind::Callable)
+        .all(|parameter| calls().any(|call| call.parameter() == parameter.index()));
+    // An input a closure fills, or an `Option` of the one Rawr makes, is
+    // written as the closure's type (`callable_signature`).
+    let closure = |input: &Type| {
+        calls().any(|filled| *input == Type::Parameter(filled.parameter()))
+            || call.is_some_and(|call| {
+                matches!(input, Type::Option(inner)
+                    if **inner == Type::Parameter(call.parameter()))
+            })
+    };
+    filled
+        && signature
+            .inputs()
+            .iter()
+            .filter(|input| !closure(input))
+            .chain([signature.output()])
+            .all(|ty| declared(ty, parameters))
+        && calls().all(|call| {
+            call.inputs()
+                .iter()
+                .chain([call.output()])
+                .all(|ty| declared(ty, parameters))
         })
 }
 

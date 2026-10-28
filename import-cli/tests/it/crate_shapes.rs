@@ -115,8 +115,10 @@ fn a_generic_traits_provided_method_is_each_implementors() {
 /// gives what no script closure can, as tokio's `MappedMutexGuard::map`
 /// (`F: FnOnce(&mut T) -> &mut U`) and cosmic text's `with_buffer_mut`
 /// (`F: FnOnce(&mut Borrowed<Buffer>) -> T`) are, has no binding, and the
-/// module's other items stay importable. It used to fail the import with
-/// "unknown type parameter `F`" (T313).
+/// module's other items stay importable. So does a method whose closure
+/// gives a future parameter, as warp's `Ws::on_upgrade` (`F: FnOnce(WebSocket)
+/// -> U, U: Future`) is. Each used to fail the import with "unknown type
+/// parameter" (T313).
 #[test]
 fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
     runs_as_cargo_does("guard", "3\n");

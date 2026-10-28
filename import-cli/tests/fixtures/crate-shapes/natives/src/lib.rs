@@ -209,8 +209,9 @@ pub mod base {
 /// Functions whose callable parameter is a named type parameter that no
 /// script closure fills, as tokio's `MappedMutexGuard::map` (`F:
 /// FnOnce(&mut T) -> &mut U`) and cosmic-text's `with_buffer_mut` (`F:
-/// FnOnce(&mut Borrowed<Buffer>) -> T`) take, beside the items a script
-/// reaches.
+/// FnOnce(&mut Borrowed<Buffer>) -> T`) take, or whose closure gives a
+/// future parameter, as warp's `Ws::on_upgrade` takes, beside the items a
+/// script reaches.
 pub mod guard {
     pub struct Guard<'a, T> {
         value: &'a mut T,
@@ -242,6 +243,16 @@ pub mod guard {
         }
 
         pub fn lines(&self) -> u32 {
+            self.lines
+        }
+
+        /// A closure that gives a future, as warp's `Ws::on_upgrade` takes.
+        pub fn on_upgrade<F, U>(self, func: F) -> u32
+        where
+            F: FnOnce(Buffer) -> U + Send + 'static,
+            U: std::future::Future<Output = ()> + Send + 'static,
+        {
+            drop(func(self));
             self.lines
         }
     }
