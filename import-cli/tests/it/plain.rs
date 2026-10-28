@@ -66,7 +66,10 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
         text(&run.stdout),
         text(&run.stderr)
     );
-    assert_eq!(text(&run.stdout), "parsed: 1.2.3\nmajor: 1\n");
+    assert_eq!(
+        text(&run.stdout),
+        "parsed: 1.2.3\nmajor: 1\nwidest: 18446744073709551615.0.9223372036854775808\n"
+    );
     let runner = fs::read_to_string(root.join("target/rawr/runner/Cargo.toml")).unwrap();
     assert!(
         runner.contains("__rawr_internal = { package = \"rawr\""),

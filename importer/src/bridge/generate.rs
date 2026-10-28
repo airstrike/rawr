@@ -426,20 +426,55 @@ impl Error {
     }
 }
 
-/// Rawr's `i64` as the Rust integer `T`, checked as `T::try_from` checks.
+/// A Rust integer as Rawr keeps it in an `i64`. Rawr keeps a `u64` or a
+/// `usize` as the `i64` with the same bits, so every value of theirs
+/// crosses. The narrower types are checked as `try_from` checks.
+trait Int: Sized + Copy + std::fmt::Display {
+    fn from_int(value: i64) -> Option<Self>;
+    fn into_int(self) -> Option<i64>;
+}
+
+macro_rules! checked_int {
+    ($($ty:ty),*) => {$(
+        impl Int for $ty {
+            fn from_int(value: i64) -> Option<Self> {
+                Self::try_from(value).ok()
+            }
+            fn into_int(self) -> Option<i64> {
+                i64::try_from(self).ok()
+            }
+        }
+    )*};
+}
+checked_int!(i8, i16, i32, i64, isize, u8, u16, u32);
+
+macro_rules! wide_int {
+    ($($ty:ty),*) => {$(
+        impl Int for $ty {
+            fn from_int(value: i64) -> Option<Self> {
+                Some(value as u64 as $ty)
+            }
+            fn into_int(self) -> Option<i64> {
+                Some(self as u64 as i64)
+            }
+        }
+    )*};
+}
+wide_int!(u64, usize);
+
+/// Rawr's `i64` as the Rust integer `T`.
 #[allow(dead_code)]
-fn int_from<T: TryFrom<i64>>(value: i64) -> Result<T, Error> {
-    T::try_from(value).map_err(|_| Error::OutOfRange {
+fn int_from<T: Int>(value: i64) -> Result<T, Error> {
+    T::from_int(value).ok_or_else(|| Error::OutOfRange {
         value: value.to_string(),
         ty: std::any::type_name::<T>(),
     })
 }
 
-/// The Rust integer `value` as Rawr's `i64`. A `u64` above `i64::MAX` is
-/// an error.
+/// The Rust integer `value` as Rawr's `i64`.
 #[allow(dead_code)]
-fn int_into<T: TryInto<i64> + Copy + std::fmt::Display>(value: T) -> Result<i64, Error> {
-    value.try_into().map_err(|_| Error::OutOfRange {
+fn int_into<T: Int>(value: T) -> Result<i64, Error> {
+    value.into_int().ok_or_else(|| Error::OutOfRange {
         value: value.to_string(),
         ty: "i64",
     })
@@ -447,7 +482,7 @@ fn int_into<T: TryInto<i64> + Copy + std::fmt::Display>(value: T) -> Result<i64,
 
 /// Rawr's inclusive integer range with each end checked into `T`.
 #[allow(dead_code)]
-fn range_from<T: TryFrom<i64>>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::RangeInclusive<T>, Error> {
+fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::RangeInclusive<T>, Error> {
     let (start, end) = range.into_inner();
     Ok(int_from(start)?..=int_from(end)?)
 }
@@ -1088,7 +1123,7 @@ fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usiz
 }
 
 #[allow(dead_code)]
-fn take_int<T: TryFrom<i64>>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+fn take_int<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     int_from(take_primitive::<i64>(arguments, index)?)
 }
 
@@ -1099,7 +1134,7 @@ fn take_f32(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<f32, 
 
 /// An inclusive range whose integer type Rust infers from the call.
 #[allow(dead_code)]
-fn take_range<T: TryFrom<i64>>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::ops::RangeInclusive<T>, Error> {
+fn take_range<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::ops::RangeInclusive<T>, Error> {
     range_from(take_primitive::<std::ops::RangeInclusive<i64>>(arguments, index)?)
 }
 
