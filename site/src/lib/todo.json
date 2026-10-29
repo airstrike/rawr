@@ -1,18 +1,21 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-29",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"Reuse verified crate extraction tables across projects, with atomic publication, active-reader protection and removal by last use. Small whole-crate entries can serve later item demands without another nightly build; larger entries currently reuse their recorded subset.","issues":[367,272],"refs":[271,281]},
-        {"text":"Validate declared files, environment and compiler inputs before reusing bindings. Differences between nightly and project build-script outputs keep bindings local with diagnostics, and changes to external declared inputs reach a running app.","issues":[275]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.18",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"Reuse verified crate extraction tables across projects, with atomic publication, active-reader protection and removal by last use. Small whole-crate entries can serve later item demands without another nightly build; larger entries currently reuse their recorded subset.","issues":[367,272],"refs":[271,281]},
+          {"text":"Validate declared files, environment and compiler inputs before reusing bindings. Differences between nightly and project build-script outputs keep bindings local with diagnostics, and changes to external declared inputs reach a running app.","issues":[275]},
+          {"text":"Track hot reload at every release with a repeatable installed-tool benchmark and versioned raw samples. The 0.3.17 baseline measured 1.000 s for the first edit and 1.108 s median over five later edits, from save to changed native callback output; startup is recorded separately.","issues":[368]}
+        ]
+      },
       {
         "version": "0.3.17",
         "date": "2026-10-29",
@@ -601,10 +604,10 @@
     {"issue":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.2"},
     {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
-    {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.1"},
     {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
@@ -696,8 +699,8 @@
     {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)","release":"0.3.17"},
     {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
-    {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":368,"title":"Record hot-reload measurements for every release","state":"open","category":"Health"}
+    {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
+    {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"}
   ],
   "groups": [
     {
