@@ -4,11 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"Script implementations of native traits preserve Result types in callback parameters and return values, so callbacks returning Ok or Err compile with their declared Rust signatures.","issues":[371]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.20",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"Script implementations of native traits preserve Result types in callback parameters and return values, so callbacks returning Ok or Err compile with their declared Rust signatures.","issues":[371]},
+        {"text":"Deployment waits read the current container application directly, avoiding false rollout timeouts when Cloudflare’s account-wide list still shows the previous image.","issues":[374]}
+      ]
+    },
     {
       "version": "0.3.19",
       "date": "2026-10-29",
