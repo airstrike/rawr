@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-28",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A view's column of text made from an iterator, as iced's text and events examples make it, now builds. rawr reads each type's lifetime variance from rustc, and a value made outside the view joins the view's region only when its type is covariant.","issues":[335]},
-        {"text":"A function iced runs on its executor thread with crate values, such as `Task::map(Result::ok)` or `listen_with`'s filter, runs with an arena of its own for the call. Upstream text and events run with no rawr-iced.","issues":[347]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.15",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A view's column of text made from an iterator, as iced's text and events examples make it, now builds. rawr reads each type's lifetime variance from rustc, and a value made outside the view joins the view's region only when its type is covariant.","issues":[335]},
+          {"text":"A function iced runs on its executor thread with crate values, such as `Task::map(Result::ok)` or `listen_with`'s filter, runs with an arena of its own for the call. Upstream text and events run with no rawr-iced.","issues":[347]}
+        ]
+      },
       {
         "version": "0.3.14",
         "date": "2026-10-28",
@@ -304,6 +306,7 @@
   },
   "items": [
     {"issue":1,"title":"A method call through a borrow guard (`text.write().push_str(..)`) calls the guard method twice…","state":"open","category":"Divergences from rustc"},
+    {"issue":2,"title":"A panic printed `error[RAWR-RUNTIME-THROW]` instead of rustc's panic text","state":"closed","category":"Divergences from rustc","release":"0.1.0"},
     {"issue":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open","category":"Divergences from rustc"},
     {"issue":4,"title":"`VecDeque` is type-checked as a `Vec`","state":"open","category":"Divergences from rustc"},
     {"issue":5,"title":"`write!` works without `use std::fmt::Write`","state":"open","category":"Divergences from rustc"},
@@ -311,7 +314,6 @@
     {"issue":7,"title":"A `use Enum::*` inside a function applies to the whole file","state":"open","category":"Divergences from rustc"},
     {"issue":8,"title":"When several `From` cases fit an argument, rustc decides","state":"open","category":"Divergences from rustc"},
     {"issue":9,"title":"On the playground, `random_range` over an `f32` range draws an `f64`","state":"open","category":"Divergences from rustc"},
-    {"issue":2,"title":"A panic printed `error[RAWR-RUNTIME-THROW]` instead of rustc's panic text","state":"closed","category":"Divergences from rustc","release":"0.1.0"},
     {"issue":10,"title":"A guard inside `Option` or `Result` (`try_write`, `Mutex::lock`)","state":"open","category":"Borrow guards (D554)"},
     {"issue":11,"title":"Mutating a guarded `Vec` or tuple","state":"open","category":"Borrow guards (D554)"},
     {"issue":12,"title":"Plain `&T` and `&mut T` outputs, and `Option<&mut T>` as a write-back place","state":"open","category":"Borrow guards (D554)"},
@@ -637,7 +639,7 @@
     {"issue":332,"title":"A method from a generic struct's trait impl isn't found (warp's `And<F>::value`)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":333,"title":"An uncallable method shows no \"no binding\" note when it's called with method syntax","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":334,"title":"No-glue stops after #313","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.15"},
     {"issue":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
     {"issue":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
@@ -649,7 +651,7 @@
     {"issue":344,"title":"A std type a crate re-exports under another name works in types but not in call paths…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":345,"title":"No-glue stops after #312 and #338","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":346,"title":"`plain::a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save` times out when the…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":347,"title":"Result::ok on iced's executor thread needs the arena","state":"closed","category":"No glue (D593)"},
+    {"issue":347,"title":"Result::ok on iced's executor thread needs the arena","state":"closed","category":"No glue (D593)","release":"0.3.15"},
     {"issue":348,"title":"A receiver's type arguments are matched by the struct's parameter names","state":"open","category":"No glue (D593)"},
     {"issue":349,"title":"Slots copy crate values that Rust borrows","state":"open","category":"No glue (D593)"},
     {"issue":350,"title":"A script function can't fill a single-input function pointer","state":"open","category":"No glue (D593)"},
