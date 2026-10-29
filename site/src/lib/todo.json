@@ -700,7 +700,8 @@
     {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
     {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
-    {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"}
+    {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"},
+    {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

@@ -368,6 +368,7 @@
     {"t":"T365","issue":365,"title":"T365: Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc","labels":["rustc divergence","no glue"],"gantt":null,"decisions":["D386","D594"],"commit":null,"release":null},
     {"t":"T366","issue":366,"title":"T366: Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D625","D637"],"commit":null,"release":null},
     {"t":"T367","issue":367,"title":"T367: Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"bind","row":"key-and-publish"},"decisions":["D608","D609","D638","D639","D640","D642","D643","D644","D645"],"commit":"fddbfbab34","release":"0.3.18"},
-    {"t":"T368","issue":368,"title":"T368: Record hot-reload measurements for every release","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D648"],"commit":"5329212b8","release":"0.3.18"}
+    {"t":"T368","issue":368,"title":"T368: Record hot-reload measurements for every release","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D648"],"commit":"5329212b8","release":"0.3.18"},
+    {"t":"T369","issue":369,"title":"T369: Substitute blanket provided-method types on concrete receivers","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D649"],"commit":null,"release":null}
   ]
 }
