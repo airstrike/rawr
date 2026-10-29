@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
-      {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.19",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
+        {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
+      ]
+    },
     {
       "version": "0.3.18",
       "date": "2026-10-29",

@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-29",
-  "version": "0.3.18",
+  "version": "0.3.19",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
-        {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.19",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
+          {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
+        ]
+      },
       {
         "version": "0.3.18",
         "date": "2026-10-29",
@@ -707,8 +709,8 @@
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
     {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"},
-    {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)"},
-    {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)"},
+    {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)","release":"0.3.19"},
+    {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"open","category":"No glue (D593)"},
     {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"}
   ],
