@@ -875,8 +875,8 @@
           "name": "Key and publish",
           "start": 43,
           "size": 3,
-          "state": "next",
-          "note": "Atomic, with leases. #271",
+          "state": "now",
+          "note": "Validate inputs before reuse; publish complete generations. #271",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"}
           ]
@@ -886,8 +886,8 @@
           "name": "Removal by last use",
           "start": 45,
           "size": 2,
-          "state": "next",
-          "note": "Kept across reinstalls. #272",
+          "state": "now",
+          "note": "Stable leases across replacement and eviction. #272",
           "issues": [
             {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open"}
           ]
@@ -905,14 +905,14 @@
             {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open"}
           ]
         },
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[]},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Validate declared inputs before shared and remembered hits","issues":[]},
         {
           "id": "drift-loudly",
           "name": "Drift, loudly",
           "start": 49,
           "size": 2,
-          "state": "next",
-          "note": "Names the crate. #275",
+          "state": "now",
+          "note": "Compare nightly and project build-script outputs. #275",
           "issues": [
             {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open"}
           ]
@@ -1023,6 +1023,19 @@
             {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
           ]
+        },
+        {
+          "id": "custom-widgets",
+          "name": "Custom widgets",
+          "start": 43,
+          "size": 4,
+          "state": "now",
+          "note": "Provided methods, alias methods and generic struct fields. #359, #360, #364",
+          "issues": [
+            {"number":359,"title":"A crate trait's provided method on a script type","state":"open"},
+            {"number":360,"title":"Methods of a type only an alias names","state":"open"},
+            {"number":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"open"}
+          ]
         }
       ]
     },
@@ -1037,8 +1050,8 @@
           "name": "Generic script impls",
           "start": 43,
           "size": 4,
-          "state": "next",
-          "note": "custom_quad, component. #322–#324, #341",
+          "state": "done",
+          "note": "0.3.16. Generic impls and methods compile per use. #322–#324, #341",
           "issues": [
             {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed"},
             {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed"},
