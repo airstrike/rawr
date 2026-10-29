@@ -19,7 +19,7 @@ Release hot reload measurements
 After installing each release, run this on macOS or Linux with Python 3.11+:
 
 ```bash
-python3 scripts/measure_reload.py --release 0.3.17 --wait-before-edits
+python3.12 scripts/measure_reload.py --release 0.3.18 --wait-before-edits
 ```
 
 The command starts the installed `rawr` and its adjacent `rawr-import` and
@@ -28,12 +28,31 @@ used to build that installation. At **Ready**, wait for unrelated builds to fini
 press Enter. Omit `--wait-before-edits` for an unattended run; use
 `--label provisional-busy` when the machine is busy. Load is recorded, never
 used to refuse work. `--bin-dir` selects another complete installation.
+Use the same observer Python version as the previous comparable baseline;
+the first baseline used **3.12.0**. Verify the executable's version before
+starting. Preserve unmatched and repeated runs, and state why a matched run
+is selected for comparison.
 
-The committed [0.3.17 baseline](reload-results/0.3.17.json) measured a first
-edit of 999.733 ms, then a median of 1107.552 ms and maximum of 1134.842 ms
-over five later edits. Those edits ran after other builds stopped. Its
-136.474 s cold-cache startup overlapped other work; the observed callback
-interval median was 25.068 ms on this machine.
+Recorded releases use the same Apple M2 Max machine, fixture and harness.
+The following comparison uses Python 3.12.0 and fresh benchmark caches for
+both releases. Each timed edit window began after other builds stopped.
+
+| Release | First edit | Five later edits: median | Later maximum | Separate startup |
+|---|---:|---:|---:|---:|
+| [0.3.17](reload-results/0.3.17.json) | 999.733 ms | 1107.552 ms | 1134.842 ms | 136.474 s |
+| [0.3.18](reload-results/0.3.18-python3.12.json) | 1074.205 ms | 1133.550 ms | 1247.609 ms | 157.436 s |
+
+The 0.3.18 later-edit median increased **25.998 ms (2.35%)**, and its maximum
+increased **112.767 ms (9.94%)**. These are observed differences across two
+small samples, not an isolated measurement of a particular code change.
+Both startups overlapped other work and are not quiet-startup comparisons.
+Requested callback cadence was 20 ms; observed cadence and machine load are
+retained in each result.
+
+An [earlier 0.3.18 run](reload-results/0.3.18.json) used Python 3.14.7 and a
+previously populated benchmark cache, recording 1178.581 ms later-edit median.
+It is retained as measured. The second run was chosen to match the original
+observer version and fresh-cache conditions, before its results were known.
 
 The benchmark copies `import-cli/tests/fixtures/marked-ticker` into its owned
 `target/reload-bench/fixture`, uses a **20 ms** native tick interval, and extends
