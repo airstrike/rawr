@@ -114,7 +114,7 @@
         {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326]},
         {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327]},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338]},
-        {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"next","note":"Result-returning native trait callbacks must keep their Rust signature. #371","issues":[371]},
+        {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"done","note":"Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371","issues":[371]},
         {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345]}
       ]
     },

@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"Script implementations of native traits preserve Result types in callback parameters and return values, so callbacks returning Ok or Err compile with their declared Rust signatures.","issues":[371]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.19",
@@ -711,9 +716,10 @@
     {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"},
     {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
-    {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"open","category":"No glue (D593)"},
+    {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed","category":"No glue (D593)"},
     {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
-    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"}
+    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"},
+    {"issue":374,"title":"Deployment wait reads a stale container application list","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1156,10 +1162,10 @@
           "name": "Callback return types",
           "start": 47,
           "size": 2,
-          "state": "next",
-          "note": "Result-returning native trait callbacks must keep their Rust signature. #371",
+          "state": "done",
+          "note": "Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371",
           "issues": [
-            {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"open"}
+            {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed"}
           ]
         },
         {

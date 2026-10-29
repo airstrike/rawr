@@ -56,21 +56,27 @@ else
   echo "warning: the private tabs were not uploaded; see $logs/release-private.log" >&2
 fi
 
-# Cloudflare's rollout replaces the container; the application shows the new
-# image only once that rollout has completed. A rollout that never places a
+# Query the application itself: the account-wide list can retain an old image
+# after the application and its running instance have advanced. A rollout that never places a
 # healthy instance fails here with Cloudflare's own view, not in the snippets.
 app="rawr-play-playbot"
+application_id() {
+  npx wrangler containers list --json 2>/dev/null |
+    node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>console.log(JSON.parse(s).find((x)=>x.name===process.argv[1])?.id??""))' "$app"
+}
+id="$(application_id || true)"
 i=0
-until npx wrangler containers list --json 2>/dev/null |
-  node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const a=JSON.parse(s).find((x)=>x.name===process.argv[1]);process.exit(a&&a.image.endsWith(":"+process.argv[2])?0:1)})' "$app" "$want"; do
+until [ -n "$id" ] && npx wrangler containers info "$id" --json 2>/dev/null |
+  node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const a=JSON.parse(s);process.exit(a.id===process.argv[1]&&a.name===process.argv[2]&&a.configuration?.image?.endsWith(":"+process.argv[3])?0:1)})' "$id" "$app" "$want"; do
   i=$((i + 1))
   if [ "$i" -gt 60 ]; then
     echo "Cloudflare did not finish rolling out image $want within 10 minutes. Its application and instances:" >&2
     npx wrangler containers list --json >&2 || true
-    id="$(npx wrangler containers list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>console.log(JSON.parse(s).find((x)=>x.name===process.argv[1])?.id??""))' "$app")"
+    [ -z "$id" ] || npx wrangler containers info "$id" --json >&2 || true
     [ -z "$id" ] || npx wrangler containers instances "$id" --json >&2 || true
     exit 1
   fi
+  [ -n "$id" ] || id="$(application_id || true)"
   sleep 10
 done
 echo "Cloudflare runs image $want after $((i * 10)) s."
