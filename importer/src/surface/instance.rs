@@ -92,6 +92,9 @@ pub struct ScriptImpl {
     generics: Box<[Box<str>]>,
     associated: Box<[(Box<str>, convert::Type)]>,
     functions: Box<[ScriptImplFunction]>,
+    /// The trait's lifetime arguments, which the header writes `'_`.
+    #[serde(default)]
+    lifetimes: u32,
 }
 
 /// One function of a [`ScriptImpl`].
@@ -137,7 +140,22 @@ impl ScriptImpl {
             generics,
             associated,
             functions,
+            lifetimes: 0,
         }
+    }
+
+    /// This impl of a trait with `lifetimes` lifetime arguments before its
+    /// types, as iced's `Component<'a, Message>`.
+    #[must_use]
+    pub const fn with_lifetimes(mut self, lifetimes: u32) -> Self {
+        self.lifetimes = lifetimes;
+        self
+    }
+
+    /// The trait's lifetime arguments.
+    #[must_use]
+    pub const fn lifetimes(&self) -> u32 {
+        self.lifetimes
     }
 
     /// The type the impl is for.

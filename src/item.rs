@@ -96,6 +96,21 @@ impl Key {
         self.kind
     }
 
+    /// This key with the declared name `name`, at the same owner and kind,
+    /// as an instance of a generic method is keyed (D629).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn renamed(&self, name: ImmutableString) -> Self {
+        Self {
+            path: program::Path::new(
+                self.package().into(),
+                self.modules().to_vec().into_boxed_slice(),
+                name,
+            ),
+            owner: self.owner.clone(),
+            kind: self.kind,
+        }
+    }
+
     pub(crate) fn same_unowned_path(&self, other: &Self) -> bool {
         self.path == other.path
     }

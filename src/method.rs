@@ -327,6 +327,51 @@ impl Definition {
         self.body
     }
 
+    /// This method's instance named `name` at `id` and `key`, compiled for
+    /// one instantiation of its generic parameters (D629): `substitute`
+    /// writes each type of its signature at that instantiation, and the
+    /// instance has no generic parameters of its own. Its body reads them
+    /// as those types (`resolve::Instances::types`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn instance(
+        &self,
+        id: Id,
+        key: item::Key,
+        name: ImmutableString,
+        substitute: impl Fn(&type_ref::Type) -> type_ref::Type,
+    ) -> Self {
+        let mut instance = self.clone();
+        instance.id = id;
+        instance.key = key;
+        instance.name.text = name;
+        for parameter in instance.parameters.iter_mut() {
+            parameter.ty = substitute(&parameter.ty);
+        }
+        instance.output = substitute(&instance.output);
+        instance.owner_arguments = instance.owner_arguments.iter().map(&substitute).collect();
+        instance.trait_arguments = instance.trait_arguments.iter().map(&substitute).collect();
+        let parameters = self
+            .generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect::<Vec<_>>();
+        instance.lifetimes.bounds = instance
+            .lifetimes
+            .bounds
+            .iter()
+            .filter(|(bounded, _)| !parameters.contains(bounded))
+            .cloned()
+            .collect();
+        instance.generics = Box::default();
+        instance.fingerprint = signature::Fingerprint::function(
+            true,
+            instance.receiver,
+            &instance.parameters,
+            Some(&instance.output),
+        );
+        instance
+    }
+
     pub(crate) fn symbol(&self) -> ImmutableString {
         format!("\0rawr.method.{}", self.key).into()
     }

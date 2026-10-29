@@ -84,7 +84,7 @@ pub(super) fn named_value(value: &Dynamic) -> Option<(&'static str, Dynamic)> {
 }
 
 /// A new cell of `value`, a `Cell` when `plain`.
-fn made(value: Dynamic, plain: bool) -> Dynamic {
+pub(crate) fn made(value: Dynamic, plain: bool) -> Dynamic {
     Dynamic::from(Cell(crate::Shared::new(Inner {
         value: crate::Locked::new(value),
         plain,
