@@ -81,7 +81,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // its where-clause names.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 31;
+const PROTOCOL_SCHEMA: u32 = 32;
 
 pub(super) struct Invocation {
     pub(super) package: Package,

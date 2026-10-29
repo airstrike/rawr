@@ -1,6 +1,6 @@
 ---
-// A line of the work plan's text: `code` in backticks, and each #N linked to its issue.
-import { issueUrl, parts } from "../../lib/todo.ts";
+// A line of the work plan's text: `code` in backticks, and each #N linked to its issue, crossed off once it's closed.
+import { isClosed, issueUrl, parts } from "../../lib/todo.ts";
 const { text } = Astro.props as { text: string };
 ---
-{parts(text).map((p) => (p.code ? <code>{p.text}</code> : p.issue ? <a class="issue" href={issueUrl(p.issue)}>{p.text}</a> : p.text))}
+{parts(text).map((p) => (p.code ? <code>{p.text}</code> : p.issue ? <a class={isClosed(p.issue) ? "issue closed" : "issue"} href={issueUrl(p.issue)}>{p.text}</a> : p.text))}

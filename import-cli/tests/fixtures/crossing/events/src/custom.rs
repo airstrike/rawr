@@ -5,6 +5,14 @@
 
 use std::marker::PhantomData;
 
+/// Invokes a provided trait method through the defining crate's path.
+#[macro_export]
+macro_rules! framed {
+    ($widget:expr) => {
+        $crate::widgets::Framed::framed($widget)
+    };
+}
+
 /// A renderer's primitives, as iced's `renderer::Renderer`.
 pub trait Renderer {
     /// Fills `quad` with `color`.
@@ -34,6 +42,108 @@ impl Renderer for Recorder {
             quad.radius,
             crate::paint(color)
         ));
+    }
+}
+
+mod backend {
+    pub struct Primary;
+    pub struct Secondary;
+}
+
+/// A renderer whose concrete backend types are not publicly nameable.
+pub struct Composite<A, B> {
+    recorder: Recorder,
+    backends: PhantomData<(A, B)>,
+}
+
+/// The public name of one concrete renderer instance.
+pub type Aliased = Composite<backend::Primary, backend::Secondary>;
+
+/// Makes the renderer named only through `Aliased`.
+pub fn aliased() -> Aliased {
+    Composite {
+        recorder: Recorder::default(),
+        backends: PhantomData,
+    }
+}
+
+/// A generic struct with a numeric default, like iced's `Size`.
+#[derive(Debug, Clone, Copy)]
+pub struct Size<T = f32> {
+    /// Its width.
+    pub width: T,
+    /// Its height.
+    pub height: T,
+}
+
+impl<T> Size<T> {
+    /// Makes a size from its dimensions.
+    pub fn new(width: T, height: T) -> Self {
+        Self { width, height }
+    }
+}
+
+/// Layout requests, like iced's `Length`.
+#[derive(Debug, Clone, Copy)]
+pub enum Length {
+    /// Use the available space.
+    Fill,
+    /// Use the content's size.
+    Shrink,
+}
+
+/// A native value lent mutably into a script callback.
+pub struct Tree {
+    /// Its computed size.
+    pub size: Size,
+}
+
+/// Calls the script with a mutable native place and reports the stored size.
+pub fn layout(update: impl Layout) -> String {
+    let mut tree = Tree {
+        size: Size::new(0.0, 0.0),
+    };
+    update.change(&mut tree);
+    format!("{}x{}", tree.size.width, tree.size.height)
+}
+
+/// The layout operation implemented by a script's widget.
+pub trait Layout {
+    /// Updates the native layout tree in place.
+    fn change(&self, tree: &mut Tree);
+}
+
+/// Describes a size instantiated at a type different from its default.
+pub fn requested(size: Size<Length>) -> String {
+    format!("{:?}/{:?}", size.width, size.height)
+}
+
+/// A second concrete instance used beside the first one.
+pub fn numbers(size: Size<u16>) -> u16 {
+    size.width + size.height
+}
+
+/// A constructor with a nested parameter and no default.
+pub struct Nested<T> {
+    /// The value that determines the parameter.
+    pub value: Option<T>,
+}
+
+/// Reads the nested argument inferred by its constructor.
+pub fn nested(value: Nested<u8>) -> u8 {
+    value.value.unwrap_or(0)
+}
+
+impl<A, B> Renderer for Composite<A, B> {
+    fn fill_quad(&mut self, quad: Quad, color: crate::Color) {
+        self.recorder.fill_quad(quad, color);
+    }
+}
+
+impl<A, B> Composite<A, B> {
+    /// Returns what the renderer drew.
+    pub fn rendered(&self) -> String {
+        self.recorder.filled.join(", ")
     }
 }
 

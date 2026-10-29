@@ -469,7 +469,32 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .type_implements_trait(trait_id, [self_ty], param_env)
                     .must_apply_modulo_regions()
             };
-            let applies = trait_generic || implements(self_ty) || defaulted.is_some_and(implements);
+            // A trait the generic type implements for any arguments its
+            // impl bounds, as iced's `impl<A: Renderer, B: Renderer>
+            // Renderer for fallback::Renderer<A, B>`: an alias names the
+            // instance, as `iced::Renderer` is `fallback::Renderer<wgpu,
+            // tiny_skia>`, and rustc proves the bounds where the bridge
+            // calls the member.
+            let generally =
+                || {
+                    let mut found = false;
+                    tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
+                        found |= tcx.impl_opt_trait_ref(implementation).is_some_and(|reference| {
+                        matches!(
+                            reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                            ty::Adt(definition, arguments) if definition.did() == adt
+                                && arguments.types().all(|argument| {
+                                    matches!(argument.kind(), ty::Param(_))
+                                })
+                        )
+                    }) && tcx.impl_polarity(implementation) == ty::ImplPolarity::Positive;
+                    });
+                    found
+                };
+            let applies = trait_generic
+                || implements(self_ty)
+                || defaulted.is_some_and(implements)
+                || (generic && generally());
             if !applies {
                 continue;
             }

@@ -28,11 +28,15 @@ fn copy(from: &Path, to: &Path) {
 }
 
 fn rawr_import(root: &Path, arguments: &[&str]) -> Output {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    rawr_import_with_home(root, arguments, &home)
+}
+
+fn rawr_import_with_home(root: &Path, arguments: &[&str], home: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .args(arguments)
         .arg(root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", home)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -46,7 +50,12 @@ fn text(bytes: &[u8]) -> String {
 
 /// `rawr_import`, killed and failed after `limit`: a run that waits on
 /// itself fails the test instead of hanging it.
-fn rawr_import_within(root: &Path, arguments: &[&str], limit: std::time::Duration) -> Output {
+fn rawr_import_within(
+    root: &Path,
+    arguments: &[&str],
+    home: &Path,
+    limit: std::time::Duration,
+) -> Output {
     use std::process::Stdio;
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let name = root.file_name().unwrap().to_string_lossy().into_owned();
@@ -55,7 +64,7 @@ fn rawr_import_within(root: &Path, arguments: &[&str], limit: std::time::Duratio
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .args(arguments)
         .arg(root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", home)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -154,6 +163,12 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
 /// it reads them from the home too (D609.4).
 #[test]
 fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
+    // This test owns its binding namespace. Old protocol generations in the
+    // suite's general home are valid retained entries, not extra publications
+    // by this run. Preserve the runtime while starting with cold bindings.
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("semver-sharing-home");
+    let bindings = home.join("bindings");
+    let _ = fs::remove_dir_all(&bindings);
     let projects = ["first", "second", "other", "other-again"]
         .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shared-{name}")));
     for root in &projects {
@@ -167,7 +182,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     }
     let expected = "parsed: 1.2.3\nmajor: 1\nwidest: 18446744073709551615.0.9223372036854775808\n";
     let run = |root: &Path, stdout: &str| {
-        let run = rawr_import(root, &["run"]);
+        let run = rawr_import_with_home(root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -182,9 +197,12 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
             .unwrap_or_default();
         root.join("target/rawr/build").exists() || probed != 0
     };
-    let bindings = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home/bindings");
 
     run(first, expected);
+    assert!(
+        nightly(first),
+        "the first project starts with cold bindings"
+    );
     let published = fs::read_dir(&bindings)
         .unwrap()
         .filter_map(|entry| {
@@ -210,7 +228,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     let harness = second.join("target/rawr/shared/Cargo.toml");
     let copied = fs::metadata(&harness).unwrap().modified().unwrap();
     fs::remove_dir_all(second.join("target/rawr/store")).unwrap();
-    let rebuilt = rawr_import_within(second, &["run"], std::time::Duration::from_secs(300));
+    let rebuilt = rawr_import_within(second, &["run"], &home, std::time::Duration::from_secs(300));
     assert!(
         rebuilt.status.success(),
         "stdout:\n{}\nstderr:\n{}",

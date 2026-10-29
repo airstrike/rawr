@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 57;
+const CLASSIFIER_VERSION: u32 = 58;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3797,7 +3797,11 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     model::Owner::Free | model::Owner::Definition(_) => None,
                 };
-                let selector = selector(definition)?;
+                let selector = if self.instance_aliases().contains(&definition_index) {
+                    crate::surface::identity::Selector::Declaration
+                } else {
+                    selector(definition)?
+                };
                 self.retain_selector(&selector)?;
                 let identity =
                     crate::surface::identity::Identity::imported(export, implementation, selector)?;
@@ -3836,6 +3840,7 @@ impl<P: api::Phase> Context<'_, P> {
                 } else {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
+                    records.extend(self.self_member_implementations(export, definition)?);
                     records.into_boxed_slice()
                 };
                 Ok(OutcomeRecord {
@@ -3970,11 +3975,37 @@ impl<P: api::Phase> Context<'_, P> {
         definitions: &[DefinitionPlan],
     ) -> Result<Box<[ImplementationRecord]>, Error> {
         let mut outcomes = Vec::new();
+        let alias = self
+            .graph
+            .definition_index(export.target())
+            .and_then(|index| self.instance_aliases().contains(&index).then_some(index));
+        let alias = alias.and_then(|index| self.graph.definitions().nth(index));
+        let instance = alias.and_then(|alias| match alias.kind() {
+            model::Kind::TypeAlias { ty, .. } => Some(ty),
+            _ => None,
+        });
+        let target = match instance {
+            Some(model::Type::Definition { id, .. }) => id,
+            _ => export.target(),
+        };
         for implementation in self.graph.implementations().filter(|implementation| {
             implementation
                 .relevance()
-                .any(|definition| definition == export.target())
+                .any(|definition| definition == target)
         }) {
+            let substitutions = match instance {
+                Some(instance) => {
+                    let Some(substitutions) = instance_substitutions(
+                        implementation.self_type(),
+                        instance,
+                        implementation.id(),
+                    ) else {
+                        continue;
+                    };
+                    Some(substitutions)
+                }
+                None => None,
+            };
             self.retain_items(1)?;
             self.retain_items(implementation.associated().len())?;
             self.retain_array::<ImplementationRecord>(1)?;
@@ -4023,12 +4054,17 @@ impl<P: api::Phase> Context<'_, P> {
                     export.span().clone(),
                     definition.span().clone(),
                 );
-                let evidence = self.classify_associated(
-                    implementation,
-                    definition,
-                    definitions,
-                    export.target(),
-                )?;
+                let evidence = match &substitutions {
+                    Some(substitutions) => {
+                        self.classify_alias_member(implementation, definition, substitutions)?
+                    }
+                    None => self.classify_associated(
+                        implementation,
+                        definition,
+                        definitions,
+                        export.target(),
+                    )?,
+                };
                 associated.push(OutcomeRecord {
                     export: export.key().clone(),
                     identity: item_identity,
@@ -4047,6 +4083,74 @@ impl<P: api::Phase> Context<'_, P> {
             });
         }
         Ok(outcomes.into_boxed_slice())
+    }
+
+    /// An opaque alias names one exact instance of an otherwise unnameable
+    /// type. Its methods use that instance's arguments, while the bridge
+    /// calls through the public alias and rustc checks the impl's bounds.
+    fn classify_alias_member(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+        substitutions: &[((api::identity::Definition, u32), model::Type)],
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{callable, reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let result = (|| -> Result<Representability, Failure> {
+            if implementation.safety() != model::Safety::Safe
+                || implementation.polarity() != model::Polarity::Positive
+                || implementation.const_impl()
+                || implementation.default_impl()
+            {
+                return Err(reject::Kind::GenericImplementation.into());
+            }
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = definition.kind()
+            else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            let provided = provided_signature(implementation, definition, signature, generics)?;
+            let (signature, generics) = provided
+                .as_ref()
+                .map_or((signature, generics), |(signature, generics)| {
+                    (signature, generics)
+                });
+            let signature = substituted_signature(signature, substitutions);
+            let generics = model::Generics::new(
+                generics.parameters().cloned().collect(),
+                generics
+                    .predicates()
+                    .map(|predicate| {
+                        map_predicate_types(predicate, |ty| {
+                            substitute_parameters(ty, substitutions)
+                        })
+                    })
+                    .collect(),
+            );
+            match self.function(&signature, &generics)? {
+                Representability::FunctionItem(item) => Ok(Representability::Invocation(
+                    callable::Invocation::new(item, 0),
+                )),
+                plan => Ok(plan),
+            }
+        })();
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(implementation.span())?;
+                Representability::Rejected(reject::Reason::classification(
+                    kind,
+                    implementation.span().clone(),
+                ))
+            }
+            Err(Failure::Operational(error)) => return Err(error),
+        };
+        self.retain_inline_representability()?;
+        Ok(OutcomeEvidence::Inline(Box::new(plan)))
     }
 
     /// The methods of each trait an opaque `impl Trait` type the function
@@ -4165,6 +4269,243 @@ impl<P: api::Phase> Context<'_, P> {
             }
         }
         Ok(records)
+    }
+
+    /// The methods the trait `definition` declares that take `self` by
+    /// value, each a function generic over the trait's `Self`
+    /// (`surface::member`): a program's own type that implements the trait
+    /// calls them, as `column!`'s `Widget::_boxed(circle)` calls the
+    /// provided `_boxed` of a script's `impl Widget<..> for Circle`. No
+    /// impl of the crate's has the script type as its `Self`.
+    fn self_member_implementations(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+    ) -> Result<Vec<ImplementationRecord>, Error> {
+        let model::Kind::Trait {
+            associated,
+            generics,
+            ..
+        } = definition.kind()
+        else {
+            return Ok(Vec::new());
+        };
+        let mut outcomes = Vec::new();
+        for method_id in associated.iter() {
+            let Some(method) = self
+                .graph
+                .definition_index(method_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            else {
+                continue;
+            };
+            let model::Kind::Function {
+                signature: method_signature,
+                generics: method_generics,
+            } = method.kind()
+            else {
+                continue;
+            };
+            if !matches!(method_signature.receiver(), model::Receiver::Value { .. }) {
+                continue;
+            }
+            let selector = crate::surface::identity::Selector::AssociatedFunction {
+                item: crate::surface::identity::Definition::self_member(
+                    definition.id(),
+                    method.id(),
+                ),
+            };
+            self.retain_selector(&selector)?;
+            let identity = crate::surface::identity::Identity::imported(export, None, selector)?;
+            let name = method.display_path().last().unwrap_or("<unnamed>");
+            self.retain_outcome_common(export.key(), name)?;
+            self.retain_span(export.span())?;
+            self.retain_span(method.span())?;
+            let origin =
+                representability::origin::Set::new(export.span().clone(), method.span().clone());
+            let evidence = self.classify_self_member(
+                definition,
+                generics,
+                method,
+                method_signature,
+                method_generics,
+            )?;
+            outcomes.push(OutcomeRecord {
+                export: export.key().clone(),
+                identity,
+                name: name.into(),
+                origin: Some(origin),
+                evidence,
+                implementations: Box::default(),
+                variant: None,
+            });
+        }
+        if outcomes.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Charged as `implementations` charges a crate's own.
+        self.retain_items(1)?;
+        self.retain_items(outcomes.len())?;
+        self.retain_array::<ImplementationRecord>(1)?;
+        self.retain_array::<OutcomeRecord>(outcomes.len())?;
+        self.retain_span(definition.span())?;
+        Ok(vec![ImplementationRecord {
+            identity: crate::surface::identity::Implementation::self_members(
+                &crate::surface::identity::Definition::of(definition.id()),
+            ),
+            span: definition.span().clone(),
+            associated: outcomes.into_boxed_slice(),
+        }])
+    }
+
+    /// `method` of the trait `definition`, whose generics are `container`,
+    /// as a function of its `Self` and the trait's parameters: `self` its
+    /// first input, `Self` a parameter the call's receiver fills and no
+    /// turbofish names, and the trait's parameters the trait's path takes,
+    /// as `Widget::<Message, Theme, Renderer>::_boxed(circle)`.
+    fn classify_self_member(
+        &self,
+        definition: &model::Definition,
+        container: &model::Generics,
+        method: &model::Definition,
+        signature: &model::Signature,
+        generics: &model::Generics,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{callable, reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let trait_id = definition.id();
+        let result = (|| -> Result<Representability, Failure> {
+            let model::Receiver::Value { ty: receiver } = signature.receiver() else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            let this = |ty: &model::Type| self_as_parameter(ty, trait_id);
+            // `Self` is the trait's parameter 0, a parameter of its own here.
+            let mut parameters = vec![model::Parameter::new(
+                trait_id.clone(),
+                0,
+                "This".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            )];
+            let mut container_parameters = 0_usize;
+            for parameter in container.parameters() {
+                if parameter.name() == "Self" || is_lifetime_parameter(parameter) {
+                    continue;
+                }
+                if !matches!(parameter.kind(), model::ParameterKind::Type { .. }) {
+                    return Err(reject::Kind::GenericImplementation.into());
+                }
+                container_parameters += 1;
+                parameters.push(parameter.clone());
+            }
+            parameters.extend(generics.parameters().cloned());
+            let trait_arguments = container
+                .parameters()
+                .filter(|parameter| parameter.name() != "Self")
+                .map(|parameter| match parameter.kind() {
+                    model::ParameterKind::Lifetime { .. } => {
+                        model::Argument::Lifetime(model::Lifetime::Static)
+                    }
+                    _ => model::Argument::Type(model::Type::Parameter {
+                        owner: trait_id.clone(),
+                        index: parameter.index(),
+                    }),
+                })
+                .collect::<Box<[_]>>();
+            let own_bound = model::Predicate::Bound {
+                ty: model::Type::Parameter {
+                    owner: trait_id.clone(),
+                    index: 0,
+                },
+                bound: model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: trait_arguments,
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                },
+            };
+            // The trait's own predicates and the method's, `Self` the
+            // parameter: `Self: Sized` holds of any value a call passes.
+            let mut predicates = Vec::new();
+            for predicate in container.predicates().chain(generics.predicates()) {
+                if let model::Predicate::Bound {
+                    ty: model::Type::SelfType(owner),
+                    bound:
+                        model::Bound::Trait {
+                            trait_id: bound, ..
+                        },
+                } = predicate
+                    && owner == trait_id
+                    && self.definition_name(bound) == Some("Sized")
+                {
+                    continue;
+                }
+                let predicate = self_predicate_as_parameter(predicate, trait_id);
+                if !predicates.contains(&predicate) {
+                    predicates.push(predicate);
+                }
+            }
+            let bounded = predicates.iter().any(|predicate| {
+                matches!(
+                    predicate,
+                    model::Predicate::Bound {
+                        ty: model::Type::Parameter { owner, index: 0 },
+                        bound: model::Bound::Trait { trait_id: bound, .. },
+                    } if owner == trait_id && bound == trait_id
+                )
+            });
+            if !bounded {
+                predicates.insert(0, own_bound);
+            }
+            let mut inputs = vec![this(receiver)];
+            inputs.extend(signature.inputs().map(this));
+            let rewritten = model::Signature::new(
+                signature.safety(),
+                signature.const_function(),
+                signature.async_function(),
+                signature.abi().into(),
+                signature.variadic(),
+                signature.binders().cloned().collect(),
+                model::Receiver::None,
+                inputs.into_boxed_slice(),
+                this(signature.output()),
+            )
+            .with_guard(signature.guard().cloned());
+            let generics =
+                model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice());
+            let Representability::FunctionItem(item) = self.function(&rewritten, &generics)? else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            let item = item.with_inferred(&[0], container_parameters + 1);
+            if item.call().is_some() || !item.crossings().is_empty() {
+                return Err(reject::Kind::CallableProtocol.into());
+            }
+            Ok(Representability::Invocation(callable::Invocation::new(
+                item,
+                container_parameters,
+            )))
+        })();
+        match result {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(method.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        method.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
+        }
     }
 
     /// `method` of the trait `trait_id` as a member of the opaque type
@@ -4932,8 +5273,10 @@ impl<P: api::Phase> Context<'_, P> {
                 crate::surface::identity::Field::new(field.index(), field.name().into())
             }),
         )?;
-        let constructor = (constructible && !declaration_only)
-            .then_some(crate::surface::identity::Selector::StructConstructor(form));
+        // A generic constructor is available once demand supplies its
+        // concrete instance; an uninstantiated use remains refused.
+        let constructor =
+            constructible.then_some(crate::surface::identity::Selector::StructConstructor(form));
         Ok(representability::structure::Plan::new(
             constructor,
             parameters,
@@ -7665,6 +8008,182 @@ fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Type>) {
         }
         _ => {}
     }
+}
+
+/// `ty` with the trait `trait_id`'s `Self` its parameter 0, as a trait's
+/// method is a function of its `Self` (`classify_self_member`).
+fn self_as_parameter(ty: &model::Type, trait_id: &api::identity::Definition) -> model::Type {
+    let inner = |ty: &model::Type| Box::new(self_as_parameter(ty, trait_id));
+    match ty {
+        model::Type::SelfType(owner) if owner == trait_id => model::Type::Parameter {
+            owner: owner.clone(),
+            index: 0,
+        },
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: self_arguments_as_parameter(arguments, trait_id),
+        },
+        model::Type::Projection {
+            trait_id: projected,
+            associated,
+            arguments,
+        } => model::Type::Projection {
+            trait_id: projected.clone(),
+            associated: associated.clone(),
+            arguments: self_arguments_as_parameter(arguments, trait_id),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| self_as_parameter(member, trait_id))
+                .collect(),
+        ),
+        model::Type::Slice(element) => model::Type::Slice(inner(element)),
+        model::Type::Array { element, length } => model::Type::Array {
+            element: inner(element),
+            length: length.clone(),
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: inner(ty),
+        },
+        model::Type::RawPointer { mutability, ty } => model::Type::RawPointer {
+            mutability: *mutability,
+            ty: inner(ty),
+        },
+        other => other.clone(),
+    }
+}
+
+fn self_arguments_as_parameter(
+    arguments: &[model::Argument],
+    trait_id: &api::identity::Definition,
+) -> Box<[model::Argument]> {
+    arguments
+        .iter()
+        .map(|argument| match argument {
+            model::Argument::Type(ty) => model::Argument::Type(self_as_parameter(ty, trait_id)),
+            other => other.clone(),
+        })
+        .collect()
+}
+
+/// `predicate` with the trait `trait_id`'s `Self` its parameter 0
+/// (`self_as_parameter`).
+fn self_predicate_as_parameter(
+    predicate: &model::Predicate,
+    trait_id: &api::identity::Definition,
+) -> model::Predicate {
+    map_predicate_types(predicate, |ty| self_as_parameter(ty, trait_id))
+}
+
+fn map_predicate_types(
+    predicate: &model::Predicate,
+    ty: impl Fn(&model::Type) -> model::Type,
+) -> model::Predicate {
+    match predicate {
+        model::Predicate::Bound { ty: bounded, bound } => model::Predicate::Bound {
+            ty: ty(bounded),
+            bound: match bound {
+                model::Bound::Trait {
+                    trait_id: bound,
+                    arguments,
+                    polarity,
+                    binders,
+                } => model::Bound::Trait {
+                    trait_id: bound.clone(),
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| match argument {
+                            model::Argument::Type(value) => model::Argument::Type(ty(value)),
+                            other => other.clone(),
+                        })
+                        .collect(),
+                    polarity: *polarity,
+                    binders: binders.clone(),
+                },
+                other => other.clone(),
+            },
+        },
+        model::Predicate::ProjectionEquality {
+            projection,
+            ty: equal,
+        } => model::Predicate::ProjectionEquality {
+            projection: ty(projection),
+            ty: ty(equal),
+        },
+        model::Predicate::TypeOutlives {
+            ty: outliving,
+            lifetime,
+        } => model::Predicate::TypeOutlives {
+            ty: ty(outliving),
+            lifetime: lifetime.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// Match an impl's self type to an alias's exact instance. Repeated
+/// parameters must agree and fixed arguments must match; unrelated impls
+/// are excluded before their methods become members of the alias.
+fn instance_substitutions(
+    declared: &model::Type,
+    actual: &model::Type,
+    implementation: &api::identity::Definition,
+) -> Option<Vec<((api::identity::Definition, u32), model::Type)>> {
+    fn collect(
+        declared: &model::Type,
+        actual: &model::Type,
+        implementation: &api::identity::Definition,
+        substitutions: &mut Vec<((api::identity::Definition, u32), model::Type)>,
+    ) -> bool {
+        match (declared, actual) {
+            (model::Type::Parameter { owner, index }, actual) if owner == implementation => {
+                if let Some((_, previous)) = substitutions
+                    .iter()
+                    .find(|((id, at), _)| id == owner && at == index)
+                {
+                    previous == actual
+                } else {
+                    substitutions.push(((owner.clone(), *index), actual.clone()));
+                    true
+                }
+            }
+            (
+                model::Type::Definition {
+                    id: left,
+                    arguments: declared,
+                },
+                model::Type::Definition {
+                    id: right,
+                    arguments: actual,
+                },
+            ) if left == right && declared.len() == actual.len() => declared
+                .iter()
+                .zip(actual)
+                .all(|(declared, actual)| match (declared, actual) {
+                    (model::Argument::Type(declared), model::Argument::Type(actual)) => {
+                        collect(declared, actual, implementation, substitutions)
+                    }
+                    _ => declared == actual,
+                }),
+            (model::Type::Tuple(declared), model::Type::Tuple(actual))
+                if declared.len() == actual.len() =>
+            {
+                declared.iter().zip(actual).all(|(declared, actual)| {
+                    collect(declared, actual, implementation, substitutions)
+                })
+            }
+            _ => declared == actual,
+        }
+    }
+    let mut substitutions = Vec::new();
+    collect(declared, actual, implementation, &mut substitutions).then_some(substitutions)
 }
 
 fn substituted_signature(

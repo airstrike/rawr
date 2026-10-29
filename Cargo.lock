@@ -3991,7 +3991,7 @@ dependencies = [
 
 [[package]]
 name = "rawr"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "ahash",
  "arbitrary",
@@ -4020,14 +4020,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-canonical"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rawr-cli"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -4041,7 +4041,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-directory"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "libc",
  "thiserror 2.0.19",
@@ -4049,7 +4049,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-iced"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "iced",
  "iced_runtime",
@@ -4069,7 +4069,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-iced-cli"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -4085,7 +4085,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anstream",
  "fd-lock",
@@ -4117,7 +4117,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import-cli"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "nix 0.27.1",
  "rawr",
@@ -4129,14 +4129,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-location"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "rawr-toml-edit",
 ]
 
 [[package]]
 name = "rawr-macros"
-version = "0.3.16"
+version = "0.3.17"
 
 [[package]]
 name = "rawr-notify"
@@ -4164,7 +4164,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-play"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "aes",
  "color_quant",
@@ -4203,7 +4203,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rawr-toml"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "serde_json",
  "thiserror 2.0.19",
@@ -4226,7 +4226,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-watch"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "rawr",
  "rawr-iced",
@@ -4236,7 +4236,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-web"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "console_error_panic_hook",
  "iced",
@@ -4255,7 +4255,7 @@ dependencies = [
 
 [[package]]
 name = "rawr_codegen"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "proc-macro2",
  "quote",
