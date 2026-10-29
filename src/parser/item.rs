@@ -223,7 +223,7 @@ const ATTRIBUTES: [&str; 2] = ["preview", "widget"];
 
 /// Whether `item` is a `use` of the `rawr` crate's attributes and nothing
 /// else: `use rawr::preview;` or `use rawr::{preview, widget};`.
-fn is_attribute_import(item: &crate::item::Parsed) -> bool {
+pub(crate) fn is_attribute_import(item: &crate::item::Parsed) -> bool {
     let crate::item::Parsed::Use(used) = item else {
         return false;
     };
