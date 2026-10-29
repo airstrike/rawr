@@ -374,6 +374,7 @@
     {"t":"T371","issue":371,"title":"T371: A native trait callback returning Result gets a Value signature","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"iced","row":"callback-return-types"},"decisions":[],"commit":"1873adc3b56d9e1a687de3a9d176640226e494e5","release":"0.3.20"},
     {"t":"T372","issue":372,"title":"T372: Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)","labels":["no glue","shared bindings"],"gantt":{"group":"bind","row":"key-and-publish"},"decisions":["D649","D650"],"commit":null,"release":null},
     {"t":"T373","issue":373,"title":"T373: Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D355","D383","D648"],"commit":null,"release":null},
-    {"t":"T374","issue":374,"title":"T374: Deployment wait reads a stale container application list","state":"closed","category":"Health","labels":["playground"],"gantt":null,"decisions":[],"commit":"c4fa36bc65863e5d8b1991311b4ba951ba388146","release":"0.3.20"}
+    {"t":"T374","issue":374,"title":"T374: Deployment wait reads a stale container application list","state":"closed","category":"Health","labels":["playground"],"gantt":null,"decisions":[],"commit":"c4fa36bc65863e5d8b1991311b4ba951ba388146","release":"0.3.20"},
+    {"t":"T375","issue":375,"title":"T375: Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","labels":["playground"],"gantt":null,"decisions":[],"commit":"4c74d4903","release":null}
   ]
 }

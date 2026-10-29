@@ -178,3 +178,13 @@ node --input-type=module -e '
   }
   console.log("ran " + sources.size + " distinct site snippets from " + pages.length + " pages");
 ' "$site" "$repo/site/dist"
+
+# Port readiness must not erase the boot report accepted before the snippets.
+curl -fsS "$site/bot/health" | node -e '
+  const health = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+  if (!health.running || health.image !== process.argv[1]) {
+    console.error("the bot lost its running-image evidence after site snippets:", health);
+    process.exit(1);
+  }
+  console.log("The bot still reports image " + health.image + " after site snippets.");
+' "$want"
