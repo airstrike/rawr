@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.21",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
+      ]
+    },
     {
       "version": "0.3.20",
       "date": "2026-10-29",

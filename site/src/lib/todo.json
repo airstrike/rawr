@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-29",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.21",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
+        ]
+      },
       {
         "version": "0.3.20",
         "date": "2026-10-29",
@@ -728,7 +730,7 @@
     {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
     {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"},
     {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
-    {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health"}
+    {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"}
   ],
   "groups": [
     {
