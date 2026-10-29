@@ -11970,7 +11970,7 @@ fn render_impl(
     writeln!(
         output,
         "/// The script's `impl {trait_} for {owner}` (D594).
-#[allow(unused_mut, unused_variables, clippy::all)]
+#[allow(unused_mut, unused_variables, refining_impl_trait, clippy::all)]
 impl{parameters} {trait_} for {owner} {{
 {body}}}
 "
@@ -12108,22 +12108,57 @@ fn render_impl_function(
             values.iter().map(|value| crossed(value)).collect::<Vec<_>>().join(", ")
         ))
     );
-    let mut converted = String::new();
-    render_from_dynamic(returned, "value", 0, &mut converted)?;
-    let converted = in_arena(&converted);
     let member = function.member();
     let mutable = mutable.join(", ");
-    let mut call = format!(
-        "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+    // An output that borrows, as a `view(&self) -> impl Widget<..>`'s
+    // widgets do: made in a region anchored on `self`, as a slot's is, and
+    // taken out of it at `self`'s lifetime.
+    let family = (carries_lifetime(returned)
+        && matches!(function.receiver(), ImplReceiver::Shared))
+    .then(|| family_of(returned))
+    .flatten();
+    let (lifetime, rust, mut call) = match family {
+        Some(family) => {
+            parameters[0] = "&'x self".to_owned();
+            (
+                "<'x>",
+                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+                format!(
+                    "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+        let mut values: [Dynamic; {count}] = {values};
+        let mut region = __rawr_internal::scope::Region::anchored(self.0.pins());
+        let value = __rawr_internal::scope::open_anchored(&mut region, || __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]));{restores}
+        let scoped = value
+            .read_lock::<__rawr_internal::scope::Scoped>()
+            .map(|scoped| *scoped)
+            .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
+        region
+            .take::<{family}>(scoped)
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+                ),
+            )
+        }
+        None => {
+            let mut converted = String::new();
+            render_from_dynamic(returned, "value", 0, &mut converted)?;
+            let converted = in_arena(&converted);
+            (
+                "",
+                rust,
+                format!(
+                    "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
         let mut values: [Dynamic; {count}] = {values};
         let value = __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]);{restores}
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
-    );
+                ),
+            )
+        }
+    };
     // Each borrowed native value is lent around the call, innermost last.
     let (items, wrapped) = lent_around(&lends, call);
     call = wrapped;
     Ok(format!(
-        "    fn {}({}) -> {rust} {{
+        "    fn {}{lifetime}({}) -> {rust} {{
 {items}        {call}
     }}
 ",

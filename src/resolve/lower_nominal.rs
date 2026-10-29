@@ -889,8 +889,22 @@ fn instance_templates(program: &mut Program) -> bool {
         let item::Kind::Impl(implementation) = &shell.kind else {
             continue;
         };
+        // Its parameters touch a crate's types where a crate's trait bounds
+        // one, or where a function's signature names one, which the runner
+        // writes at a type (component's `update(..) -> Option<Message>`).
+        let signatures = || {
+            implementation.functions.iter().any(|function| {
+                function
+                    .parameters
+                    .iter()
+                    .map(|parameter| &parameter.ty)
+                    .chain(function.output.as_ref())
+                    .any(mentions_parameter)
+            })
+        };
         if !matches!(implementation.trait_, Some(item::TraitImpl::Native { .. }))
-            || !implementation.generics.iter().any(|generic| generic.host)
+            || implementation.generics.is_empty()
+            || !(implementation.generics.iter().any(|generic| generic.host) || signatures())
         {
             continue;
         }
@@ -9500,6 +9514,15 @@ impl Inference {
             Ty::Projection(base, trait_name, name) => {
                 self.project(self.resolve(base), trait_name, name)
             }
+            // A generic script type's arguments, as component's
+            // `NumericInput<Message>` holds its message's type.
+            Ty::Script(definition, arguments) if !arguments.is_empty() => Ty::Script(
+                *definition,
+                arguments
+                    .iter()
+                    .map(|argument| self.resolve(argument))
+                    .collect(),
+            ),
             Ty::Dyn(trait_name, bindings) => Ty::Dyn(
                 trait_name.clone(),
                 bindings

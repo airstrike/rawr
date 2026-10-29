@@ -88,3 +88,47 @@ where
         self.widget.press(label)
     }
 }
+
+/// A part of a view a program writes itself, as iced's `Component`, whose
+/// `view` gives `impl Widget<Self::Event>`.
+pub trait Panel<Message> {
+    /// The panel's widgets.
+    fn view(&self) -> impl crate::widgets::Widget<Message>;
+
+    /// The message the panel sends for a press its widgets don't answer.
+    fn fallback(&self, label: &str) -> Option<Message>;
+}
+
+/// `panel`'s widgets among the crate's own, as iced's `component(..)`.
+pub fn panel<P, Message>(panel: P) -> Paneled<P, Message>
+where
+    P: Panel<Message>,
+{
+    Paneled {
+        panel,
+        look: PhantomData,
+    }
+}
+
+/// A program's own panel among the crate's widgets (`panel`).
+pub struct Paneled<P, Message> {
+    panel: P,
+    look: PhantomData<Message>,
+}
+
+impl<P, Message> crate::widgets::Widget<Message> for Paneled<P, Message>
+where
+    P: Panel<Message>,
+{
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push("panel".to_owned());
+        self.panel.view().labels(labels);
+    }
+
+    fn press(&self, label: &str) -> Option<Message> {
+        self.panel
+            .view()
+            .press(label)
+            .or_else(|| self.panel.fallback(label))
+    }
+}

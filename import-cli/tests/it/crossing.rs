@@ -246,6 +246,25 @@ fn an_associated_state_held_as_a_script_value_crosses() {
     );
 }
 
+/// iced's component: a generic script type implements a crate trait over
+/// the message its boxed callback makes, `view` gives `impl Widget<
+/// Message>` and `fallback` an `Option<Message>`, both of the impl's own
+/// parameter. The impl is compiled for the use the crate's bound makes of
+/// it (D629), the view's widgets are made in a region anchored on `self`,
+/// and the callback crosses inside the script value. The output is `cargo
+/// run`'s.
+#[test]
+fn a_generic_script_impl_with_an_opaque_view_runs() {
+    let (rawr, cargo) = both_printed("crossing-panel", "panel.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view panel pad 0 [Increment] 0@16\n1 message Changed(1)")
+            && rawr.contains("4 message Changed(0)")
+            && rawr.ends_with("last view panel pad 0 [Increment] 0@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's multi_window: a view passes a window's view, a method whose
 /// `impl Widget` output is declared after its caller, to a generic crate
 /// function. The caller waits for that output, and a fresh build asks the

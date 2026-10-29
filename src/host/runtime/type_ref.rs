@@ -613,6 +613,10 @@ impl Type {
         registry: &host::runtime::Registry,
     ) -> Result<(), Error> {
         match self {
+            // A function type, as a script struct's `Box<dyn Fn(i64) ->
+            // Message>` field is: a callable the program made, of any of
+            // its forms.
+            Self::Object(name) if crate::item::type_ref::is_fn_type(name) => Ok(()),
             Self::Object(_) => {
                 if value.read_lock::<crate::types::nominal::Struct>().is_some()
                     || value.read_lock::<crate::types::nominal::Enum>().is_some()
@@ -889,6 +893,8 @@ impl Type {
                     TypeId::of::<crate::ImmutableString>(),
                 )),
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
+                // A function type: any callable (`validate`).
+                name if crate::item::type_ref::is_fn_type(name) => Ok(Self::Object(name.into())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
             Target::Parameter
