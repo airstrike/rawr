@@ -75,6 +75,10 @@ export const ITEMS = data.items as Item[];
 
 export const issueUrl = (n: number) => `https://github.com/${REPO}/issues/${n}`;
 
+const closedIssues = new Set(ITEMS.filter((i) => i.state === "closed").map((i) => i.issue));
+/** Whether issue `n` is closed, so the page can cross it off. */
+export const isClosed = (n: number) => closedIssues.has(n);
+
 /** A piece of a line of text: plain, `code`, or an issue named as #N. */
 export type Part = { text: string; code?: true; issue?: number };
 
