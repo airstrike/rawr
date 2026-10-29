@@ -8,6 +8,7 @@ use std::fmt::Debug;
 pub mod controls;
 pub mod conversions;
 pub mod custom;
+pub mod results;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
