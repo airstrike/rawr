@@ -44,6 +44,48 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// `rawr_import`, killed and failed after `limit`: a run that waits on
+/// itself fails the test instead of hanging it.
+fn rawr_import_within(root: &Path, arguments: &[&str], limit: std::time::Duration) -> Output {
+    use std::process::Stdio;
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let name = root.file_name().unwrap().to_string_lossy().into_owned();
+    let stdout = directory.join(format!("{name}.stdout"));
+    let stderr = directory.join(format!("{name}.stderr"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .args(arguments)
+        .arg(root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&stdout).unwrap())
+        .stderr(fs::File::create(&stderr).unwrap())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "rawr-import {arguments:?} ran past {limit:?}:\n{}",
+                fs::read_to_string(&stderr).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    Output {
+        status,
+        stdout: fs::read(&stdout).unwrap(),
+        stderr: fs::read(&stderr).unwrap(),
+    }
+}
+
 #[test]
 fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
@@ -161,6 +203,26 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     assert!(!nightly(second));
     run(second, expected);
     assert!(second.join("target/rawr/shared/remembered.json").is_file());
+    // With the project's store gone, the remembered run builds its API
+    // inside the store's batch, under the project's ownership lease. It
+    // reads what the API is built from off disk: running the resolution
+    // there again waited on that lease forever.
+    let harness = second.join("target/rawr/shared/Cargo.toml");
+    let copied = fs::metadata(&harness).unwrap().modified().unwrap();
+    fs::remove_dir_all(second.join("target/rawr/store")).unwrap();
+    let rebuilt = rawr_import_within(second, &["run"], std::time::Duration::from_secs(300));
+    assert!(
+        rebuilt.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&rebuilt.stdout),
+        text(&rebuilt.stderr)
+    );
+    assert_eq!(text(&rebuilt.stdout), expected);
+    assert_eq!(
+        fs::metadata(&harness).unwrap().modified().unwrap(),
+        copied,
+        "the remembered run resolved again"
+    );
 
     // Other items of the crate replay from the whole table, and the same
     // program in another project takes them from the home again.

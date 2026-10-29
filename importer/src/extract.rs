@@ -614,25 +614,39 @@ pub(crate) fn retain_from_owner_parts(
 /// `document` it gave, with the external crates bound through this
 /// project's unit graph instead of a build (`crate::bindings`).
 #[cfg(feature = "rustc-driver")]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "materialization consumes the replayed document with the resolution it binds to"
-)]
 pub(crate) fn materialize_shared(
     stored: Option<&api::cached::Product>,
     document: &[u8],
     external: Vec<ExternalBinding>,
+    context: &api::Context,
+    policy: &Policy,
+    limits: &cargo::Limits,
+) -> Result<api::Graph<api::Captured>> {
+    let mut allocation = Allocation::new(limits);
+    let document = protocol::decode_accounted(document, limits, &mut allocation)?;
+    let invocations = Invocations::seal_document_with_allocation(&document, allocation, limits)?
+        .bind_external(external, limits)?;
+    materialize_document(stored, document, invocations, policy, context, limits)
+}
+
+/// The API context of a run that replayed shared bindings, from its
+/// resolution. It is plain data, so a later run keeps it (`owner::memo`).
+#[cfg(feature = "rustc-driver")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the context joins the resolution, the toolchain and the request"
+)]
+pub(crate) fn shared_context(
     metadata: &cargo::unit::Metadata,
     build_unit: &cargo::unit::BuildGraph,
     selected: &[cargo::Selection],
     toolchain: &cargo::toolchain::Proof,
     target: &str,
     profile: &str,
-    policy: &Policy,
     limits: &cargo::Limits,
-) -> Result<api::Graph<api::Captured>> {
+) -> Result<api::Context> {
     let mut allocation = Allocation::new(limits);
-    let context = api::Context::from_resolution_parts(
+    api::Context::from_resolution_parts(
         metadata,
         build_unit,
         selected,
@@ -641,11 +655,7 @@ pub(crate) fn materialize_shared(
         profile,
         None,
         &mut allocation,
-    )?;
-    let document = protocol::decode_accounted(document, limits, &mut allocation)?;
-    let invocations = Invocations::seal_document_with_allocation(&document, allocation, limits)?
-        .bind_external(external, limits)?;
-    materialize_document(stored, document, invocations, policy, &context, limits)
+    )
 }
 
 /// Retain the API of a run that replayed shared bindings, under the
@@ -1093,6 +1103,7 @@ enum ExternalAuthority {
 }
 
 #[cfg(feature = "rustc-driver")]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(super) struct ExternalBinding {
     crate_name: Box<str>,
     stable_crate_id: Box<str>,

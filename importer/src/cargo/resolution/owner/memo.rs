@@ -9,6 +9,12 @@
 //! takes the same answer back: it reads those files again, and an entry's
 //! table by its length and modification time, which publication changes.
 //! Anything else runs the resolution again.
+//!
+//! What the API is built from is kept too: the sidecar document the tables
+//! replayed, its external crates and the API context, all plain data. A
+//! consumer that rebuilds the API, which may run under the store's
+//! ownership lease, reads those files and nothing else: running the
+//! resolution again there would wait on that same lease forever.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,9 +27,11 @@ use sha2::{Digest as _, Sha256};
 use crate::bindings::{Script, Settled};
 use crate::input::proof::{Entry, Proof, Role};
 
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 /// Kept beside the harness copies a shared resolution leaves.
 const FILE: &str = "shared/remembered.json";
+/// The sidecar document the tables replayed, beside it.
+const DOCUMENT: &str = "shared/document.json";
 
 /// One file a shared resolution read, as its proof names it: a harness copy
 /// or one of the request's inputs, with its length and digest, or none when
@@ -88,7 +96,7 @@ struct Used {
 }
 
 /// A shared resolution, as the next run takes it back.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub(super) struct Memo {
     schema: u32,
     request: String,
@@ -97,6 +105,25 @@ pub(super) struct Memo {
     native: String,
     files: Vec<File>,
     entries: Vec<Used>,
+    /// The document's length and digest.
+    document: (u64, String),
+    external: Vec<crate::extract::ExternalBinding>,
+    context: crate::api::Context,
+}
+
+/// A `Memo` as a run writes it, borrowing what the API is built from.
+#[derive(Serialize)]
+struct Written<'a> {
+    schema: u32,
+    request: String,
+    attestation: String,
+    identity: String,
+    native: String,
+    files: &'a [File],
+    entries: Vec<Used>,
+    document: (u64, String),
+    external: &'a [crate::extract::ExternalBinding],
+    context: &'a crate::api::Context,
 }
 
 impl Memo {
@@ -116,6 +143,18 @@ impl Memo {
             entries.into_boxed_slice(),
             unhex(&self.native)?,
         ))
+    }
+
+    /// What the API is built from, read from disk alone.
+    pub(super) fn materials(self, rawr: &Path) -> Option<super::Materials> {
+        let document = fs::read(rawr.join(DOCUMENT)).ok()?;
+        (document.len() as u64 == self.document.0
+            && crate::extract::engine::hex(&Sha256::digest(&document)) == self.document.1)
+            .then_some(super::Materials {
+                document,
+                external: self.external,
+                context: self.context,
+            })
     }
 
     /// The tables the resolution read, settled once the runner builds.
@@ -139,6 +178,7 @@ pub(super) struct Resolution<'a> {
     pub(super) native: &'a [u8; 32],
     pub(super) files: &'a [File],
     pub(super) settled: &'a [Settled],
+    pub(super) materials: &'a super::Materials,
 }
 
 /// Remember `resolution` under the project's Rawr directory. Best effort:
@@ -165,23 +205,36 @@ pub(super) fn remember(rawr: &Path, bindings: &Path, resolution: &Resolution<'_>
         });
     }
     let hex = crate::extract::engine::hex;
-    let memo = Memo {
+    let materials = resolution.materials;
+    // The memo is written only after its document, so it never names one
+    // that is not there.
+    if !write(&rawr.join(DOCUMENT), &materials.document) {
+        return;
+    }
+    let memo = Written {
         schema: SCHEMA,
         request: hex(resolution.request),
         attestation: hex(resolution.attestation),
         identity: hex(resolution.identity),
         native: hex(resolution.native),
-        files: resolution.files.to_vec(),
+        files: resolution.files,
         entries,
+        document: (
+            materials.document.len() as u64,
+            hex(&Sha256::digest(&materials.document)),
+        ),
+        external: &materials.external,
+        context: &materials.context,
     };
-    let Ok(bytes) = serde_json::to_vec(&memo) else {
-        return;
-    };
-    let path = rawr.join(FILE);
-    let temporary = path.with_extension(format!("json.{}", std::process::id()));
-    if fs::write(&temporary, bytes).is_ok() {
-        let _ = fs::rename(&temporary, &path);
+    if let Ok(bytes) = serde_json::to_vec(&memo) {
+        write(&rawr.join(FILE), &bytes);
     }
+}
+
+/// Write `bytes` to `path` whole, through a temporary beside it.
+fn write(path: &Path, bytes: &[u8]) -> bool {
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&temporary, bytes).is_ok() && fs::rename(&temporary, path).is_ok()
 }
 
 /// The remembered resolution for `request` under `attestation`, when every
@@ -284,12 +337,24 @@ mod tests {
                 native: &[4; 32],
                 files: &files,
                 settled: &settled,
+                materials: &super::super::Materials {
+                    document: b"{\"schema\":1}".to_vec(),
+                    external: Vec::new(),
+                    context: crate::api::Context::fixture(),
+                },
             },
         );
         let memo = recall(&rawr, &bindings, &request, &attestation).unwrap();
         assert_eq!(memo.identity(), Some([3; 32]));
         assert!(memo.proof().is_some());
         assert_eq!(memo.settled().len(), 1);
+        // What the API is built from comes back from disk alone, and a
+        // document that changed does not.
+        let materials = memo.materials(&rawr).unwrap();
+        assert_eq!(materials.document, b"{\"schema\":1}");
+        std::fs::write(rawr.join(super::DOCUMENT), "{}").unwrap();
+        let memo = recall(&rawr, &bindings, &request, &attestation).unwrap();
+        assert!(memo.materials(&rawr).is_none());
         // Another request, or another toolchain, runs the resolution.
         assert!(recall(&rawr, &bindings, &[9; 32], &attestation).is_none());
         assert!(recall(&rawr, &bindings, &request, &[9; 32]).is_none());

@@ -584,7 +584,7 @@ fn evaluate(
     ) {
         return Ok(Resolved::Shared(Box::new(SharedReady {
             evaluation: state,
-            parts: Parts::Remembered(remembered),
+            parts: Parts::Remembered(Box::new(remembered)),
         })));
     }
     let validator = Arc::clone(&state);
@@ -613,6 +613,7 @@ fn evaluate(
                             native: &parts.native,
                             files: &parts.files,
                             settled: &parts.settled,
+                            materials: &parts.materials,
                         },
                     );
                     Ok(Resolved::Shared(Box::new(SharedReady {
@@ -1184,13 +1185,12 @@ pub(crate) struct Shared {
 }
 
 /// What the API is built from, when a consumer rebuilds it.
+/// All plain data, so a remembered resolution keeps it on disk and builds
+/// the API with no Cargo, no tables and no store (`memo`).
 struct Materials {
     document: Vec<u8>,
     external: Vec<crate::extract::ExternalBinding>,
-    metadata: cargo::unit::Metadata,
-    build_unit: cargo::unit::BuildGraph,
-    selected: Box<[cargo::Selection]>,
-    toolchain: cargo::toolchain::Proof,
+    context: crate::api::Context,
 }
 
 impl Evaluation {
@@ -1255,10 +1255,16 @@ impl Evaluation {
             materials: Materials {
                 document: shared.document,
                 external: shared.external,
-                metadata: harness.metadata.clone(),
-                build_unit: harness.initial.clone(),
-                selected: harness.selected.clone(),
-                toolchain: harness.toolchain.clone(),
+                context: crate::extract::shared_context(
+                    &harness.metadata,
+                    &harness.initial,
+                    &harness.selected,
+                    &harness.toolchain,
+                    &self.request.target,
+                    &self.request.profile,
+                    &self.limits,
+                )
+                .ok()?,
             },
             identity: shared.identity,
             settled: shared.settled,
@@ -1266,33 +1272,6 @@ impl Evaluation {
             files,
             native,
         })
-    }
-
-    /// The parts of a remembered shared resolution, for a consumer that
-    /// rebuilds its API: the cold attempt runs again, and stops at the
-    /// shared tables as it did.
-    fn shared_again(self: &Arc<Self>) -> Result<Shared, node::Error> {
-        let recipe = self.cached.context.discover_with_parents::<Product>(
-            self.identity.as_bytes(),
-            BYTES,
-            &[node::Parent::validated(self.cached.attestation.as_ref())],
-        )?;
-        let validator = Arc::clone(self);
-        let executor = Arc::clone(self);
-        let outcome = node::Evaluator::new(&self.store, &metrics::Current)
-            .discover_bundled_budgeted(
-                &recipe,
-                move |value, graph| validator.validate(value, graph),
-                move |attempt| executor.execute(attempt),
-            );
-        let shared = self.shared.lock().ok().and_then(|mut shared| shared.take());
-        match (shared, outcome) {
-            (Some(parts), _) => Ok(parts),
-            (None, Err(error)) => Err(error),
-            (None, Ok(_)) => Err(node::Error::State(
-                "shared bindings no longer answer this resolution",
-            )),
-        }
     }
 }
 
@@ -1306,7 +1285,7 @@ pub(crate) struct SharedReady {
 /// what an earlier run remembered (`memo`).
 enum Parts {
     Read(Box<Shared>),
-    Remembered(memo::Memo),
+    Remembered(Box<memo::Memo>),
 }
 
 impl SharedReady {
@@ -1334,6 +1313,7 @@ impl SharedReady {
             field: "shared bindings",
             reason: "the remembered resolution is unreadable".into(),
         };
+        let rawr = evaluation.cached.context.rawr().to_path_buf();
         let (identity, proof, materials) = match parts {
             Parts::Read(parts) => {
                 let Shared {
@@ -1342,12 +1322,12 @@ impl SharedReady {
                     proof,
                     ..
                 } = *parts;
-                (identity, proof, Some(materials))
+                (identity, proof, Ok(materials))
             }
             Parts::Remembered(memo) => (
                 memo.identity().ok_or_else(stale)?,
                 memo.proof().ok_or_else(stale)?,
-                None,
+                Err(memo),
             ),
         };
         let mut request = Sha256::new();
@@ -1364,30 +1344,18 @@ impl SharedReady {
             proof,
             &evaluation.request.policy,
             move |stored| {
-                // A remembered resolution reads the tables again only for
-                // a consumer that rebuilds the API.
+                // This may run inside the store's batch, under the
+                // project's ownership lease, so it reads only files: a
+                // remembered resolution's materials are on disk.
                 let materials = match materials {
-                    Some(materials) => materials,
-                    None => {
-                        source
-                            .shared_again()
-                            .map_err(|error| crate::Error::Node {
-                                operation: "shared bindings",
-                                source: Box::new(error),
-                            })?
-                            .materials
-                    }
+                    Ok(materials) => materials,
+                    Err(memo) => (*memo).materials(&rawr).ok_or_else(stale)?,
                 };
                 crate::extract::materialize_shared(
                     stored,
                     &materials.document,
                     materials.external,
-                    &materials.metadata,
-                    &materials.build_unit,
-                    &materials.selected,
-                    &materials.toolchain,
-                    &source.request.target,
-                    &source.request.profile,
+                    &materials.context,
                     &source.request.policy,
                     &owned_limits,
                 )

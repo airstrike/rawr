@@ -307,7 +307,7 @@ impl cargo::unit::Measure for Allocation {
 }
 
 #[cfg(feature = "rustc-driver")]
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ArtifactAuthority {
     pub(crate) semantic_key: Box<str>,
     pub(crate) package_id: Box<str>,
