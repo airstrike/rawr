@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": []
+    "entries": [
+      {"text":"Reuse verified crate extraction tables across projects, with atomic publication, active-reader protection and removal by last use. Small whole-crate entries can serve later item demands without another nightly build; larger entries currently reuse their recorded subset.","issues":[367,272],"refs":[271,281]},
+      {"text":"Validate declared files, environment and compiler inputs before reusing bindings. Differences between nightly and project build-script outputs keep bindings local with diagnostics, and changes to external declared inputs reach a running app.","issues":[275]}
+    ]
   },
   "releases": [
     {

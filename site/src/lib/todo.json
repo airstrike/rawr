@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"Reuse verified crate extraction tables across projects, with atomic publication, active-reader protection and removal by last use. Small whole-crate entries can serve later item demands without another nightly build; larger entries currently reuse their recorded subset.","issues":[367,272],"refs":[271,281]},
+        {"text":"Validate declared files, environment and compiler inputs before reusing bindings. Differences between nightly and project build-script outputs keep bindings local with diagnostics, and changes to external declared inputs reach a running app.","issues":[275]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.17",
@@ -577,7 +583,7 @@
     {"issue":251,"title":"Methods of generic impls (`Subscription::map`) don't take slots yet","state":"open","category":"No glue (D593)"},
     {"issue":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open","category":"No glue (D593)"},
     {"issue":253,"title":"import-cli `scope`'s `borrowing_parsers…` fails with E0382 on `reader`, on main since…","state":"open","category":"No glue (D593)"},
-    {"issue":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open","category":"No glue (D593)"},
+    {"issue":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed","category":"No glue (D593)"},
     {"issue":255,"title":"The first `rawr run` of a fresh crate with one small dependency (`itoa`) took 105–111 s and…","state":"open","category":"No glue (D593)"},
     {"issue":256,"title":"On a tiny crate with one dependency, a one-shot `rawr run` after an edit took 1.7–7.9 s and warm…","state":"open","category":"No glue (D593)"},
     {"issue":257,"title":"The struct-shape check at function entry (D605.3) walks the whole value, every `Vec` element…","state":"open","category":"No glue (D593)"},
@@ -595,11 +601,11 @@
     {"issue":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.2"},
     {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
-    {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.1"},
     {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
@@ -690,7 +696,8 @@
     {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)","release":"0.3.17"},
     {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
-    {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":368,"title":"Record hot-reload measurements for every release","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -888,10 +895,10 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Validate inputs before reuse; publish complete generations. #271",
+          "note": "Verified extraction sharing shipped; complete classification and facade reuse remain. #367, #271",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
-            {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"open"}
+            {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"}
           ]
         },
         {
@@ -899,10 +906,10 @@
           "name": "Removal by last use",
           "start": 45,
           "size": 2,
-          "state": "now",
-          "note": "Stable leases across replacement and eviction. #272",
+          "state": "done",
+          "note": "Stable generation leases, atomic publication and last-use pruning. #272",
           "issues": [
-            {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open"}
+            {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed"}
           ]
         },
         {
@@ -910,24 +917,24 @@
           "name": "Key holes",
           "start": 45,
           "size": 2,
-          "state": "next",
-          "note": "#252, #254, #276",
+          "state": "now",
+          "note": "Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252",
           "issues": [
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
-            {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open"},
-            {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open"}
+            {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
+            {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"}
           ]
         },
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Validate declared inputs before shared and remembered hits","issues":[]},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[]},
         {
           "id": "drift-loudly",
           "name": "Drift, loudly",
           "start": 49,
           "size": 2,
-          "state": "now",
-          "note": "Compare nightly and project build-script outputs. #275",
+          "state": "done",
+          "note": "Compare toolchain outputs and validate declared inputs before reuse. #275",
           "issues": [
-            {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open"}
+            {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed"}
           ]
         }
       ]
