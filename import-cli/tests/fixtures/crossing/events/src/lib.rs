@@ -7,6 +7,7 @@ use std::fmt::Debug;
 
 pub mod controls;
 pub mod conversions;
+pub mod custom;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
@@ -574,6 +575,14 @@ pub mod widgets {
 
         fn press(&self, label: &str) -> Option<Message> {
             self.children.iter().find_map(|child| child.press(label))
+        }
+    }
+
+    /// A column of one widget, as iced's `center` is a container of one.
+    pub fn center<W>(content: W) -> Column<W> {
+        Column {
+            children: vec![content],
+            padding: 0,
         }
     }
 

@@ -194,6 +194,96 @@ fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
     );
 }
 
+/// Generic methods over a crate's trait, a generic associated function
+/// giving `impl Widget<M>`, and a generic function whose parameter reaches
+/// a crate function only in its body, called with a crate color and with a
+/// script type that converts into one: each is compiled once per
+/// instantiation its callers use (D629). The output is `cargo run`'s.
+#[test]
+fn generic_methods_and_body_only_generics_run_once_per_instantiation() {
+    let (rawr, cargo) = both_printed("crossing-methods", "methods.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 pad 5 [Increment] pad 7 0@50 pad 1 [Decrement] \
+             painted rgb(1, 2, 0)@16 painted rgb(10, 20, 30)@16"
+        ) && rawr.contains("4 message Decrement"),
+        "{rawr}"
+    );
+}
+
+/// iced's custom_quad and custom_widget: the program's own widget
+/// implements the crate's widget trait over any message, theme and
+/// renderer its bound on the crate's renderer trait admits, and `draw`
+/// calls the renderer's `fill_quad`. The impl is compiled for the use the
+/// crate's bound makes of it, at the crate's renderer (D629), and its
+/// `press` gives an `Option` of the impl's own parameter. The output is
+/// `cargo run`'s.
+#[test]
+fn a_script_impl_generic_over_a_crate_bound_is_compiled_per_use() {
+    let (rawr, cargo) = both_printed("crossing-quad", "quad.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 custom 10 [quad 10r2 rgb(1, 2, 3)] [Increment] 0@16")
+            && rawr
+                .ends_with("last view pad 0 custom 13 [quad 13r2 rgb(1, 2, 3)] [Increment] 3@16"),
+        "{rawr}"
+    );
+}
+
+/// iced's the_matrix: a script impl of a crate trait whose associated
+/// `State` is a std type Rust code holds as a script value, `RefCell<Vec<
+/// i64>>`, which the trait asks `Default` of. The runner names it by a
+/// proxy whose `Default` is the type's, and `draw` changes the state the
+/// crate keeps between its calls. The output is `cargo run`'s.
+#[test]
+fn an_associated_state_held_as_a_script_value_crosses() {
+    let (rawr, cargo) = both_printed("crossing-state", "state.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view canvas[primary 3 cells [1, 10, 20] at 40x30 tick 0#1]")
+            && rawr.contains(
+                "pressed Increment: canvas[primary 3 cells [2, 10, 20] at 40x30 tick 0#1]"
+            ),
+        "{rawr}"
+    );
+}
+
+/// iced's component: a generic script type implements a crate trait over
+/// the message its boxed callback makes, `view` gives `impl Widget<
+/// Message>` and `fallback` an `Option<Message>`, both of the impl's own
+/// parameter. The impl is compiled for the use the crate's bound makes of
+/// it (D629), the view's widgets are made in a region anchored on `self`,
+/// and the callback crosses inside the script value. The output is `cargo
+/// run`'s.
+#[test]
+fn a_generic_script_impl_with_an_opaque_view_runs() {
+    let (rawr, cargo) = both_printed("crossing-panel", "panel.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view panel pad 0 [Increment] 0@16\n1 message Changed(1)")
+            && rawr.contains("4 message Changed(0)")
+            && rawr.ends_with("last view panel pad 0 [Increment] 0@16"),
+        "{rawr}"
+    );
+}
+
+/// iced's multi_window: a view passes a window's view, a method whose
+/// `impl Widget` output is declared after its caller, to a generic crate
+/// function. The caller waits for that output, and a fresh build asks the
+/// crate for what the window's view names before reporting the caller's
+/// failure. The output is `cargo run`'s.
+#[test]
+fn a_view_passing_a_later_methods_opaque_output_to_the_crate_runs() {
+    let (rawr, cargo) = both_printed("crossing-windows", "windows.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 3 pad 0 One 1 0@16 [Increment]\n1 message Increment")
+            && rawr.ends_with("last view pad 3 pad 0 One 1 3@16 [Increment]"),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

@@ -2126,6 +2126,11 @@ fn qualify_opaque_bounds(
             .chain(path.segments.iter().skip(1).cloned())
             .collect();
     }
+    // `impl<R> Widget<M, T, R> for Quad where R: renderer::Renderer`: the
+    // impl's own bounds name a dependency's trait the same way (D629).
+    if let crate::item::Parsed::Impl(item) = item {
+        qualify_bounds(&mut item.generics, modules);
+    }
     let functions: Vec<&mut crate::item::Function> = match item {
         crate::item::Parsed::Function(function) => vec![function],
         crate::item::Parsed::Impl(item) => item.functions.iter_mut().collect(),
@@ -2139,43 +2144,55 @@ fn qualify_opaque_bounds(
         // is lifted to a generic parameter bounded by `Widget<Message>`,
         // or `W: Widget<Message>`: a dependency's trait by a module the
         // unit's `use`s bind, written from the crate's root (D629).
-        for generic in function.generics.iter_mut() {
-            let mut bounds = generic.bounds.to_vec();
-            for bound in &mut bounds {
-                if bound.global {
-                    continue;
-                }
-                let Some(module) = bound
-                    .segments
-                    .first()
-                    .and_then(|first| modules.get(&first.name.text))
-                else {
-                    continue;
-                };
-                let (at, span) = (bound.segments[0].name.span, bound.segments[0].span);
-                let written = bound.segments[0].arguments.clone();
-                let single = bound.segments.len() == 1;
-                let count = module.split("::").count();
-                bound.segments = module
-                    .split("::")
-                    .enumerate()
-                    .map(|(index, text)| Segment {
-                        name: crate::item::Name {
-                            text: text.into(),
-                            span: at,
-                        },
-                        arguments: if single && index + 1 == count {
-                            written.clone()
-                        } else {
-                            Box::default()
-                        },
-                        span,
-                    })
-                    .chain(bound.segments.iter().skip(1).cloned())
-                    .collect();
+        qualify_bounds(&mut function.generics, modules);
+    }
+}
+
+/// Each bound of `generics` that names a dependency's trait by a module the
+/// unit's `use`s bind (`Renderer: renderer::Renderer`), written from the
+/// crate's root.
+#[cfg(feature = "rust-import")]
+fn qualify_bounds(
+    generics: &mut [crate::item::GenericParam],
+    modules: &BTreeMap<ImmutableString, ImmutableString>,
+) {
+    use crate::item::type_ref::Segment;
+    for generic in generics.iter_mut() {
+        let mut bounds = generic.bounds.to_vec();
+        for bound in &mut bounds {
+            if bound.global {
+                continue;
             }
-            generic.bounds = bounds.into_boxed_slice();
+            let Some(module) = bound
+                .segments
+                .first()
+                .and_then(|first| modules.get(&first.name.text))
+            else {
+                continue;
+            };
+            let (at, span) = (bound.segments[0].name.span, bound.segments[0].span);
+            let written = bound.segments[0].arguments.clone();
+            let single = bound.segments.len() == 1;
+            let count = module.split("::").count();
+            bound.segments = module
+                .split("::")
+                .enumerate()
+                .map(|(index, text)| Segment {
+                    name: crate::item::Name {
+                        text: text.into(),
+                        span: at,
+                    },
+                    arguments: if single && index + 1 == count {
+                        written.clone()
+                    } else {
+                        Box::default()
+                    },
+                    span,
+                })
+                .chain(bound.segments.iter().skip(1).cloned())
+                .collect();
         }
+        generic.bounds = bounds.into_boxed_slice();
     }
 }
 

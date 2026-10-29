@@ -1,12 +1,22 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-10-28",
-  "version": "0.3.15",
+  "updated": "2026-10-29",
+  "version": "0.3.16",
   "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.16",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"A generic method, and a generic whose parameter reaches a crate item only in its body, is compiled once per instantiation its callers use, and a view that passes a later method's opaque output to a crate function builds from a fresh cache.","issues":[341]},
+          {"text":"A script impl of a crate trait generic over a crate-bounded parameter, as custom_quad's `impl<Message, Theme, Renderer> Widget<..> for Quad where Renderer: renderer::Renderer`, is compiled for each use a crate's bound makes of it, so its body calls the renderer at its type.","issues":[322]},
+          {"text":"A script impl whose signatures name its own parameter, as component's `Option<Message>`, and whose view returns `impl Widget<..> + 'a`, crosses, and a trait with lifetime arguments, as `Component<'a, Message>`, is selected and written in the runner.","issues":[323]},
+          {"text":"An associated type Rust code would hold as a script value, as the_matrix's `type State = RefCell<Vec<Cache>>`, crosses as a proxy whose `Default` is the type's.","issues":[324]}
+        ]
+      },
       {
         "version": "0.3.15",
         "date": "2026-10-28",
@@ -626,9 +636,9 @@
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
+    {"issue":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
+    {"issue":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open","category":"Shared dependency cache (D607)"},
@@ -645,7 +655,7 @@
     {"issue":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
     {"issue":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
-    {"issue":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":342,"title":"A `match` on a `&mut Option` binding whose arm rebinds the same name (`Some(first) => ..`) fails…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":343,"title":"A script's hand-written `impl Debug` isn't used when a crate prints the type, so a crate's…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":344,"title":"A std type a crate re-exports under another name works in types but not in call paths…","state":"open","category":"Shared dependency cache (D607)"},
@@ -662,7 +672,13 @@
     {"issue":355,"title":"A float range such as `1.0..=30.0` passes where a crate takes `RangeInclusive<T>`","state":"closed","category":"No glue (D593)","release":"0.3.14"},
     {"issue":356,"title":"A borrowed `Vec` passes where a crate takes `impl IntoIterator<Item = T>`, and its items are…","state":"closed","category":"No glue (D593)","release":"0.3.14"},
     {"issue":357,"title":"A script value made off the owner thread can't keep a crate value","state":"open","category":"No glue (D593)"},
-    {"issue":358,"title":"An invariant crate value made outside a view can't join a column the view makes","state":"open","category":"No glue (D593)"}
+    {"issue":358,"title":"An invariant crate value made outside a view can't join a column the view makes","state":"open","category":"No glue (D593)"},
+    {"issue":359,"title":"A crate trait's provided method on a script type","state":"open","category":"No glue (D593)"},
+    {"issue":360,"title":"Methods of a type only an alias names","state":"open","category":"No glue (D593)"},
+    {"issue":361,"title":"A crate function's opaque output inside a borrowing widget","state":"open","category":"No glue (D593)"},
+    {"issue":362,"title":"Operators of crate types","state":"open","category":"No glue (D593)"},
+    {"issue":363,"title":"A crate type's derived Ord","state":"open","category":"No glue (D593)"},
+    {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -1024,10 +1040,10 @@
           "state": "next",
           "note": "custom_quad, component. #322–#324, #341",
           "issues": [
-            {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"open"},
-            {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open"},
-            {"number":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"open"},
-            {"number":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open"}
+            {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed"},
+            {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed"},
+            {"number":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed"},
+            {"number":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"closed"}
           ]
         },
         {

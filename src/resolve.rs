@@ -107,6 +107,26 @@ pub(crate) struct Instances {
     /// Each instance's generic parameters by name, as the types its body
     /// reads them as.
     pub(crate) types: BTreeMap<crate::item::Key, Box<[(ImmutableString, type_ref::Type)]>>,
+    /// Each script impl of a crate's trait whose own parameters touch a
+    /// crate's types (`impl<R: renderer::Renderer> Widget<M, T, R> for
+    /// Quad`), by its item's index: the instances the crate's uses of the
+    /// impl need, each the types its parameters take, then the types of the
+    /// trait's arguments, defaults filled in (D629). Its functions are
+    /// templates whose instances are these.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) impls: BTreeMap<usize, Vec<ImplInstance>>,
+}
+
+/// An instance of a script impl of a crate's trait (`Instances::impls`).
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub(crate) struct ImplInstance {
+    /// The name of the type each of the impl's parameters takes.
+    pub(crate) names: Box<[ImmutableString]>,
+    /// Each of the impl's parameters at its type.
+    pub(crate) types: Box<[(ImmutableString, type_ref::Type)]>,
+    /// The trait's arguments at this instance, its defaults filled in.
+    pub(crate) arguments: Box<[type_ref::Type]>,
 }
 
 pub(crate) struct Script {
@@ -155,6 +175,20 @@ impl LoweringFailure {
 
     pub(crate) fn into_parts(self) -> (LoweringEvidence, crate::ParseError) {
         (self.evidence, self.error)
+    }
+
+    /// Whether the failure names a type, member or import Rawr doesn't
+    /// know, which a crate may give once it is asked for.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn names_unknown(&self) -> bool {
+        matches!(
+            self.error.err_type(),
+            crate::ParseErrorType::Resolution(
+                Error::UnknownType { .. }
+                    | Error::UnknownMember { .. }
+                    | Error::UnknownImport { .. }
+            )
+        )
     }
 
     pub(crate) fn into_error(self) -> crate::ParseError {
@@ -2091,8 +2125,17 @@ fn resolve_item(
                 variants: variants.into_boxed_slice(),
             })
         }
-        crate::item::Parsed::Impl(parsed) => {
-            let (scope, generics) = generic_scope(
+        crate::item::Parsed::Impl(mut parsed) => {
+            // `impl<R> Widget<M, T, R> for Quad where R: renderer::Renderer`:
+            // an impl whose parameter a dependency's trait bounds is compiled
+            // per instantiation (D629), and rustc proves the bound.
+            let crate_bounded = crate_trait_generics(
+                &mut parsed.generics,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )?;
+            let (scope, mut generics) = generic_scope(
                 parsed.generics,
                 types,
                 host,
@@ -2100,6 +2143,23 @@ fn resolve_item(
                 native,
             )?;
             let types = scope.as_ref().unwrap_or(types);
+            for generic in generics.iter_mut() {
+                if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+                    generic.crate_bounds = bounds
+                        .iter()
+                        .map(|bound| {
+                            type_ref::resolve(
+                                opaque_bound(bound),
+                                types,
+                                host,
+                                #[cfg(feature = "rust-import")]
+                                native,
+                            )
+                        })
+                        .collect::<Result<_, _>>()?;
+                    generic.host = true;
+                }
+            }
             let trait_ = parsed
                 .trait_
                 .map(|path| {
@@ -2359,7 +2419,12 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl { reference });
     }
     erase_trait_generics(&mut parsed, types, host);
-    let crate_bounded = crate_trait_generics(&mut parsed, host);
+    let crate_bounded = crate_trait_generics(
+        &mut parsed.generics,
+        host,
+        #[cfg(feature = "rust-import")]
+        native,
+    )?;
     let lifetimes = item::Lifetimes::of(&parsed);
     let (scope, generics) = generic_scope(
         parsed.generics,
@@ -2432,7 +2497,7 @@ fn resolve_function(
                 .iter()
                 .map(|parameter| &parameter.ty)
                 .chain(output.as_ref())
-                .any(|ty| names_in_host_type(ty, &generic.name.text, false));
+                .any(|ty| names_in_host_type(ty, &generic.name.text, false, host));
     }
 
     Ok(item::Function {
@@ -2456,14 +2521,22 @@ fn resolve_function(
 }
 
 /// Whether `ty` names the generic parameter `name` as a type argument of a
-/// host type, at any depth.
-fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> bool {
+/// host type, or of an opaque `impl Trait<..>` of a crate's trait
+/// (`impl Widget<M>`), at any depth.
+fn names_in_host_type(
+    ty: &type_ref::Type,
+    name: &str,
+    inside_host: bool,
+    host: &host::Registry,
+) -> bool {
     match ty {
         type_ref::Type::Unit(_) => false,
         type_ref::Type::Tuple { members, .. } => members
             .iter()
-            .any(|member| names_in_host_type(member, name, inside_host)),
-        type_ref::Type::Reference { target, .. } => names_in_host_type(target, name, inside_host),
+            .any(|member| names_in_host_type(member, name, inside_host, host)),
+        type_ref::Type::Reference { target, .. } => {
+            names_in_host_type(target, name, inside_host, host)
+        }
         type_ref::Type::Path(path) => {
             if inside_host
                 && matches!(path.target, type_ref::Target::Parameter)
@@ -2471,9 +2544,19 @@ fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> boo
             {
                 return true;
             }
-            let host = inside_host || matches!(path.target, type_ref::Target::Host { .. });
+            #[cfg(feature = "rust-import")]
+            let crate_opaque = ty
+                .opaque_trait()
+                .is_some_and(|name| matches!(host.entry(name), Some(host::Entry::Module)));
+            #[cfg(not(feature = "rust-import"))]
+            let crate_opaque = {
+                let _ = host;
+                false
+            };
+            let inside =
+                inside_host || crate_opaque || matches!(path.target, type_ref::Target::Host { .. });
             path.arguments.iter().any(|argument| match argument {
-                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, host),
+                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, inside, host),
                 type_ref::Argument::Lifetime(_) => false,
             })
         }
@@ -2487,32 +2570,49 @@ fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> boo
 /// proves the bound where the instance calls the crate.
 #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
 fn crate_trait_generics(
-    function: &mut crate::item::Function,
+    generics: &mut [crate::item::GenericParam],
     host: &host::Registry,
-) -> BTreeMap<ImmutableString, Vec<crate::item::type_ref::Path>> {
+    #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
+) -> Result<BTreeMap<ImmutableString, Vec<crate::item::type_ref::Path>>, Error> {
     #[allow(unused_mut)]
     let mut bounded = BTreeMap::new();
     #[cfg(feature = "rust-import")]
-    for generic in function.generics.iter_mut() {
-        let (crate_traits, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut generic.bounds)
-            .into_vec()
-            .into_iter()
-            .partition(|bound| {
-                let qualified = bound
-                    .segments
-                    .iter()
-                    .map(|segment| segment.name.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                bound.segments.len() > 1
-                    && matches!(host.entry(&qualified), Some(host::Entry::Module))
-            });
+    for generic in generics.iter_mut() {
+        let mut crate_traits = Vec::new();
+        let mut kept = Vec::new();
+        for bound in std::mem::take(&mut generic.bounds).into_vec() {
+            let qualified = bound
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            if bound.segments.len() > 1
+                && matches!(host.entry(&qualified), Some(host::Entry::Module))
+            {
+                crate_traits.push(bound);
+                continue;
+            }
+            // A dependency's trait no binding has asked for yet is fetched,
+            // as a crate's unknown type is.
+            if bound.segments.len() > 1
+                && let Some(site) = native.filter(|site| site.missing_binding(host, &qualified))
+            {
+                let error = Error::UnknownType {
+                    name: qualified.into(),
+                    reference: bound.span,
+                };
+                site.record(&error);
+                return Err(error);
+            }
+            kept.push(bound);
+        }
         generic.bounds = kept.into_boxed_slice();
         if !crate_traits.is_empty() {
             bounded.insert(generic.name.text.clone(), crate_traits);
         }
     }
-    bounded
+    Ok(bounded)
 }
 
 /// `impl Bound`, the opaque type a dependency's trait bound reads as.
@@ -4967,10 +5067,16 @@ fn resolve_trait(
                     crate::item::type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect::<Result<_, _>>()?;
+            let lifetimes = last
+                .arguments
+                .iter()
+                .filter(|argument| matches!(argument, crate::item::type_ref::Argument::Lifetime(_)))
+                .count();
             return Ok(item::TraitImpl::Native {
                 path: trait_path.into(),
                 name: last.name.clone(),
                 arguments,
+                lifetimes,
             });
         }
         let error = Error::UnknownType {

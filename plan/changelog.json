@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.3.16",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"A generic method, and a generic whose parameter reaches a crate item only in its body, is compiled once per instantiation its callers use, and a view that passes a later method's opaque output to a crate function builds from a fresh cache.","issues":[341]},
+        {"text":"A script impl of a crate trait generic over a crate-bounded parameter, as custom_quad's `impl<Message, Theme, Renderer> Widget<..> for Quad where Renderer: renderer::Renderer`, is compiled for each use a crate's bound makes of it, so its body calls the renderer at its type.","issues":[322]},
+        {"text":"A script impl whose signatures name its own parameter, as component's `Option<Message>`, and whose view returns `impl Widget<..> + 'a`, crosses, and a trait with lifetime arguments, as `Component<'a, Message>`, is selected and written in the runner.","issues":[323]},
+        {"text":"An associated type Rust code would hold as a script value, as the_matrix's `type State = RefCell<Vec<Cache>>`, crosses as a proxy whose `Default` is the type's.","issues":[324]}
+      ]
+    },
+    {
       "version": "0.3.15",
       "date": "2026-10-28",
       "entries": [

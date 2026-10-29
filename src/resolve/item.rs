@@ -268,6 +268,9 @@ pub(crate) enum TraitImpl {
         path: crate::ImmutableString,
         name: crate::item::Name,
         arguments: Box<[type_ref::Type]>,
+        /// The lifetime arguments the header writes before the types, as
+        /// `'a` of `impl<'a, M> Component<'a, M> for C`.
+        lifetimes: usize,
     },
 }
 

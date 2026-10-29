@@ -1,6 +1,6 @@
 [package]
 name = "rawr-toml"
-version = "0.3.15"
+version = "0.3.16"
 rust-version = "1.91.0"
 edition = "2024"
 publish = false
