@@ -689,7 +689,8 @@
     {"issue":363,"title":"A crate type's derived Ord","state":"open","category":"No glue (D593)"},
     {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)","release":"0.3.17"},
     {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
-    {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"}
+    {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
+    {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -889,7 +890,8 @@
           "state": "now",
           "note": "Validate inputs before reuse; publish complete generations. #271",
           "issues": [
-            {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"}
+            {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
+            {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"open"}
           ]
         },
         {

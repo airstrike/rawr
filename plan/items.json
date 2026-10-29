@@ -366,6 +366,7 @@
     {"t":"T363","issue":363,"title":"T363: A crate type's derived Ord","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D636"],"commit":null,"release":null},
     {"t":"T364","issue":364,"title":"T364: A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"now","row":"custom-widgets"},"decisions":["D636"],"commit":"c8a83da94ef0a061bbfb186e6c2c7579569af3b0","release":"0.3.17"},
     {"t":"T365","issue":365,"title":"T365: Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc","labels":["rustc divergence","no glue"],"gantt":null,"decisions":["D386","D594"],"commit":null,"release":null},
-    {"t":"T366","issue":366,"title":"T366: Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D625","D637"],"commit":null,"release":null}
+    {"t":"T366","issue":366,"title":"T366: Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D625","D637"],"commit":null,"release":null},
+    {"t":"T367","issue":367,"title":"T367: Reuse verified crate extraction tables across projects","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"bind","row":"key-and-publish"},"decisions":["D608","D609","D638","D639","D640","D642","D643","D644","D645"],"commit":null,"release":null}
   ]
 }
