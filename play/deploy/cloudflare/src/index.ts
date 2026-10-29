@@ -463,12 +463,39 @@ export class PlayBot extends Container<Env> {
     };
   }
 
-  // Every start records the settings it passed. That covers ensure's starts
-  // and the library's own, which a request to a stopped container makes. The
-  // image is whatever Cloudflare placed, which only the bot's report shows.
-  override async onStart() {
-    await this.ctx.storage.put(STARTED_KEY, this.settings());
-    await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
+  // The SDK calls onStart again when a running container becomes port-ready.
+  // Record actual start attempts before either SDK entry point instead, so
+  // a readiness request cannot invalidate the running bot's boot report.
+  private recordingStart?: Promise<void>;
+
+  private beforeStart(): Promise<void> | undefined {
+    if (this.ctx.container?.running) return;
+    return this.recordingStart ??= this.ctx.storage.put({
+      [STARTED_KEY]: this.settings(),
+      [STARTED_AT_KEY]: Math.floor(Date.now() / 1000),
+    });
+  }
+
+  override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
+    const recording = this.beforeStart();
+    try {
+      await recording;
+      await super.start(...args);
+    } finally {
+      if (this.recordingStart === recording) this.recordingStart = undefined;
+    }
+  }
+
+  override async startAndWaitForPorts(
+    ...args: Parameters<Container<Env>["startAndWaitForPorts"]>
+  ): Promise<void> {
+    const recording = this.beforeStart();
+    try {
+      await recording;
+      await super.startAndWaitForPorts(...args);
+    } finally {
+      if (this.recordingStart === recording) this.recordingStart = undefined;
+    }
   }
 
   // The bot gets no inbound requests, so idleness means nothing: never sleep.
