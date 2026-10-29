@@ -6852,6 +6852,23 @@ struct ImportedOperation {
 
 #[cfg(feature = "rust-import")]
 impl ImportedOperation {
+    fn instance(&self, inference: &Inference) -> Box<[Ty]> {
+        use crate::host::structural::Kind;
+        let owner = match self.kind {
+            Kind::Constructor => Some(&self.output),
+            Kind::Field { .. } | Kind::Store => self.operands.first().map(|(ty, ..)| ty),
+            _ => None,
+        };
+        let Some(owner) = owner else {
+            return Box::default();
+        };
+        let resolved = inference.resolve(owner);
+        match without_references(&resolved) {
+            Ty::Host { arguments, .. } => arguments.clone(),
+            _ => Box::default(),
+        }
+    }
+
     fn collect_dependencies(&self, dependencies: &mut BTreeSet<crate::host::facade::Dependency>) {
         for (operand, _, _) in &self.operands {
             operand.collect_dependencies(dependencies);
@@ -11398,6 +11415,12 @@ struct Parser<'a> {
     deferred_clears: Vec<(String, String)>,
     #[cfg(feature = "rust-import")]
     imported: Option<ImportedContext<'a>>,
+    /// Structural uses keep their inference variables until the body's
+    /// return and later uses have constrained them.
+    #[cfg(feature = "rust-import")]
+    pending_structural: Vec<(usize, Box<[Ty]>, Span)>,
+    #[cfg(feature = "rust-import")]
+    structural_defaults: Vec<(Ty, Ty, Span)>,
 }
 
 impl<'a> Parser<'a> {
@@ -11577,6 +11600,10 @@ impl<'a> Parser<'a> {
             deferred_clears: Vec::new(),
             #[cfg(feature = "rust-import")]
             imported,
+            #[cfg(feature = "rust-import")]
+            pending_structural: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            structural_defaults: Vec::new(),
         }
     }
 
@@ -12270,10 +12297,11 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Selection> {
         let ty = self.inference.resolve(ty);
         // A script type's own impl of the trait, which fixes what it can
-        // and is compiled for the use (D629). A script type with none is
-        // rustc's to prove.
-        if matches!(ty, Ty::Script(..)) {
-            let _ = self.select_script_impl(&ty, identity, arguments);
+        // and is compiled for the use (D629). Otherwise a crate's blanket
+        // impl may lead to the script's own impl of another trait.
+        if matches!(ty, Ty::Script(..))
+            && self.select_script_impl(&ty, identity, arguments).is_some()
+        {
             return Ok(());
         }
         let open = contains_inference(&ty)
@@ -16524,6 +16552,8 @@ impl<'a> Parser<'a> {
     }
 
     fn finish_ops(&mut self) -> Result<Vec<ExecutableOp>, Error> {
+        #[cfg(feature = "rust-import")]
+        self.finish_structural_instances()?;
         let ops = std::mem::take(&mut self.ops);
         #[cfg(feature = "rust-import")]
         self.collect_imported_ops(&ops)?;
@@ -16552,10 +16582,22 @@ impl<'a> Parser<'a> {
                 operation,
                 span,
             } => {
+                let types = operation
+                    .instance(&self.inference)
+                    .iter()
+                    .map(|ty| instance_surface_type(&self.inference, &self.models, ty))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| Error::InvalidHostOperation {
+                        item: path.clone(),
+                        reason: "structural instance has an unresolved type argument".into(),
+                        operation: span,
+                    })?;
+                let instance =
+                    (!types.is_empty()).then(|| rawr_import::surface::instance::key(&types));
                 let definition = self
                     .models
                     .host
-                    .structural(&path, &selector, operation.kind)
+                    .structural(&path, &selector, operation.kind, instance)
                     .cloned()
                     .ok_or_else(|| {
                         let error = Error::InvalidHostOperation {
@@ -22917,8 +22959,256 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// `value.field` of an imported struct: a read, or, before `=`, the
+    /// field's store (`store_imported_field`).
     #[cfg(feature = "rust-import")]
     fn parse_imported_field(
+        &mut self,
+        receiver: ParsedExpr,
+        definition: crate::host::type_def::Definition,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        // `a.b = v` or `a.b.c = v`: the fields after this one up to a plain
+        // `=`, each a field of the one before.
+        let mut ahead = self.input.clone();
+        let mut after = Vec::new();
+        let stored = loop {
+            match ahead.next() {
+                Some((Token::Equals, _)) => break true,
+                Some((Token::Period, _)) => match ahead.next() {
+                    Some((Token::Identifier(name), position)) => {
+                        let name = ImmutableString::from(name.as_str());
+                        let at = Span::new(position, text_end(position, &name));
+                        after.push((name, at));
+                    }
+                    _ => break false,
+                },
+                _ => break false,
+            }
+        };
+        if !stored || self.split_angle.is_some() {
+            return self.read_imported_field(receiver, definition, member, member_span);
+        }
+        for _ in 0..after.len() * 2 + 1 {
+            self.next();
+        }
+        let mut fields = vec![(member, member_span)];
+        fields.extend(after);
+        // Rust evaluates the right side before evaluating the assigned
+        // place, including before reading any intermediate Copy field.
+        let mut value = self.parse_expr()?;
+        let temporary = self.temporary("assigned");
+        let mut source = origin::Fragment::plain(format!("let {temporary} = "));
+        source.push(value.rendered_source());
+        source.push_text("; ");
+        value.prelude = origin::Fragment::default();
+        value.source = origin::Fragment::plain(temporary);
+        let mut stored = self.store_imported_field(receiver, definition, &fields, false, value)?;
+        source.push(stored.rendered_source());
+        stored.source = source.surrounded("{ ", " }");
+        stored.prelude = origin::Fragment::default();
+        Ok(stored)
+    }
+
+    /// `place.a.b = value` of an imported struct's fields `a`, `b`: the
+    /// value set in place, through the place's handle or a value native
+    /// code lends `&mut` (custom_widget's `tree.size = Size::new(..)`), as
+    /// a `&mut self` method changes it. Rust sets a field below another
+    /// where it is: Rawr reads each field on the way, a `Copy` value,
+    /// sets the next one in it and sets it back, as a script place is
+    /// changed (`nested_parts`). The `=` is read.
+    #[cfg(feature = "rust-import")]
+    fn store_imported_field(
+        &mut self,
+        receiver: ParsedExpr,
+        definition: crate::host::type_def::Definition,
+        fields: &[(ImmutableString, Span)],
+        below: bool,
+        mut assigned: ParsedExpr,
+    ) -> Result<ParsedExpr, Error> {
+        let (member, member_span) = fields[0].clone();
+        let start = receiver.span.start();
+        // The place must be mutable, as Rust's assignment needs.
+        let resolved = self.inference.resolve(&receiver.ty);
+        match &resolved {
+            // A field read on the way is this store's own local.
+            _ if below => {}
+            Ty::Reference { mutable: true, .. } => {}
+            Ty::Reference { mutable: false, .. } => {
+                return Err(Error::InvalidHostOperation {
+                    item: definition.path().into(),
+                    reason: format!(
+                        "`{member}` is behind a `&` reference, so it can't be assigned"
+                    )
+                    .into(),
+                    operation: member_span,
+                });
+            }
+            _ => {
+                let root = match &receiver.lvalue {
+                    Some(lvalue) => Some(lvalue.binding().clone()),
+                    None => variable_name(receiver.source.as_str()),
+                };
+                let Some(root) = root else {
+                    return Err(self.unsupported("assignment target"));
+                };
+                match self.mutation_binding(root.as_str()) {
+                    Some(binding) if binding.mutable => {}
+                    Some(binding) => {
+                        return Err(match &binding.kind {
+                            BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
+                                owner: owner.clone(),
+                                mutation: member_span,
+                                receiver: binding.declaration,
+                            },
+                            BindingKind::Local | BindingKind::Invocation => {
+                                Error::ImmutableBinding {
+                                    binding: root,
+                                    mutation: member_span,
+                                    declaration: binding.declaration,
+                                }
+                            }
+                        });
+                    }
+                    None => return Err(self.unsupported("assignment through an unknown binding")),
+                }
+                self.mutable_use(&receiver, member_span);
+            }
+        }
+        let path: ImmutableString = definition.path().into();
+        let crate::host::type_def::Shape::Struct {
+            fields: declared, ..
+        } = definition.shape()
+        else {
+            return Err(Error::UnknownMember {
+                owner: path,
+                member,
+                reference: member_span,
+            });
+        };
+        let Some(field) = declared.iter().find(|field| field.name() == member) else {
+            return Err(Error::UnknownMember {
+                owner: path,
+                member,
+                reference: member_span,
+            });
+        };
+        let selector = field.imported_identity().clone();
+        // The receiver once, in a local the reads and stores share.
+        let place = self.temporary("place");
+        let mut prelude = origin::Fragment::plain(format!("let {place} = "));
+        prelude.push(receiver.rendered_source());
+        prelude.push_text("; ");
+        let local = self.operator_expr(
+            origin::Fragment::plain(place.clone()),
+            receiver.ty.clone(),
+            receiver.span,
+        );
+        let value = if fields.len() == 1 {
+            // The field's type at the receiver's instance, as a read takes it.
+            let read = self.operator_expr(
+                origin::Fragment::plain(place.clone()),
+                receiver.ty.clone(),
+                receiver.span,
+            );
+            let ty = self.imported_field_type(&read, &definition, field.ty(), &path)?;
+            self.coerce_expr(&ty, &mut assigned)?;
+            self.consume_imported_value(&assigned, &path, assigned.span)?;
+            self.move_local(&mut assigned)?;
+            assigned
+        } else {
+            // The field below: read, changed in it, and set back.
+            let read = self.read_imported_field(
+                local.clone(),
+                definition.clone(),
+                member.clone(),
+                member_span,
+            )?;
+            let inner_ty = self.inference.resolve(&read.ty);
+            let Ty::Host { proof, .. } = &inner_ty else {
+                return Err(
+                    self.unsupported("assigning a field of a field that isn't a crate's struct")
+                );
+            };
+            if !self.type_provides(&inner_ty, capability::Kind::Copy) {
+                return Err(self.unsupported(
+                    "assigning a field of a field that isn't `Copy`, which Rawr would have to move out",
+                ));
+            }
+            let inner = proof.definition.clone();
+            let below = self.temporary("field");
+            prelude.push_text(format!("let {below} = "));
+            prelude.push(read.rendered_source());
+            prelude.push_text("; ");
+            let below_local = self.operator_expr(
+                origin::Fragment::plain(below.clone()),
+                inner_ty.clone(),
+                member_span,
+            );
+            let changed =
+                self.store_imported_field(below_local, inner, &fields[1..], true, assigned)?;
+            prelude.push(changed.rendered_source());
+            prelude.push_text("; ");
+            self.operator_expr(origin::Fragment::plain(below), inner_ty, member_span)
+        };
+        let end = value.span.end();
+        let operation = span(start, end);
+        let imported = ImportedOperation {
+            kind: crate::host::structural::Kind::Store,
+            operands: vec![
+                (local.ty.clone(), local.span, true),
+                (value.ty.clone(), value.span, false),
+            ]
+            .into_boxed_slice(),
+            output: Ty::Unit,
+            receiver: Some(crate::receiver::Mode::Mutable),
+        };
+        let helper = self.push_imported_op(&path, &selector, Some(imported), operation)?;
+        prelude.push(origin::Fragment::call(
+            &helper,
+            [local.source, value.rendered_source()],
+        ));
+        Ok(self.operator_expr(prelude.surrounded("{ ", " }"), Ty::Unit, operation))
+    }
+
+    /// The type of a field declared `field_type` of an imported struct
+    /// `definition`, read from `receiver`, at the receiver's instance.
+    #[cfg(feature = "rust-import")]
+    fn imported_field_type(
+        &mut self,
+        receiver: &ParsedExpr,
+        definition: &crate::host::type_def::Definition,
+        field_type: &crate::host::type_ref::Type,
+        path: &str,
+    ) -> Result<Ty, Error> {
+        let resolved = self.inference.resolve(&receiver.ty);
+        let held = without_references(&resolved);
+        let selected_owner = match held {
+            Ty::Host { proof, .. } => proof.owner.clone(),
+            _ => None,
+        }
+        .or_else(|| self.models.host.type_owner(path).cloned());
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .zip(match held {
+                Ty::Host { arguments, .. } => arguments.iter(),
+                _ => [].iter(),
+            })
+            .map(|(name, argument)| (name.clone(), argument.clone()))
+            .collect();
+        self.instantiate_host_type(
+            field_type,
+            &mut parameters,
+            path,
+            selected_owner.as_ref(),
+            Some(definition),
+        )
+    }
+
+    #[cfg(feature = "rust-import")]
+    fn read_imported_field(
         &mut self,
         receiver: ParsedExpr,
         definition: crate::host::type_def::Definition,
@@ -22942,14 +23232,19 @@ impl<'a> Parser<'a> {
             return Err(self.native_miss(definition.identity().imported().is_some(), error));
         };
         let field_type = field.ty().clone();
-        let selected_owner = match &receiver.ty {
+        // A value native code lends, as `&mut widget::Tree`, is read through
+        // its reference, and its facade is the one that declares its type.
+        let resolved = self.inference.resolve(&receiver.ty);
+        let held = without_references(&resolved);
+        let selected_owner = match held {
             Ty::Host { proof, .. } => proof.owner.clone(),
             _ => None,
-        };
+        }
+        .or_else(|| self.models.host.type_owner(&path).cloned());
         let mut parameters = definition
             .parameters()
             .iter()
-            .zip(match &receiver.ty {
+            .zip(match held {
                 Ty::Host { arguments, .. } => arguments.iter(),
                 _ => [].iter(),
             })
@@ -29148,7 +29443,7 @@ impl<'a> Parser<'a> {
                     #[cfg(feature = "rust-import")]
                     Some(definition) => {
                         let receiver = self.operator_expr(value.clone(), ty.clone(), *field_span);
-                        self.parse_imported_field(
+                        self.read_imported_field(
                             receiver,
                             definition.clone(),
                             field.clone(),
@@ -35047,6 +35342,34 @@ impl<'a> Parser<'a> {
                     member: written.into(),
                 });
             };
+            // `Trait::method(value, ..)` of a crate's trait on a script type
+            // that implements it, as `column!`'s `Widget::_boxed(circle)`:
+            // the trait's method over its `Self` (`surface::member`), which
+            // the script's own impl of the trait answers.
+            #[cfg(feature = "rust-import")]
+            if self.models.method(definition_id, &member).is_none()
+                && !self
+                    .models
+                    .trait_methods
+                    .contains_key(&(definition_id, member.clone()))
+                && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
+            {
+                let path = rawr_import::surface::member::path(&trait_path, &member);
+                if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
+                    let owner = self.models.item_owner(&path).cloned();
+                    let start = value.span.start();
+                    let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+                    let mut inputs = Vec::with_capacity(arguments.len() + 1);
+                    self.move_local(&mut value)?;
+                    inputs.push(value);
+                    for mut argument in arguments {
+                        self.move_local(&mut argument)?;
+                        inputs.push(argument);
+                    }
+                    value = self.call_host_function(&items, owner, inputs, span(start, end))?;
+                    continue;
+                }
+            }
             // A scripted widget's `map` and `boxed` (`erasure_with`).
             let resolved = self.inference.resolve(&value.ty);
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
@@ -43254,22 +43577,22 @@ impl<'a> Parser<'a> {
                 construction: name_span,
             });
         }
-        // A generic struct whose every parameter has a default, as palette's
-        // `Rgb<S = Srgb, T = f32>`, is made at that instance, which `Rgb`
-        // names as a type: the bridge's constructor makes that one.
-        let mut instance = Vec::new();
-        if !definition.parameters().is_empty() {
-            self.default_host_arguments(&definition, owner.as_ref(), &mut instance);
-            if instance.len() != definition.parameters().len() {
-                return Err(Error::InvalidConstruction {
-                    owner: path,
-                    reason: "generic imported construction requires a sealed Phase 4 substitution"
-                        .into(),
-                    construction: name_span,
-                });
+        // A constructor infers its parameters from its fields and context;
+        // defaults only fill parameters those constraints leave unknown.
+        let instance = definition
+            .parameters()
+            .iter()
+            .map(|_| self.inference.fresh())
+            .collect::<Box<[_]>>();
+        if let Some((expected, depth)) = &self.collect_hint
+            && *depth == self.expression_stack.len()
+            && let Ty::Host { proof, arguments } = self.inference.resolve(expected)
+            && proof.definition.identity() == definition.identity()
+        {
+            for (parameter, argument) in instance.iter().zip(&arguments) {
+                self.require_type(parameter, argument, name_span)?;
             }
         }
-        let instance = instance.into_boxed_slice();
         let fields = fields.clone();
         let form = *form;
         let selected_owner = self.models.host.type_owner(&path).cloned();
@@ -43368,7 +43691,7 @@ impl<'a> Parser<'a> {
                 let mut arguments = Vec::with_capacity(fields.len());
                 for field in &fields {
                     if let (None, Some(base)) = (values.get(field.name()), &base_value) {
-                        let read = self.parse_imported_field(
+                        let read = self.read_imported_field(
                             ParsedExpr {
                                 prelude: origin::Fragment::default(),
                                 source: base.source.clone(),
@@ -43433,6 +43756,21 @@ impl<'a> Parser<'a> {
             self.coerce_expr(&expected, argument)?;
             self.consume_imported_value(argument, &path, argument.span)?;
         }
+        for (index, parameter) in instance.iter().enumerate() {
+            if matches!(self.inference.resolve(parameter), Ty::Infer(_))
+                && let Some(Some(default)) = definition.defaults().get(index)
+            {
+                let default = self.instantiate_host_type(
+                    default,
+                    &mut parameters,
+                    &path,
+                    owner.as_ref(),
+                    Some(&definition),
+                )?;
+                self.structural_defaults
+                    .push((parameter.clone(), default, name_span));
+            }
+        }
         let ordered = arguments
             .iter()
             .map(ParsedExpr::rendered_source)
@@ -43448,7 +43786,7 @@ impl<'a> Parser<'a> {
                 })?;
         let output = Ty::Host {
             proof: HostTyProof::new(definition.clone(), Some(definition.clone()), owner),
-            arguments: instance,
+            arguments: instance.clone(),
         };
         let imported = ImportedOperation {
             kind: crate::host::structural::Kind::Constructor,
@@ -49018,6 +49356,12 @@ impl<'a> Parser<'a> {
             .imported
             .as_mut()
             .expect("imported lowering retains its allocation context");
+        if let Some(operation) = operation {
+            let types = operation.instance(&self.inference);
+            if !types.is_empty() {
+                self.pending_structural.push((index, types, span));
+            }
+        }
         let selector = match selector.try_clone() {
             Ok(selector) => selector,
             Err(error) => {
@@ -49041,6 +49385,32 @@ impl<'a> Parser<'a> {
             span,
         });
         Ok(format!("{SENTINEL}{index}"))
+    }
+
+    #[cfg(feature = "rust-import")]
+    fn finish_structural_instances(&mut self) -> Result<(), Error> {
+        for (parameter, default, span) in std::mem::take(&mut self.structural_defaults) {
+            if matches!(self.inference.resolve(&parameter), Ty::Infer(_)) {
+                self.require_type(&parameter, &default, span)?;
+            }
+        }
+        let Some(context) = self.imported.as_mut() else {
+            return Ok(());
+        };
+        for (index, instance, span) in std::mem::take(&mut self.pending_structural) {
+            let mut types = Vec::with_capacity(instance.len());
+            for ty in instance.iter() {
+                types.push(imported_surface_type(
+                    &self.inference,
+                    &self.models,
+                    ty,
+                    span,
+                    context,
+                )?);
+            }
+            context.uses[index].types = types.into_boxed_slice();
+        }
+        Ok(())
     }
 
     #[cfg(feature = "rust-import")]

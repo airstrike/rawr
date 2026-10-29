@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 23;
+const SCHEMA: u32 = 24;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -898,6 +898,28 @@ impl Plan {
                     items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                     items.push(item);
                     facade.items = items.into_boxed_slice();
+                }
+                // A provided method called on the program's own type is
+                // the same function over `Self` in the retained runner
+                // facade as it was during demand compilation.
+                if let Some(definition) = outcome.identity().definition() {
+                    for associated in outcome
+                        .implementations()
+                        .filter(|implementation| {
+                            super::member::is_members(implementation.identity(), &definition)
+                        })
+                        .flat_map(crate::classify::ImplementationOutcome::associated)
+                    {
+                        let path = super::member::path(&relative, associated.name());
+                        let Some(mut item) = item(&path, associated)? else {
+                            continue;
+                        };
+                        item.kind = ItemKind::Function;
+                        let mut items = std::mem::take(&mut facade.items).into_vec();
+                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                        items.push(item);
+                        facade.items = items.into_boxed_slice();
+                    }
                 }
                 let mut traits = std::mem::take(&mut facade.traits).into_vec();
                 if let Err(position) = traits.binary_search(&relative) {

@@ -40,10 +40,16 @@ pub(crate) enum Operation {
         parameters: Box<[signature::Parameter]>,
         form: model::FieldForm,
         fields: Box<[Field]>,
+        /// The types a generic struct is made at, when its use infers other
+        /// than its defaults, as iced's `Size<Length>`.
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        instance: Box<[convert::Type]>,
     },
     StructField {
         parameters: Box<[signature::Parameter]>,
         field: Field,
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        instance: Box<[convert::Type]>,
     },
     EnumVariant {
         parameters: Box<[signature::Parameter]>,
@@ -268,7 +274,9 @@ impl Plan {
         outcome: crate::classify::Outcome<'_>,
         selected: &identity::Identity,
     ) -> Result<Option<usize>, Error> {
-        reject_unresolved_structural_parameters(outcome.representability())?;
+        if selected.types().is_empty() {
+            reject_unresolved_structural_parameters(outcome.representability())?;
+        }
         let origin = selected_origin(outcome, selected.selector())?;
         let operation = operation_bytes(contract, outcome.representability(), selected)?;
         let Some(export) = outcome.export().retained_bytes() else {
@@ -291,7 +299,9 @@ impl Plan {
         outcome: crate::classify::Outcome<'_>,
         selected: &identity::Identity,
     ) -> Result<Self, Error> {
-        reject_unresolved_structural_parameters(outcome.representability())?;
+        if selected.types().is_empty() {
+            reject_unresolved_structural_parameters(outcome.representability())?;
+        }
         let origin = selected_origin(outcome, selected.selector())?;
         Ok(Self {
             identity: EntryIdentity(*selected.as_bytes()),
@@ -332,6 +342,14 @@ impl Plan {
 
     pub(crate) const fn operation(&self) -> &Operation {
         &self.operation
+    }
+
+    pub(crate) fn structural_instance(&self) -> &[convert::Type] {
+        match &self.operation {
+            Operation::StructConstructor { instance, .. }
+            | Operation::StructField { instance, .. } => instance,
+            _ => &[],
+        }
     }
 
     pub(crate) fn builder_steps(&self) -> Option<&[BuilderStep]> {
@@ -519,19 +537,39 @@ fn operation_bytes(
         }
         (
             representability::Representability::Struct(plan),
-            selected @ identity::Selector::StructConstructor(_),
-        ) if plan.constructor() == Some(selected) => parameter_slice_bytes(plan.parameters())
-            .and_then(|bytes| bytes.checked_add(field_slice_bytes(plan.fields())?)),
-        (representability::Representability::Struct(plan), selected) => {
+            constructor @ identity::Selector::StructConstructor(_),
+        ) if plan.constructor() == Some(constructor) => {
+            let bytes = parameter_slice_bytes(plan.parameters())
+                .and_then(|bytes| bytes.checked_add(field_slice_bytes(plan.fields())?))
+                .and_then(|bytes| bytes.checked_add(type_slice_bytes(selected.types())?));
+            bytes.and_then(|bytes| {
+                plan.fields().iter().try_fold(bytes, |bytes, field| {
+                    bytes.checked_add(substitution_bytes(
+                        field.ty(),
+                        plan.parameters(),
+                        selected.types(),
+                    )?)
+                })
+            })
+        }
+        (representability::Representability::Struct(plan), selector) => {
             let field = plan
                 .fields()
                 .iter()
-                .find(|field| field.selector() == selected)
+                .find(|field| field.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "struct selector is absent from its exact plan",
                 })?;
             parameter_slice_bytes(plan.parameters())
                 .and_then(|bytes| bytes.checked_add(field_dynamic_bytes(field)?))
+                .and_then(|bytes| bytes.checked_add(type_slice_bytes(selected.types())?))
+                .and_then(|bytes| {
+                    bytes.checked_add(substitution_bytes(
+                        field.ty(),
+                        plan.parameters(),
+                        selected.types(),
+                    )?)
+                })
         }
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
             parameter_slice_bytes(plan.parameters())
@@ -618,21 +656,29 @@ fn clone_operation(
         }
         (
             representability::Representability::Struct(plan),
-            selected @ identity::Selector::StructConstructor(_),
-        ) if plan.constructor() == Some(selected) => Ok(Operation::StructConstructor {
-            parameters: clone_parameters(plan.parameters())?,
-            form: plan.form(),
-            fields: defaulted_fields(clone_fields(plan.fields())?, plan.parameters()),
-        }),
-        (representability::Representability::Struct(plan), selected) => {
+            constructor @ identity::Selector::StructConstructor(_),
+        ) if plan.constructor() == Some(constructor) => {
+            let instance = clone_types(selected.types())?;
+            // Its fields at the instance's types, or at the defaults.
+            let at = parameters_at(plan.parameters(), &instance);
+            Ok(Operation::StructConstructor {
+                parameters: clone_parameters(plan.parameters())?,
+                form: plan.form(),
+                fields: defaulted_fields(clone_fields(plan.fields())?, &at),
+                instance,
+            })
+        }
+        (representability::Representability::Struct(plan), selector) => {
             let field = plan
                 .fields()
                 .iter()
-                .find(|field| field.selector() == selected)
+                .find(|field| field.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "struct selector is absent from its exact plan",
                 })?;
-            let field = defaulted_fields(Box::from([clone_field(field)?]), plan.parameters())
+            let instance = clone_types(selected.types())?;
+            let at = parameters_at(plan.parameters(), &instance);
+            let field = defaulted_fields(Box::from([clone_field(field)?]), &at)
                 .into_vec()
                 .pop()
                 .ok_or(Error::AdapterPlan {
@@ -641,6 +687,7 @@ fn clone_operation(
             Ok(Operation::StructField {
                 parameters: clone_parameters(plan.parameters())?,
                 field,
+                instance,
             })
         }
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
@@ -857,6 +904,26 @@ fn clone_function_items(
     Ok(functions.into_boxed_slice())
 }
 
+fn parameters_at(
+    parameters: &[signature::Parameter],
+    instance: &[convert::Type],
+) -> Vec<signature::Parameter> {
+    if instance.is_empty() {
+        return parameters.to_vec();
+    }
+    let mut types = instance.iter();
+    parameters
+        .iter()
+        .map(|parameter| {
+            if parameter.kind() == signature::Kind::Type {
+                parameter.clone().with_default(types.next().cloned())
+            } else {
+                parameter.clone()
+            }
+        })
+        .collect()
+}
+
 fn clone_event_mappers(selected: &identity::Identity) -> Result<Box<[EventMapper]>, Error> {
     selected
         .event_mappers()
@@ -926,10 +993,8 @@ fn clone_field(field: &representability::structure::Field) -> Result<Field, Erro
     })
 }
 
-/// A generic struct's fields at its defaulted instance, which its path
-/// names as a Rust type: palette's `Rgb` is `Rgb<Srgb, f32>`, so its
-/// `red: T` is an `f32`. A struct's adapter reaches only that instance. A
-/// field naming a parameter without a default keeps its declared type.
+/// A generic struct's fields at the defaults in `parameters`, which an
+/// explicit instance replaces with its arguments (`parameters_at`).
 fn defaulted_fields(fields: Box<[Field]>, parameters: &[signature::Parameter]) -> Box<[Field]> {
     if parameters.is_empty() {
         return fields;
@@ -1196,5 +1261,49 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
         }
         convert::Type::Inferred => Some(0),
         convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
+    }
+}
+
+/// The additional ownership replacing each parameter occurrence retains.
+/// The surrounding type shape is already charged by `type_dynamic_bytes`.
+fn substitution_bytes(
+    ty: &convert::Type,
+    parameters: &[signature::Parameter],
+    instance: &[convert::Type],
+) -> Option<usize> {
+    let one = |ty: &convert::Type| substitution_bytes(ty, parameters, instance);
+    let all = |types: &[convert::Type]| {
+        types
+            .iter()
+            .try_fold(0_usize, |bytes, ty| bytes.checked_add(one(ty)?))
+    };
+    match ty {
+        convert::Type::Parameter(index) => {
+            let Some((position, parameter)) = parameters
+                .iter()
+                .filter(|parameter| parameter.kind() == signature::Kind::Type)
+                .enumerate()
+                .find(|(_, parameter)| parameter.index() == *index)
+            else {
+                return Some(0);
+            };
+            instance
+                .get(position)
+                .or_else(|| parameter.default())
+                .map_or(Some(0), type_dynamic_bytes)
+        }
+        convert::Type::Nominal { arguments, .. } | convert::Type::Script { arguments, .. } => {
+            all(arguments)
+        }
+        convert::Type::Tuple(members) => all(members),
+        convert::Type::FunctionItem { input, output } | convert::Type::Result(input, output) => {
+            one(input)?.checked_add(one(output)?)
+        }
+        convert::Type::Option(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::ProfileMessage { payload: inner, .. } => one(inner),
+        _ => Some(0),
     }
 }

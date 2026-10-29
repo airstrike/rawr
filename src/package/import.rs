@@ -1253,10 +1253,25 @@ fn imported_paths<'contract>(
         } else {
             path.clone()
         };
-        for associated in outcome
-            .implementations()
-            .flat_map(rawr_import::classify::ImplementationOutcome::associated)
-        {
+        let definition = outcome.identity().definition();
+        for (implementation, associated) in outcome.implementations().flat_map(|implementation| {
+            implementation
+                .associated()
+                .map(move |associated| (implementation.identity(), associated))
+        }) {
+            // A trait's method over its `Self` is reached beside the trait
+            // (`surface::member`).
+            if definition.is_some_and(|definition| {
+                rawr_import::surface::member::is_members(implementation, &definition)
+            }) {
+                let associated_path = rawr_import::surface::member::path(&path, associated.name());
+                allocation.retain(1, associated_path.len())?;
+                entries.push(ImportedPath {
+                    path: associated_path.into_boxed_str(),
+                    outcome: associated,
+                });
+                continue;
+            }
             // A method of a trait's impl for `&str` is reached beside the
             // trait (`surface::text`).
             if rawr_import::surface::text::is_member(associated.representability()) {
@@ -1345,6 +1360,11 @@ struct Facade<'contract> {
     /// The methods the traits the program names give Rawr's string through
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
+    /// The methods of the traits the program names that take `self` by
+    /// value, each a function generic over the trait's `Self` at its path,
+    /// which a program's own type that implements the trait calls
+    /// (`surface::member`).
+    self_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The root's re-exports of std items, as iced's `time::Duration`:
     /// each path and the std path it names (`std::time::Duration`).
     std_reexports: Vec<(Box<str>, Box<str>)>,
@@ -1516,6 +1536,7 @@ fn install(
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        self_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1547,6 +1568,7 @@ fn install(
                             macros: Vec::new(),
                             trait_identities: Vec::new(),
                             text_members: Vec::new(),
+                            self_members: Vec::new(),
                             std_reexports: Vec::new(),
                         },
                     );
@@ -1571,6 +1593,25 @@ fn install(
                     rawr_import::surface::text::path(&relative, associated.name()),
                     associated,
                 ));
+            }
+            if let Some(definition) = outcome.identity().definition() {
+                for associated in outcome
+                    .implementations()
+                    .filter(|implementation| {
+                        rawr_import::surface::member::is_members(
+                            implementation.identity(),
+                            &definition,
+                        )
+                    })
+                    .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+                {
+                    let members = &mut facades[index].self_members;
+                    members.try_reserve(1).map_err(|_| Error::Allocation)?;
+                    members.push((
+                        rawr_import::surface::member::path(&relative, associated.name()),
+                        associated,
+                    ));
+                }
             }
             let traits = &mut facades[index].traits;
             if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
@@ -1605,6 +1646,7 @@ fn install(
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        self_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1664,6 +1706,7 @@ fn install(
                         macros: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        self_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1815,10 +1858,14 @@ fn build(
     });
     // So is the module beside a trait that holds the methods its impls for
     // `&str` give Rawr's string (`surface::text`).
-    let text_modules = facade.text_members.iter().filter_map(|(path, _)| {
-        path.rsplit_once("::")
-            .map(|(module, _)| Box::<str>::from(module))
-    });
+    let text_modules = facade
+        .text_members
+        .iter()
+        .chain(&facade.self_members)
+        .filter_map(|(path, _)| {
+            path.rsplit_once("::")
+                .map(|(module, _)| Box::<str>::from(module))
+        });
     let modules = facade
         .traits
         .iter()
@@ -2085,6 +2132,29 @@ fn build(
             allocation,
         )?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
+        builder.item(
+            host::item::Definition::function(path, signature)?
+                .imported(associated.identity().selector().try_clone()?),
+        )?;
+    }
+    // A trait's method over its `Self`, which a program's own type that
+    // implements the trait calls: a function whose first input is the
+    // receiver (`surface::member`).
+    for (path, associated) in &facade.self_members {
+        let Representability::Invocation(plan) = associated.representability() else {
+            continue;
+        };
+        if !writes_declared(plan.signature(), None, &[]) || !names_declared(*associated, declared) {
+            continue;
+        }
+        let selector_bytes = associated.identity().selector().retained_bytes();
+        let bytes = selector_bytes.and_then(|selector| {
+            std::mem::size_of::<host::item::Definition>()
+                .checked_add(unqualified_path_bytes(path)?)?
+                .checked_add(selector)
+        });
+        allocation.retain_checked(Some(1), bytes)?;
+        let signature = signature_with(&types, plan.signature(), None, allocation)?;
         builder.item(
             host::item::Definition::function(path, signature)?
                 .imported(associated.identity().selector().try_clone()?),

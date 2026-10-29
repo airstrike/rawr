@@ -502,6 +502,17 @@ impl Arguments {
         let parameters = match representability {
             representability::Representability::FunctionItem(item) => item.signature().parameters(),
             representability::Representability::Invocation(item) => item.signature().parameters(),
+            // A generic struct made at an instance other than its defaulted
+            // one, as iced's `Size<Length>`.
+            representability::Representability::Struct(plan)
+                if !self.types.is_empty()
+                    && self.constants.is_empty()
+                    && self.binders.is_empty()
+                    && self.callable.is_none()
+                    && self.slots.is_empty() =>
+            {
+                plan.parameters()
+            }
             _ if self.types.is_empty()
                 && self.constants.is_empty()
                 && self.binders.is_empty()

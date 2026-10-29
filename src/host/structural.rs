@@ -15,6 +15,9 @@ pub(crate) enum Kind {
     Variant,
     /// A variant's fields when the value is that variant, else `None`.
     Match,
+    /// A field set in place to a value, through the place's handle or a
+    /// value native code lends `&mut`.
+    Store,
 }
 
 /// One generated-adapter admission retained by the compiler and runtime.
@@ -28,6 +31,7 @@ pub(crate) struct Definition {
     arguments: u32,
     manifest: [u8; 32],
     kind: Kind,
+    instance: Option<[u8; 32]>,
 }
 
 /// One fully instantiated private structural operation.
@@ -69,7 +73,13 @@ impl Definition {
             arguments,
             manifest,
             kind,
+            instance: None,
         }
+    }
+
+    pub(crate) const fn with_instance(mut self, instance: Option<[u8; 32]>) -> Self {
+        self.instance = instance;
+        self
     }
 
     pub(crate) const fn owner(&self) -> &host::facade::Dependency {
@@ -94,6 +104,10 @@ impl Definition {
 
     pub(crate) const fn kind(&self) -> Kind {
         self.kind
+    }
+
+    pub(crate) const fn instance(&self) -> Option<[u8; 32]> {
+        self.instance
     }
 
     pub(crate) fn retained_bytes(&self) -> Option<usize> {

@@ -580,13 +580,18 @@ impl Registry {
         path: &str,
         selector: &rawr_import::surface::identity::Selector,
         kind: structural::Kind,
+        instance: Option<[u8; 32]>,
     ) -> Option<&structural::Definition> {
         let fingerprint = selector.fingerprint();
-        // A variant's selector names its constructor and its matcher.
+        // A variant's selector names its constructor and its matcher, and
+        // a field's its reader and its store.
         let matcher = kind == structural::Kind::Match;
+        let store = kind == structural::Kind::Store;
         let selected = |definition: &&structural::Definition| {
             definition.selector() == &fingerprint
+                && definition.instance() == instance
                 && (definition.kind() == structural::Kind::Match) == matcher
+                && (definition.kind() == structural::Kind::Store) == store
         };
         // One type at two paths has one adapter, at one of them (D536.1):
         // `ratatui::style::Color` is also `ratatui_core::style::Color`
@@ -620,6 +625,7 @@ impl Registry {
             definition.path(),
             definition.selector(),
             definition.kind(),
+            definition.instance(),
         );
         let index = match self.structural.binary_search_by(|candidate| {
             (
@@ -627,6 +633,7 @@ impl Registry {
                 candidate.path(),
                 candidate.selector(),
                 candidate.kind(),
+                candidate.instance(),
             )
                 .cmp(&key)
         }) {

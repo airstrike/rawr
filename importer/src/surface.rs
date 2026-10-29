@@ -18,6 +18,7 @@ pub mod facade;
 pub mod headers;
 pub mod identity;
 pub mod instance;
+pub mod member;
 pub mod opaque;
 mod runner;
 pub mod text;
@@ -678,16 +679,28 @@ impl<B> Compiler<'_, B> {
             return Err(Error::ForeignIdentity);
         }
         let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
-        if has_unresolved_structural_parameters(outcome.representability()) {
+        // A generic struct's constructor at the types its use infers.
+        let structure = matches!(
+            (outcome.representability(), &selector),
+            (
+                crate::classify::representability::Representability::Struct(_),
+                identity::Selector::StructConstructor(_) | identity::Selector::StructField(_)
+            )
+        );
+        if (!structure || instance.types().is_empty())
+            && has_unresolved_structural_parameters(outcome.representability())
+        {
             return Err(Error::UnconstrainedGeneric);
         }
         instance.matches(outcome.representability())?;
-        validate_function_items(
-            self.contract,
-            outcome,
-            &mut instance,
-            self.event_projection.as_ref(),
-        )?;
+        if !structure {
+            validate_function_items(
+                self.contract,
+                outcome,
+                &mut instance,
+                self.event_projection.as_ref(),
+            )?;
+        }
         let predicates = predicate_proofs(self.contract, outcome, &instance)?;
         instance.seal_predicates(predicates);
         let actual = self.entries.len().checked_add(1).ok_or(Error::Limit {
@@ -2028,13 +2041,14 @@ mod tests {
                 parameters,
                 form: crate::api::model::FieldForm::Record,
                 fields,
+                ..
             } if parameters.is_empty() && fields.len() == 2
                 && fields[0].name() == "left"
                 && fields[0].index() == 0
         )));
         assert!(demand.adapter_plans().iter().any(|plan| matches!(
             plan.operation(),
-            Operation::StructField { parameters, field }
+            Operation::StructField { parameters, field, .. }
                 if parameters.is_empty()
                     && field.name() == "left"
                     && field.span().byte_range() == (10..14)

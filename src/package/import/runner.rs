@@ -150,9 +150,13 @@ fn runtime_error(error: Error) -> host::runtime::Error {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum StructuralKind {
     Constructor,
-    Field { copy: bool },
+    Field {
+        copy: bool,
+    },
     Variant,
     Match,
+    /// A field set in place, which shares the field's selector.
+    Store,
 }
 
 /// One scalar-only generated structural row awaiting manifest authentication.
@@ -168,6 +172,7 @@ pub struct StructuralRow {
     signature: [u8; 32],
     arguments: u32,
     kind: StructuralKind,
+    instance: Option<[u8; 32]>,
 }
 
 /// One generated producer and its profile-validated private replay conversion.
@@ -350,7 +355,16 @@ impl StructuralRow {
             signature,
             arguments,
             kind,
+            instance: None,
         }
+    }
+
+    /// The exact generic instance authenticated by this row's adapter.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn with_instance(mut self, instance: [u8; 32]) -> Self {
+        self.instance = Some(instance);
+        self
     }
 }
 
@@ -748,8 +762,10 @@ fn authenticate_structural(
                 StructuralKind::Field { copy } => host::structural::Kind::Field { copy },
                 StructuralKind::Variant => host::structural::Kind::Variant,
                 StructuralKind::Match => host::structural::Kind::Match,
+                StructuralKind::Store => host::structural::Kind::Store,
             },
-        );
+        )
+        .with_instance(row.instance);
         if adapters
             .iter()
             .any(|adapter: &host::runtime::StructuralAdapter| adapter.definition == definition)
@@ -847,9 +863,21 @@ fn structural_path<'facade>(
                 .filter(|selector| selector.fingerprint() == row.selector)
                 .map(|_| StructuralKind::Constructor)
                 .chain(fields.iter().filter_map(|field| {
+                    // A field's selector names its reader and its store.
                     (field.imported_identity().fingerprint() == row.selector).then_some(
-                        StructuralKind::Field {
-                            copy: copy_scalar(defaulted(field.ty(), definition), facade),
+                        if row.kind == StructuralKind::Store {
+                            StructuralKind::Store
+                        } else if row.instance.is_some() && !definition.parameters().is_empty() {
+                            // The authenticated adapter's signature is at
+                            // the selected instance, not the type's defaults.
+                            match row.kind {
+                                StructuralKind::Field { copy } => StructuralKind::Field { copy },
+                                _ => return None,
+                            }
+                        } else {
+                            StructuralKind::Field {
+                                copy: copy_scalar(defaulted(field.ty(), definition), facade),
+                            }
                         },
                     )
                 }))
