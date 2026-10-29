@@ -7,12 +7,21 @@ use crate::{Engine, Position, Span, PERR};
 
 /// The items of a file, and the spans of its inner attributes (`#![..]`),
 /// which the legacy script does not see.
-pub(super) type ParsedFile = (Box<[crate::item::Parsed]>, Vec<Span>);
+pub(super) struct ParsedFile {
+    pub items: Box<[crate::item::Parsed]>,
+    pub masked: Vec<Span>,
+    pub imports: Box<[crate::item::Use]>,
+    pub inner_attributes: Box<[crate::item::Attribute]>,
+}
+
+type ParsedItems = (Box<[crate::item::Parsed]>, Vec<Span>);
 
 std::thread_local! {
     /// The `fn` items and `use` imports declared inside function bodies of
     /// the file being parsed. They join the file's items, as Rawr hoists them.
     static NESTED: core::cell::RefCell<Vec<crate::item::Parsed>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    static INNER: core::cell::RefCell<Vec<crate::item::Attribute>> =
         const { core::cell::RefCell::new(Vec::new()) };
     /// The spans of the items a `#[cfg(..)]` left out of the file being
     /// parsed, which the legacy script does not see either.
@@ -22,11 +31,23 @@ std::thread_local! {
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let outer = NESTED.take();
     let outer_skipped = SKIPPED.take();
+    let outer_inner = INNER.take();
     let parsed = parse_items(engine, source);
     let nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
+    let inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
     let (mut items, mut inner) = parsed?;
     inner.extend(skipped);
+    // Preserve source authority before compatibility hoisting discards duplicates.
+    let mut imports = items
+        .iter()
+        .chain(&nested)
+        .filter_map(|item| match item {
+            crate::item::Parsed::Use(used) => Some(used.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    imports.sort_by_key(|used| used.span.start());
     if !nested.is_empty() {
         let mut all = items.into_vec();
         for item in nested {
@@ -71,7 +92,12 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     if let Some(dropped) = inline_application_builder(&mut items) {
         inner.push(dropped);
     }
-    Ok((items, inner))
+    Ok(ParsedFile {
+        items,
+        masked: inner,
+        imports: imports.into_boxed_slice(),
+        inner_attributes,
+    })
 }
 
 /// iced's `Application` builder returned by a function of the file, as
@@ -209,7 +235,7 @@ fn is_attribute_import(item: &crate::item::Parsed) -> bool {
         })
 }
 
-fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
+fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
     let inputs = [source];
     let (stream, tokenizer_control) = engine.lex(&inputs);
     tokenizer_control.borrow_mut().rust = true;
@@ -523,7 +549,9 @@ fn parse_inner_attribute(input: &mut TokenStream, hash: Position) -> ParseResult
         ))
         .into_err(hash));
     }
-    Ok(attribute.span)
+    let span = attribute.span;
+    INNER.with_borrow_mut(|inner| inner.push(attribute));
+    Ok(span)
 }
 
 fn inner_attribute_error(message: &str) -> PERR {
@@ -1626,7 +1654,7 @@ fn parse_use(
         global,
     };
 
-    let tree = if let Some(star) = glob {
+    let mut tree = if let Some(star) = glob {
         crate::item::UseTree::Glob {
             span: Span::new(path.span.start(), star.end()),
             prefix: path,
@@ -1655,6 +1683,15 @@ fn parse_use(
         crate::item::UseTree::Path(path, parse_use_alias(input)?)
     };
 
+    // Flattened members retain the root's absolute-path meaning.
+    for tree in core::iter::once(&mut tree).chain(extra_uses.iter_mut()) {
+        match tree {
+            crate::item::UseTree::Path(path, _)
+            | crate::item::UseTree::Group { prefix: path, .. }
+            | crate::item::UseTree::Glob { prefix: path, .. } => path.global = global,
+        }
+    }
+
     let semicolon = expect(input, Token::SemiColon, "to terminate an import")?;
     let end = after(semicolon, 1);
     let header = crate::item::Header {
@@ -1664,6 +1701,7 @@ fn parse_use(
     };
     for tree in extra_uses {
         let used = crate::item::Use {
+            scope: None,
             header: header.clone(),
             tree,
             span: Span::new(start, end),
@@ -1672,6 +1710,7 @@ fn parse_use(
     }
 
     Ok(crate::item::Use {
+        scope: None,
         header,
         tree,
         span: Span::new(start, end),
@@ -4195,6 +4234,8 @@ fn parse_body_syntax(
     open: Position,
 ) -> ParseResult<(Span, crate::item::BodySyntax)> {
     let mut scan = ScanState::inside_body();
+    // Each block owns only imports not already assigned by a nested block/body.
+    let mut scopes = vec![(1, open, NESTED.with_borrow(|nested| nested.len()))];
     let mut tokens = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
@@ -4424,10 +4465,33 @@ fn parse_body_syntax(
                 "unsafe" | "move" | "async" | "try" | "extern" | "union"
             ));
         }
-        match scan
+        let (token, position) = scan
             .next(input, tokenizer_control)
-            .expect("token streams always end with EOF")
+            .expect("token streams always end with EOF");
+        if matches!(token, Token::LeftBrace) {
+            scopes.push((
+                scan.delimiter_depth,
+                position,
+                NESTED.with_borrow(|nested| nested.len()),
+            ));
+        } else if matches!(token, Token::RightBrace)
+            && scopes
+                .last()
+                .is_some_and(|(depth, _, _)| *depth == scan.delimiter_depth + 1)
         {
+            let (_, start, first) = scopes.pop().expect("matched enclosing block");
+            let scope = Span::new(start, after(position, 1));
+            NESTED.with_borrow_mut(|nested| {
+                for item in &mut nested[first..] {
+                    if let crate::item::Parsed::Use(used) = item
+                        && used.scope.is_none()
+                    {
+                        used.scope = Some(scope);
+                    }
+                }
+            });
+        }
+        match (token, position) {
             (Token::RightBrace, position) if scan.delimiter_depth == 0 => {
                 return Ok((
                     Span::new(open, after(position, 1)),

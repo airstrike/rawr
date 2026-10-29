@@ -30,7 +30,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 8;
+const FORMAT: u32 = 9;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -200,6 +200,8 @@ impl Cells {
         writer.0.extend_from_slice(&digest(text));
         writer.text(script_source);
         put_all(items, &mut writer);
+        put_all(unit.imports(), &mut writer);
+        put_all(unit.inner_attributes(), &mut writer);
         Some(writer.0)
     }
 }
@@ -211,10 +213,12 @@ fn digest(text: &str) -> [u8; 32] {
 fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
     let script_source = reader.text()?.to_owned();
     let items = Box::<[item::Parsed]>::get(reader)?;
-    reader
-        .bytes
-        .is_empty()
-        .then(|| parse::Unit::new(source::Map::new(text), items, None, script_source))
+    let imports = Box::<[item::Use]>::get(reader)?;
+    let attributes = Box::<[item::Attribute]>::get(reader)?;
+    reader.bytes.is_empty().then(|| {
+        parse::Unit::new(source::Map::new(text), items, None, script_source)
+            .with_scope(imports, attributes)
+    })
 }
 
 struct Writer(Vec<u8>);
@@ -462,7 +466,7 @@ record! {
     item::Header { attributes, visibility, span }
     item::Attribute { path, arguments, span, preview }
     item::Module { header, name, span, inline }
-    item::Use { header, tree, span }
+    item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default }
     item::Struct { header, name, generics, lifetimes, fields, form, span }
@@ -818,6 +822,25 @@ impl Codec for type_ref::Argument {
 #[cfg(test)]
 mod tests {
     use super::Cells;
+
+    #[test]
+    fn lexical_imports_and_inner_attributes_survive_parse_cells() {
+        let text = "#![allow(dead_code)] fn left() { use dep::Trait; { use dep::Trait; } } fn right() { use dep::Trait; }";
+        let unit = crate::Engine::new().parse_unit(text).unwrap();
+        let cells = Cells::new(std::env::temp_dir().join("rawr-lexical-cell-codec"));
+        let encoded = cells.encode(text, &unit).unwrap();
+        let mut reader = super::Reader { bytes: &encoded };
+        assert_eq!(reader.take(super::MAGIC.len()).unwrap(), super::MAGIC);
+        assert_eq!(reader.text().unwrap(), cells.stamp);
+        assert_eq!(reader.take(32).unwrap(), super::digest(text));
+        let kept = super::decode(&mut reader, text).unwrap();
+        assert_eq!(unit.items(), kept.items());
+        assert_eq!(unit.imports(), kept.imports());
+        assert_eq!(unit.inner_attributes(), kept.inner_attributes());
+        assert_eq!(kept.imports().len(), 3);
+        assert_ne!(kept.imports()[0].scope, kept.imports()[1].scope);
+        assert_ne!(kept.imports()[0].scope, kept.imports()[2].scope);
+    }
 
     #[test]
     fn a_program_loaded_through_its_cells_is_the_parsed_program() {

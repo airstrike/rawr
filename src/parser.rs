@@ -496,7 +496,7 @@ fn optimize_combo_chain(expr: &mut Expr) {
 /// The one `trait` item `source` declares: a trait a facade lets script
 /// types implement (iced's `component::Component`).
 pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
-    let (items, _) = item::parse(&Engine::new_raw(), source).ok()?;
+    let items = item::parse(&Engine::new_raw(), source).ok()?.items;
     match <[_; 1]>::try_from(items.into_vec()).ok()? {
         [crate::item::Parsed::Trait(declared)] => Some(declared),
         _ => None,
@@ -507,13 +507,14 @@ impl Engine {
     /// Parse Rawr item headers while retaining ordinary script statements outside item bodies.
     pub fn parse_unit(&self, source: impl AsRef<str>) -> ParseResult<crate::parse::Unit> {
         let source = crate::source::Map::new(source.as_ref());
-        let (items, inner_attributes) = item::parse(self, source.text())?;
-        let script_source = source.without(
-            items
-                .iter()
-                .map(crate::item::Parsed::span)
-                .chain(inner_attributes),
-        );
+        let item::ParsedFile {
+            items,
+            masked,
+            imports,
+            inner_attributes,
+        } = item::parse(self, source.text())?;
+        let script_source =
+            source.without(items.iter().map(crate::item::Parsed::span).chain(masked));
         // The statements outside the items are typed Rust, which the
         // checker reads when it lowers them. Here it is enough to know
         // where the first one starts.
@@ -527,12 +528,10 @@ impl Engine {
             }
         };
 
-        Ok(crate::parse::Unit::new(
-            source,
-            items,
-            statements,
-            script_source,
-        ))
+        Ok(
+            crate::parse::Unit::new(source, items, statements, script_source)
+                .with_scope(imports, inner_attributes),
+        )
     }
 
     /// Find explicitly declared variable by name in the [`ParseState`], searching in reverse order.
