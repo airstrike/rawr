@@ -2,7 +2,7 @@
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-10-29",
   "version": "0.3.16",
-  "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
+  "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "groups": [
     {
       "id": "v000",
@@ -100,7 +100,7 @@
         {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. #312, #338","issues":[312,338]},
         {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. #300","issues":[300]},
         {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs. #336, #340, part of #345","issues":[336,340,345]},
-        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"now","note":"Provided methods, alias methods and generic struct fields. #359, #360, #364","issues":[359,360,364]}
+        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364","issues":[359,360,364]}
       ]
     },
     {

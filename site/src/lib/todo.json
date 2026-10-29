@@ -2,10 +2,17 @@
   "repo": "airstrike/rawr",
   "updated": "2026-10-29",
   "version": "0.3.16",
-  "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
+  "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"Call a crate trait's provided value-self method on a script type, including blanket impls and macro paths. The unchanged iced custom_widget example now renders through generated bindings.","issues":[359]},
+        {"text":"Call methods through a public alias of a concrete generic crate type, including iced's Renderer with private graphics backends. Native compilation checks the concrete implementation's bounds.","issues":[360]},
+        {"text":"Infer generic imported struct literals from fields and surrounding uses, and assign fields through borrowed native values. This includes nested Copy field updates.","issues":[364]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.16",
@@ -673,12 +680,14 @@
     {"issue":356,"title":"A borrowed `Vec` passes where a crate takes `impl IntoIterator<Item = T>`, and its items are…","state":"closed","category":"No glue (D593)","release":"0.3.14"},
     {"issue":357,"title":"A script value made off the owner thread can't keep a crate value","state":"open","category":"No glue (D593)"},
     {"issue":358,"title":"An invariant crate value made outside a view can't join a column the view makes","state":"open","category":"No glue (D593)"},
-    {"issue":359,"title":"A crate trait's provided method on a script type","state":"open","category":"No glue (D593)"},
-    {"issue":360,"title":"Methods of a type only an alias names","state":"open","category":"No glue (D593)"},
+    {"issue":359,"title":"A crate trait's provided method on a script type","state":"closed","category":"No glue (D593)"},
+    {"issue":360,"title":"Methods of a type only an alias names","state":"closed","category":"No glue (D593)"},
     {"issue":361,"title":"A crate function's opaque output inside a borrowing widget","state":"open","category":"No glue (D593)"},
     {"issue":362,"title":"Operators of crate types","state":"open","category":"No glue (D593)"},
     {"issue":363,"title":"A crate type's derived Ord","state":"open","category":"No glue (D593)"},
-    {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"open","category":"No glue (D593)"}
+    {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)"},
+    {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
+    {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -1029,12 +1038,12 @@
           "name": "Custom widgets",
           "start": 43,
           "size": 4,
-          "state": "now",
-          "note": "Provided methods, alias methods and generic struct fields. #359, #360, #364",
+          "state": "done",
+          "note": "0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364",
           "issues": [
-            {"number":359,"title":"A crate trait's provided method on a script type","state":"open"},
-            {"number":360,"title":"Methods of a type only an alias names","state":"open"},
-            {"number":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"open"}
+            {"number":359,"title":"A crate trait's provided method on a script type","state":"closed"},
+            {"number":360,"title":"Methods of a type only an alias names","state":"closed"},
+            {"number":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed"}
           ]
         }
       ]
