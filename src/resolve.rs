@@ -157,6 +157,20 @@ impl LoweringFailure {
         (self.evidence, self.error)
     }
 
+    /// Whether the failure names a type, member or import Rawr doesn't
+    /// know, which a crate may give once it is asked for.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn names_unknown(&self) -> bool {
+        matches!(
+            self.error.err_type(),
+            crate::ParseErrorType::Resolution(
+                Error::UnknownType { .. }
+                    | Error::UnknownMember { .. }
+                    | Error::UnknownImport { .. }
+            )
+        )
+    }
+
     pub(crate) fn into_error(self) -> crate::ParseError {
         match self.evidence {
             LoweringEvidence::Original(_) => self.error,

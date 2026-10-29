@@ -389,6 +389,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
+        let mut first_unknown = None;
         for &next in &pending {
             let mut uses = Vec::new();
             let mut dependencies = BTreeSet::new();
@@ -487,16 +488,30 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                 Err(super::ImportedFailure::Surface(error)) => {
                     return Err(super::ImportedFailure::Surface(error));
                 }
-                Err(failure) => {
+                // A body that passes another body's opaque output to a
+                // crate before that output is revealed, as multi_window's
+                // `center(window.view(id))` does when `Window::view` comes
+                // later, waits for it. When nothing reveals, a failure that
+                // names an item Rawr doesn't know comes first: the crate is
+                // asked for it, after which `Window::view` may reveal.
+                Err(super::ImportedFailure::Lowering(failure)) => {
                     waiting.push(next);
-                    first_failure.get_or_insert(failure);
+                    if failure.names_unknown() {
+                        first_unknown.get_or_insert(failure);
+                    } else {
+                        first_failure.get_or_insert(failure);
+                    }
                 }
             }
         }
         // A round that reveals nothing and adds no instance has no other
         // reveal to wait for.
         if revealed.is_empty() && added.is_empty() {
-            return Err(first_failure.expect("an unrevealed round keeps its failure"));
+            return Err(super::ImportedFailure::Lowering(
+                first_unknown
+                    .or(first_failure)
+                    .expect("an unrevealed round keeps its failure"),
+            ));
         }
         for (next, output) in revealed {
             match next {

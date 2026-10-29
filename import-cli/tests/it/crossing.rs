@@ -191,6 +191,22 @@ fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
     );
 }
 
+/// iced's multi_window: a view passes a window's view, a method whose
+/// `impl Widget` output is declared after its caller, to a generic crate
+/// function. The caller waits for that output, and a fresh build asks the
+/// crate for what the window's view names before reporting the caller's
+/// failure. The output is `cargo run`'s.
+#[test]
+fn a_view_passing_a_later_methods_opaque_output_to_the_crate_runs() {
+    let (rawr, cargo) = both_printed("crossing-windows", "windows.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 3 pad 0 One 1 0@16 [Increment]\n1 message Increment")
+            && rawr.ends_with("last view pad 3 pad 0 One 1 3@16 [Increment]"),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.

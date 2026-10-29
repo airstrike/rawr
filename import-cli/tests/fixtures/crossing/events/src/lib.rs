@@ -576,6 +576,14 @@ pub mod widgets {
         }
     }
 
+    /// A column of one widget, as iced's `center` is a container of one.
+    pub fn center<W>(content: W) -> Column<W> {
+        Column {
+            children: vec![content],
+            padding: 0,
+        }
+    }
+
     /// A column of widgets, each boxed, as iced's `column!`. Its own name
     /// differs from the root's `column` function's.
     #[macro_export]
