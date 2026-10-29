@@ -2,7 +2,7 @@
   "repo": "airstrike/rawr",
   "updated": "2026-10-28",
   "version": "0.3.14",
-  "examples": {"running":9,"total":56,"note":"Most others now stop further along"},
+  "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
   "groups": [
     {
       "id": "v000",
@@ -429,7 +429,7 @@
           "state": "next",
           "note": "events, exit, theme, modal. T335–T340",
           "issues": [
-            {"number":335,"t":"T335","title":"T335: events: `rawr check` passes, but the runner build fails on…","state":"open"},
+            {"number":335,"t":"T335","title":"T335: events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
             {"number":337,"t":"T337","title":"T337: arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"open"},
             {"number":339,"t":"T339","title":"T339: A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open"},
