@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 55;
+const CLASSIFIER_VERSION: u32 = 56;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1937,6 +1937,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
+            // A lifetime argument, as `'a` of iced's `C: Component<'a,
+            // Message, Theme, Renderer>`, ties no type.
+            let arguments = arguments
+                .iter()
+                .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
+                .collect::<Vec<_>>();
             if !binders.is_empty() || arguments.is_empty() {
                 continue;
             }
@@ -2001,6 +2007,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let Some(implemented) = implemented.get(1..) else {
                     continue;
                 };
+                let implemented = implemented
+                    .iter()
+                    .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
+                    .collect::<Vec<_>>();
                 if id != trait_id
                     || implementation.polarity() != model::Polarity::Positive
                     || implemented.len() != arguments.len()

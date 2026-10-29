@@ -89,20 +89,21 @@ where
     }
 }
 
-/// A part of a view a program writes itself, as iced's `Component`, whose
-/// `view` gives `impl Widget<Self::Event>`.
-pub trait Panel<Message> {
+/// A part of a view a program writes itself, as iced's `Component<'a,
+/// Message>`, whose `view` gives `impl Widget<Self::Event> + 'a`.
+pub trait Panel<'a, Message> {
     /// The panel's widgets.
-    fn view(&self) -> impl crate::widgets::Widget<Message>;
+    fn view(&self) -> impl crate::widgets::Widget<Message> + 'a;
 
     /// The message the panel sends for a press its widgets don't answer.
     fn fallback(&self, label: &str) -> Option<Message>;
 }
 
 /// `panel`'s widgets among the crate's own, as iced's `component(..)`.
-pub fn panel<P, Message>(panel: P) -> Paneled<P, Message>
+pub fn panel<'a, P, Message>(panel: P) -> Paneled<'a, P, Message>
 where
-    P: Panel<Message>,
+    P: Panel<'a, Message> + 'a,
+    Message: 'a,
 {
     Paneled {
         panel,
@@ -111,14 +112,14 @@ where
 }
 
 /// A program's own panel among the crate's widgets (`panel`).
-pub struct Paneled<P, Message> {
+pub struct Paneled<'a, P, Message> {
     panel: P,
-    look: PhantomData<Message>,
+    look: PhantomData<&'a Message>,
 }
 
-impl<P, Message> crate::widgets::Widget<Message> for Paneled<P, Message>
+impl<'a, P, Message> crate::widgets::Widget<Message> for Paneled<'a, P, Message>
 where
-    P: Panel<Message>,
+    P: Panel<'a, Message>,
 {
     fn labels(&self, labels: &mut Vec<String>) {
         labels.push("panel".to_owned());

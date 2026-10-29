@@ -31,8 +31,8 @@ fn stepper<Message>(value: i64, on_change: impl Fn(i64) -> Message + 'static) ->
     }
 }
 
-impl<Message: Clone> custom::Panel<Message> for Stepper<Message> {
-    fn view(&self) -> impl Widget<Message> {
+impl<'a, Message: Clone + 'a> custom::Panel<'a, Message> for Stepper<Message> {
+    fn view(&self) -> impl Widget<Message> + 'a {
         column![
             button("Increment").on_press((self.on_change)(self.value + 1)),
             text(self.value),

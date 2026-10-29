@@ -5067,10 +5067,16 @@ fn resolve_trait(
                     crate::item::type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect::<Result<_, _>>()?;
+            let lifetimes = last
+                .arguments
+                .iter()
+                .filter(|argument| matches!(argument, crate::item::type_ref::Argument::Lifetime(_)))
+                .count();
             return Ok(item::TraitImpl::Native {
                 path: trait_path.into(),
                 name: last.name.clone(),
                 arguments,
+                lifetimes,
             });
         }
         let error = Error::UnknownType {

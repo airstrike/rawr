@@ -11942,6 +11942,11 @@ fn render_impl(
         .map(|argument| impl_type(argument, generics))
         .collect::<Option<Vec<_>>>()
         .ok_or(drift("a script impl's trait arguments"))?;
+    // Each lifetime argument is the impl's own, as `'_` writes it.
+    let arguments = (0..script.lifetimes())
+        .map(|_| "'_".to_owned())
+        .chain(arguments)
+        .collect::<Vec<_>>();
     let trait_ = if arguments.is_empty() {
         script.trait_path().to_owned()
     } else {
@@ -12110,23 +12115,23 @@ fn render_impl_function(
     );
     let member = function.member();
     let mutable = mutable.join(", ");
-    // An output that borrows, as a `view(&self) -> impl Widget<..>`'s
-    // widgets do: made in a region anchored on `self`, as a slot's is, and
-    // taken out of it at `self`'s lifetime.
-    let family = (carries_lifetime(returned)
-        && matches!(function.receiver(), ImplReceiver::Shared))
-    .then(|| family_of(returned))
-    .flatten();
+    // An output that borrows, as a `view(&self) -> impl Widget<..> + 'a`'s
+    // widgets do: made in a region, as a slot's is, anchored on the strings
+    // pinned for the runner's life, since the trait may ask the widgets to
+    // outlive any lifetime of the impl's, and taken out of it at
+    // `'static`.
+    let family = carries_lifetime(returned)
+        .then(|| family_of(returned))
+        .flatten();
     let (lifetime, rust, mut call) = match family {
         Some(family) => {
-            parameters[0] = "&'x self".to_owned();
             (
-                "<'x>",
-                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+                "",
+                format!("<{family} as __rawr_internal::scope::Family>::Of<'static>"),
                 format!(
                     "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
         let mut values: [Dynamic; {count}] = {values};
-        let mut region = __rawr_internal::scope::Region::anchored(self.0.pins());
+        let mut region = __rawr_internal::scope::Region::anchored(static_pins());
         let value = __rawr_internal::scope::open_anchored(&mut region, || __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]));{restores}
         let scoped = value
             .read_lock::<__rawr_internal::scope::Scoped>()

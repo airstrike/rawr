@@ -1699,6 +1699,10 @@ fn native_impl(
                 output,
             ));
         }
+        let lifetimes = match &implementation.trait_ {
+            Some(item::TraitImpl::Native { lifetimes, .. }) => *lifetimes,
+            _ => 0,
+        };
         Ok(ScriptImpl::new(
             owner,
             path.into(),
@@ -1706,7 +1710,8 @@ fn native_impl(
             generics.iter().map(|name| name.as_str().into()).collect(),
             associated,
             functions.into_boxed_slice(),
-        ))
+        )
+        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX)))
     }
 }
 
