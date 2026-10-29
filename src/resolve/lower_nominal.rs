@@ -1743,6 +1743,10 @@ fn impl_surface_type(
         Ty::Option(element) => {
             Type::Option(Box::new(impl_surface_type(models, element, generics)?))
         }
+        Ty::Result(ok, err) => Type::Result(
+            Box::new(impl_surface_type(models, ok, generics)?),
+            Box::new(impl_surface_type(models, err, generics)?),
+        ),
         Ty::Array {
             element,
             length: None,

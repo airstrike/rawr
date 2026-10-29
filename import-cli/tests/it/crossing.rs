@@ -611,6 +611,16 @@ fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
     );
 }
 
+#[test]
+fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
+    let (rawr, cargo) = both_printed("crossing-results", "results.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "check Ok(()) Err(\"check\")\nvalue Ok(17) Err(\"value\")\necho Ok(23) Err(\"input\")"
+    );
+}
+
 /// An edit to the body of a script impl's function, which native code calls
 /// through the proxy, takes effect at its next call, in the same process
 /// with the state kept.
