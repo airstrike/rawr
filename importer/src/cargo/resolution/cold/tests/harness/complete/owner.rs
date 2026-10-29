@@ -858,16 +858,16 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     let predecessor = snapshot(&old_bundle);
 
     let reopen = || {
-        let fresh = crate::context::Context::capture(
+        let mut request = Fixture::request(&root, context.environment().clone());
+        request.universe = universe.clone();
+        let fresh = crate::context::Context::capture_config(
             context.project(),
-            context.environment().clone(),
+            &request.config,
             context.target(),
             &limits,
         )
         .unwrap();
         cargo::toolchain::Attestation::fixture_replay(&fresh);
-        let mut request = Fixture::request(&root, fresh.environment().clone());
-        request.universe = universe.clone();
         let cached = cargo::CachedToolchain {
             attestation: fresh.cached_toolchain().unwrap(),
             context: fresh.clone(),
@@ -1206,16 +1206,16 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
 
     // A fresh Context opens a fresh graph: its first replay decodes the record
     // again, because the first graph's stage is not visible to it.
-    let fresh = crate::context::Context::capture(
+    let mut request = Fixture::request(&root, context.environment().clone());
+    request.universe = universe;
+    let fresh = crate::context::Context::capture_config(
         context.project(),
-        context.environment().clone(),
+        &request.config,
         context.target(),
         &limits,
     )
     .unwrap();
     cargo::toolchain::Attestation::fixture_replay(&fresh);
-    let mut request = Fixture::request(&root, fresh.environment().clone());
-    request.universe = universe;
     let cached = cargo::CachedToolchain {
         attestation: fresh.cached_toolchain().unwrap(),
         context: fresh.clone(),

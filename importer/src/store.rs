@@ -66,7 +66,10 @@ pub(crate) const FIXED_DIRECTORIES: &[&str] = &[
 ];
 
 /// Rawr's home: `$RAWR_HOME` when set, otherwise `<cargo_home>/rawr`. It holds
-/// the typed store (`v1`), shared deps, hosts and file digests.
+/// what Rawr shares across projects: rawr-iced's hosts (`hosts`), rawr's
+/// compiled runtime (`runtime`), shared bindings (`bindings`), lone scripts'
+/// packages (`scripts`) and file digests. A project's own products live in
+/// its target directory (D608.4).
 #[must_use]
 pub fn home(cargo_home: &Path) -> PathBuf {
     if let Some(home) = std::env::var_os("RAWR_HOME") {

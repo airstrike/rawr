@@ -20,6 +20,22 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>A project whose runner can&rsquo;t link the shared copy compiles rawr&rsquo;s crates in its own <code>target/</code>, as before, and rawr says so once. That happens when a native library or symbol is defined both by the project&rsquo;s crates and by rawr&rsquo;s. It also happens for an iced app that runs on rawr-iced, which compiles against the project&rsquo;s iced.</p>
 <p>The <code>rawr</code> crate compiles at <code>opt-level = 3</code>, so the interpreter inside the runner is fast. Set <code>RAWR_RUNTIME_OPT_LEVEL</code> to <code>0</code>, <code>1</code>, <code>2</code>, <code>s</code> or <code>z</code> to compile it at a lower level. The runtime compiles faster, and scripts run slower. Each level is a copy of its own.</p>
 <p>rawr reads your dependencies&rsquo; APIs with its own pinned nightly. That build runs in <code>target/rawr</code>, apart from the units <code>cargo build</code> uses. It is a check build. It runs build scripts and compiles proc macros, and for every other crate it writes only the metadata rawr reads.</p>
+<h3 id="bindings">Shared bindings</h3>
+<p>What rawr reads of a crate is kept once per machine, in <code>bindings/</code> in rawr&rsquo;s home. A later project that uses the same crate reads it from there. When every crate a program uses is there, rawr runs no nightly build and doesn&rsquo;t start the nightly compiler. The first such run still asks the pinned cargo how the project resolves, which compiles nothing. Your <code>cargo</code> still compiles the crates themselves in your <code>target/</code>.</p>
+<p>The first time a program reaches a small crate, such as semver, rawr reads the crate&rsquo;s whole public API. So a later program that uses other items of it needs no nightly build either. A large crate, such as iced, would make that first run wait, so its entry keeps what each program that reached it read. A later program that uses only those items needs no nightly build. One that uses other items reads them once with the nightly, and the entry keeps them too.</p>
+<p>A project&rsquo;s next run with nothing changed reuses its last resolution, so it doesn&rsquo;t ask cargo again.</p>
+<p>A crate is shared when it, and every crate it depends on, comes from a registry or from a git commit. A path dependency, a workspace member, and any crate that depends on one, stay in the project&rsquo;s <code>target/rawr</code>.</p>
+<p>Each entry is keyed by the crate alone, never by a program. The key covers:</p>
+<ul>
+  <li>the crate&rsquo;s version, features, profile and target;</li>
+  <li>the checksum or commit of every crate it depends on;</li>
+  <li>the pinned nightly&rsquo;s <code>rustc -vV</code> commit;</li>
+  <li>the format rawr reads crates in.</li>
+</ul>
+<p>A new rawr whose format is unchanged keeps the entries already there.</p>
+<p>Before sharing bindings, rawr compares the extraction nightly&rsquo;s build-script results with your toolchain&rsquo;s results: every cfg, environment value and generated file, including scripts used to build procedural macros. If the results differ or cannot be read, the run continues with local bindings and rawr names the crate it could not share. A shared entry must also match a later project&rsquo;s results. A mismatch stops that run before execution and names the crate; rawr removes the entry when no reader holds it. When an adapter fails to compile and those results differ, the error names the crate whose API differs between the two toolchains.</p>
+<p>Before using a shared entry, including during <code>rawr check</code> and a remembered run, rawr checks the toolchain and the files and environment variables the crate declared as inputs. A change sends the crate through extraction again. Declared files remain watched during a live run, including when its bindings were shared. While rawr reads an entry, another project cannot replace or remove it partway through the read.</p>
+<p>An entry unused for 30 days is removed when another is added, unless a run is reading it. Removal never delays a run. <code>rawr cache clean</code> removes entries unused for an hour.</p>
 <p>The toolchain must be Rust 1.95 or newer. With an older one, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and says to update it.</p>
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
 <p>A cargo script with dependencies builds the same way too, from its own directory in rawr&rsquo;s home. Every script shares one build directory there. <a href="/docs/run#scripts">Run</a> explains it.</p>
@@ -52,7 +68,7 @@ fn main() {
 2 doubled is 4
 3 doubled is 6</span></div>
 </div>
-<p>The first run compiles the dependencies and the runner. For a new project that uses semver, that took about 13&nbsp;s on an Apple Silicon Mac. The first project on a toolchain also compiles <a href="#runtime">rawr&rsquo;s runtime</a> once for every project, which took about 2 minutes. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
+<p>The first run compiles the dependencies and the runner. For a new project that uses semver, that took about 7&nbsp;s on an Apple Silicon Mac, with semver&rsquo;s <a href="#bindings">bindings</a> already in rawr&rsquo;s home. The first project on a toolchain also compiles <a href="#runtime">rawr&rsquo;s runtime</a> once for every project, which took about 2 minutes. After an edit to <code>src/main.rs</code>, the next run reused that build and took about 2.4&nbsp;s.</p>
 <p>rawr uses the dependencies as Cargo resolves them. It reads only the items your code uses.</p>
 
 <h2 id="native">Native modules</h2>

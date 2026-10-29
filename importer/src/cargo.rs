@@ -270,19 +270,43 @@ pub(crate) const REQUEST_STRING_RESOURCE: &str = "request retained string bytes"
 /// A currently validated semantic resolution owner ready for API publication.
 #[cfg(feature = "rustc-driver")]
 pub struct Prepared {
-    owner: resolution::owner::Ready,
+    owner: resolution::owner::Resolved,
 }
 
 #[cfg(feature = "rustc-driver")]
 impl Prepared {
+    /// The shared tables this preparation used or extracted, to settle
+    /// once the runner builds (`crate::bindings`).
+    pub fn settlement(&mut self) -> crate::bindings::Settlement {
+        match &mut self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.settlement(),
+            resolution::owner::Resolved::Shared(shared) => shared.settlement(),
+        }
+    }
+
+    /// Whether every selected crate replayed shared bindings, so no nightly
+    /// build or probe ran.
+    pub fn is_shared(&self) -> bool {
+        matches!(self.owner, resolution::owner::Resolved::Shared(_))
+    }
+
     /// Publish this currently validated owner through the extraction API node.
     pub fn publish(self, limits: &Limits) -> Result<crate::api::Graph<crate::api::Extracted>> {
-        self.owner.publish(limits)
+        match self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.publish(limits),
+            resolution::owner::Resolved::Shared(_) => Err(Error::Request {
+                field: "API publication",
+                reason: "shared bindings publish through the retained API".into(),
+            }),
+        }
     }
 
     /// Retain API data for audited classification before its current consumer union.
     pub fn retain_api(self, limits: &Limits) -> Result<crate::api::Continuation> {
-        self.owner.retain_api(limits)
+        match self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner.retain_api(limits),
+            resolution::owner::Resolved::Shared(shared) => (*shared).retain_api(limits),
+        }
     }
 }
 
@@ -337,6 +361,9 @@ struct CompletedHarness {
     universe: Option<universe::Proof>,
     #[cfg(feature = "rustc-driver")]
     capture: crate::extract::plan::Capture,
+    /// The shared tables this extraction leaves to publish.
+    #[cfg(feature = "rustc-driver")]
+    settlement: Vec<crate::bindings::Settled>,
 }
 
 impl CompletedHarness {
@@ -1165,9 +1192,9 @@ impl Request {
                 let _placement = select_placement(&self, catalog, &provisional_manifest, limits)?;
             }
         }
-        let context = crate::context::Context::capture(
+        let context = crate::context::Context::capture_config(
             &self.project_root,
-            self.config.environment().clone(),
+            &self.config,
             &self.target,
             limits,
         )
@@ -1259,9 +1286,9 @@ impl Request {
         let mut request_allocation = self.allocation;
         let node_context = Arc::new(match cached {
             Some(cached) => cached.context.clone(),
-            None => crate::context::Context::capture(
+            None => crate::context::Context::capture_config(
                 &self.project_root,
-                self.config.environment().clone(),
+                &self.config,
                 &self.target,
                 limits,
             )
@@ -2511,6 +2538,8 @@ impl Request {
             None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
         };
         #[cfg(feature = "rustc-driver")]
+        let mut settlement = capture.settlement(&build);
+        #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture.artifact_inputs(limits)?;
         #[cfg(not(feature = "rustc-driver"))]
         let probe_artifacts = Vec::new();
@@ -2544,6 +2573,26 @@ impl Request {
             command_build,
             limits,
         )?;
+        #[cfg(feature = "rustc-driver")]
+        if let Some(current) =
+            crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
+        {
+            for settled in &mut settlement {
+                if let crate::bindings::Settled::Extracted {
+                    inputs_packages,
+                    publish,
+                    ..
+                } = settled
+                {
+                    publish.meta.inputs = crate::input::bindings::Inputs::capture(
+                        &input,
+                        retained_build.build(),
+                        inputs_packages,
+                        &current,
+                    );
+                }
+            }
+        }
         let universe = universe
             .map(|pending| {
                 pending.complete(
@@ -2589,6 +2638,8 @@ impl Request {
             universe,
             #[cfg(feature = "rustc-driver")]
             capture,
+            #[cfg(feature = "rustc-driver")]
+            settlement,
         })
     }
 }

@@ -142,7 +142,13 @@ pub(crate) fn prepare(
     }
     let environment = context.environment();
     let level = opt_level(environment).map_err(transform)?;
-    let toolchain = Toolchain::query(context.project(), environment)?;
+    let Some(toolchain) = Toolchain::for_context(context)? else {
+        crate::progress::note(
+            "runtime-local",
+            "rawr: this context has no captured project compiler, so rawr compiles in this project",
+        );
+        return Ok(None);
+    };
     let wrapper = wrapper_manifest(&root, dependency, &level);
     let source_lock = fs::read(root.join("Cargo.lock")).map_err(|source| node::Error::Io {
         operation: "read the lockfile of rawr's runtime",
@@ -578,15 +584,39 @@ struct Toolchain {
     cargo: PathBuf,
 }
 
+/// The compiler the project's own Cargo build selects, including rustup's
+/// directory override. Shared binding replay binds this before using an API.
+pub(crate) fn compiler_identity(
+    project: &Path,
+    config: &crate::cargo::config::Provenance,
+) -> Result<String, node::Error> {
+    Toolchain::query_program(
+        project,
+        config.environment(),
+        config.compiler(project).configured().map(Path::to_path_buf),
+    )
+    .map(|toolchain| toolchain.version)
+}
+
 impl Toolchain {
-    fn query(
+    fn for_context(context: &crate::context::Context) -> Result<Option<Self>, node::Error> {
+        context
+            .compiler()
+            .map(|compiler| {
+                Self::query_program(
+                    context.project(),
+                    context.environment(),
+                    compiler.configured().map(Path::to_path_buf),
+                )
+            })
+            .transpose()
+    }
+
+    fn query_program(
         project: &Path,
         environment: &crate::cargo::config::Environment,
+        configured: Option<PathBuf>,
     ) -> Result<Self, node::Error> {
-        let configured = environment
-            .entries()
-            .find_map(|(key, value)| (key == "RUSTC").then_some(value))
-            .map(PathBuf::from);
         let rustc = configured.clone().unwrap_or_else(|| PathBuf::from("rustc"));
         let run = |arguments: &[&str]| -> Result<String, node::Error> {
             let output = Command::new(&rustc)
@@ -1130,6 +1160,103 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fn scratch(name: &str) -> PathBuf {
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
             .join(format!("rawr-runtime-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn default_compiler_keeps_the_project_toolchain_after_changing_directory() {
+        use std::process::Command;
+
+        use crate::cargo::config;
+
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("rawr-runtime-toolchain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let runtime = root.join("runtime");
+        let home = root.join("cargo-home");
+        for directory in [&project, &runtime, &home] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        fs::write(
+            project.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel='stable'\n",
+        )
+        .unwrap();
+        fs::write(
+            runtime.join("rust-toolchain.toml"),
+            format!(
+                "[toolchain]\nchannel='{}'\n",
+                crate::cargo::toolchain::CHANNEL
+            ),
+        )
+        .unwrap();
+        let captured = config::Environment::capture().unwrap();
+        let proxy_directory = captured.cargo_home().unwrap().unwrap().join("bin");
+        let captured_path = captured
+            .entries()
+            .find_map(|(key, value)| (key == "PATH").then_some(value))
+            .unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(proxy_directory).chain(std::env::split_paths(captured_path)),
+        )
+        .unwrap();
+        let environment = config::Environment::from_pairs(captured.entries().filter(|(key, _)| {
+            !matches!(*key, "RUSTUP_TOOLCHAIN" | "RUSTC" | "CARGO_BUILD_RUSTC")
+        }))
+        .unwrap()
+        .setting("CARGO_HOME", home.to_str().unwrap())
+        .unwrap()
+        .setting("PATH", path.to_str().unwrap())
+        .unwrap();
+        let limits = crate::cargo::Limits::standard();
+        let provenance = config::Provenance::discover(
+            &project,
+            None,
+            environment.clone(),
+            crate::cargo::toolchain::HOST,
+            "dev",
+            crate::process::parallelism::Proof::discover().unwrap(),
+            &limits,
+        )
+        .unwrap();
+        let context = crate::context::Context::capture_config(
+            &project,
+            &provenance,
+            crate::cargo::toolchain::HOST,
+            &limits,
+        )
+        .unwrap();
+        assert!(context.compiler().unwrap().configured().is_none());
+        let toolchain = super::Toolchain::for_context(&context).unwrap().unwrap();
+        assert!(toolchain.rustc.is_absolute(), "{:?}", toolchain.rustc);
+        assert_eq!(
+            toolchain.version,
+            super::compiler_identity(&project, &provenance).unwrap()
+        );
+        let run = |program: &std::path::Path| {
+            let output = Command::new(program)
+                .arg("-vV")
+                .current_dir(&runtime)
+                .env_clear()
+                .envs(environment.entries())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        assert_eq!(run(&toolchain.rustc), toolchain.version);
+        assert_ne!(
+            run(std::path::Path::new("rustc")),
+            toolchain.version,
+            "the proxy follows the runtime directory's different toolchain"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

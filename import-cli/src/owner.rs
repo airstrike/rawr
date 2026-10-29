@@ -769,14 +769,24 @@ fn prepare_on_lane(
         };
         let manifests = prepared.manifests.clone();
         let limits = prepared.limits();
+        let mut prepared = prepared;
+        let settlement = prepared.take_settlement();
         let (request, snapshot, _, inputs) = prepared.into_parts();
         let generated = request
             .generate(&limits)
             .map_err(|error| framework(error, source.clone()))?;
         // The API phase has ended; hand its freed allocator pages back before the build.
         crate::release::freed_memory();
-        let mut built = lane
-            .build(generated)
+        let mut built =
+            lane.build(generated)
+                .map_err(|error| match settlement.drift_diagnostic() {
+                    Some(drift) => framework(format!("{drift}\n\n{error}"), source.clone()),
+                    None => framework(error, source.clone()),
+                })?;
+        // Shared bindings are published, or refused, once the project's
+        // own build has run their build scripts (D609.4).
+        settlement
+            .settle()
             .map_err(|error| framework(error, source.clone()))?;
         match built.retain_startup(&snapshot) {
             Ok(()) => {

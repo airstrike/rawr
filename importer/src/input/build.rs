@@ -18,6 +18,40 @@ pub(crate) struct Build {
     pub(super) package_files: BTreeMap<Box<str>, package::Set>,
 }
 
+#[cfg(feature = "rustc-driver")]
+impl Build {
+    /// The extraction toolchain's observed build-script outputs. A package
+    /// whose generated files cannot be read has no shareable evidence.
+    pub(crate) fn binding_scripts(&self) -> BTreeMap<String, Option<Vec<crate::bindings::Script>>> {
+        let mut results = BTreeMap::<String, Option<Vec<crate::bindings::Script>>>::new();
+        for script in &self.evidence.scripts {
+            let output = crate::bindings::Script::new(
+                script.cfg.iter().map(ToString::to_string),
+                script
+                    .environment
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string())),
+                &script.out_dir,
+            );
+            let kept = results
+                .entry(script.package_id.to_string())
+                .or_insert_with(|| Some(Vec::new()));
+            match output {
+                Ok(output) => {
+                    if let Some(outputs) = kept
+                        && !outputs.contains(&output)
+                    {
+                        outputs.push(output);
+                        outputs.sort_unstable();
+                    }
+                }
+                Err(_) => *kept = None,
+            }
+        }
+        results
+    }
+}
+
 /// Historical Build observations after package-file ownership moved to a baseline.
 /// The borrowed view cannot be consumed into another baseline capture.
 pub(crate) struct Retained {

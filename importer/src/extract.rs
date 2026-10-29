@@ -403,8 +403,16 @@ const fn diagnostic_namespace(namespace: u8) -> &'static str {
 }
 
 #[cfg(feature = "rustc-driver")]
+#[allow(
+    dead_code,
+    reason = "shared with the driver, which answers and records the units"
+)]
+pub(crate) mod engine;
+#[cfg(feature = "rustc-driver")]
 pub(crate) mod plan;
 pub(crate) mod protocol;
+#[cfg(feature = "rustc-driver")]
+pub(crate) mod shared;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) struct DirectPublication {
@@ -600,6 +608,93 @@ pub(crate) fn retain_from_owner_parts(
         operation: "retained API from resolution owner",
         source: Box::new(source),
     })
+}
+
+/// The API graph of a run that replayed shared bindings: the sidecar
+/// `document` it gave, with the external crates bound through this
+/// project's unit graph instead of a build (`crate::bindings`).
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn materialize_shared(
+    stored: Option<&api::cached::Product>,
+    document: &[u8],
+    external: Vec<ExternalBinding>,
+    context: &api::Context,
+    policy: &Policy,
+    limits: &cargo::Limits,
+) -> Result<api::Graph<api::Captured>> {
+    let mut allocation = Allocation::new(limits);
+    let document = protocol::decode_accounted(document, limits, &mut allocation)?;
+    let invocations = Invocations::seal_document_with_allocation(&document, allocation, limits)?
+        .bind_external(external, limits)?;
+    materialize_document(stored, document, invocations, policy, context, limits)
+}
+
+/// The API context of a run that replayed shared bindings, from its
+/// resolution. It is plain data, so a later run keeps it (`owner::memo`).
+#[cfg(feature = "rustc-driver")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the context joins the resolution, the toolchain and the request"
+)]
+pub(crate) fn shared_context(
+    metadata: &cargo::unit::Metadata,
+    build_unit: &cargo::unit::BuildGraph,
+    selected: &[cargo::Selection],
+    toolchain: &cargo::toolchain::Proof,
+    target: &str,
+    profile: &str,
+    limits: &cargo::Limits,
+) -> Result<api::Context> {
+    let mut allocation = Allocation::new(limits);
+    api::Context::from_resolution_parts(
+        metadata,
+        build_unit,
+        selected,
+        toolchain,
+        target,
+        profile,
+        None,
+        &mut allocation,
+    )
+}
+
+/// Retain the API of a run that replayed shared bindings, under the
+/// toolchain attestation; a current API hit defers `materialize`.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn retain_shared(
+    context: &crate::context::Context,
+    request: &[u8; 32],
+    parent: std::sync::Arc<crate::node::Validated<cargo::toolchain::Attestation>>,
+    proof: crate::input::proof::Proof,
+    policy: &Policy,
+    materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
+        + Send
+        + 'static,
+) -> Result<api::Continuation> {
+    let node_error = |operation: &'static str| {
+        move |source| Error::Node {
+            operation,
+            source: Box::new(source),
+        }
+    };
+    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let retention = crate::node::read_set::Retention::from_validated(parent.as_ref(), None)
+        .map_err(node_error("shared bindings retention"))?;
+    api::cached::retain_under(
+        context,
+        request,
+        &policy_identity,
+        crate::node::Parent::validated(parent.as_ref()),
+        &retention,
+        None,
+        materialize,
+        |product, retained, graph| {
+            api::retained::Continuation::capture_shared(
+                context, parent, proof, product, retained, graph,
+            )
+        },
+    )
+    .map_err(node_error("retained API from shared bindings"))
 }
 
 /// Measure one complete canonicalization without granting publication authority.
@@ -1008,6 +1103,7 @@ enum ExternalAuthority {
 }
 
 #[cfg(feature = "rustc-driver")]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(super) struct ExternalBinding {
     crate_name: Box<str>,
     stable_crate_id: Box<str>,
@@ -2173,6 +2269,23 @@ impl Invocations {
             },
             allocation,
         })
+    }
+
+    /// Each external crate the probe named, with the unit that compiled it.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn external_records(&self) -> Vec<crate::bindings::External> {
+        self.authority
+            .external_units
+            .iter()
+            .map(|(key, authority)| crate::bindings::External {
+                crate_name: key.crate_name.to_string(),
+                stable_crate_id: key.stable_crate_id.to_string(),
+                unit_key: match authority {
+                    ExternalAuthority::Available(unit) => Some(unit.unit_key.to_string()),
+                    ExternalAuthority::Unavailable { .. } => None,
+                },
+            })
+            .collect()
     }
 
     #[cfg(feature = "rustc-driver")]

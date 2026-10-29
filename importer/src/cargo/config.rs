@@ -157,6 +157,24 @@ pub(crate) struct Provenance {
     projection: projection::Projection,
     no_build_std: NoBuildStd,
     digest: Digest,
+    /// Project/hierarchical `build.rustc`, resolved during the existing parse.
+    /// Selected-authority configs used only by extraction cannot select the
+    /// project's runner compiler.
+    compiler: Option<PathBuf>,
+}
+
+/// A compiler selection derived from Cargo authority. The default rustup
+/// lookup must become the project's exact sysroot executable before a build
+/// changes directory; an explicitly configured program retains its semantics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Compiler {
+    configured: Option<PathBuf>,
+}
+
+impl Compiler {
+    pub(crate) fn configured(&self) -> Option<&Path> {
+        self.configured.as_deref()
+    }
 }
 
 impl Roles {
@@ -844,6 +862,20 @@ impl Selected {
 }
 
 impl Provenance {
+    /// Cargo's project compiler selection (D642): RUSTC, then the config
+    /// environment variable, then the nearest hierarchical value. Program
+    /// paths containing a separator resolve relative to their definition;
+    /// bare program names are left for the sealed PATH.
+    pub(crate) fn compiler(&self, project: &Path) -> Compiler {
+        let configured = self
+            .environment
+            .value("RUSTC")
+            .or_else(|| self.environment.value("CARGO_BUILD_RUSTC"))
+            .map(|value| compiler_path(project, value))
+            .or_else(|| self.compiler.clone());
+        Compiler { configured }
+    }
+
     pub(crate) fn environment(&self) -> &Environment {
         &self.environment
     }
@@ -968,6 +1000,8 @@ impl Provenance {
         candidates.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         candidates.dedup_by(|left, right| left.path == right.path);
 
+        let mut compiler = None::<(usize, PathBuf)>;
+        let cargo_home = environment.cargo_home()?;
         for candidate in &candidates {
             if matches!(candidate.state, State::Present(_)) {
                 let bytes =
@@ -984,6 +1018,40 @@ impl Provenance {
                     reason: error.to_string().into_boxed_str(),
                 })?;
                 validate_config_authority(&document, &candidate.path)?;
+                if let Some(value) = document
+                    .get("build")
+                    .and_then(toml_edit::Item::as_table_like)
+                    .and_then(|build| build.get("rustc"))
+                {
+                    let value = value.as_str().ok_or_else(|| Error::Request {
+                        field: "Cargo project compiler",
+                        reason: "build.rustc must be a program path string".into(),
+                    })?;
+                    let directory = candidate.path.parent().ok_or_else(|| Error::Request {
+                        field: "Cargo project compiler",
+                        reason: "config has no containing directory".into(),
+                    })?;
+                    let base = directory.parent().ok_or_else(|| Error::Request {
+                        field: "Cargo project compiler",
+                        reason: "config has no relative-path base".into(),
+                    })?;
+                    let priority = if directory.file_name() == Some(std::ffi::OsStr::new(".cargo"))
+                        && project_root.starts_with(base)
+                    {
+                        Some(base.components().count() + 1)
+                    } else if cargo_home.as_deref() == Some(directory) {
+                        Some(0)
+                    } else {
+                        None
+                    };
+                    if let Some(priority) = priority
+                        && compiler.as_ref().is_none_or(|(kept, _)| priority > *kept)
+                    {
+                        let path = compiler_path(base, value);
+                        allocation.path(&path)?;
+                        compiler = Some((priority, path));
+                    }
+                }
             }
         }
 
@@ -1042,6 +1110,7 @@ impl Provenance {
             projection,
             no_build_std: NoBuildStd { private: () },
             digest: digest(&digest_input),
+            compiler: compiler.map(|(_, path)| path),
         })
     }
 
@@ -1172,6 +1241,14 @@ impl Provenance {
             projection,
             _allocation: *allocation,
         })
+    }
+}
+
+fn compiler_path(base: &Path, value: &str) -> PathBuf {
+    if value.contains('/') || value.contains('\\') {
+        base.join(value)
+    } else {
+        PathBuf::from(value)
     }
 }
 
@@ -1554,6 +1631,7 @@ mod tests {
             projection,
             no_build_std: NoBuildStd { private: () },
             digest: digest(b"input config fixture"),
+            compiler: None,
         }
     }
 
@@ -1804,6 +1882,7 @@ mod tests {
             .expect("test projection derives"),
             no_build_std: NoBuildStd { private: () },
             digest: digest(b"test"),
+            compiler: None,
         };
         fs::write(&path, b"[net]\noffline = true\n").expect("test config is created");
         let error = provenance
@@ -2132,5 +2211,156 @@ mod tests {
         );
         assert!(itoa.shares_cargo_unit(&renamed));
         assert!(renamed.shares_cargo_unit(&itoa));
+    }
+
+    /// The pinned Cargo's actual attempted rustc invocation is the oracle for
+    /// precedence and definition-relative paths. The executable deliberately
+    /// stops before compilation; no rustc wrapper or second config parser is
+    /// involved in discovering the production value.
+    #[cfg(unix)]
+    #[test]
+    fn project_compiler_matches_pinned_cargo_precedence_and_relative_paths() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::Command;
+
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("rawr-compiler-config-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let home = root.join("home/.cargo");
+        for directory in [
+            root.join(".cargo"),
+            project.join(".cargo"),
+            project.join("src"),
+            home.clone(),
+        ] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        fs::write(
+            project.join("Cargo.toml"),
+            "[workspace]\n[package]\nname='compiler-config'\nversion='0.1.0'\nedition='2021'\n",
+        )
+        .unwrap();
+        fs::write(project.join("src/lib.rs"), "").unwrap();
+        let tools = [
+            root.join("bin/ancestor"),
+            root.join("home/bin/home"),
+            project.join("bin/project"),
+            project.join("bin/build-env"),
+            project.join("bin/rustc-env"),
+        ];
+        for tool in &tools {
+            fs::create_dir_all(tool.parent().unwrap()).unwrap();
+            fs::write(
+                tool,
+                "#!/bin/sh\nprintf '%s' \"$0\" > \"$COMPILER_LOG\"\nexit 91\n",
+            )
+            .unwrap();
+            fs::set_permissions(tool, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(
+            root.join(".cargo/config.toml"),
+            "[build]\nrustc='bin/ancestor'\n",
+        )
+        .unwrap();
+        fs::write(home.join("config.toml"), "[build]\nrustc='bin/home'\n").unwrap();
+        let project_config = project.join(".cargo/config.toml");
+        fs::write(&project_config, "[build]\nrustc='bin/project'\n").unwrap();
+        let cargo = Command::new("rustup")
+            .args([
+                "which",
+                "--toolchain",
+                crate::cargo::toolchain::CHANNEL,
+                "cargo",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            cargo.status.success(),
+            "{}",
+            String::from_utf8_lossy(&cargo.stderr)
+        );
+        let cargo = String::from_utf8(cargo.stdout).unwrap();
+        let log = root.join("compiler.log");
+        let verify = |extra: &[(&str, &str)], expected: &Path| {
+            let mut values = vec![
+                ("CARGO_HOME".to_owned(), home.to_str().unwrap().to_owned()),
+                (
+                    "HOME".to_owned(),
+                    root.join("home").to_str().unwrap().to_owned(),
+                ),
+                ("PATH".to_owned(), std::env::var("PATH").unwrap()),
+                ("COMPILER_LOG".to_owned(), log.to_str().unwrap().to_owned()),
+            ];
+            values.extend(
+                extra
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string())),
+            );
+            let environment = Environment::from_pairs(values).unwrap();
+            let limits = Limits::standard();
+            let provenance = Provenance::discover(
+                &project,
+                None,
+                environment.clone(),
+                crate::cargo::toolchain::HOST,
+                "dev",
+                crate::process::parallelism::Proof::discover().unwrap(),
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(provenance.compiler(&project).configured(), Some(expected));
+            let context = crate::context::Context::capture_config(
+                &project,
+                &provenance,
+                crate::cargo::toolchain::HOST,
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(
+                context.compiler().and_then(super::Compiler::configured),
+                Some(expected)
+            );
+            let unbound = crate::context::Context::capture(
+                &project,
+                environment.clone(),
+                crate::cargo::toolchain::HOST,
+                &limits,
+            )
+            .unwrap();
+            assert_ne!(context.identity(), unbound.identity());
+            let _ = fs::remove_file(&log);
+            let observed = Command::new(cargo.trim())
+                .args(["check", "--offline"])
+                .current_dir(&project)
+                .env_clear()
+                .envs(environment.entries())
+                .output()
+                .unwrap();
+            assert!(!observed.status.success());
+            assert_eq!(
+                fs::read_to_string(&log).unwrap_or_else(|_| panic!(
+                    "Cargo did not invoke fixture compiler: {}",
+                    String::from_utf8_lossy(&observed.stderr)
+                )),
+                expected.to_str().unwrap()
+            );
+        };
+        verify(&[], &tools[2]);
+        fs::remove_file(&project_config).unwrap();
+        verify(&[], &tools[0]);
+        verify(&[("CARGO_BUILD_RUSTC", "bin/build-env")], &tools[3]);
+        verify(
+            &[
+                ("CARGO_BUILD_RUSTC", "bin/build-env"),
+                ("RUSTC", "bin/rustc-env"),
+            ],
+            &tools[4],
+        );
+        fs::remove_file(root.join(".cargo/config.toml")).unwrap();
+        verify(&[], &tools[1]);
+        fs::remove_dir_all(root).unwrap();
     }
 }

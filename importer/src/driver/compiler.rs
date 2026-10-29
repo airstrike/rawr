@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace as RustNamespace, Res};
+use rustc_hir::def::{CtorKind, DefKind, Namespace as RustNamespace, Res};
 use rustc_hir::definitions::DefPathData;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::metadata::Reexport as RustReexport;
@@ -29,8 +29,25 @@ mod attempt;
 #[path = "compiler/completion.rs"]
 mod completion;
 
-#[path = "compiler/reuse.rs"]
-mod reuse;
+#[path = "../extract/engine.rs"]
+#[allow(
+    dead_code,
+    reason = "shared with the library, which replays recorded units"
+)]
+mod engine;
+
+#[path = "compiler/table.rs"]
+mod table;
+
+#[path = "compiler/units.rs"]
+mod units;
+
+use engine::model::{
+    Authority, Binding, Id, Namespace, Reexport, ReexportEvidence, ReexportId, ReexportKind,
+    Scalar, ScalarPredicateOutcome, ScalarPredicateProof, Span,
+};
+use engine::{Emission, Hash, Level};
+use units::raw;
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PACKAGES: usize = 4_096;
@@ -64,7 +81,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // its where-clause names.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 31;
+const PROTOCOL_SCHEMA: u32 = 32;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -127,38 +144,25 @@ struct Extractor {
     result: Option<Result<Budget, String>>,
 }
 
+/// Answers the engine's units from the compiler (`engine::Oracle`). A unit
+/// only emits: every decision about what the walk reaches is the engine's,
+/// so each answer depends on the selected crate and the unit alone.
 struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     tcx: TyCtxt<'tcx>,
     invocation: &'invocation Invocation,
     selected: CrateNum,
-    definitions: HashMap<(DefId, Namespace), Definition>,
-    scheduler: Scheduler<SemanticKey, DefinitionRequest>,
-    implementations: HashMap<DefId, Implementation>,
-    reachable: Vec<Export>,
-    foreign_roots: Vec<ForeignRoot>,
+    /// What the unit being answered emitted so far.
+    emissions: Vec<Emission>,
+    /// Definitions by def-path hash, as this session's emissions named them.
+    definitions: HashMap<Hash, DefId>,
+    /// Trait obligations and associated obligations by their stable keys.
+    obligations: HashMap<String, TraitObligation<'tcx>>,
+    associated: HashMap<String, AssociatedObligation<'tcx>>,
+    /// Every crate the session registered, for the handshake's artifacts.
     sysroot: BTreeMap<CrateNum, Sysroot>,
     external: BTreeMap<CrateNum, ExternalCrate>,
-    expanded_impls: HashSet<DefId>,
-    expanded_surfaces: HashSet<DefId>,
     implementation_index: HashMap<CrateNum, HashMap<DefId, Vec<DefId>>>,
-    implementation_requests: BTreeMap<[u8; 16], ImplementationRequest<'tcx>>,
-    obligations: BTreeMap<TraitObligationOrderKey, ScheduledTraitObligation<'tcx>>,
-    queued_obligations: usize,
     obligation_candidates: HashMap<TraitObligationKey<'tcx>, Vec<DefId>>,
-    scalar_predicate_proofs: BTreeMap<ScalarPredicateKey, ScalarPredicateProof>,
-    active_demand: Demand,
-    /// `Type::member` paths Rawr demanded: a member the type may have
-    /// through a trait it implements.
-    member_demands: Vec<(DefId, String)>,
-    /// `Trait::member` paths Rawr demanded, as `Widget::_boxed(..)` of a
-    /// string: the member of each of the trait's impls for `&str`.
-    trait_member_demands: Vec<(DefId, String)>,
-    /// The roots of crates a macro's `$crate` demanded (`crate_segment`),
-    /// named under their segment after extraction drains.
-    crate_roots: Vec<(DefId, String)>,
-    /// A blanket trait implementation applied to one concrete type, as if
-    /// the crate wrote `impl Trait for Type`.
-    applications: BTreeMap<String, Implementation>,
     /// While a blanket implementation is applied through a type's own
     /// implementation of the trait its where-clause names, that
     /// implementation and the application's identity, which owns its
@@ -170,39 +174,8 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// The selected crate's public aliases that pass their own parameters
     /// on to a type, by that type (`passing_alias`).
     passing_aliases: HashMap<DefId, DefId>,
-    /// While a crate is walked only for the types aliases name
-    /// (`hidden_alias_targets`), those types.
-    only_names: Option<HashSet<DefId>>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
-}
-
-/// A re-exported foreign crate root (`pub use wgpu;`), named after the
-/// selected crate's extraction drains and never extracted itself.
-struct ForeignRoot {
-    module: DefId,
-    path: Vec<String>,
-    reexports: Vec<Reexport>,
-    depth: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Demand {
-    ShapeOnly,
-    SelectedRoot,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct SemanticKey {
-    def_path_hash: [u8; 16],
-    namespace: Namespace,
-}
-
-#[derive(Clone)]
-struct DefinitionRequest {
-    def_id: DefId,
-    namespace: Namespace,
-    owner: Owner,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -227,26 +200,6 @@ struct TraitObligationKey<'tcx> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct TraitObligationOrderKey {
-    trait_hash: [u8; 16],
-    associated_hash: [u8; 16],
-    substitution_hash: u64,
-    relevance_hash: [u8; 16],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TraitObligationState {
-    Queued,
-    Complete,
-}
-
-struct ScheduledTraitObligation<'tcx> {
-    obligation: TraitObligation<'tcx>,
-    state: TraitObligationState,
-    selected: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ScalarPredicateKey {
     owner_hash: [u8; 16],
     parameter: u32,
@@ -267,12 +220,6 @@ impl<'tcx> TraitObligation<'tcx> {
     }
 }
 
-struct ImplementationRequest<'tcx> {
-    impl_id: DefId,
-    relevance: Vec<DefId>,
-    associated: BTreeMap<AssociatedObligationOrderKey, AssociatedObligation<'tcx>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum AssociatedDemandKind {
     SelectedMember,
@@ -285,14 +232,6 @@ struct AssociatedObligation<'tcx> {
     trait_item: Option<DefId>,
     arguments: Option<ty::GenericArgsRef<'tcx>>,
     param_env: ty::ParamEnv<'tcx>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct AssociatedObligationOrderKey {
-    kind: AssociatedDemandKind,
-    trait_item_hash: [u8; 16],
-    substitution_hash: u64,
-    param_env_hash: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -327,105 +266,6 @@ fn effective_associated_item<I: Copy>(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ScheduleState {
-    Queued,
-    Active,
-    Complete { demand: Demand },
-}
-
-struct Scheduled<V> {
-    value: V,
-    demand: Demand,
-    state: ScheduleState,
-}
-
-struct Scheduler<K, V> {
-    entries: BTreeMap<K, Scheduled<V>>,
-    ready: BTreeSet<K>,
-}
-
-impl<K, V> Scheduler<K, V>
-where
-    K: Clone + Ord,
-    V: Clone,
-{
-    fn new() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-            ready: BTreeSet::new(),
-        }
-    }
-
-    fn request(
-        &mut self,
-        key: K,
-        value: V,
-        demand: Demand,
-        budget: &mut Budget,
-    ) -> Result<(), String> {
-        match self.entries.get_mut(&key) {
-            Some(entry) => {
-                entry.demand = entry.demand.max(demand);
-                if let ScheduleState::Complete { demand: completed } = entry.state
-                    && entry.demand > completed
-                {
-                    budget.items(1)?;
-                    entry.state = ScheduleState::Queued;
-                    self.ready.insert(key);
-                }
-            }
-            None => {
-                // Charge both scheduler-owned nodes before either allocation.
-                budget.items(2)?;
-                self.entries.insert(
-                    key.clone(),
-                    Scheduled {
-                        value,
-                        demand,
-                        state: ScheduleState::Queued,
-                    },
-                );
-                self.ready.insert(key);
-            }
-        }
-        Ok(())
-    }
-
-    fn next(&mut self) -> Result<Option<(K, V, Demand)>, String> {
-        let Some(key) = self.ready.pop_first() else {
-            return Ok(None);
-        };
-        let entry = self
-            .entries
-            .get_mut(&key)
-            .ok_or_else(|| "traversal scheduler lost a queued identity".to_owned())?;
-        if entry.state != ScheduleState::Queued {
-            return Err("traversal scheduler selected a non-queued identity".to_owned());
-        }
-        entry.state = ScheduleState::Active;
-        Ok(Some((key, entry.value.clone(), entry.demand)))
-    }
-
-    fn complete(&mut self, key: K, demand: Demand, budget: &mut Budget) -> Result<(), String> {
-        let entry = self
-            .entries
-            .get_mut(&key)
-            .ok_or_else(|| "traversal scheduler lost an active identity".to_owned())?;
-        if entry.state != ScheduleState::Active {
-            return Err("traversal scheduler completed a non-active identity".to_owned());
-        }
-        if entry.demand > demand {
-            budget.items(1)?;
-            entry.state = ScheduleState::Queued;
-            self.ready.insert(key);
-        } else {
-            entry.state = ScheduleState::Complete { demand };
-        }
-        Ok(())
-    }
-}
-
 pub(super) struct Budget {
     bytes: usize,
     items: usize,
@@ -456,18 +296,6 @@ struct DiagnosticInstantiation {
     substitution: u64,
 }
 
-/// A sidecar is `{"handshake":…,` then this body's fields; the body is what
-/// per-crate extraction reuse keeps for an unchanged crate.
-#[derive(Serialize)]
-#[serde(deny_unknown_fields)]
-struct Body {
-    reachable: Vec<Export>,
-    definitions: Vec<Definition>,
-    implementations: Vec<Implementation>,
-    scalar_predicate_proofs: Vec<ScalarPredicateProof>,
-    index: Vec<IndexName>,
-}
-
 /// One edge of a selected crate's name index: `name` is a public child
 /// of module `parent`, of compiler `kind`, defining `id` (its def-path hash).
 /// The crate root is the edge with an empty parent and name.
@@ -478,34 +306,6 @@ struct IndexName {
     name: String,
     kind: &'static str,
     id: String,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ScalarPredicateProof {
-    owner: Id,
-    parameter: u32,
-    trait_id: Id,
-    scalar: Scalar,
-    outcome: ScalarPredicateOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Scalar {
-    Unit,
-    Bool,
-    Char,
-    F64,
-    I64,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum ScalarPredicateOutcome {
-    Absent,
-    Positive { implementation: Id },
-    Unresolved,
 }
 
 #[derive(Serialize)]
@@ -577,102 +377,6 @@ struct ExternalCrate {
 enum ImplementationCrateAuthority {
     Sysroot,
     External,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Id {
-    authority: Authority,
-    def_path_hash: String,
-    namespace: Namespace,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum Authority {
-    Compiler {
-        crate_name: String,
-        stable_crate_id: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Namespace {
-    Type,
-    Value,
-    Macro,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Export {
-    binding: Binding,
-    root_alias: String,
-    path: Vec<String>,
-    namespace: Namespace,
-    target: ExportTarget,
-    aliases: Vec<Alias>,
-    reexports: Vec<Reexport>,
-    span: Span,
-    /// A re-exported enum variant, as `pub use Alignment::Center;`: the
-    /// variant's name, and `target` is its enum.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    variant: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Binding {
-    Nameable,
-    AnonymousImport,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum ExportTarget {
-    Definition { id: Id },
-    Unsupported { compiler_kind: String },
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Reexport {
-    kind: ReexportKind,
-    evidence: ReexportEvidence,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum ReexportEvidence {
-    Identified { item: ReexportId, span: Span },
-    IdentitylessMacro,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ReexportKind {
-    Single,
-    Glob,
-    ExternCrate,
-    MacroUse,
-    MacroExport,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ReexportId {
-    crate_name: String,
-    stable_crate_id: String,
-    def_path_hash: String,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Alias {
-    from: Vec<String>,
-    to: Vec<String>,
-    span: Span,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1055,24 +759,6 @@ enum Constant {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Implementation {
-    key: String,
-    id: Id,
-    relevance: Vec<Id>,
-    trait_ref: Trait,
-    self_type: Type,
-    safety: Safety,
-    polarity: Polarity,
-    const_impl: bool,
-    default_impl: bool,
-    generics: Generics,
-    associated: Vec<Id>,
-    span: Span,
-    origin: Origin,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Trait {
     Inherent,
@@ -1084,18 +770,6 @@ enum Trait {
 enum Polarity {
     Positive,
     Negative,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Span {
-    file: String,
-    byte_start: u32,
-    byte_end: u32,
-    line_start: u32,
-    column_start: u32,
-    line_end: u32,
-    column_end: u32,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1202,11 +876,17 @@ fn extract_all(
     // rendering and publication retain a fresh production budget, while the
     // ordinary probe keeps its original aggregate production budget.
     let mut publication_budget = diagnostic_measurement.then(Budget::standard);
-    // A diagnostic traversal always extracts.
-    let mut cache = match reuse {
-        Some(directory) if !diagnostic_measurement => Some(reuse::Cache::open(directory)?),
+    // A diagnostic traversal always extracts, and records nothing.
+    let tables = match reuse {
+        Some(directory) if !diagnostic_measurement => Some(table::Tables::open(directory)?),
         _ => None,
     };
+    let mut used = Vec::new();
+    let session = engine::session_key(
+        invocations
+            .iter()
+            .map(|invocation| invocation.unit_key.as_str()),
+    );
     for invocation in invocations {
         let selected = selected_crate(tcx, &invocation.artifact.path, &mut budget)?;
         if let Some(diagnostic) = diagnostic {
@@ -1230,32 +910,19 @@ fn extract_all(
         let crate_hash = budget.formatted(format_args!("{:?}", tcx.crate_hash(selected)))?;
         let stable_crate_id =
             budget.formatted(format_args!("{:016x}", tcx.stable_crate_id(selected)))?;
-        let key = cache
-            .as_ref()
-            .map(|cache| cache.key(&invocation, &crate_hash, &stable_crate_id));
-        let reused = match (&mut cache, &key) {
-            (Some(cache), Some(key)) => cache.load(key, &loaded_crates),
-            _ => None,
-        };
-        let reuse::Reused {
-            sysroot,
-            external,
-            body,
-        } = match reused {
-            Some(reused) => reused,
-            None => {
-                let extracted = extract(tcx, &invocation, selected, &mut budget, diagnostic)?;
-                if let (Some(cache), Some(key)) = (&cache, &key) {
-                    cache.store(
-                        key,
-                        &extracted.sysroot,
-                        &extracted.external,
-                        &extracted.body,
-                    );
-                }
-                extracted
-            }
-        };
+        let (sysroot, external, body) = extract(
+            tcx,
+            &invocation,
+            selected,
+            &crate_hash,
+            &stable_crate_id,
+            &loaded_crates,
+            &session,
+            tables.as_ref(),
+            &mut used,
+            &mut budget,
+            diagnostic,
+        )?;
         let (protocol_directory, handshake) = handshake(
             invocation,
             arguments_digest,
@@ -1273,8 +940,8 @@ fn extract_all(
             publication_budget.as_mut().unwrap_or(&mut budget),
         )?;
     }
-    if let Some(cache) = &cache {
-        cache.prune();
+    if let Some(tables) = &tables {
+        tables.prune(&used);
     }
     Ok(budget)
 }
@@ -1392,153 +1059,199 @@ fn projected_alias_instance<'tcx>(tcx: TyCtxt<'tcx>, alias: DefId) -> Option<Ty<
     .then_some(instance)
 }
 
+/// A selected crate's sysroot and external crates, and its body.
+type Extracted = (Vec<Sysroot>, Vec<ExternalCrate>, Vec<u8>);
+
+/// The selected crate's body for the invocation's demand, its sysroot and
+/// external crates. The walk is the engine's (`engine.rs`). A table that
+/// recorded every unit the demand needs replays it with no compiler work;
+/// otherwise the compiler answers, and what it answered joins the table, so
+/// the table grows with each demand a crate meets. A crate whose whole walk
+/// is small is walked whole as well (`WHOLE_UNITS`).
+/// The units the compiler may answer for a whole walk beyond what the
+/// demand reached. semver's whole walk, 301 units, stays well within it.
+/// iced's whole API, walked on its first program's way to the window, cost
+/// the counter about 18 s, so iced's table grows with demand instead; the
+/// attempt that finds it large costs the counter about 70 ms.
+const WHOLE_UNITS: usize = 1_024;
+
+/// Answers at most `left` units live, then refuses.
+struct WithinBound<'a, O: engine::Oracle> {
+    live: &'a mut O,
+    left: usize,
+}
+
+impl<O: engine::Oracle> engine::Oracle for WithinBound<'_, O> {
+    fn unit(
+        &mut self,
+        unit: &engine::Unit,
+    ) -> Result<std::rc::Rc<[engine::Emission]>, engine::Fault> {
+        self.left = self
+            .left
+            .checked_sub(1)
+            .ok_or_else(|| engine::Fault::Error("the whole walk passed its bound".to_owned()))?;
+        self.live.unit(unit)
+    }
+
+    fn module(
+        &mut self,
+        module: engine::Hash,
+    ) -> Result<std::rc::Rc<[engine::Child]>, engine::Fault> {
+        self.live.module(module)
+    }
+
+    fn segment(&mut self, name: &str) -> Result<Option<engine::Segment>, engine::Fault> {
+        self.live.segment(name)
+    }
+
+    fn index(&mut self) -> Result<std::rc::Rc<[Box<serde_json::value::RawValue>]>, engine::Fault> {
+        self.live.index()
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the extraction joins the session, the crate and its recorded table"
+)]
 fn extract<'tcx>(
     tcx: TyCtxt<'tcx>,
     invocation: &Invocation,
     selected: CrateNum,
+    crate_hash: &str,
+    stable_crate_id: &str,
+    loaded: &[ExternalCrate],
+    session: &str,
+    tables: Option<&table::Tables>,
+    used: &mut Vec<String>,
     budget: &mut Budget,
     diagnostic: &mut Option<Diagnostic>,
-) -> Result<reuse::Reused, String> {
-    // A demanded unit also publishes its complete name index, so Rawr
-    // can tell a typo from an unextracted item without another probe.
-    let index = if invocation.demand.is_empty() {
-        Vec::new()
-    } else {
-        name_index(tcx, selected.as_def_id(), budget)?
+) -> Result<Extracted, String> {
+    let root = engine::Root {
+        module: tcx
+            .def_path_hash(selected.as_def_id())
+            .to_raw_def_path_hash()
+            .0,
+        krate: stable_crate_id.to_owned(),
     };
-    let mut builder = Builder {
-        tcx,
-        invocation,
-        selected,
-        definitions: HashMap::new(),
-        scheduler: Scheduler::new(),
-        implementations: HashMap::new(),
-        reachable: Vec::new(),
-        foreign_roots: Vec::new(),
-        sysroot: BTreeMap::new(),
-        external: BTreeMap::new(),
-        expanded_impls: HashSet::new(),
-        expanded_surfaces: HashSet::new(),
-        implementation_index: HashMap::new(),
-        implementation_requests: BTreeMap::new(),
-        obligations: BTreeMap::new(),
-        queued_obligations: 0,
-        obligation_candidates: HashMap::new(),
-        scalar_predicate_proofs: BTreeMap::new(),
-        active_demand: Demand::ShapeOnly,
-        member_demands: Vec::new(),
-        trait_member_demands: Vec::new(),
-        crate_roots: Vec::new(),
-        applications: BTreeMap::new(),
-        reowned: None,
-        instance_aliases: None,
-        passing_aliases: HashMap::new(),
-        only_names: None,
-        budget,
-        diagnostic,
+    let Root::Selected { aliases } = &invocation.root;
+    let key = tables.map(|tables| tables.key_for(invocation, crate_hash));
+    // A demand that grows the one the table was made from, as each round of
+    // a first run's demand does, cannot replay: neither read nor merge it.
+    let outgrown = tables
+        .zip(key.as_deref())
+        .and_then(|(tables, key)| tables.outgrown(key, session, &invocation.demand, used));
+    let served = match &outgrown {
+        Some(_) => None,
+        None => tables
+            .zip(key.as_deref())
+            .and_then(|(tables, key)| tables.served(key)),
     };
-    if invocation.demand.is_empty() {
-        // Whole-crate seeding: every public path of the selected crate.
-        builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, false)?;
-        builder.drain_scheduler()?;
-        for root in std::mem::take(&mut builder.foreign_roots) {
-            builder.collect_external_exports(
-                root.module,
-                root.path,
-                &root.reexports,
-                root.depth,
-                true,
+    let kept = match &outgrown {
+        Some(_) => None,
+        None => tables
+            .zip(key.as_deref())
+            .map(|(tables, key)| tables.load(key, &root, crate_hash, used)),
+    };
+    if let Some(Some(memo)) = &kept {
+        let mut replay = engine::Replay(memo);
+        if let Ok(extracted) = engine::Engine::new(
+            &mut replay,
+            root.clone(),
+            aliases.clone(),
+            session.to_owned(),
+        )
+        .run(&invocation.demand)
+        {
+            let body = extracted.body()?;
+            let (sysroot, external) = units::registered(
+                &invocation.compiler_commit,
+                &invocation.selected_target,
+                &extracted.crates,
+                loaded,
+                budget,
             )?;
-        }
-    } else {
-        // Seed from the paths Rawr names instead. Each lands on
-        // a selected root whose closure (signatures, public fields, inherent
-        // and trait impl tables) the scheduler drains as for a whole crate;
-        // the names-only walk then names exactly what was extracted, through
-        // every public spelling, wholesale crate re-exports included.
-        for path in &invocation.demand {
-            builder.select_path(selected.as_def_id(), &path[1..], 0)?;
-        }
-        builder.drain_scheduler()?;
-        builder.resolve_member_demands()?;
-        builder.resolve_trait_member_demands()?;
-        builder.drain_scheduler()?;
-        builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, true)?;
-        let hidden = builder.hidden_alias_targets()?;
-        // A macro's `$crate` paths, under the segment naming its crate.
-        for (root, segment) in std::mem::take(&mut builder.crate_roots) {
-            builder.collect_external_exports(root, vec![segment], &[], 1, true)?;
-        }
-        // Each type only an alias names, under the segment naming its
-        // crate; nothing else of that crate.
-        if !hidden.is_empty() {
-            let mut roots = hidden.iter().map(|target| target.krate).collect::<Vec<_>>();
-            roots.dedup();
-            builder.only_names = Some(hidden.into_iter().collect());
-            for krate in roots {
-                let segment = crate_segment(tcx, krate);
-                builder.collect_external_exports(krate.as_def_id(), vec![segment], &[], 1, true)?;
-            }
-            builder.only_names = None;
+            return Ok((sysroot, external, body));
         }
     }
-    let mut definitions = Vec::new();
-    builder.budget.items(builder.definitions.len())?;
-    definitions
-        .try_reserve_exact(builder.definitions.len())
-        .map_err(|error| format!("definition ledger allocation failed: {error}"))?;
-    definitions.extend(builder.definitions.into_values());
-    let mut implementations = Vec::new();
-    builder.budget.items(builder.implementations.len())?;
-    implementations
-        .try_reserve_exact(builder.implementations.len())
-        .map_err(|error| format!("implementation ledger allocation failed: {error}"))?;
-    implementations.extend(builder.implementations.into_values());
-    builder.budget.items(builder.applications.len())?;
-    implementations
-        .try_reserve(builder.applications.len())
-        .map_err(|error| format!("implementation ledger allocation failed: {error}"))?;
-    implementations.extend(builder.applications.into_values());
-    let mut scalar_predicate_proofs = Vec::new();
+    let mut builder = Builder::new(tcx, invocation, selected, budget, diagnostic);
     builder
-        .budget
-        .items(builder.scalar_predicate_proofs.len())?;
-    scalar_predicate_proofs
-        .try_reserve_exact(builder.scalar_predicate_proofs.len())
-        .map_err(|error| format!("scalar predicate proof ledger allocation failed: {error}"))?;
-    scalar_predicate_proofs.extend(builder.scalar_predicate_proofs.into_values());
-    let mut reachable = builder.reachable;
-    let mut sysroot = Vec::new();
-    builder.budget.items(builder.sysroot.len())?;
-    sysroot
-        .try_reserve_exact(builder.sysroot.len())
-        .map_err(|error| format!("sysroot ledger allocation failed: {error}"))?;
-    sysroot.extend(builder.sysroot.into_values());
-    let mut external_crates = Vec::new();
-    builder.budget.items(builder.external.len())?;
-    external_crates
-        .try_reserve_exact(builder.external.len())
-        .map_err(|error| format!("external crate ledger allocation failed: {error}"))?;
-    external_crates.extend(builder.external.into_values());
-    definitions.sort_unstable();
-    implementations.sort_unstable();
-    scalar_predicate_proofs.sort_unstable();
-    reachable.sort_unstable();
-    sysroot.sort_unstable();
-    external_crates.sort_unstable();
-    let body = serde_json::to_vec(&Body {
-        reachable,
-        definitions,
-        implementations,
-        scalar_predicate_proofs,
-        index,
-    })
-    .map_err(|error| format!("failed to encode compiler sidecar: {error}"))?;
-    Ok(reuse::Reused {
-        sysroot,
-        external: external_crates,
-        body,
-    })
+        .definitions
+        .insert(root.module, selected.as_def_id());
+    let mut memo = engine::Memo::default();
+    let extracted = {
+        let mut record = engine::Record {
+            live: &mut builder,
+            memo: &mut memo,
+        };
+        engine::Engine::new(
+            &mut record,
+            root.clone(),
+            aliases.clone(),
+            session.to_owned(),
+        )
+        .run(&invocation.demand)
+        .map_err(units::fault)?
+    };
+    if let (Some(tables), Some(key)) = (tables, &key) {
+        // Whether a table that was read holds only known demands.
+        let read = matches!(kept, Some(Some(_)));
+        let mut kept = kept.flatten().unwrap_or_default();
+        if let Some(outgrown) = &outgrown {
+            kept.large = outgrown.large();
+        }
+        if invocation.demand.is_empty() {
+            memo.whole = true;
+        } else if !kept.whole && !kept.large {
+            // The whole crate, when its walk stays within `WHOLE_UNITS`,
+            // so a later program's other items replay too. A walk past it
+            // is dropped, and marked so that it is not tried again: its
+            // crate's table grows with each demand instead.
+            let mut whole = engine::Memo::default();
+            whole.absorb(&kept);
+            whole.absorb(&memo);
+            let complete = {
+                let mut bounded = WithinBound {
+                    live: &mut builder,
+                    left: WHOLE_UNITS,
+                };
+                let mut record = engine::Record {
+                    live: &mut bounded,
+                    memo: &mut whole,
+                };
+                engine::Engine::new(
+                    &mut record,
+                    root.clone(),
+                    aliases.clone(),
+                    session.to_owned(),
+                )
+                .run(&[])
+                .is_ok()
+            };
+            if complete {
+                whole.whole = true;
+                memo = whole;
+            } else {
+                memo.large = true;
+            }
+        }
+        kept.absorb(&memo);
+        let made = table::Served::new(session, &invocation.demand, &kept);
+        let served = if read {
+            served.and_then(|served| made.merged(&served))
+        } else {
+            Some(made)
+        };
+        tables.store(key, &root, crate_hash, &kept, served);
+    }
+    let body = extracted.body()?;
+    let (sysroot, external) = units::registered(
+        &invocation.compiler_commit,
+        &invocation.selected_target,
+        &extracted.crates,
+        loaded,
+        builder.budget,
+    )?;
+    Ok((sysroot, external, body))
 }
 
 #[allow(
@@ -2144,898 +1857,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         )
     }
 
-    /// Walk one public module. With `names_only`, the walk extracts nothing: it
-    /// names only definitions the selected crate's extraction already holds.
-    fn collect_external_exports(
-        &mut self,
-        module: DefId,
-        prefix: Vec<String>,
-        inherited: &[Reexport],
-        depth: usize,
-        names_only: bool,
-    ) -> Result<(), String> {
-        if depth > MAX_DEPTH {
-            return Err("external public module traversal depth exceeded".to_owned());
-        }
-        self.breadcrumb(
-            "begin",
-            "selected-exports",
-            "module-exports",
-            module,
-            Namespace::Type,
-            "definition",
-        )?;
-        for child in self.tcx.module_children(module) {
-            if !child.vis.is_public() {
-                continue;
-            }
-            // A re-exported variant's constructor, in the value namespace,
-            // is the variant the type namespace re-exports.
-            if matches!(child.res, Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)) {
-                continue;
-            }
-            // A re-exported variant, as `pub use Alignment::Center;`, names
-            // its enum's variant: the export is the enum's, with the
-            // variant's name.
-            let (res, variant) = match child.res {
-                Res::Def(DefKind::Variant, variant) => {
-                    let owner = self.tcx.parent(variant);
-                    (
-                        Res::Def(DefKind::Enum, owner),
-                        Some(self.budget.owned(self.tcx.item_name(variant).as_str())?),
-                    )
-                }
-                res => (res, None),
-            };
-            if names_only {
-                match res {
-                    Res::Def(DefKind::Mod, _) => {}
-                    Res::Def(_, def_id)
-                        if self
-                            .only_names
-                            .as_ref()
-                            .is_some_and(|only| !only.contains(&def_id)) =>
-                    {
-                        continue;
-                    }
-                    Res::Def(kind, def_id)
-                        if kind.ns().is_some_and(|ns| {
-                            self.definitions.contains_key(&(def_id, namespace(ns)))
-                        }) => {}
-                    _ => continue,
-                }
-            }
-            self.edge(prefix.len().saturating_add(1))?;
-            self.budget.items(prefix.len().saturating_add(1))?;
-            for component in &prefix {
-                self.string(component)?;
-            }
-            let mut path = Vec::new();
-            path.try_reserve_exact(prefix.len().saturating_add(1))
-                .map_err(|error| format!("public path allocation failed: {error}"))?;
-            path.extend(prefix.iter().cloned());
-            let child_name = child.ident.name.as_str();
-            path.push(self.budget.owned(child_name)?);
-            let binding = if child.ident.name == kw::Underscore {
-                Binding::AnonymousImport
-            } else {
-                Binding::Nameable
-            };
-            let (namespace, target, aliases, nested, named) = match res {
-                Res::Def(kind, def_id) => {
-                    let Some(namespace) = kind.ns().map(namespace) else {
-                        return Err(format!(
-                            "external reachable definition has no namespace: {kind:?}"
-                        ));
-                    };
-                    if matches!(
-                        associated_path_kind(self.tcx, def_id)?,
-                        Some(AssociatedPathKind::AnonymousSupport(_))
-                    ) {
-                        return Err(
-                            "anonymous associated support cannot become a reachable export"
-                                .to_owned(),
-                        );
-                    }
-                    if binding == Binding::AnonymousImport
-                        && (kind != DefKind::Trait
-                            || child.reexport_chain.is_empty()
-                            || !matches!(
-                                child.reexport_chain.last(),
-                                Some(RustReexport::Single(_))
-                            ))
-                    {
-                        return Err(
-                            "anonymous import lacks exact trait single-import evidence".to_owned()
-                        );
-                    }
-                    let named = !names_only || self.definitions.contains_key(&(def_id, namespace));
-                    if !names_only {
-                        self.breadcrumb(
-                            "begin",
-                            "selected-root",
-                            "selected-export",
-                            def_id,
-                            namespace,
-                            "definition+namespace",
-                        )?;
-                        self.ensure_with_demand(
-                            def_id,
-                            namespace,
-                            if binding == Binding::AnonymousImport {
-                                Demand::ShapeOnly
-                            } else {
-                                Demand::SelectedRoot
-                            },
-                        )?;
-                        self.breadcrumb(
-                            "complete",
-                            "selected-root",
-                            "selected-export",
-                            def_id,
-                            namespace,
-                            "definition+namespace",
-                        )?;
-                    }
-                    let display_path = self.definition_path(def_id)?;
-                    let aliases = if display_path == path {
-                        Vec::new()
-                    } else {
-                        self.budget.items(1)?;
-                        self.charge_strings(&path)?;
-                        let mut values = Vec::new();
-                        values
-                            .try_reserve_exact(1)
-                            .map_err(|error| format!("alias allocation failed: {error}"))?;
-                        values.push(Alias {
-                            from: display_path,
-                            to: path.clone(),
-                            span: self.span(child.ident.span)?,
-                        });
-                        values
-                    };
-                    (
-                        namespace,
-                        ExportTarget::Definition {
-                            id: self.id(def_id, namespace)?,
-                        },
-                        aliases,
-                        (kind == DefKind::Mod).then_some(def_id),
-                        named,
-                    )
-                }
-                Res::PrimTy(primitive) => (
-                    Namespace::Type,
-                    ExportTarget::Unsupported {
-                        compiler_kind: {
-                            self.budget
-                                .formatted(format_args!("primitive:{primitive:?}"))?
-                        },
-                    },
-                    Vec::new(),
-                    None,
-                    true,
-                ),
-                other => {
-                    return Err(format!(
-                        "external reachable unsupported compiler resolution: {other:?}"
-                    ));
-                }
-            };
-            if binding == Binding::AnonymousImport
-                && !matches!(target, ExportTarget::Definition { .. })
-            {
-                return Err("anonymous import target is not a definition".to_owned());
-            }
-            let span = self.span(child.ident.span)?;
-            self.edge(inherited.len())?;
-            self.charge_reexports(inherited)?;
-            self.budget.items(child.reexport_chain.len())?;
-            let mut reexports = Vec::new();
-            reexports
-                .try_reserve_exact(inherited.len().saturating_add(child.reexport_chain.len()))
-                .map_err(|error| format!("re-export allocation failed: {error}"))?;
-            reexports.extend_from_slice(inherited);
-            self.edge(child.reexport_chain.len())?;
-            for reexport in &child.reexport_chain {
-                // A names-only walk extracts nothing, so a hop through a crate
-                // none of whose definitions were extracted registers it here.
-                if names_only
-                    && let Some(hop) = reexport.id()
-                    && hop.krate != self.selected
-                {
-                    if self.is_sysroot_crate(hop.krate)? {
-                        self.register_sysroot(hop.krate)?;
-                    } else {
-                        self.register_external(hop.krate)?;
-                    }
-                }
-                reexports.push(self.reexport(*reexport)?);
-            }
-            let Root::Selected {
-                aliases: root_aliases,
-            } = &self.invocation.root;
-            self.edge(root_aliases.len())?;
-            for root_alias in root_aliases.iter().filter(|_| named) {
-                self.charge_export_clone(root_alias, &path, &target, &aliases, &reexports, &span)?;
-                self.reachable
-                    .try_reserve(1)
-                    .map_err(|error| format!("reachable export allocation failed: {error}"))?;
-                self.reachable.push(Export {
-                    binding,
-                    root_alias: root_alias.clone(),
-                    path: path.clone(),
-                    namespace,
-                    target: target.clone(),
-                    aliases: aliases.clone(),
-                    reexports: reexports.clone(),
-                    span: span.clone(),
-                    variant: variant.clone(),
-                });
-            }
-            let depth = depth.saturating_add(1);
-            match nested {
-                // A re-exported foreign crate root such as `pub use wgpu;`
-                // is not extracted; it is only named after extraction drains.
-                Some(module) if !names_only && self.is_foreign_crate_root(module) => {
-                    self.foreign_roots.try_reserve(1).map_err(|error| {
-                        format!("foreign crate root allocation failed: {error}")
-                    })?;
-                    self.foreign_roots.push(ForeignRoot {
-                        module,
-                        path,
-                        reexports,
-                        depth,
-                    });
-                }
-                Some(module) => {
-                    self.collect_external_exports(module, path, &reexports, depth, names_only)?;
-                }
-                None => {}
-            }
-        }
-        self.breadcrumb(
-            "complete",
-            "selected-exports",
-            "module-exports",
-            module,
-            Namespace::Type,
-            "definition",
-        )?;
-        Ok(())
-    }
-
-    /// Select what one demanded path names, resolved through
-    /// public module children as Rust resolves it (globs and shadowing are
-    /// already settled in the crate's metadata). Every item a segment lands
-    /// on, in any namespace, is extracted as a selected root, so a module on
-    /// the path is named and a type brings its impl tables; segments after a
-    /// non-module (`Button::new`) are members its closure already holds. A
-    /// path that names nothing extracts nothing and stays a missing item. A
-    /// final `*` is a glob import: every public child of the module.
-    fn select_path(&mut self, module: DefId, path: &[String], depth: usize) -> Result<(), String> {
-        if depth > MAX_DEPTH {
-            return Err("demanded path traversal depth exceeded".to_owned());
-        }
-        let Some((name, rest)) = path.split_first() else {
-            return Ok(());
-        };
-        let tcx = self.tcx;
-        // A macro's `$crate` (`crate_segment`): the root of the crate that
-        // defines it, as the macro's own paths are written.
-        if depth == 0 && name.starts_with(CRATE_SEGMENT) {
-            if let Some(krate) = tcx
-                .crates(())
-                .iter()
-                .copied()
-                .find(|krate| crate_segment(tcx, *krate) == *name)
-            {
-                let root = krate.as_def_id();
-                if !self.crate_roots.iter().any(|(known, _)| *known == root) {
-                    self.crate_roots
-                        .try_reserve(1)
-                        .map_err(|error| format!("crate root allocation failed: {error}"))?;
-                    self.crate_roots.push((root, name.clone()));
-                }
-                return self.select_path(root, rest, depth.saturating_add(1));
-            }
-            return Ok(());
-        }
-        for child in tcx.module_children(module) {
-            if !child.vis.is_public() || (name != "*" && child.ident.name.as_str() != name) {
-                continue;
-            }
-            let Res::Def(kind, def_id) = child.res else {
-                continue;
-            };
-            // A re-exported variant, as `pub use Alignment::Center;`, selects
-            // its enum.
-            let (kind, def_id) = match kind {
-                DefKind::Variant => (DefKind::Enum, tcx.parent(def_id)),
-                DefKind::Ctor(CtorOf::Variant, _) => {
-                    (DefKind::Enum, tcx.parent(tcx.parent(def_id)))
-                }
-                _ => (kind, def_id),
-            };
-            let Some(ns) = kind.ns() else {
-                continue;
-            };
-            self.ensure_with_demand(def_id, namespace(ns), Demand::SelectedRoot)?;
-            // `pub type Duration = TimeDelta;` names the type with its
-            // members: selecting the alias selects the type.
-            let (def_id, kind) = match kind {
-                DefKind::TyAlias => match tcx
-                    .type_of(def_id)
-                    .instantiate_identity()
-                    .skip_norm_wip()
-                    .kind()
-                {
-                    ty::Adt(definition, arguments) if arguments.is_empty() => {
-                        let target = definition.did();
-                        self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
-                        (target, tcx.def_kind(target))
-                    }
-                    // A generic alias, as `pub type Element<'a, M, Theme =
-                    // Plain> = element::Element<'a, M, Theme>;`, or one with
-                    // fixed arguments, as `pub type Result = Result<(),
-                    // Error>;`, selects each type it and its defaults name,
-                    // with their impl tables, as rustc proves their bounds.
-                    // `Alias::member` is its type's member.
-                    aliased => {
-                        let defaults = tcx
-                            .generics_of(def_id)
-                            .own_params
-                            .iter()
-                            .filter_map(|parameter| parameter.default_value(tcx))
-                            .filter_map(|default| {
-                                default.instantiate_identity().skip_norm_wip().as_type()
-                            })
-                            .collect::<Vec<_>>();
-                        // An alias of an associated type names the type it
-                        // gives at its defaults (`projected_alias_instance`).
-                        let instance = projected_alias_instance(tcx, def_id);
-                        let named = tcx
-                            .type_of(def_id)
-                            .instantiate_identity()
-                            .skip_norm_wip()
-                            .walk()
-                            .chain(defaults.into_iter().flat_map(|default| default.walk()))
-                            .chain(instance.into_iter().flat_map(|instance| instance.walk()))
-                            .filter_map(|argument| argument.as_type())
-                            .filter_map(|ty| match ty.kind() {
-                                ty::Adt(definition, _) => Some(definition.did()),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>();
-                        for target in named {
-                            self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
-                        }
-                        match aliased {
-                            ty::Adt(definition, _) => {
-                                (definition.did(), tcx.def_kind(definition.did()))
-                            }
-                            _ => (def_id, kind),
-                        }
-                    }
-                },
-                _ => (def_id, kind),
-            };
-            if kind == DefKind::Mod && !rest.is_empty() {
-                self.select_path(def_id, rest, depth.saturating_add(1))?;
-            } else if matches!(kind, DefKind::Struct | DefKind::Enum)
-                && let [member] = rest
-                && member != "*"
-            {
-                // `Type::member`: the type's own member, or one a trait it
-                // implements provides.
-                self.budget.items(1)?;
-                self.member_demands
-                    .try_reserve(1)
-                    .map_err(|error| format!("member demand allocation failed: {error}"))?;
-                self.member_demands.push((def_id, member.clone()));
-            } else if kind == DefKind::Trait
-                && let [member] = rest
-                && member != "*"
-            {
-                // `Trait::member`: the member of the trait's impls for a
-                // type Rawr holds as its own string.
-                self.budget.items(1)?;
-                self.trait_member_demands
-                    .try_reserve(1)
-                    .map_err(|error| format!("member demand allocation failed: {error}"))?;
-                self.trait_member_demands.push((def_id, member.clone()));
-            }
-        }
-        Ok(())
-    }
-
-    /// Each demanded `Trait::member`: the member of each of the trait's
-    /// impls for `&str`, as iced's `impl Widget<..> for &str` gives
-    /// `Widget::_boxed("label")` that `column!` writes. Rawr's string is
-    /// such a receiver, pinned as `&'static str`.
-    fn resolve_trait_member_demands(&mut self) -> Result<(), String> {
-        let tcx = self.tcx;
-        let mut demands = std::mem::take(&mut self.trait_member_demands);
-        demands.sort_unstable_by_key(|(trait_id, member)| {
-            (
-                tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0,
-                member.clone(),
-            )
-        });
-        demands.dedup();
-        for (trait_id, member) in demands {
-            let name = Symbol::intern(&member);
-            let Some(trait_item) = tcx
-                .associated_items(trait_id)
-                .filter_by_name_unhygienic(name)
-                .find(|item| item.is_fn())
-                .map(|item| item.def_id)
-            else {
-                continue;
-            };
-            let mut implementations = Vec::new();
-            for impl_id in tcx.all_impls(trait_id) {
-                self.budget.edge(1)?;
-                let Some(reference) = tcx.impl_opt_trait_ref(impl_id) else {
-                    continue;
-                };
-                let reference = reference.instantiate_identity().skip_norm_wip();
-                if matches!(
-                    reference.self_ty().kind(),
-                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
-                ) && tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
-                {
-                    implementations
-                        .try_reserve(1)
-                        .map_err(|error| format!("member demand allocation failed: {error}"))?;
-                    implementations.push((impl_id, reference.args));
-                }
-            }
-            implementations.sort_unstable_by_key(|(impl_id, _)| {
-                tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
-            for (impl_id, arguments) in implementations {
-                let obligation = AssociatedObligation {
-                    kind: AssociatedDemandKind::SelectedMember,
-                    trait_item: Some(trait_item),
-                    arguments: Some(arguments),
-                    param_env: tcx.param_env(impl_id),
-                };
-                self.request_implementation(impl_id, trait_id, Some(obligation))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Each demanded `Type::member` that is no inherent member of the type:
-    /// the member of every trait the type implements that declares it. A
-    /// trait implemented for the type itself selects that member of its
-    /// implementation. A blanket implementation (`impl<R: RngCore> Rng for
-    /// R`) applies to the type as if the crate wrote `impl Rng for Type`.
-    /// rustc proves the type implements the trait, under the type's own
-    /// bounds for a generic type. Only a trait without generic parameters
-    /// of its own is looked up.
-    fn resolve_member_demands(&mut self) -> Result<(), String> {
-        let tcx = self.tcx;
-        let mut demands = std::mem::take(&mut self.member_demands);
-        demands.sort_unstable_by_key(|(adt, member)| {
-            (
-                tcx.def_path_hash(*adt).to_raw_def_path_hash().0,
-                member.clone(),
-            )
-        });
-        demands.dedup();
-        for (adt, member) in demands {
-            let generic = tcx.generics_of(adt).count() != 0;
-            let name = Symbol::intern(&member);
-            let inherent = tcx.inherent_impls(adt).iter().any(|implementation| {
-                tcx.associated_items(*implementation)
-                    .filter_by_name_unhygienic(name)
-                    .next()
-                    .is_some()
-            });
-            if inherent {
-                continue;
-            }
-            let self_ty = tcx.type_of(adt).instantiate_identity().skip_norm_wip();
-            let param_env = tcx.param_env(adt);
-            let mut traits = tcx
-                .visible_traits()
-                .filter(|trait_id| {
-                    tcx.associated_items(*trait_id)
-                        .filter_by_name_unhygienic(name)
-                        .any(|item| item.is_fn())
-                })
-                .collect::<Vec<_>>();
-            traits.sort_unstable_by_key(|trait_id| {
-                tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0
-            });
-            traits.dedup();
-            // A generic type whose every parameter has a default is reached
-            // at that instance, which its path names as a type: palette's
-            // `impl<S, T: Stimulus> Default for Rgb<S, T>` applies to
-            // `Rgb<Srgb, f32>`, though not to every `Rgb<S, T>`.
-            let defaulted = generic.then(|| defaulted_instance(tcx, adt)).flatten();
-            for trait_id in traits {
-                self.edge(1)?;
-                // A generic trait, as iced's `Widget<Message, Theme,
-                // Renderer>`, is the type's own implementation of it, whose
-                // trait arguments rustc proves where the bridge calls the
-                // member: its provided `_boxed` is the type's.
-                let trait_generic = tcx.generics_of(trait_id).count() != 1;
-                let implements = |self_ty: ty::Ty<'tcx>| {
-                    tcx.infer_ctxt()
-                        .build(ty::TypingMode::non_body_analysis())
-                        .type_implements_trait(trait_id, [self_ty], param_env)
-                        .must_apply_modulo_regions()
-                };
-                // A trait the generic type implements for any arguments its
-                // impl bounds, as iced's `impl<A: Renderer, B: Renderer>
-                // Renderer for fallback::Renderer<A, B>`: an alias names the
-                // instance, as `iced::Renderer` is `fallback::Renderer<wgpu,
-                // tiny_skia>`, and rustc proves the bounds where the bridge
-                // calls the member.
-                let generally = || {
-                    let mut found = false;
-                    tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
-                        found |= tcx.impl_opt_trait_ref(implementation).is_some_and(|reference| {
-                            matches!(
-                                reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                                ty::Adt(definition, arguments) if definition.did() == adt
-                                    && arguments.types().all(|argument| {
-                                        matches!(argument.kind(), ty::Param(_))
-                                    })
-                            )
-                        }) && tcx.impl_polarity(implementation) == ty::ImplPolarity::Positive;
-                    });
-                    found
-                };
-                let applies = trait_generic
-                    || implements(self_ty)
-                    || defaulted.is_some_and(implements)
-                    || (generic && generally());
-                if !applies {
-                    continue;
-                }
-                let Some(trait_item) = tcx
-                    .associated_items(trait_id)
-                    .filter_by_name_unhygienic(name)
-                    .find(|item| item.is_fn())
-                    .map(|item| item.def_id)
-                else {
-                    continue;
-                };
-                let mut candidates = Vec::new();
-                tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
-                    candidates.push(implementation);
-                });
-                let own = candidates.iter().copied().find(|implementation| {
-                    tcx.impl_opt_trait_ref(*implementation)
-                        .is_some_and(|reference| {
-                            matches!(
-                                reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                                ty::Adt(definition, _) if definition.did() == adt
-                            )
-                        })
-                });
-                let arguments = match own {
-                    Some(implementation) if trait_generic => tcx
-                        .impl_opt_trait_ref(implementation)
-                        .map(|reference| reference.instantiate_identity().skip_norm_wip().args)
-                        .unwrap_or_else(|| tcx.mk_args(&[self_ty.into()])),
-                    _ => tcx.mk_args(&[self_ty.into()]),
-                };
-                let obligation = AssociatedObligation {
-                    kind: AssociatedDemandKind::SelectedMember,
-                    trait_item: Some(trait_item),
-                    arguments: Some(arguments),
-                    param_env,
-                };
-                if let Some(implementation) = own {
-                    self.request_implementation(implementation, adt, Some(obligation))?;
-                    continue;
-                }
-                // A blanket implementation whose where-clause names a trait
-                // the type implements itself, as iced's extension trait
-                // `impl<T, M, Th, R> Widget<M, Th, R> for T where T:
-                // core::Widget<M, Th, R>`, applies through that
-                // implementation, which fixes the trait's arguments.
-                if (trait_generic || generic)
-                    && self.apply_blanket_through(&candidates, adt, self_ty, obligation)?
-                {
-                    continue;
-                }
-                // Any other blanket implementation of a generic trait is
-                // left unresolved, as rustc would choose its arguments.
-                if trait_generic {
-                    continue;
-                }
-                let blankets = candidates
-                    .iter()
-                    .copied()
-                    .filter(|implementation| {
-                        tcx.generics_of(*implementation).count() == 1
-                            && tcx
-                                .impl_opt_trait_ref(*implementation)
-                                .is_some_and(|reference| {
-                                    matches!(
-                                        reference
-                                            .instantiate_identity()
-                                            .skip_norm_wip()
-                                            .self_ty()
-                                            .kind(),
-                                        ty::Param(_)
-                                    )
-                                })
-                    })
-                    .collect::<Vec<_>>();
-                // Coherence admits one blanket implementation of a trait
-                // for any one type. Several candidates whose bounds rustc
-                // would have to choose between are left unresolved, as is
-                // a blanket implementation for a generic type.
-                if let [implementation] = blankets.as_slice()
-                    && !generic
-                {
-                    self.apply_blanket(*implementation, adt, self_ty, obligation)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The one blanket implementation among `candidates` (`impl<T, ..>
-    /// Trait<..> for T where T: Base<..>`) whose where-clause on `T` names
-    /// a trait `adt` implements itself (`impl<..> Base<..> for Adt<..>`),
-    /// applied to `adt` through that implementation: the application has
-    /// its generics and where-clauses, and its trait arguments fix every
-    /// other parameter of the blanket implementation. rustc proves the
-    /// blanket implementation's other bounds where the bridge calls the
-    /// member. `false` when no candidate, or more than one, applies so.
-    fn apply_blanket_through(
-        &mut self,
-        candidates: &[DefId],
-        adt: DefId,
-        self_ty: Ty<'tcx>,
-        obligation: AssociatedObligation<'tcx>,
-    ) -> Result<bool, String> {
-        let tcx = self.tcx;
-        let mut found = Vec::new();
-        for &implementation in candidates {
-            let Some(reference) = tcx.impl_opt_trait_ref(implementation) else {
-                continue;
-            };
-            let reference = reference.instantiate_identity().skip_norm_wip();
-            let ty::Param(blanket) = reference.self_ty().kind() else {
-                continue;
-            };
-            let generics = tcx.generics_of(implementation);
-            if generics.parent.is_some() {
-                continue;
-            }
-            for (clause, _) in tcx.predicates_of(implementation).predicates {
-                self.edge(1)?;
-                let ty::ClauseKind::Trait(predicate) = clause.kind().skip_binder() else {
-                    continue;
-                };
-                if predicate.polarity != ty::PredicatePolarity::Positive
-                    || !matches!(predicate.self_ty().kind(), ty::Param(bounded) if bounded.index == blanket.index)
-                {
-                    continue;
-                }
-                let base_trait = predicate.def_id();
-                let mut own = Vec::new();
-                tcx.for_each_relevant_impl(base_trait, self_ty, |base| own.push(base));
-                own.retain(|base| {
-                    tcx.impl_opt_trait_ref(*base).is_some_and(|base| {
-                        matches!(
-                            base.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                            ty::Adt(definition, _) if definition.did() == adt
-                        )
-                    })
-                });
-                let [base] = own.as_slice() else {
-                    continue;
-                };
-                let base_reference = tcx
-                    .impl_opt_trait_ref(*base)
-                    .ok_or_else(|| "base implementation lost its trait".to_owned())?
-                    .instantiate_identity()
-                    .skip_norm_wip();
-                // Each parameter of the blanket implementation: its self
-                // type is the base's, and each other is the base's trait
-                // argument where the where-clause names it.
-                let mut fixed = vec![None; generics.count()];
-                fixed[blanket.index as usize] = Some(base_reference.self_ty().into());
-                for (written, argument) in predicate
-                    .trait_ref
-                    .args
-                    .iter()
-                    .zip(base_reference.args.iter())
-                    .skip(1)
-                {
-                    if let Some(written) = written.as_type()
-                        && let ty::Param(parameter) = written.kind()
-                        && let Some(slot) = fixed.get_mut(parameter.index as usize)
-                    {
-                        *slot = Some(argument);
-                    }
-                }
-                let Some(arguments) = fixed.into_iter().collect::<Option<Vec<_>>>() else {
-                    continue;
-                };
-                found.push((implementation, *base, tcx.mk_args(&arguments)));
-            }
-        }
-        found.sort_unstable_by_key(|(implementation, base, _)| {
-            (
-                tcx.def_path_hash(*implementation).to_raw_def_path_hash().0,
-                tcx.def_path_hash(*base).to_raw_def_path_hash().0,
-            )
-        });
-        found.dedup_by_key(|(implementation, base, _)| (*implementation, *base));
-        let [(implementation, base, arguments)] = found.as_slice() else {
-            return Ok(false);
-        };
-        let (implementation, base, arguments) = (*implementation, *base, *arguments);
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.blanket-through-application/v1");
-        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(base).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
-        let digest = digest.finalize();
-        let key = hex(&digest[..16])?;
-        let instantiated = tcx
-            .impl_opt_trait_ref(implementation)
-            .ok_or_else(|| "blanket implementation lost its trait".to_owned())?
-            .instantiate(tcx, arguments)
-            .skip_norm_wip();
-        let identity = tcx
-            .impl_opt_trait_ref(implementation)
-            .map(|reference| reference.instantiate_identity().skip_norm_wip());
-        match implementation_crate_authority(self.is_sysroot_crate(implementation.krate)?) {
-            ImplementationCrateAuthority::Sysroot => self.register_sysroot(implementation.krate)?,
-            ImplementationCrateAuthority::External => {
-                self.register_external(implementation.krate)?
-            }
-        }
-        let mut id = self.id(base, Namespace::Type)?;
-        id.def_path_hash = key.clone();
-        let mut obligations = BTreeMap::new();
-        obligations.insert(self.associated_obligation_order_key(obligation), obligation);
-        let associated =
-            self.expand_associated_obligations(implementation, identity, &obligations, &id, true)?;
-        if let Some(existing) = self.applications.get_mut(&key) {
-            existing.associated.extend(associated);
-            existing.associated.sort_unstable();
-            existing.associated.dedup();
-            return Ok(true);
-        }
-        self.ensure(adt, Namespace::Type)?;
-        self.ensure(instantiated.def_id, Namespace::Type)?;
-        let mut relevance = vec![
-            self.id(adt, Namespace::Type)?,
-            self.id(instantiated.def_id, Namespace::Type)?,
-        ];
-        relevance.sort_unstable();
-        relevance.dedup();
-        // The base implementation's parameters are the application's.
-        let previous = self.reowned.replace((base, id.clone()));
-        let parts = (|| {
-            Ok::<_, String>((
-                self.arguments(instantiated.args, base, 0)?,
-                self.type_of(instantiated.self_ty(), base, 0)?,
-                self.generics(base)?,
-            ))
-        })();
-        self.reowned = previous;
-        let (trait_arguments, self_type, generics) = parts?;
-        let header = tcx.impl_trait_header(implementation);
-        let record = Implementation {
-            key: key.clone(),
-            id: id.clone(),
-            relevance,
-            trait_ref: Trait::Trait {
-                id: self.id(instantiated.def_id, Namespace::Type)?,
-                arguments: trait_arguments,
-            },
-            self_type,
-            safety: safety(header.safety),
-            polarity: Polarity::Positive,
-            const_impl: false,
-            default_impl: false,
-            generics,
-            associated,
-            span: self.span(tcx.def_span(implementation))?,
-            origin: self.origin(tcx.def_span(implementation))?,
-        };
-        self.budget.items(1)?;
-        self.applications.insert(key, record);
-        Ok(true)
-    }
-
-    /// The blanket implementation `implementation` applied to the concrete
-    /// type `adt`: an implementation of the trait for that type, with the
-    /// demanded member and no generics of its own.
-    fn apply_blanket(
-        &mut self,
-        implementation: DefId,
-        adt: DefId,
-        self_ty: Ty<'tcx>,
-        obligation: AssociatedObligation<'tcx>,
-    ) -> Result<(), String> {
-        let tcx = self.tcx;
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.blanket-application/v1");
-        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
-        let digest = digest.finalize();
-        let key = hex(&digest[..16])?;
-        let instantiated = tcx
-            .impl_opt_trait_ref(implementation)
-            .ok_or_else(|| "blanket implementation lost its trait".to_owned())?
-            .instantiate(tcx, tcx.mk_args(&[self_ty.into()]))
-            .skip_norm_wip();
-        let identity = tcx
-            .impl_opt_trait_ref(implementation)
-            .map(|reference| reference.instantiate_identity().skip_norm_wip());
-        match implementation_crate_authority(self.is_sysroot_crate(implementation.krate)?) {
-            ImplementationCrateAuthority::Sysroot => self.register_sysroot(implementation.krate)?,
-            ImplementationCrateAuthority::External => {
-                self.register_external(implementation.krate)?
-            }
-        }
-        let mut id = self.id(implementation, Namespace::Type)?;
-        id.def_path_hash = key.clone();
-        let mut obligations = BTreeMap::new();
-        obligations.insert(self.associated_obligation_order_key(obligation), obligation);
-        let associated =
-            self.expand_associated_obligations(implementation, identity, &obligations, &id, true)?;
-        if let Some(existing) = self.applications.get_mut(&key) {
-            existing.associated.extend(associated);
-            existing.associated.sort_unstable();
-            existing.associated.dedup();
-            return Ok(());
-        }
-        self.ensure(adt, Namespace::Type)?;
-        self.ensure(instantiated.def_id, Namespace::Type)?;
-        // The ledger keeps relevance in identity order.
-        let mut relevance = vec![
-            self.id(adt, Namespace::Type)?,
-            self.id(instantiated.def_id, Namespace::Type)?,
-        ];
-        relevance.sort_unstable();
-        relevance.dedup();
-        let header = tcx.impl_trait_header(implementation);
-        let record = Implementation {
-            key: key.clone(),
-            id,
-            relevance,
-            trait_ref: Trait::Trait {
-                id: self.id(instantiated.def_id, Namespace::Type)?,
-                arguments: self.arguments(instantiated.args, adt, 0)?,
-            },
-            self_type: self.type_of(self_ty, adt, 0)?,
-            safety: safety(header.safety),
-            polarity: Polarity::Positive,
-            const_impl: false,
-            default_impl: false,
-            generics: Generics {
-                parameters: Vec::new(),
-                predicates: Vec::new(),
-            },
-            associated,
-            span: self.span(tcx.def_span(implementation))?,
-            origin: self.origin(tcx.def_span(implementation))?,
-        };
-        self.budget.items(1)?;
-        self.applications.insert(key, record);
-        Ok(())
-    }
-
-    fn is_foreign_crate_root(&self, def_id: DefId) -> bool {
-        def_id.is_crate_root() && def_id.krate != self.selected
-    }
-
     fn reexport(&mut self, reexport: RustReexport) -> Result<Reexport, String> {
         let identified =
             |builder: &mut Self, kind: ReexportKind, id: DefId| -> Result<Reexport, String> {
@@ -3141,58 +1962,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
     }
 
-    /// The types exported aliases pass their parameters on to that no
-    /// public path of the root reaches, as `iced::Element` passes them to
-    /// `iced_core::Element` and `canvas::Cache` to
-    /// `iced_graphics::geometry::Cache`, in crate order. Each is named under
-    /// its defining crate's `$crate` segment (`crate_segment`), as a macro's
-    /// `$crate` path names it, so it is exported and generated code writes
-    /// it through the alias. A type in the root's own crate, or one whose
-    /// crate a macro's `$crate` already names, is left out.
-    fn hidden_alias_targets(&mut self) -> Result<Vec<DefId>, String> {
-        let tcx = self.tcx;
-        let exported = self
-            .reachable
-            .iter()
-            .filter_map(|export| match &export.target {
-                ExportTarget::Definition { id } => Some(id.def_path_hash.clone()),
-                ExportTarget::Unsupported { .. } => None,
-            })
-            .collect::<HashSet<_>>();
-        let mut targets = Vec::new();
-        for (alias, namespace) in self.definitions.keys() {
-            if *namespace != Namespace::Type
-                || tcx.def_kind(*alias) != DefKind::TyAlias
-                || !exported.contains(&def_hash(tcx, *alias)?)
-            {
-                continue;
-            }
-            let Some(target) = passed_on_target(tcx, *alias) else {
-                continue;
-            };
-            if target.krate != self.selected
-                && self.definitions.contains_key(&(target, Namespace::Type))
-                && !exported.contains(&def_hash(tcx, target)?)
-                && !self
-                    .crate_roots
-                    .iter()
-                    .any(|(root, _)| root.krate == target.krate)
-                && !self.is_sysroot_crate(target.krate)?
-            {
-                targets.push(target);
-            }
-        }
-        // In a fixed order, whatever the table's.
-        targets.sort_unstable_by_key(|target| (target.krate, tcx.def_path_hash(*target)));
-        targets.dedup();
-        Ok(targets)
-    }
-
     fn ensure_with_demand(
         &mut self,
         def_id: DefId,
         namespace: Namespace,
-        demand: Demand,
+        demand: Level,
     ) -> Result<(), String> {
         let owner = self.compiler_definition_owner(def_id)?;
         self.request_definition(def_id, namespace, owner, demand)
@@ -3203,110 +1977,43 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         def_id: DefId,
         namespace: Namespace,
         owner: Owner,
-        demand: Demand,
+        demand: Level,
     ) -> Result<(), String> {
-        // A type the root reaches only through an alias that passes its
-        // parameters on is written through that alias, so the alias comes
-        // with it (D604.5).
-        if namespace == Namespace::Type
+        let (request, alias) = self.definition_request(def_id, namespace, owner, demand)?;
+        self.budget.items(2)?;
+        self.emissions.push(Emission::Request { request, alias });
+        Ok(())
+    }
+
+    /// The request for `def_id` at `demand`. A type the root reaches only
+    /// through an alias that passes its parameters on is written through
+    /// that alias, so the alias's shape comes with it (D604.5).
+    fn definition_request(
+        &mut self,
+        def_id: DefId,
+        namespace: Namespace,
+        owner: Owner,
+        demand: Level,
+    ) -> Result<(engine::Request, Option<engine::Request>), String> {
+        let alias = if namespace == Namespace::Type
             && matches!(self.tcx.def_kind(def_id), DefKind::Struct | DefKind::Enum)
             && let Some(alias) = self.passing_alias(def_id)
         {
-            let key = SemanticKey {
-                def_path_hash: self.tcx.def_path_hash(alias).to_raw_def_path_hash().0,
-                namespace: Namespace::Type,
-            };
-            if !self.scheduler.entries.contains_key(&key) {
-                self.ensure_with_demand(alias, Namespace::Type, Demand::ShapeOnly)?;
-            }
-        }
-        let key = SemanticKey {
-            def_path_hash: self.tcx.def_path_hash(def_id).to_raw_def_path_hash().0,
-            namespace,
+            let owner = self.compiler_definition_owner(alias)?;
+            Some(engine::Request {
+                key: self.key(alias, Namespace::Type),
+                owner: raw(&owner)?,
+                level: Level::Shape,
+            })
+        } else {
+            None
         };
-        if !self.scheduler.entries.contains_key(&key)
-            && self.scheduler.entries.len() >= MAX_DEFINITIONS
-        {
-            return Err("compiler definition limit exceeded".to_owned());
-        }
-        if let Some(existing) = self.scheduler.entries.get(&key)
-            && (existing.value.def_id != def_id || existing.value.namespace != namespace)
-        {
-            return Err("stable semantic traversal identity collision".to_owned());
-        }
-        if let Some(existing) = self.scheduler.entries.get(&key)
-            && existing.value.owner != owner
-        {
-            return Err(format!(
-                "stable definition owner traversal identity collision at `{}`",
-                self.tcx.def_path_str(def_id)
-            ));
-        }
-        self.scheduler.request(
-            key,
-            DefinitionRequest {
-                def_id,
-                namespace,
-                owner,
-            },
-            demand,
-            self.budget,
-        )
-    }
-
-    fn drain_scheduler(&mut self) -> Result<(), String> {
-        loop {
-            if let Some((key, request, demand)) = self.scheduler.next()? {
-                let operation = match demand {
-                    Demand::ShapeOnly => "ensure-shape",
-                    Demand::SelectedRoot => "ensure-selected",
-                };
-                let stage = match demand {
-                    Demand::ShapeOnly => "shape-only",
-                    Demand::SelectedRoot => "selected-root",
-                };
-                self.breadcrumb(
-                    "begin",
-                    stage,
-                    operation,
-                    request.def_id,
-                    request.namespace,
-                    "definition+namespace",
-                )?;
-                let previous_demand = self.active_demand;
-                self.active_demand = demand;
-                let operation_result: Result<(), String> = (|| {
-                    self.materialize_shape(request.def_id, request.namespace, request.owner)?;
-                    if matches!(demand, Demand::SelectedRoot) {
-                        self.expand_implementations(request.def_id)?;
-                        self.expand_selected_surface(request.def_id)?;
-                    }
-                    Ok(())
-                })();
-                self.active_demand = previous_demand;
-                operation_result?;
-                self.breadcrumb(
-                    "complete",
-                    stage,
-                    operation,
-                    request.def_id,
-                    request.namespace,
-                    "definition+namespace",
-                )?;
-                self.scheduler.complete(key, demand, self.budget)?;
-                continue;
-            }
-            if self.queued_obligations != 0 {
-                self.drain_trait_obligations()?;
-                continue;
-            }
-            if let Some((_, request)) = self.implementation_requests.pop_first() {
-                self.insert_external_implementation(request)?;
-                continue;
-            }
-            break;
-        }
-        Ok(())
+        let request = engine::Request {
+            key: self.key(def_id, namespace),
+            owner: raw(&owner)?,
+            level: demand,
+        };
+        Ok((request, alias))
     }
 
     fn request_trait_obligation(
@@ -3331,99 +2038,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             param_env: self.tcx.param_env(owner),
             relevance: owner,
         };
-        let key = self.trait_obligation_order_key(obligation);
-        if let Some(existing) = self.obligations.get(&key) {
-            if existing.obligation != obligation {
-                return Err("stable trait obligation traversal identity collision".to_owned());
-            }
-            if self.active_demand == Demand::SelectedRoot && !existing.selected {
-                let existing = self
-                    .obligations
-                    .get_mut(&key)
-                    .ok_or_else(|| "trait obligation selection state disappeared".to_owned())?;
-                existing.selected = true;
-            }
-            return Ok(());
-        }
+        let key = self.obligation_key(obligation);
+        self.obligations.insert(key.clone(), obligation);
         self.budget.items(1)?;
-        if self
-            .obligations
-            .insert(
-                key,
-                ScheduledTraitObligation {
-                    obligation,
-                    state: TraitObligationState::Queued,
-                    selected: self.active_demand == Demand::SelectedRoot,
-                },
-            )
-            .is_some()
-        {
-            return Err("duplicate trait obligation traversal identity".to_owned());
-        }
-        self.queued_obligations = self
-            .queued_obligations
-            .checked_add(1)
-            .ok_or_else(|| "queued trait obligation count overflowed".to_owned())?;
+        let class = match obligation.self_ty.kind() {
+            ty::Param(_) => engine::Class::Parameter,
+            ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
+                engine::Class::Inert
+            }
+            _ => engine::Class::Concrete,
+        };
+        self.emissions.push(Emission::Obligation { key, class });
         Ok(())
-    }
-
-    fn trait_obligation_order_key(
-        &self,
-        obligation: TraitObligation<'tcx>,
-    ) -> TraitObligationOrderKey {
-        let mut substitution = DefaultHasher::new();
-        obligation.self_ty.hash(&mut substitution);
-        obligation.arguments.hash(&mut substitution);
-        obligation.polarity.hash(&mut substitution);
-        obligation.param_env.hash(&mut substitution);
-        TraitObligationOrderKey {
-            trait_hash: self
-                .tcx
-                .def_path_hash(obligation.trait_id)
-                .to_raw_def_path_hash()
-                .0,
-            associated_hash: obligation
-                .associated
-                .map(|associated| self.tcx.def_path_hash(associated).to_raw_def_path_hash().0)
-                .unwrap_or_default(),
-            substitution_hash: substitution.finish(),
-            relevance_hash: self
-                .tcx
-                .def_path_hash(obligation.relevance)
-                .to_raw_def_path_hash()
-                .0,
-        }
-    }
-
-    fn drain_trait_obligations(&mut self) -> Result<(), String> {
-        let mut obligations = std::mem::take(&mut self.obligations);
-        let mut queued = std::mem::take(&mut self.queued_obligations);
-        let mut result = Ok(());
-        for scheduled in obligations.values_mut() {
-            if scheduled.state == TraitObligationState::Complete {
-                continue;
-            }
-            if let Err(error) =
-                self.process_trait_obligation(scheduled.obligation, scheduled.selected)
-            {
-                result = Err(error);
-                break;
-            }
-            scheduled.state = TraitObligationState::Complete;
-            queued = match queued.checked_sub(1) {
-                Some(queued) => queued,
-                None => {
-                    result = Err("queued trait obligation count underflowed".to_owned());
-                    break;
-                }
-            };
-        }
-        if result.is_ok() && (!self.obligations.is_empty() || self.queued_obligations != 0) {
-            result = Err("trait obligation traversal recursively enqueued work".to_owned());
-        }
-        self.obligations = obligations;
-        self.queued_obligations = queued;
-        result
     }
 
     fn process_trait_obligation(
@@ -3702,109 +2328,23 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 scalar,
                 outcome,
             };
-            match self.scalar_predicate_proofs.get(&key) {
-                Some(existing) if existing != &proof => {
-                    return Err("scalar predicate proof identity collision".to_owned());
-                }
-                Some(_) => {}
-                None => {
-                    self.budget.items(1)?;
-                    self.scalar_predicate_proofs.insert(key, proof);
-                }
-            }
+            self.budget.items(1)?;
+            self.emissions.push(Emission::Scalar {
+                key: format!(
+                    "{}:{}:{}:{:?}",
+                    hex(&key.owner_hash)?,
+                    key.parameter,
+                    hex(&key.trait_hash)?,
+                    key.scalar
+                ),
+                proof,
+            });
         }
         Ok(())
-    }
-
-    fn request_implementation(
-        &mut self,
-        impl_id: DefId,
-        relevance: DefId,
-        associated: Option<AssociatedObligation<'tcx>>,
-    ) -> Result<(), String> {
-        let key = self.tcx.def_path_hash(impl_id).to_raw_def_path_hash().0;
-        let associated = associated
-            .map(|obligation| (self.associated_obligation_order_key(obligation), obligation));
-        match self.implementation_requests.get_mut(&key) {
-            Some(request) => {
-                if request.impl_id != impl_id {
-                    return Err("stable implementation traversal identity collision".to_owned());
-                }
-                if !request.relevance.contains(&relevance) {
-                    self.budget.items(1)?;
-                    request.relevance.try_reserve(1).map_err(|error| {
-                        format!("implementation request allocation failed: {error}")
-                    })?;
-                    request.relevance.push(relevance);
-                }
-                if let Some((associated_key, obligation)) = associated {
-                    match request.associated.get(&associated_key) {
-                        Some(existing) if existing != &obligation => {
-                            return Err(
-                                "stable associated obligation identity collision".to_owned()
-                            );
-                        }
-                        Some(_) => {}
-                        None => {
-                            self.budget.items(1)?;
-                            request.associated.insert(associated_key, obligation);
-                        }
-                    }
-                }
-            }
-            None => {
-                self.budget
-                    .items(3_usize.saturating_add(usize::from(associated.is_some())))?;
-                let mut relevance_set = Vec::new();
-                relevance_set.try_reserve_exact(1).map_err(|error| {
-                    format!("implementation request allocation failed: {error}")
-                })?;
-                relevance_set.push(relevance);
-                let mut associated_set = BTreeMap::new();
-                if let Some((associated_key, obligation)) = associated {
-                    associated_set.insert(associated_key, obligation);
-                }
-                self.implementation_requests.insert(
-                    key,
-                    ImplementationRequest {
-                        impl_id,
-                        relevance: relevance_set,
-                        associated: associated_set,
-                    },
-                );
-            }
-        }
-        Ok(())
-    }
-
-    fn associated_obligation_order_key(
-        &self,
-        obligation: AssociatedObligation<'tcx>,
-    ) -> AssociatedObligationOrderKey {
-        let mut substitution = DefaultHasher::new();
-        obligation.arguments.hash(&mut substitution);
-        let mut param_env = DefaultHasher::new();
-        obligation.param_env.hash(&mut param_env);
-        AssociatedObligationOrderKey {
-            kind: obligation.kind,
-            trait_item_hash: obligation
-                .trait_item
-                .map(|item| self.tcx.def_path_hash(item).to_raw_def_path_hash().0)
-                .unwrap_or_default(),
-            substitution_hash: substitution.finish(),
-            param_env_hash: param_env.finish(),
-        }
     }
 
     fn expand_selected_surface(&mut self, def_id: DefId) -> Result<(), String> {
-        if self.expanded_surfaces.contains(&def_id) {
-            return Ok(());
-        }
         self.budget.items(1)?;
-        self.expanded_surfaces
-            .try_reserve(1)
-            .map_err(|error| format!("selected surface allocation failed: {error}"))?;
-        self.expanded_surfaces.insert(def_id);
         self.breadcrumb(
             "begin",
             "selected-surface",
@@ -3878,7 +2418,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     self.ensure_with_demand(
                         item.def_id,
                         namespace(item.namespace()),
-                        Demand::SelectedRoot,
+                        Level::Selected,
                     )?;
                 }
                 Ok(())
@@ -3926,9 +2466,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     "definition",
                 )?;
                 if self.tcx.visibility(def_id).is_public() {
-                    self.ensure_with_demand(def_id, Namespace::Type, Demand::SelectedRoot)?;
+                    self.ensure_with_demand(def_id, Namespace::Type, Level::Selected)?;
                 } else {
-                    self.ensure_with_demand(def_id, Namespace::Type, Demand::ShapeOnly)?;
+                    self.ensure_with_demand(def_id, Namespace::Type, Level::Shape)?;
                 }
                 self.instantiated_breadcrumb(
                     "complete",
@@ -3945,7 +2485,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     fn ensure(&mut self, def_id: DefId, namespace: Namespace) -> Result<(), String> {
-        self.ensure_with_demand(def_id, namespace, Demand::ShapeOnly)
+        self.ensure_with_demand(def_id, namespace, Level::Shape)
     }
 
     fn materialize_shape(
@@ -3954,9 +2494,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         namespace: Namespace,
         owner: Owner,
     ) -> Result<(), String> {
-        if self.definitions.contains_key(&(def_id, namespace)) {
-            return Ok(());
-        }
         if def_id.is_local() {
             Err("selected metadata refers to the Rawr probe crate".to_owned())
         } else if self.is_sysroot_crate(def_id.krate)? {
@@ -3972,7 +2509,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         namespace: Namespace,
         owner: Owner,
     ) -> Result<(), String> {
-        self.request_definition(def_id, namespace, owner, Demand::ShapeOnly)
+        self.request_definition(def_id, namespace, owner, Level::Shape)
     }
 
     fn insert_external(
@@ -3991,12 +2528,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         let owner = self.validate_definition_owner(def_id, owner)?;
         self.register_external(def_id.krate)?;
-        if self.definitions.contains_key(&(def_id, namespace)) {
-            return Ok(());
-        }
-        if self.definitions.len() >= MAX_DEFINITIONS {
-            return Err("compiler definition limit exceeded".to_owned());
-        }
         let anonymous_support = match associated_path_kind(self.tcx, def_id)? {
             Some(AssociatedPathKind::AnonymousSupport(support)) => {
                 self.validate_anonymous_associated_owner(support, &owner)?;
@@ -4026,29 +2557,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 None => self.origin(self.tcx.def_span(def_id))?,
             },
         };
-        self.budget.items(1)?;
-        self.definitions
-            .try_reserve(1)
-            .map_err(|error| format!("definition ledger allocation failed: {error}"))?;
-        if self
-            .definitions
-            .insert((def_id, namespace), definition)
-            .is_some()
-        {
-            return Err("duplicate external definition identity".to_owned());
-        }
-        Ok(())
+        let alias = (namespace == Namespace::Type && self.tcx.def_kind(def_id) == DefKind::TyAlias)
+            .then(|| passed_on_target(self.tcx, def_id))
+            .flatten()
+            .map(|target| self.alias_target(target))
+            .transpose()?;
+        self.emit_definition(def_id, namespace, &definition, alias)
     }
 
     fn expand_implementations(&mut self, def_id: DefId) -> Result<(), String> {
-        if self.expanded_impls.contains(&def_id) {
-            return Ok(());
-        }
         self.budget.items(1)?;
-        self.expanded_impls
-            .try_reserve(1)
-            .map_err(|error| format!("expanded implementation allocation failed: {error}"))?;
-        self.expanded_impls.insert(def_id);
         let kind = self.tcx.def_kind(def_id);
         self.breadcrumb(
             "begin",
@@ -4065,6 +2583,22 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // is not an unconstrained request for every implementation.
             ImplementationWork::Trait => {}
             ImplementationWork::Nominal => {
+                // The names its inherent impls give: a demanded member of one
+                // of them needs no trait (`Unit::Member`).
+                let mut names = self
+                    .tcx
+                    .inherent_impls(def_id)
+                    .iter()
+                    .flat_map(|implementation| {
+                        self.tcx
+                            .associated_items(*implementation)
+                            .in_definition_order()
+                            .map(|item| item.name().to_string())
+                    })
+                    .collect::<Vec<_>>();
+                names.sort_unstable();
+                names.dedup();
+                self.emissions.push(Emission::Inherent { names });
                 let inherent_count = self.tcx.inherent_impls(def_id).len();
                 self.edge(inherent_count)?;
                 self.budget.items(inherent_count)?;
@@ -4173,196 +2707,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         Ok(())
     }
 
-    fn insert_external_implementation(
-        &mut self,
-        request: ImplementationRequest<'tcx>,
-    ) -> Result<(), String> {
-        let ImplementationRequest {
-            impl_id,
-            relevance: mut requested_relevance,
-            associated: requested_associated,
-        } = request;
-        requested_relevance
-            .sort_unstable_by_key(|owner| self.tcx.def_path_hash(*owner).to_raw_def_path_hash().0);
-        requested_relevance.dedup();
-        match implementation_crate_authority(self.is_sysroot_crate(impl_id.krate)?) {
-            ImplementationCrateAuthority::Sysroot => self.register_sysroot(impl_id.krate)?,
-            ImplementationCrateAuthority::External => self.register_external(impl_id.krate)?,
-        }
-        let key = self.def_hash(impl_id)?;
-        let implementation_id = self.id(impl_id, Namespace::Type)?;
-        let compiler_self_ty = self
-            .tcx
-            .type_of(impl_id)
-            .instantiate_identity()
-            .skip_norm_wip();
-        let compiler_trait_ref = self
-            .tcx
-            .impl_opt_trait_ref(impl_id)
-            .map(|reference| reference.instantiate_identity().skip_norm_wip());
-        let mut relevance = BTreeSet::new();
-        for owner_id in requested_relevance {
-            self.insert_implementation_relevance_owner(owner_id, &mut relevance)?;
-        }
-        for obligation in requested_associated.values() {
-            if let Some(trait_item) = obligation.trait_item {
-                self.insert_implementation_relevance_definition(trait_item, &mut relevance)?;
-            }
-        }
-        if let Some(mut existing) = self.implementations.remove(&impl_id) {
-            let associated = self.expand_associated_obligations(
-                impl_id,
-                compiler_trait_ref,
-                &requested_associated,
-                &implementation_id,
-                false,
-            )?;
-            if existing.relevance.len().saturating_add(relevance.len()) > MAX_EDGES {
-                return Err("implementation relevance edge limit exceeded".to_owned());
-            }
-            self.budget.items(relevance.len())?;
-            existing
-                .relevance
-                .try_reserve(relevance.len())
-                .map_err(|error| format!("implementation relevance allocation failed: {error}"))?;
-            existing.relevance.extend(relevance);
-            existing.relevance.sort_unstable();
-            existing.relevance.dedup();
-            if existing.associated.len().saturating_add(associated.len()) > MAX_EDGES {
-                return Err("implementation associated edge limit exceeded".to_owned());
-            }
-            self.budget.items(associated.len())?;
-            existing
-                .associated
-                .try_reserve(associated.len())
-                .map_err(|error| format!("implementation associated allocation failed: {error}"))?;
-            existing.associated.extend(associated);
-            existing.associated.sort_unstable();
-            existing.associated.dedup();
-            if self.implementations.insert(impl_id, existing).is_some() {
-                return Err("implementation ledger identity collision".to_owned());
-            }
-            return Ok(());
-        }
-        self.breadcrumb(
-            "begin",
-            "implementation",
-            "implementation-body",
-            impl_id,
-            Namespace::Type,
-            "implementation",
-        )?;
-        for argument in compiler_self_ty.walk() {
-            if let Some(inner) = argument.as_type()
-                && let ty::Adt(definition, _) = inner.kind()
-            {
-                self.edge(1)?;
-                self.ensure(definition.did(), Namespace::Type)?;
-                self.budget.items(1)?;
-                relevance.insert(self.id(definition.did(), Namespace::Type)?);
-            }
-        }
-        let self_type = self.type_of(compiler_self_ty, impl_id, 0)?;
-        let trait_ref = match compiler_trait_ref {
-            None => Trait::Inherent,
-            Some(reference) => {
-                let trait_id: DefId = reference.def_id;
-                self.edge(1)?;
-                self.ensure(trait_id, Namespace::Type)?;
-                self.budget.items(1)?;
-                relevance.insert(self.id(trait_id, Namespace::Type)?);
-                Trait::Trait {
-                    id: self.id(trait_id, Namespace::Type)?,
-                    arguments: self.arguments(reference.args, impl_id, 0)?,
-                }
-            }
-        };
-        let associated = self.expand_associated_obligations(
-            impl_id,
-            compiler_trait_ref,
-            &requested_associated,
-            &implementation_id,
-            false,
-        )?;
-        let (impl_safety, polarity, const_impl) = match compiler_trait_ref {
-            Some(_) => {
-                let header = self.tcx.impl_trait_header(impl_id);
-                let polarity = match header.polarity {
-                    ty::ImplPolarity::Positive => Polarity::Positive,
-                    ty::ImplPolarity::Negative => Polarity::Negative,
-                    ty::ImplPolarity::Reservation => {
-                        self.breadcrumb(
-                            "complete",
-                            "implementation",
-                            "implementation-body",
-                            impl_id,
-                            Namespace::Type,
-                            "implementation",
-                        )?;
-                        return Ok(());
-                    }
-                };
-                (
-                    safety(header.safety),
-                    polarity,
-                    matches!(header.constness, hir::Constness::Const { .. }),
-                )
-            }
-            None => (Safety::Safe, Polarity::Positive, false),
-        };
-        let generics = self.generics(impl_id)?;
-        let span = self.span(self.tcx.def_span(impl_id))?;
-        let origin = self.origin(self.tcx.def_span(impl_id))?;
-        let implementation = Implementation {
-            key,
-            id: implementation_id,
-            relevance: {
-                let mut values = Vec::new();
-                self.budget.items(relevance.len())?;
-                values.try_reserve_exact(relevance.len()).map_err(|error| {
-                    format!("implementation relevance allocation failed: {error}")
-                })?;
-                values.extend(relevance);
-                values
-            },
-            trait_ref,
-            self_type,
-            safety: impl_safety,
-            polarity,
-            const_impl,
-            default_impl: self.tcx.defaultness(impl_id).is_default(),
-            generics,
-            associated,
-            span,
-            origin,
-        };
-        self.budget.items(1)?;
-        self.implementations
-            .try_reserve(1)
-            .map_err(|error| format!("implementation ledger allocation failed: {error}"))?;
-        if self
-            .implementations
-            .insert(impl_id, implementation)
-            .is_some()
-        {
-            return Err("duplicate external implementation identity".to_owned());
-        }
-        self.breadcrumb(
-            "complete",
-            "implementation",
-            "implementation-body",
-            impl_id,
-            Namespace::Type,
-            "implementation",
-        )?;
-        Ok(())
-    }
-
     fn expand_associated_obligations(
         &mut self,
         impl_id: DefId,
         compiler_trait_ref: Option<ty::TraitRef<'tcx>>,
-        obligations: &BTreeMap<AssociatedObligationOrderKey, AssociatedObligation<'tcx>>,
+        obligations: &[AssociatedObligation<'tcx>],
         implementation_id: &Id,
         application: bool,
     ) -> Result<Vec<Id>, String> {
@@ -4370,7 +2719,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         match compiler_trait_ref {
             None => {
                 if obligations
-                    .values()
+                    .iter()
                     .any(|obligation| obligation.kind == AssociatedDemandKind::SelectedMember)
                 {
                     return Err(
@@ -4379,7 +2728,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     );
                 }
                 if obligations
-                    .values()
+                    .iter()
                     .any(|obligation| obligation.kind == AssociatedDemandKind::NominalSurface)
                 {
                     for item in self.tcx.associated_items(impl_id).in_definition_order() {
@@ -4392,7 +2741,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             Some(reference) => {
                 let trait_id: DefId = reference.def_id;
                 let implementors = self.tcx.impl_item_implementor_ids(impl_id);
-                for obligation in obligations.values() {
+                for obligation in obligations.iter() {
                     match obligation.kind {
                         // A demanded nominal admits a trait implementation header as
                         // applicability evidence. It does not make every trait member
@@ -4501,7 +2850,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 item_namespace,
                 "definition+namespace",
             )?;
-            self.ensure_with_demand(definition_id, item_namespace, Demand::SelectedRoot)?;
+            self.ensure_with_demand(definition_id, item_namespace, Level::Selected)?;
             self.breadcrumb(
                 "complete",
                 "implementation",
@@ -4633,12 +2982,17 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         Ok(())
     }
 
+    /// Every registration is emitted, so a unit replayed alone still names
+    /// the crates it reached; the session keeps each crate's artifacts once.
     fn register_external(&mut self, crate_num: CrateNum) -> Result<(), String> {
-        if self.external.contains_key(&crate_num) {
+        if let Some(external) = self.external.get(&crate_num) {
+            let emission = Emission::Register {
+                sysroot: false,
+                crate_name: external.crate_name.clone(),
+                stable_crate_id: external.stable_crate_id.clone(),
+            };
+            self.emissions.push(emission);
             return Ok(());
-        }
-        if self.external.len() >= MAX_PACKAGES {
-            return Err("external compiler crate limit exceeded".to_owned());
         }
         let mut artifacts = Vec::new();
         for path in self.tcx.used_crate_source(crate_num).paths() {
@@ -4672,7 +3026,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 artifacts,
             },
         );
-        Ok(())
+        self.register_external(crate_num)
     }
 
     fn insert_sysroot(
@@ -4682,12 +3036,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         owner: Owner,
     ) -> Result<(), String> {
         let owner = self.validate_definition_owner(def_id, owner)?;
-        if self.definitions.contains_key(&(def_id, namespace)) {
-            return Ok(());
-        }
-        if self.definitions.len() >= MAX_DEFINITIONS {
-            return Err("compiler definition limit exceeded".to_owned());
-        }
         self.register_sysroot(def_id.krate)?;
         let anonymous_support = match associated_path_kind(self.tcx, def_id)? {
             Some(AssociatedPathKind::AnonymousSupport(support)) => {
@@ -4714,12 +3062,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 None => self.origin(self.tcx.def_span(def_id))?,
             },
         };
-        self.budget.items(1)?;
-        self.definitions
-            .try_reserve(1)
-            .map_err(|error| format!("sysroot definition allocation failed: {error}"))?;
-        self.definitions.insert((def_id, namespace), definition);
-        Ok(())
+        self.emit_definition(def_id, namespace, &definition, None)
     }
 
     /// A `macro_rules!` macro's definition, read from its crate's source
@@ -5763,7 +4106,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .instantiate_identity()
                     .skip_norm_wip();
                 if let Some(alias) = self.instance_alias(default) {
-                    self.ensure_with_demand(alias, Namespace::Type, Demand::ShapeOnly)?;
+                    self.ensure_with_demand(alias, Namespace::Type, Level::Shape)?;
                 }
             }
             let parameter_kind = match parameter.kind {
@@ -6187,7 +4530,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     fn register_sysroot(&mut self, crate_num: CrateNum) -> Result<(), String> {
-        if self.sysroot.contains_key(&crate_num) {
+        if let Some(sysroot) = self.sysroot.get(&crate_num) {
+            let emission = Emission::Register {
+                sysroot: true,
+                crate_name: sysroot.crate_name.clone(),
+                stable_crate_id: sysroot.stable_crate_id.clone(),
+            };
+            self.emissions.push(emission);
             return Ok(());
         }
         if self.sysroot.len() >= MAX_PACKAGES {
@@ -6213,7 +4562,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 stable_crate_id,
             },
         );
-        Ok(())
+        self.register_sysroot(crate_num)
     }
 
     fn span(&mut self, span: RustSpan) -> Result<Span, String> {
@@ -6383,14 +4732,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         })
     }
 
-    fn charge_strings(&mut self, values: &[String]) -> Result<(), String> {
-        self.budget.items(values.len())?;
-        for value in values {
-            self.string(value)?;
-        }
-        Ok(())
-    }
-
     fn charge_id(&mut self, id: &Id) -> Result<(), String> {
         let Authority::Compiler {
             crate_name,
@@ -6399,53 +4740,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.string(crate_name)?;
         self.string(stable_crate_id)?;
         self.string(&id.def_path_hash)
-    }
-
-    fn charge_span(&mut self, span: &Span) -> Result<(), String> {
-        self.string(&span.file)
-    }
-
-    fn charge_reexports(&mut self, values: &[Reexport]) -> Result<(), String> {
-        self.budget.items(values.len())?;
-        for value in values {
-            if let ReexportEvidence::Identified { item, span } = &value.evidence {
-                for text in [
-                    item.crate_name.as_str(),
-                    item.stable_crate_id.as_str(),
-                    item.def_path_hash.as_str(),
-                ] {
-                    self.string(text)?;
-                }
-                self.charge_span(span)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn charge_export_clone(
-        &mut self,
-        root_alias: &str,
-        path: &[String],
-        target: &ExportTarget,
-        aliases: &[Alias],
-        reexports: &[Reexport],
-        span: &Span,
-    ) -> Result<(), String> {
-        self.budget.items(1)?;
-        self.string(root_alias)?;
-        self.charge_strings(path)?;
-        match target {
-            ExportTarget::Definition { id } => self.charge_id(id)?,
-            ExportTarget::Unsupported { compiler_kind } => self.string(compiler_kind)?,
-        }
-        self.budget.items(aliases.len())?;
-        for alias in aliases {
-            self.charge_strings(&alias.from)?;
-            self.charge_strings(&alias.to)?;
-            self.charge_span(&alias.span)?;
-        }
-        self.charge_reexports(reexports)?;
-        self.charge_span(span)
     }
 
     fn edge(&mut self, amount: usize) -> Result<(), String> {
@@ -7124,10 +5418,10 @@ mod tests {
         anonymous_associated_segment, check_type_depth, definition_has_item_name,
         effective_associated_item, implementation_crate_authority, implementation_work,
         opaque_argument_action, selected_surface_work, take_owned_candidate_bucket,
-        validate_parameter_class, Artifact, Budget, Demand, Diagnostic, DiagnosticIdentity,
+        validate_parameter_class, Artifact, Budget, Diagnostic, DiagnosticIdentity,
         ImplementationCrateAuthority, ImplementationWork, Invocation, Namespace,
-        OpaqueArgumentAction, Package, ParameterClass, Root, ScheduleState, Scheduler,
-        SelectedSurfaceWork, DIAGNOSTIC_SLOTS, DIAGNOSTIC_SLOT_BYTES, MAX_DEPTH, MAX_EDGES,
+        OpaqueArgumentAction, Package, ParameterClass, Root, SelectedSurfaceWork, DIAGNOSTIC_SLOTS,
+        DIAGNOSTIC_SLOT_BYTES, MAX_DEPTH, MAX_EDGES,
     };
     use rustc_hir::def::DefKind;
 
@@ -7317,7 +5611,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_crate_reuses_its_extraction_and_a_changed_one_is_extracted() {
+    fn a_crate_replays_its_recorded_units_and_a_changed_one_is_extracted() {
         use sha2::Digest as _;
         const CHILD: &str = "RAWR_EXTRACTION_REUSE_TEST";
         const ROOT: &str = "RAWR_EXTRACTION_REUSE_ROOT";
@@ -7328,12 +5622,12 @@ mod tests {
             let root = std::fs::canonicalize(root).unwrap();
             std::fs::create_dir(root.join("cache")).unwrap();
             // One compiler session per process: each step is a probe run in
-            // its own bundle-like directory, sharing the reuse directory.
+            // its own bundle-like directory, sharing the table directory.
             for step in ["first", "unchanged", "changed"] {
                 let status = std::process::Command::new(std::env::current_exe().unwrap())
                     .args([
                         "--exact",
-                        "compiler::tests::an_unchanged_crate_reuses_its_extraction_and_a_changed_one_is_extracted",
+                        "compiler::tests::a_crate_replays_its_recorded_units_and_a_changed_one_is_extracted",
                         "--nocapture",
                     ])
                     .env(CHILD, step)
@@ -7410,42 +5704,31 @@ mod tests {
         std::env::set_current_dir(previous_directory).unwrap();
         assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
         let sidecar = std::fs::read_to_string(protocol.join(format!("{identity}.json"))).unwrap();
+        // Each table, without the record of what it was made from.
         let kept: Vec<_> = std::fs::read_dir(&cache)
             .unwrap()
             .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_none())
             .collect();
-        assert_eq!(kept.len(), 1, "one body per probed crate: {kept:?}");
-        assert!(std::fs::metadata(&kept[0])
-            .unwrap()
-            .permissions()
-            .readonly());
+        assert_eq!(kept.len(), 1, "one table per probed crate: {kept:?}");
+        let table: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&kept[0]).unwrap()).unwrap();
+        assert_eq!(table["whole"], true, "the whole crate is recorded");
         // The sidecar names this bundle's artifact, never the kept one's.
         assert!(sidecar.contains(&format!("\"path\":\"{}\"", artifact.display())));
         match step {
             "first" => {
                 assert!(sidecar.contains("\"Example\""));
-                // Mark the kept body, so only reuse can carry the mark into
-                // the next sidecar, and reseal its digest.
-                let mut kept_bytes = std::fs::read(&kept[0]).unwrap();
-                let split = kept_bytes.iter().rposition(|byte| *byte == b'\n').unwrap();
-                let mut header: serde_json::Value =
-                    serde_json::from_slice(&kept_bytes[split + 1..]).unwrap();
-                kept_bytes.truncate(split);
-                let body = String::from_utf8(kept_bytes)
+                // Mark the recorded units, so only a replay can carry the
+                // mark into the next sidecar.
+                let marked = std::fs::read_to_string(&kept[0])
                     .unwrap()
                     .replace("\"Example\"", "\"Exampel\"");
-                header["digest"] = super::hex(&sha2::Sha256::digest(body.as_bytes()))
-                    .unwrap()
-                    .into();
-                std::fs::remove_file(&kept[0]).unwrap();
-                std::fs::write(&kept[0], format!("{body}\n{header}")).unwrap();
-                let mut permissions = std::fs::metadata(&kept[0]).unwrap().permissions();
-                permissions.set_readonly(true);
-                std::fs::set_permissions(&kept[0], permissions).unwrap();
+                std::fs::write(&kept[0], marked).unwrap();
                 std::fs::write(root.join("kept"), kept[0].to_str().unwrap()).unwrap();
             }
             "unchanged" => {
-                assert!(sidecar.contains("\"Exampel\""), "the kept body is reused");
+                assert!(sidecar.contains("\"Exampel\""), "the recorded units replay");
                 assert_eq!(
                     kept[0].to_str().unwrap(),
                     std::fs::read_to_string(root.join("kept")).unwrap()
@@ -7460,7 +5743,7 @@ mod tests {
                 assert_ne!(
                     kept[0].to_str().unwrap(),
                     std::fs::read_to_string(root.join("kept")).unwrap(),
-                    "the stale body is retired"
+                    "the stale table is retired"
                 );
             }
         }
@@ -7580,104 +5863,6 @@ mod tests {
             implementation_crate_authority(false),
             ImplementationCrateAuthority::External
         );
-    }
-
-    #[test]
-    fn traversal_scheduler_drains_a_deep_chain_without_call_stack_growth() {
-        const DEPTH: u32 = 100_000;
-        let mut budget = Budget::with_limits(usize::MAX, usize::MAX);
-        let mut scheduler = Scheduler::new();
-        scheduler
-            .request(0_u32, 0_u32, Demand::ShapeOnly, &mut budget)
-            .expect("the root is queued");
-        let mut completed = 0_u32;
-        while let Some((key, value, demand)) = scheduler.next().expect("queued work remains valid")
-        {
-            assert_eq!(key, value);
-            if value < DEPTH {
-                scheduler
-                    .request(value + 1, value + 1, Demand::ShapeOnly, &mut budget)
-                    .expect("the next identity is queued");
-            }
-            scheduler
-                .complete(key, demand, &mut budget)
-                .expect("the active identity completes");
-            completed += 1;
-        }
-        assert_eq!(completed, DEPTH + 1);
-    }
-
-    #[test]
-    fn traversal_scheduler_coalesces_active_cycles() {
-        let mut budget = Budget::with_limits(usize::MAX, usize::MAX);
-        let mut scheduler = Scheduler::new();
-        scheduler
-            .request(7_u32, 7_u32, Demand::ShapeOnly, &mut budget)
-            .expect("the cycle root is queued");
-        let (key, _, demand) = scheduler
-            .next()
-            .expect("the queue is valid")
-            .expect("the root is active");
-        scheduler
-            .request(7_u32, 7_u32, Demand::ShapeOnly, &mut budget)
-            .expect("the active back-edge is coalesced");
-        scheduler
-            .complete(key, demand, &mut budget)
-            .expect("the cycle root completes once");
-        assert!(scheduler.next().expect("the queue remains valid").is_none());
-        assert_eq!(
-            scheduler.entries.get(&7).map(|entry| entry.state),
-            Some(ScheduleState::Complete {
-                demand: Demand::ShapeOnly
-            })
-        );
-    }
-
-    #[test]
-    fn traversal_scheduler_requeues_an_active_demand_upgrade_once() {
-        let mut budget = Budget::with_limits(usize::MAX, usize::MAX);
-        let mut scheduler = Scheduler::new();
-        scheduler
-            .request(11_u32, 11_u32, Demand::ShapeOnly, &mut budget)
-            .expect("shape demand is queued");
-        let (key, _, demand) = scheduler
-            .next()
-            .expect("the queue is valid")
-            .expect("shape work is active");
-        scheduler
-            .request(11_u32, 11_u32, Demand::SelectedRoot, &mut budget)
-            .expect("selected-root demand joins the active work");
-        scheduler
-            .complete(key, demand, &mut budget)
-            .expect("shape completion retains the upgrade");
-        let (key, _, upgraded) = scheduler
-            .next()
-            .expect("the queue is valid")
-            .expect("the upgrade is queued");
-        assert_eq!(upgraded, Demand::SelectedRoot);
-        scheduler
-            .complete(key, upgraded, &mut budget)
-            .expect("selected-root work completes");
-        assert!(scheduler.next().expect("the queue remains valid").is_none());
-    }
-
-    #[test]
-    fn traversal_scheduler_uses_canonical_key_order() {
-        let mut budget = Budget::with_limits(usize::MAX, usize::MAX);
-        let mut scheduler = Scheduler::new();
-        for key in [9_u32, 2, 5] {
-            scheduler
-                .request(key, key, Demand::ShapeOnly, &mut budget)
-                .expect("the identity is queued");
-        }
-        let mut observed = Vec::new();
-        while let Some((key, _, demand)) = scheduler.next().expect("the queue is valid") {
-            observed.push(key);
-            scheduler
-                .complete(key, demand, &mut budget)
-                .expect("the identity completes");
-        }
-        assert_eq!(observed, [2, 5, 9]);
     }
 
     #[test]

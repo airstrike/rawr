@@ -544,6 +544,27 @@ impl Request {
             context,
             None,
         )?;
+        // Which selected crates share their tables per machine, before
+        // the unit graph's bytes move into the documents.
+        let selected_units = initial
+            .extraction()
+            .iter()
+            .map(|unit| crate::extract::shared::Selected {
+                unit_key: unit.semantic_key(),
+                package_id: unit.package_id(),
+                target: unit.target(),
+                features: unit.features(),
+            })
+            .collect::<Vec<_>>();
+        let shared = crate::extract::shared::keys(
+            bytes.bytes(),
+            &metadata,
+            &selected_units,
+            toolchain.rustc_commit(),
+            toolchain.host(),
+            &self.target,
+        );
+        drop(selected_units);
         let documents = cargo::Documents::bind(metadata_bytes, bytes, &metadata, &initial)?;
         let mut extraction_plan = crate::extract::plan::Plan::prepare_in(
             layout,
@@ -553,7 +574,11 @@ impl Request {
             limits,
         )?
         .demand(&self.demand)?
-        .reuse(&cached.context.rawr().join("extraction"))?;
+        .reuse(&cached.context.rawr().join("extraction"))?
+        .share(
+            shared,
+            crate::bindings::directory(cached.context.cargo_home()),
+        );
         let command_target = extraction_plan.command_target()?;
         allocation.path(paths.root())?;
         Ok(cargo::Harness {

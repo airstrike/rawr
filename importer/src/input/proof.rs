@@ -703,6 +703,39 @@ impl Proof {
         }
     }
 
+    /// The proof of a run that replayed shared bindings: the files it read
+    /// (the project's manifest and lock, the final-form harness), joined with
+    /// the evaluated crate input witnesses a watcher observes (D645).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn shared<'proof>(
+        entries: Box<[Entry]>,
+        native: [u8; 32],
+        witnesses: impl IntoIterator<Item = &'proof Self>,
+    ) -> Self {
+        let entries = entries
+            .into_vec()
+            .into_iter()
+            .chain(
+                witnesses
+                    .into_iter()
+                    .flat_map(|proof| proof.entries.iter().cloned()),
+            )
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let canonical = serde_json::to_vec(&(SCHEMA, &entries)).unwrap_or_default();
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(b"rawr.import.shared-bindings/v1");
+        fingerprint.update(&canonical);
+        Self {
+            schema: SCHEMA,
+            entries,
+            fingerprint: Fingerprint::from_bytes(fingerprint.finalize().into()),
+            native: Some(super::native::Inputs::shared(native)),
+        }
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn fixture() -> Self {
         Self {
