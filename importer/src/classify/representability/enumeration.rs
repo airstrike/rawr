@@ -29,6 +29,11 @@ pub struct Plan {
     /// region when it does (D558 tier 1).
     #[serde(default, skip_serializing_if = "is_zero")]
     lifetimes: u32,
+    /// Whether the type is covariant (or bivariant) in each of its
+    /// lifetimes, as rustc's variance says: its value at `'static` is one
+    /// at a scope frame region's shorter lifetime.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    covariant: bool,
     /// The crate implements `Iterator` for the type: a `for` loop walks it
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -116,6 +121,7 @@ impl Plan {
             eq,
             hash,
             lifetimes: 0,
+            covariant: false,
             iterator: false,
         }
     }
@@ -176,8 +182,14 @@ impl Plan {
         self.hash
     }
 
-    pub(crate) const fn with_borrowing(mut self, lifetimes: u32, iterator: bool) -> Self {
+    pub(crate) const fn with_borrowing(
+        mut self,
+        lifetimes: u32,
+        covariant: bool,
+        iterator: bool,
+    ) -> Self {
         self.lifetimes = lifetimes;
+        self.covariant = covariant;
         self.iterator = iterator;
         self
     }
@@ -186,6 +198,12 @@ impl Plan {
     #[must_use]
     pub const fn lifetimes(&self) -> u32 {
         self.lifetimes
+    }
+
+    /// Whether the type is covariant in each of its lifetimes.
+    #[must_use]
+    pub const fn covariant(&self) -> bool {
+        self.covariant
     }
 
     /// Whether the crate implements `Iterator` for the type.

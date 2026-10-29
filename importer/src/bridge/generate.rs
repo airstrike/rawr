@@ -377,6 +377,86 @@ fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
     __rawr_internal::island::lend::lend(arena, call)
 }
 
+/// The epochs of the arenas [`CallArena`] made, while each lives.
+static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec::new());
+
+/// An arena for one call on a thread that has none, as iced's executor
+/// calls `Task::map`'s function: the native values the call takes and gives
+/// move through it, and it ends with the call. A call that only moves its
+/// values, as `Result::ok` does, needs nothing of the owner's arena. A value
+/// the call keeps past its end, in a script value it gives, can't reach the
+/// owner's arena, so the call fails there and says so.
+#[allow(dead_code)]
+struct CallArena(Option<[u8; 32]>);
+
+#[allow(dead_code)]
+impl CallArena {
+    fn enter() -> Self {
+        if arena_access(|_| ()).is_some() {
+            return Self(None);
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut epoch = [0xca; 32];
+        epoch[..8].copy_from_slice(
+            &NEXT
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .to_le_bytes(),
+        );
+        let installed = NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
+            Ok(mut arena) if arena.is_none() => {
+                *arena = Some(Arena::new(epoch));
+                true
+            }
+            _ => false,
+        });
+        if !installed {
+            return Self(None);
+        }
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(epoch);
+        Self(Some(epoch))
+    }
+}
+
+impl Drop for CallArena {
+    fn drop(&mut self) {
+        let Some(epoch) = self.0 else {
+            return;
+        };
+        // What the call let go of is freed; what is left, a handle still
+        // holds.
+        let kept = NATIVE_ARENA.with(|cell| {
+            let mut arena = cell.borrow_mut().take()?;
+            arena.release_dropped();
+            let slot = arena.slots.iter().find(|slot| slot.value.is_some())?;
+            Some(
+                slot.debug
+                    .zip(slot.value.as_deref())
+                    .and_then(|(debug, value)| debug(value))
+                    .map(|text| format!(", {text},"))
+                    .unwrap_or_default(),
+            )
+        });
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|live| *live != epoch);
+        RELEASES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(released, ..)| *released != epoch);
+        if let Some(kept) = kept
+            && !std::thread::panicking()
+        {
+            panic!(
+                "rawr: a script function native code called on a thread with no arena kept a native value it was given{kept} past the call, which Rawr can't hand to the owner's thread"
+            );
+        }
+    }
+}
+
 /// `call` with this thread's arena: the one in its cell, or else the one a
 /// native call running on this thread lends. `None` when neither is free.
 fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
@@ -876,19 +956,37 @@ impl Arena {
         for (handle, value) in restores {
             self.restore(handle, value);
         }
+        // Another live arena's releases wait for it: the owner's for the
+        // owner, and a call arena's for that call (`CallArena`). Those of a
+        // past program's arena are dropped.
+        let live = |epoch: &[u8; 32]| {
+            CALL_EPOCHS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(epoch)
+        };
+        let call = live(&self.epoch);
         loop {
-            let batch = std::mem::take(
-                &mut *RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
+            let batch = {
+                let mut queued = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (mine, others) = std::mem::take(&mut *queued)
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|(epoch, ..)| *epoch == self.epoch);
+                *queued = others;
+                mine
+            };
+            if !call {
+                RELEASES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .retain(|(epoch, ..)| live(epoch));
+            }
             if batch.is_empty() {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            for (epoch, slot, generation) in batch {
-                if epoch != self.epoch {
-                    continue;
-                }
+            for (_, slot, generation) in batch {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
                 };
@@ -9441,6 +9539,16 @@ fn render_slot(
             } else {
                 String::new()
             };
+            // On a thread with no arena, as iced's executor runs
+            // `Task::map`'s function and iced's `listen_with`, native
+            // values move in and out through an arena of the call's own
+            // (`CallArena`). A script value made of native inputs is made
+            // where it is used instead (`deferred`), when it can be.
+            let call_arena = if native || native_output {
+                "let _arena = CallArena::enter();\n        "
+            } else {
+                ""
+            };
             // A conversion that gives its errors back by `?`, as an
             // `Option` output's does, runs in a closure of its own.
             let converted = if native_output {
@@ -9458,7 +9566,7 @@ fn render_slot(
                 "",
                 rust,
                 format!(
-                    "{items}{deferred}let value = {{ {invoked} }};
+                    "{items}{deferred}{call_arena}let value = {{ {invoked} }};
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
                 ),
             )
@@ -9909,13 +10017,25 @@ fn render_take_input(
         && let Some(family) = family_of(&element)
     {
         // An element made outside any region is in the arena, at
-        // `'static`, which the region's lifetime shortens.
+        // `'static`, which the region's lifetime shortens when the type is
+        // covariant in it, as rustc's variance says. An invariant one, as
+        // iced's `Text<'a>` is through `Theme::Class<'a>`, can't be: Rust
+        // makes each element of a view at the view's lifetime, as Rawr
+        // makes it in the region, and one made before can't join them.
         let rust = concrete_type(&element).ok_or(request::Error::Drift {
             field: "a region array's element",
         })?;
+        let arena = if shortens(&element) {
+            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
+        } else {
+            format!(
+                "Err(Error::Value({:?}.to_owned()))",
+                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
+            )
+        };
         return writeln!(
             output,
-            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle)) }} }}).collect::<Result<Vec<_>, Error>>())?;"
+            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
         )
         .map_err(|_| request::Error::Encoding);
     }
@@ -10199,8 +10319,14 @@ fn render_callable_closure(
     } else {
         format!("({converted})")
     };
+    // An arena of the call's own on a thread with none (`CallArena`).
+    let call_arena = if native_inputs || native_output {
+        "let _arena = CallArena::enter();\n            "
+    } else {
+        ""
+    };
     Ok(format!(
-        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
+        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
         parameters.join(", "),
     ))
 }
@@ -11504,6 +11630,8 @@ impl Drop for LentArguments {
 #[derive(Clone, Copy)]
 struct Lifetimes {
     count: u32,
+    /// Covariant in each lifetime, as rustc's variance says.
+    covariant: bool,
     debug: bool,
     clone: bool,
     partial_eq: bool,
@@ -11612,6 +11740,24 @@ fn may_borrow(ty: &convert::Type) -> bool {
 }
 
 /// Whether a value of `ty` borrows when it is made in a scope frame.
+/// Whether a native value of `ty` at `'static` is one at any shorter
+/// lifetime: its type is covariant in each lifetime it declares, as rustc's
+/// variance says, and its type arguments carry none.
+fn shortens(ty: &convert::Type) -> bool {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return false;
+    };
+    TYPE_TRAITS.with_borrow(|types| {
+        types
+            .get(definition.as_bytes())
+            .is_some_and(|lifetimes| lifetimes.covariant)
+    }) && !arguments.iter().any(carries_lifetime)
+}
+
 fn carries_lifetime(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Nominal {
@@ -12358,6 +12504,7 @@ impl TypePaths {
                         for ty in owner.types() {
                             let lifetimes = Lifetimes {
                                 count: ty.lifetimes(),
+                                covariant: ty.covariant(),
                                 debug: ty.debug(),
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),

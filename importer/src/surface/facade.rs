@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 22;
+const SCHEMA: u32 = 23;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -470,6 +470,11 @@ pub struct TypeDefinition {
     /// How many lifetime parameters the native type declares (D558 tier 1).
     #[serde(default, skip_serializing_if = "is_zero")]
     lifetimes: u32,
+    /// Whether the native type is covariant in each of its lifetimes, so
+    /// its value at `'static` is one at a shorter lifetime (rustc's
+    /// variance).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    covariant: bool,
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
@@ -1120,6 +1125,7 @@ impl Plan {
                             eq: false,
                             hash: false,
                             lifetimes: 0,
+                            covariant: false,
                             iterator: false,
                             view: false,
                             widget: false,
@@ -1557,6 +1563,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         eq: false,
         hash: false,
         lifetimes: 0,
+        covariant: false,
         iterator: false,
         view: false,
         widget: false,
@@ -1634,6 +1641,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 eq: false,
                 hash: false,
                 lifetimes: 0,
+                covariant: false,
                 iterator: false,
                 view: false,
                 widget: false,
@@ -1679,6 +1687,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         eq: false,
         hash: false,
         lifetimes: 0,
+        covariant: false,
         iterator: false,
         view: false,
         widget: false,
@@ -2665,6 +2674,11 @@ impl TypeDefinition {
     pub const fn lifetimes(&self) -> u32 {
         self.lifetimes
     }
+    /// Return whether the native type is covariant in each of its
+    /// lifetimes.
+    pub const fn covariant(&self) -> bool {
+        self.covariant
+    }
     /// Return whether the crate implements `Iterator` for the native type.
     pub const fn iterator(&self) -> bool {
         self.iterator
@@ -2852,9 +2866,16 @@ fn type_definition(
             plan.iterator(),
             plan.view(),
             plan.widget(),
+            plan.covariant(),
         ),
-        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), false, false),
-        _ => (0, false, false, false),
+        Representability::Enum(plan) => (
+            plan.lifetimes(),
+            plan.iterator(),
+            false,
+            false,
+            plan.covariant(),
+        ),
+        _ => (0, false, false, false, false),
     };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
@@ -2924,6 +2945,7 @@ fn type_definition(
         eq: compare[1],
         hash: compare[2],
         lifetimes: borrowing.0,
+        covariant: borrowing.4,
         iterator: borrowing.1,
         view: borrowing.2,
         widget: borrowing.3,

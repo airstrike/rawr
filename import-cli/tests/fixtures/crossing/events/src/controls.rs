@@ -304,13 +304,20 @@ pub enum Signal {
 
 /// The messages `f` makes of each event, as iced's
 /// `event::listen_with(fn(Event, Status, window::Id) -> Option<Message>)`
-/// takes a function pointer.
-pub fn listen_with<Message>(f: fn(Signal, bool, u32) -> Option<Message>) -> Subscription<Message> {
+/// takes a function pointer, which iced calls on another thread.
+pub fn listen_with<Message>(f: fn(Signal, bool, u32) -> Option<Message>) -> Subscription<Message>
+where
+    Message: crate::MaybeSend + 'static,
+{
     Subscription {
-        messages: [Signal::Moved, Signal::Rescaled(2.0)]
-            .into_iter()
-            .filter_map(|signal| f(signal, false, 1))
-            .collect(),
+        messages: std::thread::spawn(move || {
+            [Signal::Moved, Signal::Rescaled(2.0)]
+                .into_iter()
+                .filter_map(|signal| f(signal, false, 1))
+                .collect()
+        })
+        .join()
+        .expect("the listening thread finishes"),
     }
 }
 
