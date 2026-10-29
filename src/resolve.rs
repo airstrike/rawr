@@ -2373,7 +2373,12 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl { reference });
     }
     erase_trait_generics(&mut parsed, types, host);
-    let crate_bounded = crate_trait_generics(&mut parsed, host);
+    let crate_bounded = crate_trait_generics(
+        &mut parsed.generics,
+        host,
+        #[cfg(feature = "rust-import")]
+        native,
+    )?;
     let lifetimes = item::Lifetimes::of(&parsed);
     let (scope, generics) = generic_scope(
         parsed.generics,
@@ -2446,7 +2451,7 @@ fn resolve_function(
                 .iter()
                 .map(|parameter| &parameter.ty)
                 .chain(output.as_ref())
-                .any(|ty| names_in_host_type(ty, &generic.name.text, false));
+                .any(|ty| names_in_host_type(ty, &generic.name.text, false, host));
     }
 
     Ok(item::Function {
@@ -2470,14 +2475,22 @@ fn resolve_function(
 }
 
 /// Whether `ty` names the generic parameter `name` as a type argument of a
-/// host type, at any depth.
-fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> bool {
+/// host type, or of an opaque `impl Trait<..>` of a crate's trait
+/// (`impl Widget<M>`), at any depth.
+fn names_in_host_type(
+    ty: &type_ref::Type,
+    name: &str,
+    inside_host: bool,
+    host: &host::Registry,
+) -> bool {
     match ty {
         type_ref::Type::Unit(_) => false,
         type_ref::Type::Tuple { members, .. } => members
             .iter()
-            .any(|member| names_in_host_type(member, name, inside_host)),
-        type_ref::Type::Reference { target, .. } => names_in_host_type(target, name, inside_host),
+            .any(|member| names_in_host_type(member, name, inside_host, host)),
+        type_ref::Type::Reference { target, .. } => {
+            names_in_host_type(target, name, inside_host, host)
+        }
         type_ref::Type::Path(path) => {
             if inside_host
                 && matches!(path.target, type_ref::Target::Parameter)
@@ -2485,9 +2498,19 @@ fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> boo
             {
                 return true;
             }
-            let host = inside_host || matches!(path.target, type_ref::Target::Host { .. });
+            #[cfg(feature = "rust-import")]
+            let crate_opaque = ty
+                .opaque_trait()
+                .is_some_and(|name| matches!(host.entry(name), Some(host::Entry::Module)));
+            #[cfg(not(feature = "rust-import"))]
+            let crate_opaque = {
+                let _ = host;
+                false
+            };
+            let inside =
+                inside_host || crate_opaque || matches!(path.target, type_ref::Target::Host { .. });
             path.arguments.iter().any(|argument| match argument {
-                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, host),
+                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, inside, host),
                 type_ref::Argument::Lifetime(_) => false,
             })
         }
@@ -2501,32 +2524,49 @@ fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> boo
 /// proves the bound where the instance calls the crate.
 #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
 fn crate_trait_generics(
-    function: &mut crate::item::Function,
+    generics: &mut [crate::item::GenericParam],
     host: &host::Registry,
-) -> BTreeMap<ImmutableString, Vec<crate::item::type_ref::Path>> {
+    #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
+) -> Result<BTreeMap<ImmutableString, Vec<crate::item::type_ref::Path>>, Error> {
     #[allow(unused_mut)]
     let mut bounded = BTreeMap::new();
     #[cfg(feature = "rust-import")]
-    for generic in function.generics.iter_mut() {
-        let (crate_traits, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut generic.bounds)
-            .into_vec()
-            .into_iter()
-            .partition(|bound| {
-                let qualified = bound
-                    .segments
-                    .iter()
-                    .map(|segment| segment.name.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                bound.segments.len() > 1
-                    && matches!(host.entry(&qualified), Some(host::Entry::Module))
-            });
+    for generic in generics.iter_mut() {
+        let mut crate_traits = Vec::new();
+        let mut kept = Vec::new();
+        for bound in std::mem::take(&mut generic.bounds).into_vec() {
+            let qualified = bound
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            if bound.segments.len() > 1
+                && matches!(host.entry(&qualified), Some(host::Entry::Module))
+            {
+                crate_traits.push(bound);
+                continue;
+            }
+            // A dependency's trait no binding has asked for yet is fetched,
+            // as a crate's unknown type is.
+            if bound.segments.len() > 1
+                && let Some(site) = native.filter(|site| site.missing_binding(host, &qualified))
+            {
+                let error = Error::UnknownType {
+                    name: qualified.into(),
+                    reference: bound.span,
+                };
+                site.record(&error);
+                return Err(error);
+            }
+            kept.push(bound);
+        }
         generic.bounds = kept.into_boxed_slice();
         if !crate_traits.is_empty() {
             bounded.insert(generic.name.text.clone(), crate_traits);
         }
     }
-    bounded
+    Ok(bounded)
 }
 
 /// `impl Bound`, the opaque type a dependency's trait bound reads as.

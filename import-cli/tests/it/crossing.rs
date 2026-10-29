@@ -191,6 +191,24 @@ fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
     );
 }
 
+/// Generic methods over a crate's trait, a generic associated function
+/// giving `impl Widget<M>`, and a generic function whose parameter reaches
+/// a crate function only in its body, called with a crate color and with a
+/// script type that converts into one: each is compiled once per
+/// instantiation its callers use (D629). The output is `cargo run`'s.
+#[test]
+fn generic_methods_and_body_only_generics_run_once_per_instantiation() {
+    let (rawr, cargo) = both_printed("crossing-methods", "methods.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 pad 5 [Increment] pad 7 0@50 pad 1 [Decrement] \
+             painted rgb(1, 2, 0)@16 painted rgb(10, 20, 30)@16"
+        ) && rawr.contains("4 message Decrement"),
+        "{rawr}"
+    );
+}
+
 /// iced's multi_window: a view passes a window's view, a method whose
 /// `impl Widget` output is declared after its caller, to a generic crate
 /// function. The caller waits for that output, and a fresh build asks the
