@@ -11839,6 +11839,12 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
     Some(match ty {
         convert::Type::Parameter(index) => generics.get(*index as usize)?.to_string(),
         _ if !names_parameter(ty) => match ty {
+            // `&str`, Rust's borrowed string, as instances write it.
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(**ty, convert::Type::Builtin(convert::Builtin::Str)) =>
+            {
+                "&str".to_owned()
+            }
             convert::Type::Borrowed { mutable, ty } => {
                 let inner = concrete_type(ty)?;
                 if *mutable {
@@ -12032,6 +12038,13 @@ fn render_impl_function(
             }
             convert::Type::Borrowed { ty, .. } if matches!(**ty, convert::Type::Unit) => {
                 values.push("Dynamic::UNIT".to_owned());
+            }
+            // A `&str`: Rawr's string of its text, as a script function
+            // takes a string.
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(**ty, convert::Type::Builtin(convert::Builtin::Str)) =>
+            {
+                values.push(format!("Dynamic::from({name}.to_string())"));
             }
             // A native value the function borrows: lent for the call
             // alone, and reached by the adapters through the accessors

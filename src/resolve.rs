@@ -107,6 +107,26 @@ pub(crate) struct Instances {
     /// Each instance's generic parameters by name, as the types its body
     /// reads them as.
     pub(crate) types: BTreeMap<crate::item::Key, Box<[(ImmutableString, type_ref::Type)]>>,
+    /// Each script impl of a crate's trait whose own parameters touch a
+    /// crate's types (`impl<R: renderer::Renderer> Widget<M, T, R> for
+    /// Quad`), by its item's index: the instances the crate's uses of the
+    /// impl need, each the types its parameters take, then the types of the
+    /// trait's arguments, defaults filled in (D629). Its functions are
+    /// templates whose instances are these.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) impls: BTreeMap<usize, Vec<ImplInstance>>,
+}
+
+/// An instance of a script impl of a crate's trait (`Instances::impls`).
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub(crate) struct ImplInstance {
+    /// The name of the type each of the impl's parameters takes.
+    pub(crate) names: Box<[ImmutableString]>,
+    /// Each of the impl's parameters at its type.
+    pub(crate) types: Box<[(ImmutableString, type_ref::Type)]>,
+    /// The trait's arguments at this instance, its defaults filled in.
+    pub(crate) arguments: Box<[type_ref::Type]>,
 }
 
 pub(crate) struct Script {
@@ -2105,8 +2125,17 @@ fn resolve_item(
                 variants: variants.into_boxed_slice(),
             })
         }
-        crate::item::Parsed::Impl(parsed) => {
-            let (scope, generics) = generic_scope(
+        crate::item::Parsed::Impl(mut parsed) => {
+            // `impl<R> Widget<M, T, R> for Quad where R: renderer::Renderer`:
+            // an impl whose parameter a dependency's trait bounds is compiled
+            // per instantiation (D629), and rustc proves the bound.
+            let crate_bounded = crate_trait_generics(
+                &mut parsed.generics,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )?;
+            let (scope, mut generics) = generic_scope(
                 parsed.generics,
                 types,
                 host,
@@ -2114,6 +2143,23 @@ fn resolve_item(
                 native,
             )?;
             let types = scope.as_ref().unwrap_or(types);
+            for generic in generics.iter_mut() {
+                if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+                    generic.crate_bounds = bounds
+                        .iter()
+                        .map(|bound| {
+                            type_ref::resolve(
+                                opaque_bound(bound),
+                                types,
+                                host,
+                                #[cfg(feature = "rust-import")]
+                                native,
+                            )
+                        })
+                        .collect::<Result<_, _>>()?;
+                    generic.host = true;
+                }
+            }
             let trait_ = parsed
                 .trait_
                 .map(|path| {

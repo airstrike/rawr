@@ -209,6 +209,25 @@ fn generic_methods_and_body_only_generics_run_once_per_instantiation() {
     );
 }
 
+/// iced's custom_quad and custom_widget: the program's own widget
+/// implements the crate's widget trait over any message, theme and
+/// renderer its bound on the crate's renderer trait admits, and `draw`
+/// calls the renderer's `fill_quad`. The impl is compiled for the use the
+/// crate's bound makes of it, at the crate's renderer (D629), and its
+/// `press` gives an `Option` of the impl's own parameter. The output is
+/// `cargo run`'s.
+#[test]
+fn a_script_impl_generic_over_a_crate_bound_is_compiled_per_use() {
+    let (rawr, cargo) = both_printed("crossing-quad", "quad.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 custom 10 [quad 10r2 rgb(1, 2, 3)] [Increment] 0@16")
+            && rawr
+                .ends_with("last view pad 0 custom 13 [quad 13r2 rgb(1, 2, 3)] [Increment] 3@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's multi_window: a view passes a window's view, a method whose
 /// `impl Widget` output is declared after its caller, to a generic crate
 /// function. The caller waits for that output, and a fresh build asks the
