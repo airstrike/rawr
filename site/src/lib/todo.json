@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-28",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "examples": {"running":9,"total":56,"note":"Most others now stop further along"},
   "groups": [
     {
