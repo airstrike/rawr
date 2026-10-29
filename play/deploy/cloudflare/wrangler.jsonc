@@ -22,6 +22,10 @@
     "bindings": [{ "name": "PLAY_BOT", "class_name": "PlayBot" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayBot"] }],
+  // /todo's private tabs, rendered by plan/private.mjs from the local
+  // .Codex/ documents (never in this repository). src/todo.ts serves them
+  // behind the TODO_PASSWORD secret.
+  "kv_namespaces": [{ "binding": "TODO_PRIVATE", "id": "c587b986e0fd47c8a8e25a24d836048e" }],
   // Restart the bot within five minutes if it ever stops.
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
@@ -63,4 +67,6 @@
     { "pattern": "rawr-bot.airstrike.fyi", "custom_domain": true }
   ]
   // DISCORD_TOKEN is a secret: `npx wrangler secret put DISCORD_TOKEN`.
+  // TODO_PASSWORD is a secret, from the untracked .asdrubal at the
+  // repository's root: `tr -d '\n' < ../../../.asdrubal | npx wrangler secret put TODO_PASSWORD`.
 }

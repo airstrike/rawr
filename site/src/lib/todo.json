@@ -3,6 +3,665 @@
   "updated": "2026-10-28",
   "version": "0.3.14",
   "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
+  "changelog": {
+    "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"A view's column of text made from an iterator, as iced's text and events examples make it, now builds. rawr reads each type's lifetime variance from rustc, and a value made outside the view joins the view's region only when its type is covariant.","issues":[335]},
+        {"text":"A function iced runs on its executor thread with crate values, such as `Task::map(Result::ok)` or `listen_with`'s filter, runs with an arena of its own for the call. Upstream text and events run with no rawr-iced.","issues":[347]}
+      ]
+    },
+    "releases": [
+      {
+        "version": "0.3.14",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A float range such as `1.0..=30.0` passes where a crate takes `RangeInclusive<T>`. `T` becomes the float the call's other arguments give, as in iced's `slider`.","issues":[355],"refs":[314]},
+          {"text":"An array literal such as `[10, 20]` passes where a crate takes `impl Into<T>` and `T` converts from an array of that length, as in iced's `padding([10, 20])`. iced's exit runs with no rawr-iced.","issues":[336]},
+          {"text":"`.into()` on a crate value converts into the crate type its use expects, even when the program never names that type, as in iced's modal `Some(Color { .. }.into())`.","issues":[340]},
+          {"text":"A borrowed `Vec` passes where a crate takes `impl IntoIterator<Item = T>`, and its items are borrows, as in iced's `table(columns, &self.events)`. A script type named `Event` no longer clashes with the generated runner's own code.","issues":[356],"refs":[345]}
+        ]
+      },
+      {
+        "version": "0.3.13",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A boot function that returns the state and a task, as iced's `new() -> (Self, Task<Message>)`, runs as `application(Example::new, ..)` takes it.","issues":[300]},
+          {"text":"A message made from a crate value on another thread, as `Task::map(Message::InformationReceived)` on iced's executor, is made where it is delivered. iced's system_information runs with no rawr-iced.","issues":[300]},
+          {"text":"A `Vec` inside a crate type's arguments, a function-pointer parameter such as `event::listen_with`'s, a bounded generic associated function such as `Task::done` passed as a callable, an `Option` or `Result` of crate values, and a slice of crate values such as `pick_list` takes all cross. iced's text passes `rawr check`.","issues":[300]}
+        ]
+      },
+      {
+        "version": "0.3.12",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A crate's re-export of a std item is that item. `use iced::time::{Duration, Instant};` names std's `Duration` and `Instant`, and so do `time::Duration` after `use iced::time;` and `iced::time::Instant::now()`. Before, rawr refused the import as \"a standard library definition\".","issues":[312]},
+          {"text":"A std type a crate re-exports under another name, as `iced::Never` is std's `Infallible`, is that type under the new name in types. So is `use std::time::Duration as Span;`. Calls through the new name, such as `Span::from_secs(1)`, aren't supported yet.","issues":[312],"refs":[344]},
+          {"text":"std's `Instant` crosses into and out of a crate by value, as `Duration` does. `time::every(milliseconds(10))`, which gives a `Subscription<Instant>`, has a binding, and `.map(Message::Tick)` hands each tick's `Instant` to the script.","issues":[338]},
+          {"text":"`{:?}` of an `Instant` prints as Rust prints it, `Instant { tv_sec: .., tv_nsec: .. }`. Before, rawr printed `<timestamp>`.","issues":[338]},
+          {"text":"Upstream iced's stopwatch, ferris, game_of_life, table and markdown get past their `iced::time` imports, and clock and the_matrix get past `time::every`. geometry gets past `use iced::Never`. Each still stops at a later gap.","issues":[312,338]}
+        ]
+      },
+      {
+        "version": "0.3.11",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A method that a crate's extension trait gives every type through a blanket impl, such as iced's `.boxed()` on a `Container`, `Text` or `Scrollable`, is found. Before, rawr said \"no method named `boxed`\". The blanket impl applies through the type's own impl of the trait its where-clause names, which fixes the trait's arguments. Upstream iced's multi_window, scrollable and system_information get past it.","issues":[]},
+          {"text":"A generic function whose signature names a crate's type or trait runs under `rawr run`. This covers a parameter written `impl Widget<Message>`, and a helper generic over its message that builds a crate widget. rawr compiles it once per instantiation its callers use, as Rust does, and each call runs its own instance. Before, `impl Widget<Message>` in a parameter was \"unknown type `Widget`\", and a crate call inside a generic function failed with \"not one exact concrete surface type\". A type the argument leaves open, such as a widget's renderer, is fixed by the trait's defaults and the crate's impls. Upstream iced's modal and toast get past it. Other generic functions are still compiled once, as before.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.10",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"Upstream iced's `url_handler` example runs under `rawr run` without rawr-iced. Its window matches `cargo run`'s.","issues":[]},
+          {"text":"`iced::application(..).subscription(App::subscription)` works. The subscription takes `&P::State` and gives a `Subscription<P::Message>`, where `P` is the opaque program `application(..)` gives. Before, rawr said \"it takes a callable rawr can't make\". A crate method's callable now reads an associated type of a type parameter as a type the call infers, wherever the callable's inputs or output name it.","issues":[]},
+          {"text":"A method of a generic impl takes a script function as a slot, as a crate function does. A script state it lends by reference is shared, not copied.","issues":[]},
+          {"text":"A call on one opaque program that gives another, as `.subscription(..)` does, is compiled where it is made, and so are the calls on the program it gives, such as `.run()`.","issues":[]},
+          {"text":"A crate method whose impl puts its own parameter inside the type, as iced's `impl<T> Task<Option<T>>` does for `and_then`, now has a binding. When the crate overloads the method by the receiver's type argument, as `Task<Option<T>>` and `Task<Result<T, E>>` do, the receiver picks the form.","issues":[]},
+          {"text":"A generic crate function can be passed as a value, as in `window::latest().and_then(window::close)`. Its type arguments are inferred from where it goes. Before, rawr said it \"must be monomorphic\".","issues":[]},
+          {"text":"A `&str` that a widget keeps through its lifetime, as `text(url)` keeps the `&String` it is given, is pinned in the view's region. Before, the runner's build failed with E0597.","issues":[]},
+          {"text":"iced's `Task` is a crate type like any other when no host profile runs, so `update` can give back `Task::none()`. Before, the runner's build failed in `into_task`.","issues":[]},
+          {"text":"The events and exit examples get past `.subscription(..)` and `and_then(window::close)`. events stops where its runner builds `column(..)` of `text!` widgets, and exit at `padding([10, 20])`. arc and delineate stop at `.theme(Theme::Dark)`, and clock and the_matrix at `time::every`.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.9",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A crate imports when one of its methods takes a callable parameter that no script closure fits. Examples are tokio's `MappedMutexGuard::map` and cosmic text's `with_buffer_mut`, and warp's `Ws::on_upgrade`, whose closure gives a future. Before, the whole import failed with \"unknown type parameter\". Such a method has no binding.","issues":[]},
+          {"text":"A trait method on a function's opaque `impl Trait` may name a type parameter the function also names, as warp's `form<T>()` and `Filter::untuple_one<T>` both name `T`. Before, the import failed with \"duplicate type parameter `T`\".","issues":[]},
+          {"text":"A method that gives an opaque type, such as image's `Reader::into_decoder`, now imports. So does a member of a function's opaque type that names that type again, such as warp's `Filter::and`. Before, the import failed with \"requires missing module\".","issues":[]},
+          {"text":"Upstream iced's bezier_tool, vectorial_text, layout, sierpinski_triangle, solar_system, tour, component, changelog, websocket, geometry and loupe now get past these imports, and so do markdown and screenshot. Each still stops at a later gap.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.8",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A script type can implement a crate's trait, such as `impl canvas::Program<Message> for Arc`. Before, rawr stopped at the impl's header with \"an `impl` of a trait path that names no crate or std trait\". The runner writes the impl for the type's proxy, and native code calls the script's functions back, as iced calls `draw` while it lays out. Each call runs the current generation's function, so an edit to its body takes effect at the next call.","issues":[]},
+          {"text":"A crate's values that native code lends such a function, such as `&Renderer`, `&Theme` and `&Event`, are lent for the call alone and reached by their methods and `match`es. Values it gives by value, such as `Rectangle`, read as their types. A script state it lends `&mut` is changed in place.","issues":[]},
+          {"text":"A script's `impl From<Shade> for iced::Color` now reaches the runner, so a crate function that takes `impl Into<Color>` takes a script value. Before, `rawr check` passed and the runner's build failed in rustc.","issues":[]},
+          {"text":"`Canvas::new(self)` and `canvas(self)` take a shared borrow of a script value where a crate's generic parameter goes. The proxy shares the value, so nothing is copied.","issues":[]},
+          {"text":"A view whose widget leaves a type parameter open, such as `canvas(self)`'s `Message`, no longer stops with \"more than one impl of the crate's fits\" when the crate reaches one impl by several paths.","issues":[]},
+          {"text":"Upstream iced's arc, bezier_tool, clock, sandpiles, vectorial_text, layout, multitouch, sierpinski_triangle, solar_system and the_matrix now get past the headers of their `canvas::Program` impls, and lazy past its `From` impl. Each still stops at a later gap. custom_quad and custom_widget get past `impl widget::Meta`, and stop at their `Widget` impls, which are generic over a renderer bounded by a crate's trait.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.7",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"Upstream iced's `slider` example runs under `rawr run` without rawr-iced again. Its `text(self.value)` was read as the `text!` macro, because the `text` function had no binding.","issues":[]},
+          {"text":"A crate type whose only public name is an alias that passes its parameters on is named through that alias, with the alias's defaults. iced's `widget::Text` is such an alias while `iced::advanced` is off. Functions that give such a type, such as `text(..)`, now have bindings.","issues":[]},
+          {"text":"A crate constant whose value isn't a scalar, such as iced's `Font::MONOSPACE` or `Theme::ALL`, is read by its path where the runner runs. Before, rawr said \"the importer couldn't extract it\".","issues":[]},
+          {"text":"A call of a name that a `use` imports as a crate module, such as iced's `combo_box(..)`, says why rawr has no binding for the function of that name. Before, it said \"unknown function\".","issues":[]},
+          {"text":"A crate's type alias whose target type has no other public name now crosses, such as iced's `Element`, `widget::Text`, `canvas::Cache` and `canvas::Frame`. Before, `use iced::Element` stopped with \"unsupported Rust declaration (UnnameableType)\". Generated code writes the type through the alias.","issues":[]},
+          {"text":"A type alias of an associated type, such as iced's `canvas::Geometry`, is the type it names at its defaults. Before, it stopped with \"(Projection)\". It is written without arguments.","issues":[]},
+          {"text":"`#[derive(Default)]` works on a struct with a field of a generic crate type whose `Default` impl is generic, such as `canvas::Cache`.","issues":[]},
+          {"text":"Eleven upstream iced examples now get past these aliases: arc, bezier_tool, clock, sandpiles, vectorial_text, layout, tour, todos, multitouch, sierpinski_triangle and solar_system. Each still stops at a later gap.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.6",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A project that shares a crate with rawr at fewer features, as iced shares ahash, runs again with the shared copy. Before, the runner's build stopped with \"cannot update the lock file because --locked was passed\". The runner's lockfile is now what cargo resolves without rawr, with the project's versions kept.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.5",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A project whose watched folders include two names where one is the other followed by `-`, such as `target/rawr` and `target/rawr-home`, no longer fails with \"invalid stored baseline\" on its next run.","issues":[]},
+          {"text":"rawr's own crates compile once per machine, not once per project. The first `rawr run` on a toolchain compiles them into `runtime/` in rawr's home, and every project's runner links that copy. A second new project compiled no rawr crate and ran in about 13 s. Before, each project spent about 85 s compiling rawr. A script with dependencies reuses the same copy.","issues":[]},
+          {"text":"The copy is keyed by rawr's version, sources and lockfile, the compiler's `rustc -vV`, and the runtime's features and profile. Nothing about a project is in the key, so projects with different dependencies share it. Copies unused for a day go, apart from the three used last.","issues":[]},
+          {"text":"A runner that can't link the shared copy, such as one whose crates link a native library that rawr's do, compiles rawr in the project as before, and rawr says so once. iced apps on rawr-iced still compile rawr in the project.","issues":[]},
+          {"text":"`RAWR_RUNTIME_OPT_LEVEL` compiles the `rawr` crate at a lower opt-level, such as `0`, for a faster first compile and slower scripts. The default stays 3.","issues":[]},
+          {"text":"A project that shares a crate with rawr at fewer features, as iced shares ahash, runs again with the shared copy. Before, the runner's build stopped with \"cannot update the lock file because --locked was passed\". The runner's lockfile is now what cargo resolves without rawr, with the project's versions kept.","issues":[]},
+          {"text":"A native stream is bound through rawr's own `host::stream::Source` trait, not `futures_core::Stream`, so a project's copy of `futures-core` never has to be rawr's.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.4",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"`std::process::id()` in the browser playground stops with \"no pids on this platform\", as Rust's std does there, instead of crashing the page.","issues":[]},
+          {"text":"A script with its own `[profile.*]` or features no longer makes the next script rebuild rawr's crates. Every script builds in one directory, and a script's run used to remove rawr's crates another script had built under another profile. The same holds for projects that share a `CARGO_TARGET_DIR`.","issues":[]},
+          {"text":"`rawr check` and `rawr run` run `cargo check` on a script, as they do on a crate, so a script gets rustc's errors, such as an overflowing literal rawr accepts. rustc refuses a frontmatter block outside `cargo -Zscript`, so rawr checks a copy with the block blanked, and the errors name the script's own lines. It works on a stable toolchain.","issues":[]},
+          {"text":"A script with dependencies, run without rawr-import installed, is told it uses \"Rust dependencies in its frontmatter\". Before, the message named a `Cargo.toml` the script doesn't have.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.3",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A `u64` or `usize` above `i64::MAX`, such as `u64::MAX`, crosses into and out of a crate's functions. Before, it stopped with \"-1 is out of range for `u64`\".","issues":[]},
+          {"text":"`std::process::id()` gives the process's id.","issues":[]},
+          {"text":"Upstream iced's `pick_list` example runs under `rawr run` without rawr-iced, as `cargo run` draws it.","issues":[]},
+          {"text":"A type alias that passes its parameters in order, such as iced's `Text`, gives the aliased type's associated functions, so `text!(..)` works.","issues":[]},
+          {"text":"A crate trait's method implemented for `&str` can be called on a rawr string.","issues":[]},
+          {"text":"A lazy iterator can go where a crate function takes an iterable, and a slice of script values where it takes a slice of a type parameter.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.2",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A cargo script that declares dependencies in its frontmatter runs under `rawr run`, and prints what it prints under `cargo -Zscript`. Its manifest and lockfile live in `scripts/` in rawr's home, keyed by the script's path, and nothing is written beside the script.","issues":[]},
+          {"text":"Every script builds in one build directory with your own `cargo`, so a crate one script compiled is reused by the next. A second script that shares a dependency started in about 10 seconds where the first took 100.","issues":[]},
+          {"text":"What cargo refuses in a script's manifest, such as `[workspace]` or `[lib]`, is refused with cargo's message at its line.","issues":[]},
+          {"text":"A crate or script with two dependencies that share a version requirement, such as `itoa = \"1\"` and `semver = \"1\"`, runs. Before, rawr dropped the second and stopped with \"selected package name changed\".","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.1",
+        "date": "2026-10-28",
+        "entries": [
+          {"text":"A path dependency inside the project's workspace compiles once for `cargo build` and `rawr run` together. Before, the runner compiled its own copy.","issues":[]},
+          {"text":"rawr's nightly build, which reads a project's dependencies, is a check build. It writes only the metadata rawr reads, so it does no code generation for the project's crates.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.3.0",
+        "date": "2026-10-28",
+        "lede": "This milestone starts shared bindings: rawr builds bindings, and the project's own cargo builds everything.",
+        "entries": [
+          {"text":"A crate with Cargo dependencies runs under `rawr run` with no `rust-toolchain.toml` and no `.cargo/config.toml`. The project's own `cargo` builds rawr's runner with the project's toolchain, config and profiles, in the project's `target/`. Rust 1.95 or newer is enough.","issues":[]},
+          {"text":"`cargo build` after `rawr run` recompiles nothing. `rawr run` after `cargo build` compiles only rawr's own crates and the runner.","issues":[]},
+          {"text":"An older toolchain stops `rawr run` with a message that says to update it.","issues":[]},
+          {"text":"rawr's nightly build, which reads a project's dependencies, runs in `target/rawr` and no longer compiles rawr's own crates. A project's first `rawr run` through rawr-import takes about half as long.","issues":[]},
+          {"text":"`rawr new --template iced` writes only `Cargo.toml` and `src/main.rs`.","issues":[]},
+          {"text":"rawr asks smallvec for no features, so a project that uses smallvec without features keeps its one copy.","issues":[]},
+          {"text":"`rawr run` no longer deletes the project's own binary when the runner takes the project's crate name.","issues":[]},
+          {"text":"rawr-import's runner no longer builds a second `unicode-ident`, which made a project's proc macros build twice.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.9",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"Upstream iced's `checkbox`, `slider` and `tooltip` examples run under `rawr run` without rawr-iced, with iced's own titles and theme.","issues":[]},
+          {"text":"An `Option` of a closure, and a crate's function passed where a closure or function type goes, such as `.style(checkbox::primary)`, work.","issues":[]},
+          {"text":"A crate function that returns `impl Trait`, such as `iced::application(..)`, runs, and its value takes the trait's methods.","issues":[]},
+          {"text":"A number literal passed to an `impl Into<T>` parameter takes the type `T`, as in Rust.","issues":[]},
+          {"text":"A struct that derives `Default` may hold a field of a crate's type.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.8",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"The `// rawr` marker may follow a shebang line and a cargo-script frontmatter block. rawr parses such a file with its lines and columns kept.","issues":[]},
+          {"text":"A `.rs` file with frontmatter is a script wherever it sits, as cargo reads it. A script that declares dependencies stops with an error saying rawr doesn't resolve them yet.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.7",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"Upstream iced's `counter` example runs under `rawr run` without rawr-iced, through generated bindings only. It has iced's own title and theme, and a save applies at the next event with the count kept.","issues":[]},
+          {"text":"A type that only a trait's default parameters and a crate's impls decide, such as the renderer behind `impl Widget<Message>`, is worked out from the crate's own impls.","issues":[]},
+          {"text":"A crate's type alias that is the only name of its type, such as `iced::Renderer`, works.","issues":[]},
+          {"text":"Generated code names crate types through the crate's own aliases, so iced's `text(..)` works.","issues":[]},
+          {"text":"A trait that a dependency's macro reaches through `$crate` is in scope.","issues":[]},
+          {"text":"A string literal passed to a crate's generic parameter is a `&'static str`, as in Rust.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.6",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"Reading or writing a struct's field no longer copies the struct.","issues":[]},
+          {"text":"Passing `&s` or `&mut s` to a function lends the value instead of copying it.","issues":[]},
+          {"text":"A method called on a field or an element reaches it in place.","issues":[]},
+          {"text":"A script that calls `view(&state)` 2,000 times on a 20,000-element state runs about 6 times faster.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.5",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"A script struct or enum can stand where a crate expects a generic type, such as an app's state and message passed to iced's `application`.","issues":[]},
+          {"text":"A script type crossing into a crate keeps its own name, so a crate that reads `type_name` sees the app's type.","issues":[]},
+          {"text":"A script function or a closure that captures nothing can be passed where a crate takes `impl Fn`, including views that borrow their state. After a save, it calls the edited code.","issues":[]},
+          {"text":"A string a view borrows from its state isn't copied.","issues":[]},
+          {"text":"A crate trait whose only impl is for functions, such as iced's `ViewFn`, takes a script function.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.4",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"A crate method that takes an `impl Fn(..) + 'a` closure, such as iced's `Button::style`, takes a script closure.","issues":[]},
+          {"text":"An enum variant a crate re-exports with `pub use`, such as `iced::Center`, works in expressions and patterns.","issues":[]},
+          {"text":"A crate's type aliases work, with default type parameters filled in, as in `iced::Element` and `iced::Result`.","issues":[]},
+          {"text":"A default method of a crate's generic trait, such as `Widget::boxed`, is found through a type's own impl.","issues":[]},
+          {"text":"A crate module and a function with the same name both resolve.","issues":[]},
+          {"text":"The release's smoke test retries a fresh bot that drops a connection or runs out of render time.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.3",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"A dependency's `macro_rules!` macros expand from the crate's own source.","issues":[]},
+          {"text":"`$crate` paths inside such a macro reach the crate that defines it, including hidden items.","issues":[]},
+          {"text":"A path to a method or function is a function value wherever Rust accepts one, as in `iced::run(Counter::update, Counter::view)`.","issues":[]},
+          {"text":"A call written as `Type::method(&mut x, ..)` changes `x` as `x.method(..)` does.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.2",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"The importer binds futures and `Result`s whose output holds tuples and `Vec`s.","issues":[]},
+          {"text":"`&(A, B)`, `&[T]` and `&[u8]` arguments to native calls work, and the script's value stays usable after the call.","issues":[]},
+          {"text":"A struct field of type `PhantomData<T>` works.","issues":[]},
+          {"text":"A crate's struct whose type parameters all have defaults can be built and read.","issues":[]},
+          {"text":"When rawr has no binding for an imported item, the error says why.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.1",
+        "date": "2026-10-27",
+        "entries": [
+          {"text":"Functions from a crate are `Copy`, as they are in Rust.","issues":[]},
+          {"text":"A closure inside a tuple or array is `Copy` unless it captures something that isn't.","issues":[]},
+          {"text":"iced's `styling` example passes `rawr check` again.","issues":[]},
+          {"text":"`scripts/bump-version.sh` sets every rawr crate to the next version.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.2.0",
+        "date": "2026-10-26",
+        "lede": "rawr checks borrows and moves with its own checker. It follows stable rustc's non-lexical lifetimes over each function's control flow.",
+        "entries": [
+          {"text":"A borrow ends at its last use, through branches, loops, `break`, `continue`, `return` and `?`.","issues":[]},
+          {"text":"Conflicts report rustc's own error codes: E0499, E0502, E0503, E0505, E0506, E0597, E0500, E0501, E0524, E0373, E0382, E0507, E0508, E0509, E0515, E0716, E0106, E0621 and E0590.","issues":[]},
+          {"text":"A call's result keeps the borrows its signature says it keeps, including elided and written lifetimes.","issues":[]},
+          {"text":"Structs, collections, `Option`s, iterators and closures hold the borrows they're made of.","issues":[]},
+          {"text":"Patterns borrow, read and move only the parts they bind or test.","issues":[]},
+          {"text":"Moves follow control flow, and a partly moved value's other parts stay usable.","issues":[]},
+          {"text":"A value with its own `Drop` impl counts as using its borrows when it is dropped.","issues":[]},
+          {"text":"Temporaries live as long as rustc keeps them.","issues":[]},
+          {"text":"A function body is checked against its own signature.","issues":[]},
+          {"text":"A borrow the checker doesn't cover yet runs, and the background `cargo check` reports any error.","issues":[]},
+          {"text":"A `&mut` variable can be given a new borrow, and a closure can use a `&mut` value, with no copy.","issues":[]},
+          {"text":"Method calls on native values, `format!` arguments and pattern bindings reach the value without copying it.","issues":[]},
+          {"text":"The checker matches rustc 1.96 on 11,409 test programs, with no programs wrongly refused.","issues":[]},
+          {"text":"The checker adds 2–5% CPU time to a run.","issues":[]}
+        ]
+      },
+      {
+        "version": "0.1.0",
+        "date": "2026-10-26",
+        "entries": [
+          {"text":"First release under rawr's own version numbers. Every rawr crate is 0.1.0.","issues":[]}
+        ]
+      }
+    ]
+  },
+  "items": [
+    {"issue":1,"title":"A method call through a borrow guard (`text.write().push_str(..)`) calls the guard method twice…","state":"open","category":"Divergences from rustc"},
+    {"issue":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open","category":"Divergences from rustc"},
+    {"issue":4,"title":"`VecDeque` is type-checked as a `Vec`","state":"open","category":"Divergences from rustc"},
+    {"issue":5,"title":"`write!` works without `use std::fmt::Write`","state":"open","category":"Divergences from rustc"},
+    {"issue":6,"title":"A `Box<dyn Error>` coerces without `Box::new` or `.into()`","state":"open","category":"Divergences from rustc"},
+    {"issue":7,"title":"A `use Enum::*` inside a function applies to the whole file","state":"open","category":"Divergences from rustc"},
+    {"issue":8,"title":"When several `From` cases fit an argument, rustc decides","state":"open","category":"Divergences from rustc"},
+    {"issue":9,"title":"On the playground, `random_range` over an `f32` range draws an `f64`","state":"open","category":"Divergences from rustc"},
+    {"issue":2,"title":"A panic printed `error[RAWR-RUNTIME-THROW]` instead of rustc's panic text","state":"closed","category":"Divergences from rustc","release":"0.1.0"},
+    {"issue":10,"title":"A guard inside `Option` or `Result` (`try_write`, `Mutex::lock`)","state":"open","category":"Borrow guards (D554)"},
+    {"issue":11,"title":"Mutating a guarded `Vec` or tuple","state":"open","category":"Borrow guards (D554)"},
+    {"issue":12,"title":"Plain `&T` and `&mut T` outputs, and `Option<&mut T>` as a write-back place","state":"open","category":"Borrow guards (D554)"},
+    {"issue":13,"title":"Calls made directly from `main`'s frame aren't swap entries yet","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":14,"title":"The owner's per-save import preparation sets Freya's swap latency, about 4 s","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":15,"title":"Script types implementing native traits","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":16,"title":"Detecting a `static` change","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":17,"title":"Closures held outside `main` aren't tracked","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":18,"title":"Freya 0.5.0-rc.13's crate-doc counter under rawr (no longer reproduces)","state":"closed","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":19,"title":"A capturing closure passed from a variable is refused","state":"open","category":"Importer"},
+    {"issue":20,"title":"A method on one instantiation of a generic type (`impl Event<PressEventData>`) loses its…","state":"open","category":"Importer"},
+    {"issue":21,"title":"A Freya app's first launch takes about 34 s","state":"open","category":"Importer"},
+    {"issue":22,"title":"The importer's own `impl Default` on an imported type","state":"open","category":"Importer"},
+    {"issue":23,"title":"Imported values that carry lifetimes, in slices","state":"closed","category":"Importer"},
+    {"issue":24,"title":"pane_grid needed a transition-time invoker for facade bindings (`PaneGrid::new`'s closure), a…","state":"closed","category":"iced examples","release":"0.1.0"},
+    {"issue":25,"title":"markdown needs `Uri` and imports that carry a lifetime","state":"closed","category":"iced examples"},
+    {"issue":26,"title":"A message mapper can't read a borrowed value","state":"open","category":"iced examples"},
+    {"issue":27,"title":"`Content` doesn't carry across a runner restart","state":"open","category":"iced examples"},
+    {"issue":28,"title":"iced's `editor` example stops at `&dyn Window` (rfd)","state":"open","category":"iced examples"},
+    {"issue":29,"title":"Moving the importer's arena into the Adapter, and D534.3","state":"open","category":"iced examples"},
+    {"issue":30,"title":"Gallery's let chain parses","state":"closed","category":"iced examples","release":"0.1.0"},
+    {"issue":31,"title":"rawr-iced is untried on Linux","state":"open","category":"Platforms"},
+    {"issue":32,"title":"After reinstalling, the first `rawr check` sometimes says \"toolchain installation state…","state":"open","category":"Platforms"},
+    {"issue":33,"title":"On iPhone the canvas may draw at 1x instead of 3x","state":"open","category":"Platforms"},
+    {"issue":34,"title":"rawr-iced's 47 failing tests were ported to `panic!` and current rules","state":"closed","category":"Health","release":"0.1.0"},
+    {"issue":35,"title":"An index panic on a slice is placed at the `[`, where rustc places it at the expression's start","state":"open","category":"Divergences from rustc"},
+    {"issue":36,"title":"Current nightly rustc prints a blank line and a thread id first …","state":"open","category":"Divergences from rustc"},
+    {"issue":37,"title":"A panic in compiler-written code has no position, so its first line names the file with no line…","state":"open","category":"Divergences from rustc"},
+    {"issue":38,"title":"A panic in an async body in the browser goes through the iced adapter's report","state":"open","category":"Divergences from rustc"},
+    {"issue":39,"title":"`Layout::areas` needs const generics inferred from `let [a, b, c] = …`, which the resolver…","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":40,"title":"`Line::from(..)` and other direct `From` calls on imported types aren't supported","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":41,"title":"`W::State` is inferred from the argument but not checked by rawr","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":42,"title":"A lent or region value can be an argument to a native call","state":"closed","category":"Imported lifetimes after slice 1 (D561)","release":"0.1.0"},
+    {"issue":43,"title":"A leased argument has to be `Send`","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":44,"title":"A marked struct can't hold a native value that native code keeps between calls, such as…","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":45,"title":"The runner generator has no unit test for the lent-receiver and lease paths","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":46,"title":"The type-index helper is written only when some trait has a method","state":"closed","category":"Imported lifetimes after slice 1 (D561)","release":"0.1.0"},
+    {"issue":47,"title":"Run Miri over the generated accessor shape, not only the core helper","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
+    {"issue":48,"title":"A lifetime-only impl that names another type or fixes a type argument is refused again, so…","state":"closed","category":"Imported lifetimes after slice 1 (D561)","release":"0.1.0"},
+    {"issue":49,"title":"The alias-selection test now expects a field to resolve through any alias, and a missing member…","state":"closed","category":"Imported lifetimes after slice 1 (D561)","release":"0.1.0"},
+    {"issue":50,"title":"game_of_life calls itertools' `cartesian_product` on a range","state":"open","category":"iced examples"},
+    {"issue":51,"title":"the_matrix's `Distribution<usize>::sample`: the importer doesn't look up members of a trait with…","state":"open","category":"iced examples"},
+    {"issue":52,"title":"tour: the `open` crate's functions return std's `io::Result` and `JoinHandle`, which the…","state":"open","category":"iced examples"},
+    {"issue":53,"title":"loading_spinners takes `&easing::EMPHASIZED`, a `LazyLock<Easing>` static","state":"open","category":"iced examples"},
+    {"issue":54,"title":"rawr runs an array index rustc knows is out of range (`let i = 5; a[i]`) and panics, where rustc…","state":"open","category":"Divergences from rustc"},
+    {"issue":55,"title":"A `let` that binds a value borrowing a `&mut` buffer is refused, as is `while let` with a copied…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":56,"title":"Region values live until their frame ends, so memory grows over a long frame","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":57,"title":"A member of a fixed-argument impl admitted by name uniqueness also type-checks on other…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":58,"title":"`into_owned` is accepted on any `String`","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":59,"title":"Equality of region values relies on covariance","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":60,"title":"One call can't combine values from two regions","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":61,"title":"A type with several `AsRef` impls gets none of them admitted","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":62,"title":"Run Miri over the region and copy code","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":63,"title":"Scope frames inside async bodies are untested","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":64,"title":"Imported iterators expose only the adaptors built on `next`","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":65,"title":"`islands::a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin` waits 5…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":66,"title":"A call or assignment written before a frame-opening call in the same statement is refused…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":67,"title":"Two projects that share one `CARGO_TARGET_DIR` but enable different iced features fail with…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":68,"title":"A lent argument whose type has a lifetime, such as `&mut Frame<'_>` passed as an argument rather…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":69,"title":"A region value can be passed by value only, not as `&T` or `&mut T`, so…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":70,"title":"When a call takes several values that could be region values, all must be in the frame","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":71,"title":"A region argument combined with a guard-returning call or a frame-opening method fails at…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":72,"title":"The generator writes a second adapter body for every call whose input type has a lifetime, which…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":73,"title":"A Freya edit shows only at Freya's next `app()` call, such as after a click","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":74,"title":"Each new rawr build makes Freya's first check or run extract the API again, about 100 s","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":75,"title":"rawr-iced doesn't ask for every called method of a type in one round, because it drops requested…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":76,"title":"Four `rawr-notify` tests time out while FSEvents lags, on unchanged code too","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":77,"title":"A `rawr run` owner on Freya's counter holds about 965 MB, mostly the kept API graph","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":78,"title":"Let the editor tell `rawr run` a file changed: the VS Code extension sends it on save and…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":79,"title":"rawr-iced shows one failure in three places: the \"Rawr view unavailable\" fallback text, the red…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":80,"title":"Any save to pane_grid restarts the runner, because `pane_grid::State` can't be exported","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":81,"title":"pane_grid's drag and resize (`on_drag`, `on_resize`) are untested under `rawr run`","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":82,"title":"Review rawr-iced's path heuristics: Theme and Renderer default by iced path for imported iced…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":83,"title":"markdown's check stops at the script's `impl markdown::Viewer`","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":84,"title":"`bridge::generate::cached::…identical_overlay…` failed once in a parallel importer run and…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":85,"title":"markdown's `markdown::Uri` is `pub type Uri = String`","state":"closed","category":"Imported lifetimes after slice 2","release":"0.1.0"},
+    {"issue":86,"title":"reqwest's `Response::bytes()` is missing","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":87,"title":"`std::io::Cursor` is not in rawr","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":88,"title":"`image::load_from_memory(&[u8])` is missing","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":89,"title":"`webbrowser::open` is missing, and the `webbrowser` root is unknown","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":90,"title":"The facade's `TextEditor::padding` has no form that takes iced's imported `Pixels`, and Pixels…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":91,"title":"`7fd1db3fc` types a method's lent `&str` (url's `Url::scheme`) as `String`, so…","state":"closed","category":"Imported lifetimes after slice 2","release":"0.1.0"},
+    {"issue":92,"title":"pane_grid's view clones the home's `pane_grid::State` at each view evaluation","state":"closed","category":"Imported lifetimes after slice 2","release":"0.1.0"},
+    {"issue":93,"title":"On the playground, `pane_grid::State` doesn't carry over an edit, even a re-run of the same code…","state":"closed","category":"Imported lifetimes after slice 2"},
+    {"issue":94,"title":"In headless Chrome, the first key after clicking the playground canvas is dropped","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":95,"title":"Bring pane_grid back to the playground through importer-generated bindings, when the playground…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":96,"title":"The import-cli `panes` test after `c08125e4f` changed how imported borrow guards are lowered","state":"closed","category":"Imported lifetimes after slice 2"},
+    {"issue":97,"title":"`npm run check` fails in a fresh tree because the build-generated `runnable.gen.ts` is missing","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":98,"title":"Under `rawr run`, dragging a pane onto another pane makes new splits instead of swapping the two…","state":"closed","category":"Imported lifetimes after slice 2"},
+    {"issue":99,"title":"Under `rawr run`, part of a pane isn't drawn while it is being dragged (Andy, by hand, 2026-10-26)","state":"closed","category":"Imported lifetimes after slice 2"},
+    {"issue":100,"title":"`get`'s `Option<&T>` (Guard::OptionShared) copies its target with `Clone`, as borrow guards do","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":101,"title":"A `Cow<str>` or `&[u8]` from a scope frame becomes a copy","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":102,"title":"A value moved into the application's home can be read and changed but not moved out unless it…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":103,"title":"A borrow kept by a call's result runs unchecked and is left to `cargo check`, as in…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":104,"title":"A borrow stored in a struct, a collection or an `Option` runs unchecked","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":105,"title":"A closure kept past its statement runs unchecked","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":106,"title":"Pattern bindings by reference run unchecked","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":107,"title":"A new borrow into a `&mut` local (`r = &mut other`, `prev = r`) is refused","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":108,"title":"A struct field holding a `&T` of a type with `Drop` drops a copy of the value with its struct…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":109,"title":"The borrow check isn't cached per body","state":"open","category":"Borrow checker (D572)"},
+    {"issue":110,"title":"rawr-iced's `intrinsic_column::wide_and_nested_columns_have_bounded_private_call_depth`…","state":"open","category":"Health"},
+    {"issue":111,"title":"A `while` condition that holds a loop of its own may send that inner loop's `break` or…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":112,"title":"rawr refuses a labeled jump from a loop in a `while` condition to that `while`, as in…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":113,"title":"Base `rawr run` compiles each save twice: once in the watcher's check and once in the child…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":114,"title":"Each body is lowered from a copy of its whole file with everything outside the body blanked, so…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":115,"title":"A value changed through a pattern binding isn't written back, so the program prints a different…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":116,"title":"A slice pattern's `rest @ ..` binding isn't checked, because a subslice isn't a place the facts name","state":"open","category":"Borrow checker (D572)"},
+    {"issue":117,"title":"Bindings of a pattern on an imported value aren't checked, in `match` or `let`","state":"open","category":"Borrow checker (D572)"},
+    {"issue":118,"title":"In a `match` on a scalar or string through a reference, a binding arm (`match r { n => … }`)…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":119,"title":"A pattern on a value made for the match, such as a call result or a tuple expression, leaves the…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":120,"title":"A test of a slice through `Index` on a `&[T]` may be refused falsely if rawr treats `s[i]` as…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":121,"title":"A new borrow of a field or element into a `&mut` local is refused, as in `r = &mut s.right`…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":122,"title":"A `&mut` chosen by a branch value isn't lowered, as in `r = if c { &mut a } else { &mut b }`","state":"open","category":"Borrow checker (D572)"},
+    {"issue":123,"title":"A new borrow into a `&mut` local inside an async body is refused","state":"open","category":"Borrow checker (D572)"},
+    {"issue":124,"title":"The grain VM doesn't know the names a rebound `&mut` local uses, so such a program stops there…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":125,"title":"A static `&mut` alias whose referent is shadowed in the same block may reach the new variable…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":126,"title":"Native values are copied where Rust borrows them","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":127,"title":"A value's borrows are one set in the facts","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":128,"title":"A value with a `Drop` impl that holds a borrow is left to `cargo check`, because drop liveness…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":129,"title":"A lifetime written in a type inside a body (`let x: &'static T`, `f::<&'a u32>`) is left to…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":130,"title":"A compound assignment through a crate's operator impl is left to `cargo check`","state":"open","category":"Borrow checker (D572)"},
+    {"issue":131,"title":"A host method that opens a scope frame is left to `cargo check`, because `host::item` has only…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":132,"title":"Trait-object and generic-bound method calls are unknown to the checker","state":"open","category":"Borrow checker (D572)"},
+    {"issue":133,"title":"Struct-variant constructors (`E::V { .. }`) don't hold their fields' borrows yet","state":"open","category":"Borrow checker (D572)"},
+    {"issue":134,"title":"Function bodies aren't checked against their own signatures","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":135,"title":"Temporaries dropped while borrowed (E0716) aren't modeled","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":136,"title":"A bare `break` or `continue` in a `while` condition is refused as \"unsupported syntax\", not with…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":137,"title":"A `&mut` to a field or element (`writeback/shadow_field_alias.rs`), a mutable loop's element…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":138,"title":"A closure using a `&mut` local that is the place it borrows is refused (\"a closure using an…","state":"closed","category":"Borrow checker (D572)"},
+    {"issue":139,"title":"A shadow introduced only by a closure parameter (`|b|`) isn't caught by `shadowed_later`","state":"open","category":"Borrow checker (D572)"},
+    {"issue":140,"title":"A pattern's `&mut` bindings work by copying the bound parts out and writing them back, comparing…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":141,"title":"rawr misses E0505 when a later `format!` argument moves an earlier one, as in…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":142,"title":"A shared-reference local of a native value, `let b = &a;`, lowers to `const b = a` and copies…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":143,"title":"A `&mut self` call on a field or nested place (`s.t.add(1)`, `v[0].add(1)`) copies the value out…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":144,"title":"A closure that uses a `&mut` local or a function's `&mut` parameter isn't lowered, with the…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":145,"title":"A `move` closure that captures one field makes rawr treat the whole local as moved","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":146,"title":"A closure that captures by `&mut` is treated as `Copy`","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":147,"title":"The borrows a block's tail value holds don't reach the `let` that binds the block …","state":"open","category":"Borrow checker (D572)"},
+    {"issue":148,"title":"A closure that takes and returns borrows is left to `cargo check` (`issue-52534`, `issue-117146`)","state":"open","category":"Borrow checker (D572)"},
+    {"issue":149,"title":"`let c;` with a later assignment isn't lowered","state":"open","category":"Borrow checker (D572)"},
+    {"issue":150,"title":"A copy of a `move` closure shares the state it changes with the closure it was copied from","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":151,"title":"A closure body written as a block that ends in a captured local (`|| { ...; x }`) doesn't move…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":152,"title":"A closure that isn't `move` and moves a field out of a capture (`|| s.a`) doesn't move that…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":153,"title":"A pattern binding a payload or a variant's field by value doesn't move it out…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":154,"title":"A generic struct with a derived `Copy` is treated as `Copy` without its `T: Copy` bound…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":155,"title":"Moving a tuple member or nested field out of a local (`let b = t.1;`, `let b = s.inner.b;`) is…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":156,"title":"A move below a nested field in a `move` closure is left to `cargo check`, because the lowering…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":157,"title":"Returning `&r` of a reference local is left to `cargo check`, since a deref coercion may make it…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":158,"title":"A returned parameter whose type has several lifetimes isn't checked against the output's…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":159,"title":"A block's value that borrows a temporary of its tail (`let r = { String::from(\"a\").as_str() };`)…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":160,"title":"A struct field that leaves out a type's lifetime (`w: Wrapper` of `Wrapper<'a>`) is accepted…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":161,"title":"A `while` condition's temporaries end only on the edge into the loop body","state":"open","category":"Borrow checker (D572)"},
+    {"issue":162,"title":"In 176 corpus programs both refuse with the same code, but rustc places the error on another…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":163,"title":"A `&mut` binding of a slice pattern's rest (`[first, rest @ ..] = &mut v[..]`) and a catch-all…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":164,"title":"A closure that uses a `&mut` pattern binding is refused, because a closure runs in its own scope…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":165,"title":"Guard places still copy: each use copies the guard's whole value out and back, and copies the…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"open","category":"Borrow checker (D572)"},
+    {"issue":167,"title":"Changing a struct field through a binding (`row.list.push(9)`) copies the field and stores it…","state":"closed","category":"Borrow checker (D572)","release":"0.2.6"},
+    {"issue":168,"title":"An or-pattern whose alternatives use unannotated integers and `None` is refused by type inference","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"open","category":"rawr-iced (D586)"},
+    {"issue":170,"title":"D584's own-signature check reads a parameter with several lifetimes as one (`Borrows::Several`)…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":171,"title":"A method's `self` isn't a recorded local, so `self.x` returned or `self.y = y` stored inside a…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":172,"title":"A struct that declares lifetime bounds (`'b: 'a`, `T: 'a`) has its fields treated as holding all…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":173,"title":"Some std methods still keep everything of their receiver: `split_first`, `split_last`, `concat`…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":174,"title":"A `&mut` borrow in a struct literal's field (`W { v: &mut v }`) isn't lowered","state":"open","category":"Borrow checker (D572)"},
+    {"issue":175,"title":"Calling a `&mut impl FnMut` parameter (`fn twice(f: &mut impl FnMut(i32)) { f(1) }`) fails at…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":176,"title":"A closure using a `&mut` place is still refused inside an async block, for a borrow of a range…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":177,"title":"`match &slot { Some(t) => t.total() }` on an `Option` of a native value copies it three times","state":"open","category":"Borrow checker (D572)"},
+    {"issue":178,"title":"A local that a closure captured stays shared afterwards","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":179,"title":"A `let mut` local of type `impl Fn` is treated as `FnMut` when called","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
+    {"issue":180,"title":"Moving a struct's field while a borrow of it is live isn't caught and isn't noted as unmodeled…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":181,"title":"`shout(&p)` with `shout<T: Display>(x: T)` and a hand-written `Display` for `Point` is refused…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":182,"title":"The harness compares only borrow codes, so E0590, E0308 and other codes rawr reports count as…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":183,"title":"A field holding `&T` holds a copy of the value rather than the value itself","state":"open","category":"Borrow checker (D572)"},
+    {"issue":184,"title":"A `&mut` stored in a struct, tuple, `Option` or `vec!` is refused as unsupported syntax, so…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":185,"title":"Drop liveness gaps: a drop that uses only some of a value's borrows goes to `cargo check`…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":186,"title":"A call given a place through a closure's shared handle, with a closure among its arguments…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":187,"title":"A `Copy` closure copied by being captured into another `move` closure (`move || d()`) still…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":188,"title":"#179's `Fn` knowledge covers only locals set directly from a crate function or declared `fn(..)`","state":"open","category":"Borrow checker (D572)"},
+    {"issue":189,"title":"A closure inside a `&mut self` method that changes a field of `self` (`|x| { self.b.push(x); }`)…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":190,"title":"A field change inside a closure body (`|x| p.b.push(x)`) copies the field out and back at each…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":191,"title":"A trait's default body is lowered only inside an impl that receives it, so one no impl receives…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":192,"title":"`static` items are parsed as `const`, so moving out of a static (E0507) is left to rustc","state":"open","category":"Borrow checker (D572)"},
+    {"issue":193,"title":"The closure kind a use requires (`Fn` or `FnMut` bounds) isn't read, so a closure that moves out…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":195,"title":"`let o = v.last_mut(); let r = o.unwrap(); *r = 9;` is refused as \"Cannot mutate immutable…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":197,"title":"A `break value` move is recorded after the jump, so the move check doesn't follow it","state":"open","category":"Borrow checker (D572)"},
+    {"issue":198,"title":"The list of `Option` and `Result` methods that take `&self` (`builtin_enum_receiver`) is kept by…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":199,"title":"Lowering one function takes time quadratic in its length, in v0.1.0 and on main alike","state":"open","category":"Borrow checker (D572)"},
+    {"issue":200,"title":"Inventory: for every upstream iced example and every example in rawr's `examples/`, run it…","state":"closed","category":"No glue (D593)"},
+    {"issue":201,"title":"Run in place in iced's own workspace, every marked iced example stops at \"dependency identity is…","state":"open","category":"No glue (D593)"},
+    {"issue":202,"title":"Every running iced example differs from `cargo run`: the window title is \"Rawr application\"…","state":"open","category":"No glue (D593)"},
+    {"issue":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"open","category":"No glue (D593)"},
+    {"issue":204,"title":"The importer can't bind: changelog's `Changelog::list()` (an async fn in a native module, with…","state":"closed","category":"No glue (D593)","release":"0.2.2"},
+    {"issue":205,"title":"serde derives on script types (pokedex, todos)","state":"open","category":"No glue (D593)"},
+    {"issue":206,"title":"The facade shadows or lacks an item: gallery's `Image::border_radius` is hidden by the facade's…","state":"open","category":"No glue (D593)"},
+    {"issue":207,"title":"custom_shader's native module uses `crate::wgpu`, which the marked root re-exports","state":"open","category":"No glue (D593)"},
+    {"issue":208,"title":"styling is refused with a false E0382: its array of `(&str, fn)` tuples is `Copy`, and the 0.2.0…","state":"closed","category":"No glue (D593)","release":"0.2.1"},
+    {"issue":209,"title":"layout passes `rawr check` but fails at start: its state holds a `fn() -> Element` field, and…","state":"open","category":"No glue (D593)"},
+    {"issue":210,"title":"invaders exited with status 0 on its own, with no message, in 2 of 4 runs under `rawr run`","state":"open","category":"No glue (D593)"},
+    {"issue":211,"title":"The D594 falsifying spike: step 0 (the marked counter under `rawr check` and `rawr run` with no…","state":"closed","category":"No glue (D593)"},
+    {"issue":212,"title":"An `impl Fn(..) + 'a` parameter (`Button::style`, `on_press_with`) reaches the type-parameter…","state":"closed","category":"No glue (D593)","release":"0.2.4"},
+    {"issue":213,"title":"A `pub use` of an enum variant (`iced::Center`) and `use Enum::Variant` from a crate are unsupported","state":"closed","category":"No glue (D593)","release":"0.2.4"},
+    {"issue":214,"title":"Type aliases from a crate are unknown: `iced::Result`, and `iced::Element` with default type…","state":"closed","category":"No glue (D593)","release":"0.2.4"},
+    {"issue":215,"title":"A dependency's `macro_rules!` (`column!`, `row!`, `text!`, `color!`) isn't expanded from its…","state":"closed","category":"No glue (D593)","release":"0.2.3"},
+    {"issue":216,"title":"A default method that comes from a blanket trait impl (`Widget::boxed`) isn't found","state":"closed","category":"No glue (D593)","release":"0.2.4"},
+    {"issue":217,"title":"A module and a function with the same name in a crate (`mod text` and `fn text`) leave the…","state":"open","category":"No glue (D593)"},
+    {"issue":218,"title":"A method path used as a function value (`Counter::update`, as…","state":"closed","category":"No glue (D593)","release":"0.2.3"},
+    {"issue":219,"title":"D594's core: script types, closures and trait impls in native generic positions (\"imported…","state":"closed","category":"No glue (D593)","release":"0.2.5"},
+    {"issue":220,"title":"Repaint after a save under a library's own loop (D594.5, D596.4): decide between next-event and…","state":"closed","category":"No glue (D593)"},
+    {"issue":221,"title":"Publish the smallest possible crate that library authors depend on to register a \"rebuild now\"…","state":"open","category":"No glue (D593)"},
+    {"issue":222,"title":"The parser gives `fn(..)`, `impl Fn`, `dyn Fn` and `F: Fn` one function type, so a move of an…","state":"open","category":"No glue (D593)"},
+    {"issue":223,"title":"A tuple holding `&mut` (`(&mut list, 1)`) isn't lowered","state":"open","category":"No glue (D593)"},
+    {"issue":224,"title":"Standalone example crates sharing one `CARGO_TARGET_DIR`, as `scripts/iced-examples.sh`…","state":"open","category":"No glue (D593)"},
+    {"issue":225,"title":"changelog stops at `markdown::parse(..)`, which returns an opaque `impl Iterator` the importer…","state":"open","category":"No glue (D593)"},
+    {"issue":226,"title":"color_palette stops at `Slider::new(range, value, closure)`, \"its signature names a type…","state":"open","category":"No glue (D593)"},
+    {"issue":227,"title":"multitouch stops at `Polygon::points(&self) -> &[C]`: a slice whose element type is a type…","state":"open","category":"No glue (D593)"},
+    {"issue":228,"title":"Reading a non-`Copy` field of an imported struct counts as moving the whole value, because the…","state":"open","category":"No glue (D593)"},
+    {"issue":229,"title":"`&[T]` and `&(A, B)` inputs to native calls are built as Rust values and lent for the call: a…","state":"open","category":"No glue (D593)"},
+    {"issue":230,"title":"A crate named only by path, with no `use` of it (`shapes::clear(..)`), gives \"unknown type `shapes`\"","state":"open","category":"No glue (D593)"},
+    {"issue":231,"title":"One `rawr check` of color_palette failed once with \"invalid stored baseline: complete current…","state":"open","category":"No glue (D593)"},
+    {"issue":232,"title":"Right after a release deploys a new `?play` image, an iced site snippet can hit the bot's render…","state":"open","category":"No glue (D593)"},
+    {"issue":233,"title":"The compiler's pending operation grew from 632 to 640 bytes and its executable operation from…","state":"open","category":"No glue (D593)"},
+    {"issue":234,"title":"A `$crate` path to an item the root crate doesn't re-export, in a crate the program doesn't…","state":"open","category":"No glue (D593)"},
+    {"issue":235,"title":"Errors can show the `iced::__rawr_crate_…` spelling of a type (`…::Button::_boxed`) where the…","state":"open","category":"No glue (D593)"},
+    {"issue":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"open","category":"No glue (D593)"},
+    {"issue":237,"title":"Macro matching is permissive: an `expr` fragment reads to the next top-level `,`, `;` or `=>`…","state":"open","category":"No glue (D593)"},
+    {"issue":238,"title":"A `#playground` snippet (2026-10-22) is still refused on the facade path: `.into()` from a…","state":"open","category":"No glue (D593)"},
+    {"issue":239,"title":"iced's `text` and `value` functions don't bind","state":"closed","category":"No glue (D593)","release":"0.2.7"},
+    {"issue":240,"title":"A type re-exported at two paths (`natives::Alignment` and `natives::alignment::Alignment`) is…","state":"open","category":"No glue (D593)"},
+    {"issue":241,"title":"A closure stored in a native value and called from that value's `&self` or `&mut self` method…","state":"open","category":"No glue (D593)"},
+    {"issue":242,"title":"Reading a pub field of a generic crate struct (`boxed.width` on `Boxed<'a, Message>`) fails with…","state":"open","category":"No glue (D593)"},
+    {"issue":243,"title":"Spliced tokens from `path_method_call` and macro expansion carry spans past the written token's…","state":"open","category":"No glue (D593)"},
+    {"issue":244,"title":"`?play` sizes an image with no size option to the root widget's measured layout, ignoring…","state":"open","category":"No glue (D593)"},
+    {"issue":245,"title":"Counter's `fn view(&self) -> impl Widget<Message>`: rawr can't infer the hidden type's…","state":"closed","category":"No glue (D593)","release":"0.2.7"},
+    {"issue":246,"title":"A string literal filling a crate's type parameter is a `String` where Rust has `&'static str`…","state":"closed","category":"No glue (D593)","release":"0.2.7"},
+    {"issue":247,"title":"`iced::Element<'_, M>` in a type annotation is \"unknown type\"","state":"closed","category":"No glue (D593)","release":"0.2.7"},
+    {"issue":248,"title":"Reading a field copies the whole struct in script code: `s.count` copies State once…","state":"closed","category":"No glue (D593)","release":"0.2.6"},
+    {"issue":249,"title":"Proxies don't implement `Copy`, `Hash`, `Eq`, `Ord` or a crate's traits, which `canvas::Program`…","state":"open","category":"No glue (D593)"},
+    {"issue":250,"title":"A script type named like a runner root item (`Program`, `Error`, `Event`, `Arena`, …) breaks the…","state":"open","category":"No glue (D593)"},
+    {"issue":251,"title":"Methods of generic impls (`Subscription::map`) don't take slots yet","state":"open","category":"No glue (D593)"},
+    {"issue":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open","category":"No glue (D593)"},
+    {"issue":253,"title":"import-cli `scope`'s `borrowing_parsers…` fails with E0382 on `reader`, on main since…","state":"open","category":"No glue (D593)"},
+    {"issue":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open","category":"No glue (D593)"},
+    {"issue":255,"title":"The first `rawr run` of a fresh crate with one small dependency (`itoa`) took 105–111 s and…","state":"open","category":"No glue (D593)"},
+    {"issue":256,"title":"On a tiny crate with one dependency, a one-shot `rawr run` after an edit took 1.7–7.9 s and warm…","state":"open","category":"No glue (D593)"},
+    {"issue":257,"title":"The struct-shape check at function entry (D605.3) walks the whole value, every `Vec` element…","state":"open","category":"No glue (D593)"},
+    {"issue":258,"title":"Copies left after D605, measured on 100-element `Vec`s: `for t in &v` copies the collection once…","state":"open","category":"No glue (D593)"},
+    {"issue":259,"title":"Inside `f(&s, &s)`, a method call `a.m(b)` on the two parameters may report a data race where…","state":"open","category":"No glue (D593)"},
+    {"issue":260,"title":"checkbox stops at `on_toggle_maybe(f: Option<F>)` with `F: Fn(bool) -> Message`: rawr can't make…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
+    {"issue":261,"title":"slider stops at `use iced::widget::iced`, rejected as `OpaqueType`: a crate function returning…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
+    {"issue":262,"title":"tooltip stops at `.style(container::rounded_box)`: \"expected `fn(&Theme) -> Style`, found…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
+    {"issue":263,"title":"A macro and a function with the same name at one path (`events::column(..)`) resolve to the…","state":"open","category":"No glue (D593)"},
+    {"issue":264,"title":"`use iced::Renderer` failed with \"unknown type parameter `F` in host item…","state":"open","category":"No glue (D593)"},
+    {"issue":265,"title":"The direct runner dependency for a macro's `$crate` crate works for git and crates.io sources…","state":"open","category":"No glue (D593)"},
+    {"issue":266,"title":"D604's impl selection checks no candidate's bounds","state":"open","category":"No glue (D593)"},
+    {"issue":267,"title":"Clicks posted by the agents' tools don't reach iced windows that can't be brought to the front…","state":"open","category":"No glue (D593)"},
+    {"issue":268,"title":"The docs (`site/src/content/docs`) don't describe running a crate like iced through generated…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
+    {"issue":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.2"},
+    {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
+    {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.1"},
+    {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
+    {"issue":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
+    {"issue":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":282,"title":"Upstream text stops at `RAWR-RESOLVE-UNKNOWN-MEMBER` on `…::Text::new`, from the `text!(..)`…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
+    {"issue":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open","category":"No glue (D593)"},
+    {"issue":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
+    {"issue":285,"title":"`src/resolve/lower_nominal.rs` still gives the real iced examples their `Theme` and `Renderer`…","state":"open","category":"No glue (D593)"},
+    {"issue":286,"title":"rawr doesn't check a crate type's trait bounds, such as `Default`, when it fills an imported…","state":"open","category":"No glue (D593)"},
+    {"issue":287,"title":"A crate function's `impl Trait` value is limited: one per call, outputs of the same type only…","state":"open","category":"No glue (D593)"},
+    {"issue":288,"title":"A call that must run inside a view fails with a lending error when made outside one","state":"open","category":"No glue (D593)"},
+    {"issue":289,"title":"Unconfirmed: an inclusive range output of a non-`i64` type may convert wrongly, and static byte…","state":"open","category":"No glue (D593)"},
+    {"issue":290,"title":"A dependency on the workspace's root package still compiles twice under the runner, because the…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":291,"title":"Untested: a linked path crate that reads `env!(\"CARGO_MANIFEST_DIR\")` sees the link's path under…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":292,"title":"`importer/src/runner/mirror.rs` falls back to compiling path packages twice when one sits…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":293,"title":"`process::ownership::tests::naturally_exited_leader_drains_descendants_before_retirement` fails…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.4"},
+    {"issue":294,"title":"A marked script that declares iced is unverified","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":295,"title":"A script that sets its own `[profile.*]` gives rawr's crates another hash in the shared script…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.4"},
+    {"issue":296,"title":"`rawr run` runs no `cargo check` beside a script, so a script gets no cargo diagnostics","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.4"},
+    {"issue":297,"title":"A script with dependencies and no rawr-import installed is told about \"Rust dependencies in…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.4"},
+    {"issue":298,"title":"The literal `18446744073709551615` in a `u64` array fails with \"-1 is out of range for `u64`\"","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.3"},
+    {"issue":299,"title":"`std::process::id()` is not available","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.3"},
+    {"issue":300,"title":"Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.13"},
+    {"issue":301,"title":"Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.5"},
+    {"issue":302,"title":"A user setting outside the crate's files lowers the runtime's opt-level","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.5"},
+    {"issue":303,"title":"No `rawr cache clean` command reaches the shared runtime","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":305,"title":"Seen once, not reproduced: the import-cli script test's second script failed with \"invalid…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.7"},
+    {"issue":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":309,"title":"No-glue: member lookups on crate types","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":310,"title":"No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.8"},
+    {"issue":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":312,"title":"No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
+    {"issue":313,"title":"No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.9"},
+    {"issue":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
+    {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":329,"title":"`copies_tests::a_proxy_lends_its_state_to_script_functions_without_a_copy` counts 1000 copies…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":330,"title":"Calling a `&self` trait method on an opaque value fails in the runner build with E0282, because…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":331,"title":"A method's opaque `impl Trait` output gets no members","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":332,"title":"A method from a generic struct's trait impl isn't found (warp's `And<F>::value`)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":333,"title":"An uncallable method shows no \"no binding\" note when it's called with method syntax","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":334,"title":"No-glue stops after #313","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
+    {"issue":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
+    {"issue":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
+    {"issue":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":342,"title":"A `match` on a `&mut Option` binding whose arm rebinds the same name (`Some(first) => ..`) fails…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":343,"title":"A script's hand-written `impl Debug` isn't used when a crate prints the type, so a crate's…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":344,"title":"A std type a crate re-exports under another name works in types but not in call paths…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":345,"title":"No-glue stops after #312 and #338","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":346,"title":"`plain::a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save` times out when the…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":347,"title":"Result::ok on iced's executor thread needs the arena","state":"closed","category":"No glue (D593)"},
+    {"issue":348,"title":"A receiver's type arguments are matched by the struct's parameter names","state":"open","category":"No glue (D593)"},
+    {"issue":349,"title":"Slots copy crate values that Rust borrows","state":"open","category":"No glue (D593)"},
+    {"issue":350,"title":"A script function can't fill a single-input function pointer","state":"open","category":"No glue (D593)"},
+    {"issue":351,"title":"Script type names can clash with the runner's own items","state":"open","category":"No glue (D593)"},
+    {"issue":352,"title":"A view holding only a lifetime-free crate widget panics","state":"open","category":"No glue (D593)"},
+    {"issue":353,"title":"The upstream example shapes test fails with a lockfile package collision","state":"open","category":"Health"},
+    {"issue":354,"title":"A range of a crate type doesn't cross","state":"open","category":"No glue (D593)"},
+    {"issue":355,"title":"A float range such as `1.0..=30.0` passes where a crate takes `RangeInclusive<T>`","state":"closed","category":"No glue (D593)","release":"0.3.14"},
+    {"issue":356,"title":"A borrowed `Vec` passes where a crate takes `impl IntoIterator<Item = T>`, and its items are…","state":"closed","category":"No glue (D593)","release":"0.3.14"},
+    {"issue":357,"title":"A script value made off the owner thread can't keep a crate value","state":"open","category":"No glue (D593)"},
+    {"issue":358,"title":"An invariant crate value made outside a view can't join a column the view makes","state":"open","category":"No glue (D593)"}
+  ],
   "groups": [
     {
       "id": "v000",
@@ -10,14 +669,14 @@
       "subtitle": "Before rawr's own version numbers",
       "open": false,
       "rows": [
-        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[],"refs":{}},
-        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"refs":{}},
-        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[],"refs":{}},
-        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[],"refs":{}},
-        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[],"refs":{}},
-        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[],"refs":{}},
-        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[],"refs":{}},
-        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[],"refs":{}}
+        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[]},
+        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[]},
+        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[]},
+        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[]},
+        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[]},
+        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[]},
+        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[]},
+        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[]}
       ]
     },
     {
@@ -26,9 +685,9 @@
       "subtitle": "First release under rawr's own numbers",
       "open": false,
       "rows": [
-        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[],"refs":{}},
-        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[],"refs":{}},
-        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[],"refs":{}}
+        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[]},
+        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[]},
+        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[]}
       ]
     },
     {
@@ -37,10 +696,10 @@
       "subtitle": "rawr checks borrows",
       "open": false,
       "rows": [
-        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[],"refs":{}},
-        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[],"refs":{}},
-        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[],"refs":{}},
-        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"0.2.9. Optional callables","issues":[],"refs":{}}
+        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[]},
+        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[]},
+        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[]},
+        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"0.2.9. Optional callables","issues":[]}
       ]
     },
     {
@@ -57,12 +716,11 @@
           "state": "done",
           "note": "0.3.0–0.3.1. No added files, check build",
           "issues": [
-            {"number":273,"t":"T273","title":"T273: A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open"},
-            {"number":277,"t":"T277","title":"T277: A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed"},
-            {"number":278,"t":"T278","title":"T278: `deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed"},
-            {"number":279,"t":"T279","title":"T279: The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open"},
+            {"number":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed"},
+            {"number":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed"},
+            {"number":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed"}
+          ]
         },
         {
           "id": "scripts-with-dependencies",
@@ -72,14 +730,13 @@
           "state": "done",
           "note": "0.3.2–0.3.4",
           "issues": [
-            {"number":269,"t":"T269","title":"T269: A lone `.rs` file can't declare dependencies","state":"closed"},
-            {"number":295,"t":"T295","title":"T295: A script that sets its own `[profile.*]` gives rawr's crates another hash in the shared script…","state":"closed"},
-            {"number":296,"t":"T296","title":"T296: `rawr run` runs no `cargo check` beside a script, so a script gets no cargo diagnostics","state":"closed"},
-            {"number":297,"t":"T297","title":"T297: A script with dependencies and no rawr-import installed is told about \"Rust dependencies in…","state":"closed"},
-            {"number":298,"t":"T298","title":"T298: The literal `18446744073709551615` in a `u64` array fails with \"-1 is out of range for `u64`\"","state":"closed"},
-            {"number":299,"t":"T299","title":"T299: `std::process::id()` is not available","state":"closed"}
-          ],
-          "refs": {}
+            {"number":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed"},
+            {"number":295,"title":"A script that sets its own `[profile.*]` gives rawr's crates another hash in the shared script…","state":"closed"},
+            {"number":296,"title":"`rawr run` runs no `cargo check` beside a script, so a script gets no cargo diagnostics","state":"closed"},
+            {"number":297,"title":"A script with dependencies and no rawr-import installed is told about \"Rust dependencies in…","state":"closed"},
+            {"number":298,"title":"The literal `18446744073709551615` in a `u64` array fails with \"-1 is out of range for `u64`\"","state":"closed"},
+            {"number":299,"title":"`std::process::id()` is not available","state":"closed"}
+          ]
         },
         {
           "id": "runtime-once-per-machine",
@@ -89,12 +746,11 @@
           "state": "done",
           "note": "0.3.5–0.3.6. Second project in 13 s",
           "issues": [
-            {"number":280,"t":"T280","title":"T280: A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open"},
-            {"number":301,"t":"T301","title":"T301: Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed"},
-            {"number":302,"t":"T302","title":"T302: A user setting outside the crate's files lowers the runtime's opt-level","state":"closed"},
-            {"number":315,"t":"T315","title":"T315: Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open"},
+            {"number":301,"title":"Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed"},
+            {"number":302,"title":"A user setting outside the crate's files lowers the runtime's opt-level","state":"closed"},
+            {"number":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed"}
+          ]
         },
         {
           "id": "deploy-gate",
@@ -104,9 +760,8 @@
           "state": "done",
           "note": "Waits for Cloudflare's rollout",
           "issues": [
-            {"number":321,"t":"T321","title":"T321: The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed"}
-          ],
-          "refs": {}
+            {"number":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed"}
+          ]
         },
         {
           "id": "pick-list-svg",
@@ -116,9 +771,8 @@
           "state": "done",
           "note": "No glue",
           "issues": [
-            {"number":284,"t":"T284","title":"T284: Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed"}
+          ]
         },
         {
           "id": "aliases-and-names",
@@ -128,10 +782,9 @@
           "state": "done",
           "note": "0.3.7. slider runs again",
           "issues": [
-            {"number":307,"t":"T307","title":"T307: No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed"},
-            {"number":308,"t":"T308","title":"T308: No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open"}
-          ],
-          "refs": {}
+            {"number":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed"},
+            {"number":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open"}
+          ]
         },
         {
           "id": "script-impls-of-crate-traits",
@@ -141,9 +794,8 @@
           "state": "done",
           "note": "0.3.8. impl canvas::Program",
           "issues": [
-            {"number":310,"t":"T310","title":"T310: No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":310,"title":"No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed"}
+          ]
         },
         {
           "id": "host-type-parameters",
@@ -153,9 +805,8 @@
           "state": "done",
           "note": "0.3.9. 11 examples past it",
           "issues": [
-            {"number":313,"t":"T313","title":"T313: No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":313,"title":"No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed"}
+          ]
         },
         {
           "id": "subscription",
@@ -165,9 +816,8 @@
           "state": "done",
           "note": "0.3.10. url_handler runs",
           "issues": [
-            {"number":309,"t":"T309","title":"T309: No-glue: member lookups on crate types","state":"closed"}
-          ],
-          "refs": {}
+            {"number":309,"title":"No-glue: member lookups on crate types","state":"closed"}
+          ]
         },
         {
           "id": "widget-extension-trait",
@@ -177,9 +827,8 @@
           "state": "done",
           "note": "0.3.11. .boxed(), impl Widget",
           "issues": [
-            {"number":311,"t":"T311","title":"T311: No-glue: iced's `Widget` extension trait","state":"closed"}
-          ],
-          "refs": {}
+            {"number":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed"}
+          ]
         }
       ]
     },
@@ -189,7 +838,7 @@
       "subtitle": "Built once per machine",
       "open": true,
       "rows": [
-        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[],"refs":{}},
+        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[]},
         {
           "id": "macro-crate-roots",
           "name": "Macro $crate roots",
@@ -198,12 +847,11 @@
           "state": "now",
           "note": "column! without demand",
           "issues": [
-            {"number":281,"t":"T281","title":"T281: Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open"}
-          ],
-          "refs": {}
+            {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open"}
+          ]
         },
-        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"refs":{}},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"refs":{}},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
         {
           "id": "key-and-publish",
           "name": "Key and publish",
@@ -212,9 +860,8 @@
           "state": "next",
           "note": "Atomic, with leases. #271",
           "issues": [
-            {"number":271,"t":"T271","title":"T271: Generated bindings are built per project, so every project and script pays T255 again for the…","state":"open"}
-          ],
-          "refs": {}
+            {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"}
+          ]
         },
         {
           "id": "removal-by-last-use",
@@ -224,9 +871,8 @@
           "state": "next",
           "note": "Kept across reinstalls. #272",
           "issues": [
-            {"number":272,"t":"T272","title":"T272: The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open"}
-          ],
-          "refs": {}
+            {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open"}
+          ]
         },
         {
           "id": "key-holes",
@@ -236,13 +882,12 @@
           "state": "next",
           "note": "#252, #254, #276",
           "issues": [
-            {"number":252,"t":"T252","title":"T252: A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
-            {"number":254,"t":"T254","title":"T254: With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open"},
-            {"number":276,"t":"T276","title":"T276: `importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open"}
-          ],
-          "refs": {}
+            {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
+            {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open"},
+            {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open"}
+          ]
         },
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[],"refs":{}},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[]},
         {
           "id": "drift-loudly",
           "name": "Drift, loudly",
@@ -251,9 +896,8 @@
           "state": "next",
           "note": "Names the crate. #275",
           "issues": [
-            {"number":275,"t":"T275","title":"T275: Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open"}
-          ],
-          "refs": {}
+            {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open"}
+          ]
         }
       ]
     },
@@ -271,9 +915,8 @@
           "state": "next",
           "note": "r#for",
           "issues": [
-            {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
-          ],
-          "refs": {}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+          ]
         },
         {
           "id": "equality-in-bounds",
@@ -283,9 +926,8 @@
           "state": "next",
           "note": "Iterator<Item = Self::For>",
           "issues": [
-            {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
-          ],
-          "refs": {}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+          ]
         },
         {
           "id": "qualified-self-paths",
@@ -295,9 +937,8 @@
           "state": "next",
           "note": "<Self as T>::A",
           "issues": [
-            {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
-          ],
-          "refs": {}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+          ]
         },
         {
           "id": "higher-ranked-bounds",
@@ -307,9 +948,8 @@
           "state": "next",
           "note": "for<'a> Fn(&'a T)",
           "issues": [
-            {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
-          ],
-          "refs": {}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+          ]
         },
         {
           "id": "impl-for-a-reference",
@@ -319,9 +959,8 @@
           "state": "next",
           "note": "impl<T> For for &T. #320",
           "issues": [
-            {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
-          ],
-          "refs": {}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+          ]
         }
       ]
     },
@@ -339,10 +978,9 @@
           "state": "done",
           "note": "0.3.12. 8 examples past it. #312, #338",
           "issues": [
-            {"number":312,"t":"T312","title":"T312: No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
-            {"number":338,"t":"T338","title":"T338: clock, the_matrix: `time::every` has no binding, likely with T312","state":"closed"}
-          ],
-          "refs": {}
+            {"number":312,"title":"No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
+            {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
+          ]
         },
         {
           "id": "boot-returning-a-task",
@@ -352,9 +990,8 @@
           "state": "done",
           "note": "system_information runs; text to its runner build. #300",
           "issues": [
-            {"number":300,"t":"T300","title":"T300: Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
-          ],
-          "refs": {}
+            {"number":300,"title":"Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
+          ]
         },
         {
           "id": "boundary-conversions",
@@ -364,11 +1001,10 @@
           "state": "done",
           "note": "exit runs. #336, #340, part of #345",
           "issues": [
-            {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
-            {"number":340,"t":"T340","title":"T340: modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
-            {"number":345,"t":"T345","title":"T345: No-glue stops after T312 and T338","state":"open"}
-          ],
-          "refs": {}
+            {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
+            {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
+            {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
+          ]
         }
       ]
     },
@@ -386,12 +1022,11 @@
           "state": "next",
           "note": "custom_quad, component. #322–#324, #341",
           "issues": [
-            {"number":322,"t":"T322","title":"T322: A script impl generic over a crate-trait bound, such as…","state":"open"},
-            {"number":323,"t":"T323","title":"T323: The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open"},
-            {"number":324,"t":"T324","title":"T324: A crate trait's associated type held as a script value (the_matrix's…","state":"open"},
-            {"number":341,"t":"T341","title":"T341: D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open"}
-          ],
-          "refs": {}
+            {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"open"},
+            {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open"},
+            {"number":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"open"},
+            {"number":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open"}
+          ]
         },
         {
           "id": "struct-literals-live-edits",
@@ -401,10 +1036,9 @@
           "state": "next",
           "note": "#325, #326",
           "issues": [
-            {"number":325,"t":"T325","title":"T325: A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open"},
-            {"number":326,"t":"T326","title":"T326: A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open"}
-          ],
-          "refs": {}
+            {"number":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open"},
+            {"number":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open"}
+          ]
         },
         {
           "id": "projections-function-values",
@@ -414,12 +1048,11 @@
           "state": "next",
           "note": "#317–#319, #327",
           "issues": [
-            {"number":317,"t":"T317","title":"T317: An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
-            {"number":318,"t":"T318","title":"T318: Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open"},
-            {"number":319,"t":"T319","title":"T319: A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
-            {"number":327,"t":"T327","title":"T327: multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open"}
-          ],
-          "refs": {}
+            {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
+            {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open"},
+            {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
+            {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open"}
+          ]
         },
         {
           "id": "runner-build-gaps",
@@ -429,14 +1062,13 @@
           "state": "next",
           "note": "events, exit, theme, modal. #335–#340",
           "issues": [
-            {"number":335,"t":"T335","title":"T335: events: `rawr check` passes, but the runner build fails on…","state":"closed"},
-            {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
-            {"number":337,"t":"T337","title":"T337: arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"open"},
-            {"number":339,"t":"T339","title":"T339: A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open"},
-            {"number":340,"t":"T340","title":"T340: modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
-            {"number":338,"t":"T338","title":"T338: clock, the_matrix: `time::every` has no binding, likely with T312","state":"closed"}
-          ],
-          "refs": {}
+            {"number":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed"},
+            {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
+            {"number":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"open"},
+            {"number":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open"},
+            {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
+            {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
+          ]
         },
         {
           "id": "per-example-gaps",
@@ -446,13 +1078,12 @@
           "state": "next",
           "note": "About 18 examples. #314, #283, #328, #334",
           "issues": [
-            {"number":283,"t":"T283","title":"T283: Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
-            {"number":314,"t":"T314","title":"T314: No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
-            {"number":328,"t":"T328","title":"T328: lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
-            {"number":334,"t":"T334","title":"T334: No-glue stops after T313","state":"open"},
-            {"number":345,"t":"T345","title":"T345: No-glue stops after T312 and T338","state":"open"}
-          ],
-          "refs": {}
+            {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
+            {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
+            {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
+            {"number":334,"title":"No-glue stops after #313","state":"open"},
+            {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
+          ]
         }
       ]
     },
@@ -462,8 +1093,8 @@
       "subtitle": "Without rawr-iced",
       "open": true,
       "rows": [
-        {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[],"refs":{}},
-        {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[],"refs":{}}
+        {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
+        {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
       ]
     },
     {
@@ -480,9 +1111,8 @@
           "state": "next",
           "note": "",
           "issues": [
-            {"number":203,"t":"T203","title":"T203: The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"open"}
-          ],
-          "refs": {}
+            {"number":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"open"}
+          ]
         },
         {
           "id": "delete-rawr-iced",
@@ -492,10 +1122,9 @@
           "state": "next",
           "note": "A no-op by then",
           "issues": [
-            {"number":169,"t":"T169","title":"T169: Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"open"},
-            {"number":306,"t":"T306","title":"T306: rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"open"}
-          ],
-          "refs": {}
+            {"number":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"open"},
+            {"number":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"open"}
+          ]
         }
       ]
     }

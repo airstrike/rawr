@@ -79,6 +79,7 @@ import {
 } from "./play.ts";
 import { inject } from "./playpage.ts";
 import { RUNNABLE } from "./runnable.gen.ts";
+import { UNLOCK_LIMITS, UNLOCK_TOTAL_LIMITS, todoRoute } from "./todo.ts";
 import {
   addWebRateLimited,
   emptyStats,
@@ -183,6 +184,10 @@ interface Env {
   /** Turnstile: the public site key (a var) and the secret. */
   TURNSTILE_SITEKEY?: string;
   TURNSTILE_SECRET?: string;
+  /** Secret: the password of /todo's private tabs (todo.ts). */
+  TODO_PASSWORD?: string;
+  /** KV: the private tabs' rendered documents, uploaded by plan/private.mjs. */
+  TODO_PRIVATE?: KVNamespace;
 }
 
 export class PlayBot extends Container<Env> {
@@ -193,6 +198,8 @@ export class PlayBot extends Container<Env> {
   private shares = new Limiter(SHARE_LIMITS);
   private previews = new Limiter(PREVIEW_LIMITS);
   private landing = new Limiter(LANDING_LIMITS);
+  private unlocks = new Limiter(UNLOCK_LIMITS);
+  private unlocksTotal = new Limiter(UNLOCK_TOTAL_LIMITS, 1);
   /** Renders in flight by share id, so concurrent first requests render once. */
   private rendering = new Map<string, Promise<Preview>>();
   /** The day each share was last seen visiting, as stored (saves reads). */
@@ -252,7 +259,12 @@ export class PlayBot extends Container<Env> {
   }
 
   /** Count a playground request from `ip` (a hash); seconds to wait, or 0. */
-  async allow(kind: "render" | "share" | "landing", ip: string): Promise<number> {
+  async allow(kind: "render" | "share" | "landing" | "unlock", ip: string): Promise<number> {
+    if (kind === "unlock") {
+      // /todo's password: per IP, then everyone's tries together.
+      const now = Date.now();
+      return this.unlocks.take(ip, now) || this.unlocksTotal.take("all", now);
+    }
     const limiter = kind === "render" ? this.renders : kind === "share" ? this.shares : this.landing;
     const wait = limiter.take(ip, Date.now());
     if (wait > 0 && kind === "render") {
@@ -889,6 +901,12 @@ export default {
       return new Response(request.method === "HEAD" ? null : html, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
+    }
+    if (path.startsWith("/todo/")) {
+      const response = await todoRoute(request, env, path, {
+        allow: async (request) => getContainer(env.PLAY_BOT).allow("unlock", await ipHash(request, env)),
+      });
+      if (response) return response;
     }
     if (DOCS_MOVED[path]) {
       return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);

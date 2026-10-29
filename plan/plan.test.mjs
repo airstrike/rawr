@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { changelogMarkdown, doneCommits, format, parseTodo, publicText, sentences, shortTitle, validate } from "./plan.mjs";
+import { changelogMarkdown, doneCommits, format, issueRefs, parseTodo, publicText, sentences, shortTitle, siteData, validate } from "./plan.mjs";
 
 const schema = (name) => JSON.parse(readFileSync(new URL(`schema/${name}.schema.json`, import.meta.url)));
 
@@ -61,4 +61,39 @@ test("the changelog renders entries with their issues, and the committed JSON is
 
 test("records print one per line", () => {
   assert.equal(format({ items: [{ t: "T001", issue: 1 }, { t: "T002", issue: 2 }] }), '{\n  "items": [\n    {"t":"T001","issue":1},\n    {"t":"T002","issue":2}\n  ]\n}');
+});
+
+test("notes name issues as #N; r#for and entities are not issues", () => {
+  assert.deepEqual(issueRefs("exit runs. #336, #340, part of #345, r#for, &#123;"), [336, 340, 345]);
+});
+
+test("the page's data names each recorded T number as its issue", () => {
+  const plan = {
+    project: { repo: "airstrike/rawr" },
+    items: { items: [{ t: "T009", issue: 2, title: "T009: Fix T010", state: "open", category: "Health", release: null }, { t: "T010", issue: 10, title: "T010: X", state: "closed", category: "Health", release: "0.3.1" }] },
+    gantt: { updated: "2026-10-28", version: "0.3.14", examples: {}, groups: [{ id: "g", title: "G", subtitle: "", open: true, rows: [{ id: "r", name: "R", start: 0, size: 1, state: "now", note: "T009. #10", issues: [2] }] }] },
+    changelog: { intro: [], unreleased: { notes: ["Aim at T009."], entries: [] }, releases: [{ version: "0.3.1", date: "2026-10-01", entries: [{ text: "Fixed T010.", issues: [10] }] }] },
+  };
+  const data = siteData(plan);
+  assert.equal(data.groups[0].rows[0].note, "#2. #10");
+  assert.deepEqual(data.groups[0].rows[0].issues, [{ number: 2, title: "Fix #10", state: "open" }]);
+  assert.deepEqual(data.items, [{ issue: 2, title: "Fix #10", state: "open", category: "Health" }, { issue: 10, title: "X", state: "closed", category: "Health", release: "0.3.1" }]);
+  assert.equal(data.changelog.unreleased.notes[0], "Aim at #2.");
+  assert.equal(data.changelog.releases[0].entries[0].text, "Fixed #10.");
+  plan.changelog.intro = ["T999"];
+  assert.throws(() => siteData(plan), /T999 is no recorded item/);
+});
+
+test("the private documents lose local paths, secrets and the old name, and link T numbers", async () => {
+  const { leaks, linkIssues, scrub } = await import("./private.mjs");
+  const md = scrub("See /Users/x/projects/rhai/src/a.rs and /Users/x/projects/other/b, ~/.cargo, ../rhai/macros. Rhai's AST; the rhai crate. ghp_" + "a".repeat(30), ["/Users/x/projects/rhai"]);
+  assert.equal(md, "See src/a.rs and ../other/b, ~/.cargo, ../rawr/macros. Upstream's AST; the upstream crate. [redacted]");
+  assert.deepEqual(leaks(md), []);
+  assert.deepEqual(leaks("/Users/x/y rhai"), ["a local path", "the old name"]);
+  const items = [{ t: "T002", issue: 2 }];
+  assert.equal(
+    linkIssues("<p>T002 and <code>T002</code> and <a href=\"#\">T002</a></p><pre><code>T002</code></pre>", items, "o/r"),
+    '<p><a href="https://github.com/o/r/issues/2">#2</a> and <code>T002</code> and <a href="#">T002</a></p><pre><code>T002</code></pre>',
+  );
+  assert.throws(() => linkIssues("<p>T404</p>", items, "o/r"), /T404 is no recorded item/);
 });

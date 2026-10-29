@@ -47,6 +47,15 @@ until SITE_BUILT=1 npx wrangler deploy --containers-rollout=immediate >"$logs/re
 done
 grep "Version ID" "$logs/release-deploy.log" || true
 
+# /todo's private tabs: plan/private.mjs renders the local .Codex/ documents
+# and uploads them to KV. Where they are missing (CI) it does nothing. A
+# failed upload leaves the last one in place, so it warns and goes on.
+if node "$repo/plan/private.mjs" >"$logs/release-private.log" 2>&1; then
+  tail -1 "$logs/release-private.log"
+else
+  echo "warning: the private tabs were not uploaded; see $logs/release-private.log" >&2
+fi
+
 # Cloudflare's rollout replaces the container; the application shows the new
 # image only once that rollout has completed. A rollout that never places a
 # healthy instance fails here with Cloudflare's own view, not in the snippets.
