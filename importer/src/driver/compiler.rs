@@ -1069,10 +1069,11 @@ type Extracted = (Vec<Sysroot>, Vec<ExternalCrate>, Vec<u8>);
 /// the table grows with each demand a crate meets. A crate whose whole walk
 /// is small is walked whole as well (`WHOLE_UNITS`).
 /// The units the compiler may answer for a whole walk beyond what the
-/// demand reached. semver's whole walk stays well within it; iced's whole
-/// API, walked on its first program's way to the window, cost the counter
-/// about 18 s, so iced's table grows with demand instead.
-const WHOLE_UNITS: usize = 4_096;
+/// demand reached. semver's whole walk, 301 units, stays well within it.
+/// iced's whole API, walked on its first program's way to the window, cost
+/// the counter about 18 s, so iced's table grows with demand instead; the
+/// attempt that finds it large costs the counter about 70 ms.
+const WHOLE_UNITS: usize = 1_024;
 
 /// Answers at most `left` units live, then refuses.
 struct WithinBound<'a, O: engine::Oracle> {
@@ -1134,9 +1135,23 @@ fn extract<'tcx>(
     };
     let Root::Selected { aliases } = &invocation.root;
     let key = tables.map(|tables| tables.key_for(invocation, crate_hash));
-    let kept = tables
+    // A demand that grows the one the table was made from, as each round of
+    // a first run's demand does, cannot replay: neither read nor merge it.
+    let outgrown = tables
         .zip(key.as_deref())
-        .map(|(tables, key)| tables.load(key, &root, used));
+        .and_then(|(tables, key)| tables.outgrown(key, session, &invocation.demand, used));
+    let served = match &outgrown {
+        Some(_) => None,
+        None => tables
+            .zip(key.as_deref())
+            .and_then(|(tables, key)| tables.served(key)),
+    };
+    let kept = match &outgrown {
+        Some(_) => None,
+        None => tables
+            .zip(key.as_deref())
+            .map(|(tables, key)| tables.load(key, &root, used)),
+    };
     if let Some(Some(memo)) = &kept {
         let mut replay = engine::Replay(memo);
         if let Ok(extracted) = engine::Engine::new(
@@ -1178,7 +1193,12 @@ fn extract<'tcx>(
         .map_err(units::fault)?
     };
     if let (Some(tables), Some(key)) = (tables, &key) {
+        // Whether a table that was read holds only known demands.
+        let read = matches!(kept, Some(Some(_)));
         let mut kept = kept.flatten().unwrap_or_default();
+        if let Some(outgrown) = &outgrown {
+            kept.large = outgrown.large();
+        }
         if invocation.demand.is_empty() {
             memo.whole = true;
         } else if !kept.whole && !kept.large {
@@ -1215,7 +1235,13 @@ fn extract<'tcx>(
             }
         }
         kept.absorb(&memo);
-        tables.store(key, &root, &kept);
+        let made = table::Served::new(session, &invocation.demand, &kept);
+        let served = if read {
+            served.and_then(|served| made.merged(&served))
+        } else {
+            Some(made)
+        };
+        tables.store(key, &root, &kept, served);
     }
     let body = extracted.body()?;
     let (sysroot, external) = units::registered(
@@ -5678,9 +5704,11 @@ mod tests {
         std::env::set_current_dir(previous_directory).unwrap();
         assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
         let sidecar = std::fs::read_to_string(protocol.join(format!("{identity}.json"))).unwrap();
+        // Each table, without the record of what it was made from.
         let kept: Vec<_> = std::fs::read_dir(&cache)
             .unwrap()
             .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_none())
             .collect();
         assert_eq!(kept.len(), 1, "one table per probed crate: {kept:?}");
         let table: serde_json::Value =
