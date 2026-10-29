@@ -848,7 +848,7 @@ const OPS = {
     const line = ctx.todo.parsed.items.get(op.t) ?? fail(`${op.t} isn't in TODO.md`);
     // "Done in `abc` (D640)." as the file's other done items say it.
     const said = (commit) => (op.note?.startsWith("(") ? `Done in ${commit} ${op.note}.` : `Done in ${commit}.${op.note ? ` ${op.note}` : ""}`);
-    ctx.comment(item.issue, said(op.commit));
+    ctx.comment(item.issue, op.comment ? `${said(op.commit)}\n\n${publicText(op.comment)}` : said(op.commit));
     ctx.close(item.issue);
     ctx.todo.set({ ...line, done: true, text: `${said(`\`${op.commit}\``)} ${line.text}` });
     Object.assign(item, { state: "closed", commit: op.commit });
@@ -1019,7 +1019,8 @@ const OPS = {
     }
     for (const n of new Set(entries.flatMap((e) => e.issues))) {
       const item = byIssue(ctx.plan, n);
-      ctx.comment(n, `Shipped in ${version}.`);
+      const shipped = entries.filter((e) => e.issues.includes(n)).map((e) => `- ${e.text}`).join("\n");
+      ctx.comment(n, shipped ? `Shipped in ${version}:\n\n${shipped}` : `Shipped in ${version}.`);
       if (item.state === "open") {
         ctx.close(n);
         const line = ctx.todo.parsed.items.get(item.t);
@@ -1029,7 +1030,10 @@ const OPS = {
       item.release = version;
       ctx.sync(item);
     }
-    for (const n of new Set(entries.flatMap((e) => e.refs ?? []))) ctx.comment(n, `Part of this shipped in ${version}.`);
+    for (const n of new Set(entries.flatMap((e) => e.refs ?? []))) {
+      const part = entries.filter((e) => (e.refs ?? []).includes(n)).map((e) => `- ${e.text}`).join("\n");
+      ctx.comment(n, `Part of this shipped in ${version}:\n\n${part}`);
+    }
     c.releases.unshift({ version, date, ...(op.lede ? { lede: op.lede } : {}), entries });
     c.unreleased.entries = [];
     Object.assign(ctx.plan.gantt, { version, updated: date });
