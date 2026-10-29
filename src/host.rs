@@ -6,6 +6,8 @@ pub(crate) mod endpoint;
 mod error;
 pub mod export;
 pub mod facade;
+#[cfg(feature = "rust-import")]
+pub(crate) mod family;
 pub mod item;
 pub mod operation;
 pub(crate) mod path;
@@ -154,6 +156,8 @@ pub struct Registry {
     imported_aliases: Vec<usize>,
     #[cfg(feature = "rust-import")]
     structural: Vec<structural::Definition>,
+    #[cfg(feature = "rust-import")]
+    families: Vec<family::Pending>,
     items: Vec<item::Definition>,
     facades: Vec<facade::Dependency>,
     /// Facade re-exports, sorted: a path and the canonical path it names.
@@ -224,6 +228,8 @@ impl Registry {
             imported_aliases: Vec::new(),
             #[cfg(feature = "rust-import")]
             structural: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            families: Vec::new(),
             items: Vec::new(),
             facades: Vec::new(),
             aliases: Vec::new(),
@@ -270,6 +276,11 @@ impl Registry {
             .and_then(|items| items.checked_add(self.imported.len()))
             .and_then(|items| items.checked_add(self.imported_aliases.len()))
             .and_then(|items| items.checked_add(self.structural.len()))
+            .and_then(|items| {
+                self.families.iter().try_fold(items, |items, family| {
+                    items.checked_add(1)?.checked_add(family.len())
+                })
+            })
             .and_then(|items| items.checked_add(self.items.len()))
             .and_then(|items| items.checked_add(self.facades.len()));
         let mut bytes = Some(std::mem::size_of::<Self>());
@@ -301,6 +312,9 @@ impl Registry {
         });
         for definition in &self.structural {
             bytes = bytes.and_then(|bytes| bytes.checked_add(definition.retained_bytes()?));
+        }
+        for family in &self.families {
+            bytes = bytes.and_then(|bytes| bytes.checked_add(family.retained_bytes()?));
         }
         for definition in &self.items {
             bytes = bytes.and_then(|bytes| bytes.checked_add(definition.retained_bytes()?));
@@ -355,6 +369,13 @@ impl Registry {
             .try_reserve_exact(self.structural.len())
             .map_err(|_| rawr_import::surface::Error::Allocation)?;
         clone.structural.extend(self.structural.iter().cloned());
+        clone
+            .families
+            .try_reserve_exact(self.families.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for family in &self.families {
+            clone.families.push(family.try_clone()?);
+        }
         clone
             .items
             .try_reserve_exact(self.items.len())
@@ -772,6 +793,41 @@ impl Registry {
         // `canvas::stroke::Style::Solid` through the re-export of `Style`.
         self.item_slice(&path)
             .or_else(|| self.item_slice(&self.canonical(&path)?))
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn defer_imported(&mut self, families: Vec<family::Pending>) -> Result<(), Error> {
+        for family in &families {
+            if self.item_slice(family.path()).is_some()
+                || self
+                    .families
+                    .iter()
+                    .any(|prior| prior.path() == family.path())
+            {
+                return Err(Error::DuplicateFacadeOverloadInputs {
+                    item: family.path().to_string().into(),
+                });
+            }
+        }
+        self.families
+            .try_reserve_exact(families.len())
+            .map_err(|_| Error::Allocation)?;
+        self.families.extend(families);
+        self.families
+            .sort_by(|left, right| left.path().cmp(right.path()));
+        Ok(())
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn pending_method(&self, qualified: &str) -> Option<&family::Pending> {
+        let path = path::Path::parse(qualified).ok()?;
+        let find = |path: &path::Path| {
+            self.families
+                .binary_search_by(|family| family.path().cmp(path))
+                .ok()
+                .map(|index| &self.families[index])
+        };
+        find(&path).or_else(|| find(&self.canonical(&path)?))
     }
 
     /// Return the exact facade owner of a registered type.

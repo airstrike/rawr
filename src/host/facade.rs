@@ -1494,6 +1494,37 @@ impl Builder {
         Ok(self)
     }
 
+    /// Retain distinct imported methods until their resolved signatures can
+    /// be partitioned from ordinary overloads. Ordinary facade builders still
+    /// validate every declaration eagerly through `item`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported_item(
+        &mut self,
+        item: host::item::Definition,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, item.path_ref());
+        if let Ok(index) = self.item_index(&path)
+            && item.signature().instance().is_none()
+            && self.items[index]
+                .1
+                .iter()
+                .all(|prior| prior.signature().instance().is_none())
+            && self.items[index]
+                .1
+                .iter()
+                .any(|prior| host::family::distinct(prior, &item))
+        {
+            self.items[index]
+                .1
+                .try_reserve(1)
+                .map_err(|_| host::Error::Allocation)?;
+            self.items[index].1.push(item);
+            Ok(self)
+        } else {
+            self.item(item)
+        }
+    }
+
     /// Retain one already-resolved linked profile item in an imported facade.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
@@ -1726,7 +1757,7 @@ impl Builder {
     pub(crate) fn finish_imported<A: host::ImportAllocation + ?Sized>(
         mut self,
         allocation: &mut A,
-    ) -> Result<Definition, host::Error> {
+    ) -> Result<(Definition, Vec<host::family::Pending>), host::Error> {
         validate_module_parents(&self.root, &self.modules)?;
         validate_type_parents(&self.root, &self.modules, &self.types)?;
         validate_type_identities(&self.types)?;
@@ -1756,10 +1787,28 @@ impl Builder {
             .iter()
             .map(|alias| alias.path.clone())
             .collect::<Vec<_>>();
+        let mut families = Vec::new();
+        // Resolving one group temporarily owns its new storage while the
+        // declaration and final ordinary-item buffers are still alive.
+        let largest_group = self
+            .items
+            .iter()
+            .map(|(_, items)| items.len())
+            .max()
+            .unwrap_or(0);
+        allocation
+            .retain_checked(
+                Some(largest_group),
+                largest_group.checked_mul(std::mem::size_of::<host::item::Definition>()),
+            )
+            .map_err(|_| host::Error::Allocation)?;
         for (_, declarations) in self.items {
-            let start = items.len();
+            let mut resolved = Vec::new();
+            resolved
+                .try_reserve_exact(declarations.len())
+                .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                items.push(item.resolve_imported(
+                resolved.push(item.resolve_imported(
                     &self.root,
                     &self.modules,
                     &self.types,
@@ -1769,17 +1818,28 @@ impl Builder {
                     allocation,
                 )?);
             }
-            items[start..].sort_by_key(host::item::Definition::fingerprint);
-            for (offset, item) in items[start..].iter().enumerate() {
-                for existing in &items[start..start + offset] {
-                    if same_namespace(existing, item)
-                        && existing.signature().same_inputs(item.signature())?
-                    {
-                        return Err(host::Error::DuplicateFacadeOverloadInputs {
-                            item: item.path().into(),
-                        });
-                    }
+            resolved.sort_by_key(host::item::Definition::fingerprint);
+            match host::family::Pending::partition(resolved, allocation)? {
+                host::family::Admission::Ordinary(resolved) => items.extend(resolved),
+                host::family::Admission::Pending(family) => {
+                    families
+                        .try_reserve(1)
+                        .map_err(|_| host::Error::Allocation)?;
+                    families.push(family);
                 }
+            }
+        }
+
+        // A profile declaration at a deferred path is not part of the
+        // imported family. Preserve the strict mixed-declaration boundary.
+        for item in &self.profile_items {
+            if families
+                .iter()
+                .any(|family| family.path() == item.path_ref())
+            {
+                return Err(host::Error::DuplicateFacadeOverloadInputs {
+                    item: item.path().into(),
+                });
             }
         }
 
@@ -1949,20 +2009,23 @@ impl Builder {
             &self.endpoints,
             &items,
         )?;
-        Ok(Definition {
-            root: self.root,
-            abi: self.abi,
-            modules: self.modules.into_boxed_slice(),
-            types: self.types.into_boxed_slice(),
-            supports: self.supports.into_boxed_slice(),
-            endpoints: self.endpoints.into_boxed_slice(),
-            items,
-            aliases: self.aliases.into_boxed_slice(),
-            type_aliases: type_aliases.into_boxed_slice(),
-            trait_headers: trait_headers.into_boxed_slice(),
-            impl_headers: impl_headers.into_boxed_slice(),
-            fingerprint,
-        })
+        Ok((
+            Definition {
+                root: self.root,
+                abi: self.abi,
+                modules: self.modules.into_boxed_slice(),
+                types: self.types.into_boxed_slice(),
+                supports: self.supports.into_boxed_slice(),
+                endpoints: self.endpoints.into_boxed_slice(),
+                items,
+                aliases: self.aliases.into_boxed_slice(),
+                type_aliases: type_aliases.into_boxed_slice(),
+                trait_headers: trait_headers.into_boxed_slice(),
+                impl_headers: impl_headers.into_boxed_slice(),
+                fingerprint,
+            },
+            families,
+        ))
     }
 
     fn ensure_vacant(
@@ -2100,7 +2163,10 @@ fn same_namespace(left: &host::item::Definition, right: &host::item::Definition)
 /// without parameters) may share its name with owned builder methods, as
 /// iced's `style.border` and `style.border(..)`. A tuple variant's
 /// constructor may share its name with the shared reader of its field.
-fn compatible_overload(existing: &host::item::Definition, item: &host::item::Definition) -> bool {
+pub(super) fn compatible_overload(
+    existing: &host::item::Definition,
+    item: &host::item::Definition,
+) -> bool {
     debug_assert!(same_namespace(existing, item));
     use host::item::Kind;
     let value = |item: &host::item::Definition| item.kind() == Kind::Value;

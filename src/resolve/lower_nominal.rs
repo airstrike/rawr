@@ -20967,6 +20967,17 @@ impl<'a> Parser<'a> {
         };
         let path = format!("{}::{member}", definition.path());
         let (member, path) = self.exported_member(&definition, member, path, member_span)?;
+        #[cfg(feature = "rust-import")]
+        if let Some(family) = self.models.host.pending_method(&path) {
+            return Err(Error::InvalidHostOperation {
+                item: path.into(),
+                reason: format!(
+                    "imported method applicability is unsupported here: {} distinct candidates require call-specific proof; Rust ambiguity has not been established",
+                    family.len(),
+                ).into(),
+                operation: member_span,
+            });
+        }
         // `*rotation.radians_mut() = angle`: a facade writes a `&mut`
         // accessor as the function that stores the value back.
         if let Some(base) = member.strip_suffix("_mut")

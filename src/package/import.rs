@@ -1765,10 +1765,11 @@ fn install(
                     .map(|(_, definition, _)| definition),
             )
             .collect::<std::collections::BTreeSet<_>>();
-        let definition = build(contract, facade, &declared, &mut shapes, allocation)?;
+        let (definition, families) = build(contract, facade, &declared, &mut shapes, allocation)?;
         let (items, bytes) = definition.registry_usage();
         allocation.retain_checked(items, bytes)?;
         registry.install(definition)?;
+        registry.defer_imported(families)?;
     }
     Ok(())
 }
@@ -1782,7 +1783,7 @@ fn build(
         crate::Shared<host::type_def::Shape>,
     )>,
     allocation: &mut rawr_import::contract::Allocation,
-) -> Result<host::facade::Definition, Error> {
+) -> Result<(host::facade::Definition, Vec<host::family::Pending>), Error> {
     facade.entries.sort_unstable_by(|left, right| {
         left.relative
             .cmp(&right.relative)
@@ -2060,7 +2061,7 @@ fn build(
     for entry in &facade.entries {
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
         if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
-            builder.item(item)?;
+            builder.imported_item(item)?;
         }
         // A function's members are those of the opaque type it gives.
         let owner = if matches!(
@@ -2098,7 +2099,7 @@ fn build(
                 .filter(|_| names_declared(associated, declared))
                 .filter(|item| !alias || item.receiver().is_none())
             {
-                builder.item(item)?;
+                builder.imported_item(item)?;
             }
         }
     }

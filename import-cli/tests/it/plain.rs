@@ -221,6 +221,8 @@ fn main() {
     let scalar: i64 = facts_a::left().extension();
     let left: i64 = facts_a::left().choose();
     let right: bool = facts_a::right().choose();
+    Left::choose(&facts_a::left());
+    Right::choose(&facts_a::right());
     println!("{scalar} {left} {right}");
 }
 "#,
@@ -230,29 +232,44 @@ fn main() {
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
         fs::write(destination, source).unwrap();
     }
-    let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
-    assert!(
-        run.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        text(&run.stdout),
-        text(&run.stderr)
-    );
-    assert_eq!(text(&run.stdout), "101 11 true\n");
+    let valid = fs::read_to_string(root.join("src/main.rs")).unwrap();
+    // Keep the exact extraction, facade and runtime caches through repeated
+    // valid -> ambiguous -> valid transitions, including a repeated test run.
+    for _ in 0..2 {
+        fs::write(root.join("src/main.rs"), &valid).unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), "101 11 true\n");
 
-    fs::write(
-        root.join("src/main.rs"),
-        "// rawr\nuse facts_a::Both;\nuse facts_c::{Left, Right};\nfn main() { let output: i64 = facts_a::both().choose(); println!(\"{output}\"); }\n",
-    )
-    .unwrap();
-    let ambiguous = rawr_import_within(
-        &root,
-        &["check"],
-        &home,
-        std::time::Duration::from_secs(120),
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nuse facts_a::Both;\nuse facts_c::{Left, Right};\nfn main() { let output: i64 = facts_a::both().choose(); println!(\"{output}\"); }\n",
+        )
+        .unwrap();
+        let ambiguous = rawr_import_within(
+            &root,
+            &["check"],
+            &home,
+            std::time::Duration::from_secs(120),
+        );
+        assert!(!ambiguous.status.success());
+        assert!(text(&ambiguous.stderr).contains("error[E0034]"));
+        assert!(!text(&ambiguous.stderr).contains("symbolic surface identity"));
+    }
+    fs::write(root.join("src/main.rs"), &valid).unwrap();
+    let restored = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+    assert!(
+        restored.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&restored.stdout),
+        text(&restored.stderr)
     );
-    assert!(!ambiguous.status.success());
-    assert!(text(&ambiguous.stderr).contains("error[E0034]"));
-    assert!(!text(&ambiguous.stderr).contains("symbolic surface identity"));
+    assert_eq!(text(&restored.stdout), "101 11 true\n");
 }
 
 /// A crate's bindings are shared per machine: a second project with the
