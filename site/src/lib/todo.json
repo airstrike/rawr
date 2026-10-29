@@ -712,7 +712,8 @@
     {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"open","category":"No glue (D593)"},
-    {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"}
+    {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
+    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
