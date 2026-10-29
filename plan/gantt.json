@@ -71,7 +71,7 @@
         {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281]},
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
         {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
-        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Verified extraction sharing shipped; complete classification and facade reuse remain. #367, #271","issues":[271,367]},
+        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372","issues":[271,367,369,370,372]},
         {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"done","note":"Stable generation leases, atomic publication and last-use pruning. #272","issues":[272]},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252","issues":[252,254,276]},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[]},
@@ -100,7 +100,8 @@
         {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. #312, #338","issues":[312,338]},
         {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. #300","issues":[300]},
         {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs. #336, #340, part of #345","issues":[336,340,345]},
-        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364","issues":[359,360,364]}
+        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364","issues":[359,360,364]},
+        {"id":"native-callback-mutation","name":"Native callback mutations","start":47,"size":4,"state":"now","note":"Native Vec writes are lost; borrowing and element-place implementation underway. #365","issues":[365]}
       ]
     },
     {
@@ -113,6 +114,7 @@
         {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326]},
         {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327]},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338]},
+        {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"next","note":"Result-returning native trait callbacks must keep their Rust signature. #371","issues":[371]},
         {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345]}
       ]
     },
