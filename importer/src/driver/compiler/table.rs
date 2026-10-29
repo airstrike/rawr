@@ -170,18 +170,33 @@ impl Tables {
 
     /// The crate's recorded units, when a table of this format for this very
     /// crate is kept. A table that fails to read is extracted again.
-    pub(super) fn load(&self, key: &str, root: &Root, used: &mut Vec<String>) -> Option<Memo> {
+    pub(super) fn load(
+        &self,
+        key: &str,
+        root: &Root,
+        crate_hash: &str,
+        used: &mut Vec<String>,
+    ) -> Option<Memo> {
         used.push(key.to_owned());
         let bytes = fs::read(self.directory.join(key)).ok()?;
         let table: Table = serde_json::from_slice(&bytes).ok()?;
-        (table.schema == engine::TABLE_SCHEMA && table.root == *root)
+        (table.schema == engine::TABLE_SCHEMA
+            && table.root == *root
+            && table.crate_hash == crate_hash)
             .then(|| Memo::from_table(table))
     }
 
     /// Keep a crate's table, replacing the one kept before, with what it
     /// was made from when that is known. Failure only costs a later
     /// extraction.
-    pub(super) fn store(&self, key: &str, root: &Root, memo: &Memo, served: Option<Served>) {
+    pub(super) fn store(
+        &self,
+        key: &str,
+        root: &Root,
+        crate_hash: &str,
+        memo: &Memo,
+        served: Option<Served>,
+    ) {
         let served_path = self.directory.join(format!("{key}.{SERVED}"));
         // The record goes first, so a table never outlives one that says
         // less than it holds.
@@ -191,7 +206,9 @@ impl Tables {
             .join(format!(".{key}.tmp-{}", std::process::id()));
         let written = (|| -> std::io::Result<()> {
             let mut file = std::io::BufWriter::new(fs::File::create(&temporary)?);
-            serde_json::to_writer(&mut file, &memo.to_table(root.clone()))?;
+            let mut table = memo.to_table(root.clone());
+            table.crate_hash = crate_hash.to_owned();
+            serde_json::to_writer(&mut file, &table)?;
             file.flush()?;
             fs::rename(&temporary, self.directory.join(key))
         })();
@@ -266,7 +283,13 @@ mod tests {
         let first = [path(&["iced", "run"])];
         let grown = [path(&["iced", "run"]), path(&["iced", "widget", "text"])];
         let memo = Memo::default();
-        tables.store(&key, &root, &memo, Some(Served::new("s", &first, &memo)));
+        tables.store(
+            &key,
+            &root,
+            "hash",
+            &memo,
+            Some(Served::new("s", &first, &memo)),
+        );
         drop(tables);
         let tables = Tables::open(&directory).unwrap();
         let mut used = Vec::new();
@@ -278,7 +301,7 @@ mod tests {
         assert!(tables.outgrown(&key, "t", &grown, &mut used).is_none());
         assert!(tables.outgrown(&key, "s", &grown[1..], &mut used).is_none());
         // A table with no record, as one seeded from rawr's home, is read.
-        tables.store(&key, &root, &memo, None);
+        tables.store(&key, &root, "hash", &memo, None);
         drop(tables);
         let tables = Tables::open(&directory).unwrap();
         assert!(!directory.join(format!("{key}.{SERVED}")).exists());
@@ -286,6 +309,60 @@ mod tests {
         // Records of two sessions do not merge.
         let other = Served::new("t", &first, &memo);
         assert!(Served::new("s", &grown, &memo).merged(&other).is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_same_crate_key_does_not_replay_answers_from_another_nightly_artifact() {
+        let directory =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-artifact-table-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let tables = Tables::open(&directory).unwrap();
+        let root = Root {
+            module: [1; 16],
+            krate: "same-crate".to_owned(),
+        };
+        let first = Memo {
+            whole: true,
+            ..Memo::default()
+        };
+        tables.store("same-key", &root, "first-build", &first, None);
+        let mut used = Vec::new();
+        assert!(
+            tables
+                .load("same-key", &root, "first-build", &mut used)
+                .unwrap()
+                .whole
+        );
+        assert!(tables
+            .load(
+                "same-key",
+                &root,
+                "changed-cfg-or-generated-source",
+                &mut used
+            )
+            .is_none());
+        // Newly extracted answers replace the old artifact; they cannot
+        // merge its previous whole-crate inventory into the new one.
+        tables.store(
+            "same-key",
+            &root,
+            "changed-cfg-or-generated-source",
+            &Memo::default(),
+            None,
+        );
+        assert!(
+            !tables
+                .load(
+                    "same-key",
+                    &root,
+                    "changed-cfg-or-generated-source",
+                    &mut used
+                )
+                .unwrap()
+                .whole
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -35,7 +35,7 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 3;
+pub(crate) const TABLE_SCHEMA: u32 = 4;
 
 const MAX_DEFINITIONS: usize = 500_000;
 const MAX_PACKAGES: usize = 4_096;
@@ -346,6 +346,9 @@ pub(crate) struct Module {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Table {
     pub(crate) schema: u32,
+    /// The nightly artifact the recorded answers came from. This validates
+    /// local reuse; it is not part of the machine-wide crate key.
+    pub(crate) crate_hash: String,
     pub(crate) root: Root,
     pub(crate) whole: bool,
     pub(crate) large: bool,
@@ -378,6 +381,7 @@ impl Memo {
     pub(crate) fn to_table(&self, root: Root) -> Table {
         Table {
             schema: TABLE_SCHEMA,
+            crate_hash: String::new(),
             root,
             whole: self.whole,
             large: self.large,
@@ -651,7 +655,10 @@ impl<'o, O: Oracle> Engine<'o, O> {
     /// an empty demand is the whole crate.
     pub(crate) fn run(mut self, demand: &[Vec<String>]) -> Result<Extracted, Fault> {
         let root = self.root.module;
-        let index = if demand.is_empty() {
+        // A complete table must also answer a later named demand. Capture
+        // the index on whole-crate walks, not only on already-demanded ones.
+        let index = self.oracle.index()?;
+        if demand.is_empty() {
             // Whole-crate seeding: every public path of the selected crate.
             self.walk(root, Vec::new(), &[], 0, false)?;
             self.drain()?;
@@ -664,11 +671,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     true,
                 )?;
             }
-            Rc::from(Vec::new())
         } else {
-            // A demanded unit also publishes its complete name index, so
-            // Rawr can tell a typo from an unextracted item.
-            let index = self.oracle.index()?;
             for path in demand {
                 self.select_path(root, path.get(1..).unwrap_or_default(), 0)?;
             }
@@ -696,8 +699,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 }
                 self.only_names = None;
             }
-            index
-        };
+        }
         let mut definitions = std::mem::take(&mut self.definitions)
             .into_values()
             .collect::<Vec<_>>();
@@ -1751,5 +1753,64 @@ mod tests {
         )
         .run(&[]);
         assert!(matches!(missing, Err(Fault::Missing(_))));
+    }
+
+    #[test]
+    fn a_whole_crate_table_answers_a_later_named_demand() {
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        fixture.modules.get_mut(&hash(0)).unwrap()[0].landing = Some(Ok(super::Landing {
+            requests: vec![(
+                Request {
+                    key: key(1),
+                    owner: raw(r#"{"kind":"free"}"#),
+                    level: Level::Selected,
+                },
+                None,
+            )],
+            next: super::Next::Nominal(hash(1)),
+        }));
+        fixture
+            .units
+            .insert(Unit::Shape(key(1)), vec![definition(1)]);
+        let mut memo = Memo::default();
+        Engine::new(
+            &mut Record {
+                live: &mut fixture,
+                memo: &mut memo,
+            },
+            root(),
+            vec!["original".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
+        let memo = Memo::from_table(
+            serde_json::from_slice(&serde_json::to_vec(&memo.to_table(root())).unwrap()).unwrap(),
+        );
+        let demand = vec![vec!["renamed".to_owned(), "One".to_owned()]];
+        let replayed = Engine::new(
+            &mut Replay(&memo),
+            root(),
+            vec!["renamed".to_owned()],
+            String::new(),
+        )
+        .run(&demand)
+        .unwrap()
+        .body()
+        .unwrap();
+        let live = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["renamed".to_owned()],
+            String::new(),
+        )
+        .run(&demand)
+        .unwrap()
+        .body()
+        .unwrap();
+        assert_eq!(replayed, live);
+        let document: serde_json::Value = serde_json::from_slice(&replayed).unwrap();
+        assert_eq!(document["definitions"].as_array().unwrap().len(), 1);
     }
 }

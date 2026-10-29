@@ -19,6 +19,7 @@ use self::config::Config;
 use self::proof::{Recipe, Role};
 
 mod artifact;
+pub(crate) mod bindings;
 pub(crate) mod build;
 pub(crate) mod canonical;
 pub(crate) mod complete;

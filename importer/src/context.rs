@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cargo;
 
-const CONTEXT_SCHEMA: u32 = 4;
+const CONTEXT_SCHEMA: u32 = 5;
 const LAUNCHER_POLICY_SCHEMA: u32 = 1;
 
 /// Canonical project, Cargo-home, environment, target, and limit authority.
@@ -20,6 +20,9 @@ pub struct Context {
     /// `<target>/rawr`, holding everything derived from this project.
     rawr: PathBuf,
     environment: cargo::config::Environment,
+    /// The project's compiler selected by its already-discovered Cargo config.
+    /// Generic contexts need not have Cargo authority; shared runtime builds do.
+    compiler: Option<cargo::config::Compiler>,
     target: Box<str>,
     limits: cargo::Limits,
     digest: [u8; 32],
@@ -77,19 +80,72 @@ impl Context {
         })?;
         // Load persisted tool digests before keying what PATH resolves.
         crate::file_digest::attach(&rawr.join("digests"));
-        let digest = identity(&project, &cargo_home, &environment, &target, limits);
+        let digest = identity(&project, &cargo_home, &environment, &target, limits, None);
         Ok(Self {
             project,
             project_key,
             cargo_home,
             rawr,
             environment,
+            compiler: None,
             target,
             limits: *limits,
             digest,
             graph_budget: graph_budget.clone(),
             toolchain: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Bind the compiler selected by this request's existing Cargo authority
+    /// before discovering any node. Clones then carry the same selection into
+    /// both shared binding validation and runtime compilation (D644).
+    fn bind_config(mut self, config: &cargo::config::Provenance) -> Self {
+        self.compiler = Some(config.compiler(&self.project));
+        self.digest = identity(
+            &self.project,
+            &self.cargo_home,
+            &self.environment,
+            &self.target,
+            &self.limits,
+            self.compiler.as_ref(),
+        );
+        self
+    }
+
+    pub(crate) fn capture_config(
+        project: &Path,
+        config: &cargo::config::Provenance,
+        target: &str,
+        limits: &cargo::Limits,
+    ) -> Result<Self, Error> {
+        Self::capture_config_in(
+            project,
+            config,
+            target,
+            limits,
+            &crate::node::GraphBudget::with_targets(limits.graph_targets()),
+        )
+    }
+
+    pub(crate) fn capture_config_in(
+        project: &Path,
+        config: &cargo::config::Provenance,
+        target: &str,
+        limits: &cargo::Limits,
+        graph_budget: &crate::node::GraphBudget,
+    ) -> Result<Self, Error> {
+        Self::capture_in(
+            project,
+            config.environment().clone(),
+            target,
+            limits,
+            graph_budget,
+        )
+        .map(|context| context.bind_config(config))
+    }
+
+    pub(crate) fn compiler(&self) -> Option<&cargo::config::Compiler> {
+        self.compiler.as_ref()
     }
 
     /// Open the project's typed store, `<target>/rawr/store`.
@@ -217,6 +273,7 @@ impl Context {
             cargo_home: self.cargo_home.clone(),
             rawr: self.rawr.clone(),
             environment: self.environment.clone(),
+            compiler: self.compiler.clone(),
             target: self.target.clone(),
             limits: self.limits,
             digest: self.digest,
@@ -239,6 +296,7 @@ fn identity(
     environment: &cargo::config::Environment,
     target: &str,
     limits: &cargo::Limits,
+    compiler: Option<&cargo::config::Compiler>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.context/v1");
@@ -246,6 +304,19 @@ fn identity(
     digest.update(LAUNCHER_POLICY_SCHEMA.to_le_bytes());
     retain_path(&mut digest, project);
     retain_path(&mut digest, cargo_home);
+    match compiler {
+        Some(compiler) => {
+            digest.update([1]);
+            match compiler.configured() {
+                Some(path) => {
+                    digest.update([1]);
+                    retain_path(&mut digest, path);
+                }
+                None => digest.update([0]),
+            }
+        }
+        None => digest.update([0]),
+    }
     // Key on build-relevant variables only; children still inherit all.
     let relevant: Vec<_> = environment
         .entries()

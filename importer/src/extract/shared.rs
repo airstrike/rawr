@@ -8,11 +8,9 @@
 //! crate's unit key from the resolution, which covers its features, profile,
 //! target and its dependencies' unit keys; the checksum or commit of every
 //! package it reaches; the extraction toolchain; and the extraction's
-//! formats. The outputs of the build scripts of the packages compiled into
-//! the program are compared before an entry is used or published
-//! (`bindings.rs`). A script that runs only for a build script or a
-//! procedural macro, as proc-macro2's, reaches the crate's API through no
-//! cfg of its own and is not compared.
+//! formats. The outputs of every build script in the closure, including
+//! those compiling procedural macros, are compared before publication and
+//! execution (`bindings.rs`): macro expansion can change the crate's API too.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -21,12 +19,13 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cargo::unit::{Metadata, PackageSource};
 
-/// A selected crate's shared key, and the packages compiled into the program
-/// in its closure that run a build script.
+/// A selected crate's shared key, and the packages in its closure that run a
+/// build script.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shared {
     pub(crate) key: Box<str>,
     pub(crate) scripts: Box<[Box<str>]>,
+    pub(crate) packages: Box<[Box<str>]>,
 }
 
 /// What identifies one selected unit in the unit graph.
@@ -117,14 +116,11 @@ fn key(
     unit_key: &str,
     toolchain: [&str; 3],
 ) -> Option<Shared> {
-    // Each unit with whether it is compiled into the program, rather than
-    // only run while building: a procedural macro, a build script, and
-    // what either depends on are not.
-    let mut seen = BTreeSet::from([(root, true)]);
-    let mut queue = VecDeque::from([(root, true)]);
+    let mut seen = BTreeSet::from([root]);
+    let mut queue = VecDeque::from([root]);
     let mut sources = BTreeSet::new();
     let mut scripts = BTreeSet::new();
-    while let Some((index, program)) = queue.pop_front() {
+    while let Some(index) = queue.pop_front() {
         let unit = document.units.get(index)?;
         let source = match metadata.package(&unit.pkg_id)?.source() {
             PackageSource::Registry {
@@ -137,16 +133,12 @@ fn key(
             }
         };
         sources.insert((unit.pkg_id.as_str(), source));
-        let running = unit.mode == "run-custom-build";
-        if running && program {
+        if unit.mode == "run-custom-build" {
             scripts.insert(unit.pkg_id.as_str());
         }
         for dependency in &unit.dependencies {
-            let child = document.units.get(dependency.index)?;
-            let program =
-                program && !running && !child.target.kind.iter().any(|kind| kind == "proc-macro");
-            if seen.insert((dependency.index, program)) {
-                queue.push_back((dependency.index, program));
+            if seen.insert(dependency.index) {
+                queue.push_back(dependency.index);
             }
         }
     }
@@ -170,6 +162,10 @@ fn key(
     Some(Shared {
         key: crate::extract::engine::hex(&digest.finalize()).into_boxed_str(),
         scripts: scripts.into_iter().map(Box::from).collect(),
+        packages: sources
+            .into_iter()
+            .map(|(package, _)| Box::from(package))
+            .collect(),
     })
 }
 
@@ -281,8 +277,9 @@ mod tests {
         );
         assert_eq!(shared.len(), 1, "a path crate is never shared");
         let first = &shared[SEMVER_TARGET];
-        // pm2's script runs only to build the procedural macros.
-        assert_eq!(first.scripts.as_ref(), [LIBC.into()]);
+        // A procedural macro's build-script output can change the API it
+        // emits, so pm2's script belongs to the comparison too.
+        assert_eq!(first.scripts.as_ref(), [LIBC.into(), PM2.into()]);
         // A dependency's new checksum, a procedural macro's among them, or
         // another toolchain, is another key.
         for changed in [packages(5, 3), packages(2, 5)] {

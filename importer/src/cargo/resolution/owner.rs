@@ -431,9 +431,9 @@ fn capture_context_in(
     graph_budget: &node::GraphBudget,
 ) -> Result<crate::context::Context, node::Error> {
     request.require_limits(limits)?;
-    crate::context::Context::capture_in(
+    crate::context::Context::capture_config_in(
         &request.project_root,
-        request.config.environment().clone(),
+        &request.config,
         &request.target,
         limits,
         graph_budget,
@@ -576,12 +576,20 @@ fn evaluate(
     // as they were: no Cargo and no tables (`memo`).
     let bindings = crate::bindings::directory(state.cached.context.cargo_home());
     let attestation = state.cached.attestation.content().digest().as_bytes();
-    if let Some(remembered) = memo::recall(
-        state.cached.context.rawr(),
-        &bindings,
-        state.identity.as_bytes(),
-        &attestation,
-    ) {
+    let current = input::bindings::Current::capture(
+        &state.request.project_root,
+        &state.request.config,
+        &state.limits,
+    );
+    if let Some(remembered) = current.as_ref().and_then(|current| {
+        memo::recall(
+            state.cached.context.rawr(),
+            &bindings,
+            state.identity.as_bytes(),
+            &attestation,
+            current,
+        )
+    }) {
         return Ok(Resolved::Shared(Box::new(SharedReady {
             evaluation: state,
             parts: Parts::Remembered(Box::new(remembered)),
@@ -613,6 +621,7 @@ fn evaluate(
                             native: &parts.native,
                             files: &parts.files,
                             settled: &parts.settled,
+                            generations: &parts.generations,
                             materials: &parts.materials,
                         },
                     );
@@ -1177,6 +1186,7 @@ pub(crate) struct Shared {
     materials: Materials,
     identity: [u8; 32],
     settled: Vec<crate::bindings::Settled>,
+    generations: Vec<(String, String)>,
     proof: input::proof::Proof,
     /// The files `proof` names, and the digest of the run's native inputs,
     /// as the next run remembers them (`memo`).
@@ -1199,9 +1209,16 @@ impl Evaluation {
     /// the project's Rawr directory, where the runner reads it.
     fn shared_parts(&self, harness: &cargo::Harness, layout: &layout::Layout) -> Option<Shared> {
         use sha2::{Digest as _, Sha256};
-        let shared = harness
-            .extraction_plan
-            .shared_document(&harness.initial, &harness.metadata)?;
+        let current = input::bindings::Current::capture(
+            &self.request.project_root,
+            &self.request.config,
+            &self.limits,
+        )?;
+        let shared = harness.extraction_plan.shared_document(
+            &harness.initial,
+            &harness.metadata,
+            &current,
+        )?;
         let kept = self.cached.context.rawr().join("shared");
         std::fs::create_dir_all(&kept).ok()?;
         let mut entries = Vec::new();
@@ -1268,7 +1285,12 @@ impl Evaluation {
             },
             identity: shared.identity,
             settled: shared.settled,
-            proof: input::proof::Proof::shared(entries.into_boxed_slice(), native),
+            generations: shared.generations,
+            proof: input::proof::Proof::shared(
+                entries.into_boxed_slice(),
+                native,
+                &shared.witnesses,
+            ),
             files,
             native,
         })

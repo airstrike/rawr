@@ -232,6 +232,305 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     assert!(!nightly(again));
 }
 
+/// The declared inputs of a shared immutable crate are checked before both
+/// `check` and a remembered warm run consume its API. The unchanged path still
+/// shares across projects without a nightly build.
+#[test]
+fn shared_git_bindings_validate_declared_file_and_environment_before_replay() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-script-inputs");
+    let _ = fs::remove_dir_all(&root);
+    let dependency = root.join("dependency");
+    fs::create_dir_all(dependency.join("src")).unwrap();
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[package]\nname='binding-input-fixture'\nversion='0.1.0'\nedition='2021'\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "#[cfg(narrow)]\npub fn only_when_narrow() -> usize { width() }\npub fn width() -> usize { env!(\"BINDING_WIDTH\").len() }\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("build.rs"),
+        r#"
+fn main() {
+    let path = std::env::var("BINDING_INPUT_FILE").unwrap();
+    let mode = std::env::var("BINDING_INPUT_MODE").unwrap();
+    let input = std::fs::read_to_string(&path).unwrap();
+    println!("cargo:rerun-if-env-changed=BINDING_INPUT_FILE");
+    println!("cargo:rerun-if-env-changed=BINDING_INPUT_MODE");
+    println!("cargo:rerun-if-changed={path}");
+    println!("cargo:rustc-check-cfg=cfg(narrow)");
+    println!("cargo:rustc-env=BINDING_WIDTH={input}{mode}");
+    if input == "short" && mode == "small" {
+        println!("cargo:rustc-cfg=narrow");
+    }
+}
+"#,
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "binding input fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dependency)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&dependency)
+        .output()
+        .unwrap();
+    assert!(revision.status.success());
+    let revision = text(&revision.stdout);
+    let input = root.join("declared.txt");
+    fs::write(&input, "short").unwrap();
+    let projects = ["first", "checked", "warm"].map(|name| root.join(name));
+    for project in &projects {
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(project.join("Cargo.toml"), format!("[package]\nname='binding-input-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nbinding-input-fixture={{git='file://{}',rev='{}'}}\n[workspace]\n", dependency.display(), revision.trim())).unwrap();
+        fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::only_when_narrow;\nfn main() { println!(\"{}\", only_when_narrow()); }\n").unwrap();
+    }
+    let run = |project: &Path, action: &str, mode: &str| {
+        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .args([action])
+            .arg(project)
+            .env(
+                "RAWR_HOME",
+                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home"),
+            )
+            .env("BINDING_INPUT_FILE", &input)
+            .env("BINDING_INPUT_MODE", mode)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    for project in &projects {
+        let output = run(project, "run", "small");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            text(&output.stdout),
+            text(&output.stderr)
+        );
+        assert_eq!(text(&output.stdout), "10\n");
+    }
+    for project in &projects[1..] {
+        assert!(
+            !project.join("target/rawr/build").exists(),
+            "unchanged crate should replay without nightly: {}",
+            project.display()
+        );
+        let output = run(project, "run", "small");
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert!(!project.join("target/rawr/build").exists());
+        assert!(project.join("target/rawr/shared/remembered.json").is_file());
+    }
+    let checked = run(&projects[1], "check", "small");
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    assert!(!projects[1].join("target/rawr/build").exists());
+    fs::write(&input, "long").unwrap();
+    let changed = run(&projects[1], "check", "small");
+    assert!(
+        !changed.status.success(),
+        "changed file replayed old API: {}",
+        text(&changed.stdout)
+    );
+    assert!(
+        !text(&changed.stdout).contains("Checked "),
+        "Rawr accepted the stale API before Cargo diagnosed it"
+    );
+    assert!(
+        text(&changed.stderr).contains("only_when_narrow"),
+        "{}",
+        text(&changed.stderr)
+    );
+    fs::write(&input, "short").unwrap();
+    let changed = run(&projects[2], "run", "large");
+    assert!(
+        !changed.status.success(),
+        "changed environment replayed old API: {}",
+        text(&changed.stdout)
+    );
+    assert!(
+        text(&changed.stderr).contains("only_when_narrow"),
+        "{}",
+        text(&changed.stderr)
+    );
+
+    // A fresh shared hit, then a remembered hit, must retain the external
+    // declared path in the running program's watches. Its source stays put.
+    let live = root.join("live");
+    fs::create_dir_all(live.join("src")).unwrap();
+    fs::copy(projects[0].join("Cargo.toml"), live.join("Cargo.toml")).unwrap();
+    fs::write(live.join("src/main.rs"), "// rawr\nuse binding_input_fixture::width;\nfn main() { println!(\"width {}\", width()); let stdin = std::io::stdin(); let mut line = String::new(); stdin.read_line(&mut line).unwrap(); }\n").unwrap();
+    let start = || {
+        crate::support::start_with(
+            &live,
+            &[
+                ("BINDING_INPUT_FILE", input.clone()),
+                ("BINDING_INPUT_MODE", PathBuf::from("small")),
+            ],
+            &[],
+            std::process::Stdio::piped(),
+        )
+    };
+    let finish = |run: &mut crate::support::Run| {
+        use std::io::Write as _;
+        run.child.stdin.take().unwrap().write_all(b"\n").unwrap();
+        assert!(
+            run.child.wait().unwrap().success(),
+            "{}",
+            run.seen.join("\n")
+        );
+    };
+    let mut shared = start();
+    shared.until(std::time::Duration::from_secs(300), |line| {
+        line == "width 10"
+    });
+    assert!(!live.join("target/rawr/build").exists());
+    finish(&mut shared);
+    assert!(live.join("target/rawr/shared/remembered.json").is_file());
+    let mut remembered = start();
+    remembered.until(std::time::Duration::from_secs(120), |line| {
+        line == "width 10"
+    });
+    assert!(!live.join("target/rawr/build").exists());
+    fs::write(&input, "longer").unwrap();
+    remembered.until(std::time::Duration::from_secs(180), |line| {
+        line == "width 11"
+    });
+    assert!(
+        remembered
+            .seen
+            .iter()
+            .any(|line| line.contains("restarting the program")),
+        "{}",
+        remembered.seen.join("\n")
+    );
+    finish(&mut remembered);
+}
+
+/// A real adapter build reports the selected crate when its nightly API
+/// differs from the API that the project's stable compiler provides.
+#[test]
+fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-adapter-drift");
+    let _ = fs::remove_dir_all(&root);
+    let dependency = root.join("dependency");
+    fs::create_dir_all(dependency.join("src")).unwrap();
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[workspace]\n[package]\nname='adapter-drift-fixture'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "#[cfg(nightly_api)]\npub fn value() -> u32 { 7 }\n#[cfg(not(nightly_api))]\npub fn value() -> &'static str { \"seven\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("build.rs"),
+        r#"fn main() {
+    let rustc = std::env::var_os("RUSTC").unwrap();
+    let version = std::process::Command::new(rustc).arg("--version").output().unwrap();
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-check-cfg=cfg(nightly_api)");
+    if String::from_utf8(version.stdout).unwrap().contains("nightly") {
+        println!("cargo:rustc-cfg=nightly_api");
+    }
+}
+"#,
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "adapter drift fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dependency)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&dependency)
+        .output()
+        .unwrap();
+    assert!(revision.status.success());
+    let project = root.join("project");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        format!("[workspace]\n[package]\nname='adapter-drift-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nadapter-drift-fixture={{git='file://{}',rev='{}'}}\n", dependency.display(), text(&revision.stdout).trim()),
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/main.rs"),
+        "// rawr\nuse adapter_drift_fixture::value;\nfn main() { let result: u32 = value(); println!(\"{result}\"); }\n",
+    )
+    .unwrap();
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let output = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&project)
+        .env("RAWR_HOME", &home)
+        .env("RUSTUP_TOOLCHAIN", "stable")
+        .env_remove("RUSTC")
+        .env_remove("CARGO_BUILD_RUSTC")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let diagnostic = text(&output.stderr);
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    assert!(
+        diagnostic.contains("the API of `adapter_drift_fixture` differs between the extraction nightly and the project's toolchain"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("mismatched types"), "{diagnostic}");
+    let published = fs::read_dir(home.join("bindings"))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.ok()?.path().join("meta.json");
+            let meta: serde_json::Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+            (meta["crate_name"] == "adapter_drift_fixture").then_some(meta)
+        })
+        .count();
+    assert_eq!(published, 0, "a divergent API was shared");
+}
+
 /// A marked `main` gets the arguments after `--` and stdin, as under
 /// `cargo run`, and a save while it waits on stdin restarts it on the same
 /// stdin (D500.1).

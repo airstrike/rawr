@@ -692,6 +692,11 @@ fn erased_bound(stderr: &str) -> Option<(Box<str>, Box<str>)> {
 }
 
 impl Output {
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn stdout(&self) -> &[u8] {
+        &self.stdout
+    }
+
     pub(crate) fn checked(self, program: Program) -> Result<Box<[u8]>> {
         if self.success {
             return Ok(self.stdout);

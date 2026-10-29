@@ -6,8 +6,8 @@
 //! (whose identity covers the manifests, the lock, the config, the target
 //! and the demand), the pinned toolchain, the files its proof names, and
 //! the shared entries it read. So the next run with all of those unchanged
-//! takes the same answer back: it reads those files again, and an entry's
-//! table by its length and modification time, which publication changes.
+//! takes the same answer back: it reads those files again, and compares each
+//! entry's publication generation with the one captured during replay.
 //! Anything else runs the resolution again.
 //!
 //! What the API is built from is kept too: the sidecar document the tables
@@ -19,7 +19,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -27,7 +26,7 @@ use sha2::{Digest as _, Sha256};
 use crate::bindings::{Script, Settled};
 use crate::input::proof::{Entry, Proof, Role};
 
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 /// Kept beside the harness copies a shared resolution leaves.
 const FILE: &str = "shared/remembered.json";
 /// The sidecar document the tables replayed, beside it.
@@ -86,13 +85,14 @@ impl File {
     }
 }
 
-/// One shared entry the resolution read, and its table file as it was.
+/// One shared entry the resolution read, and the publication it consumed.
 #[derive(Deserialize, Serialize)]
 struct Used {
     key: String,
     crate_name: String,
     scripts: BTreeMap<String, Vec<Script>>,
-    table: (u64, u128),
+    inputs: crate::input::bindings::Inputs,
+    generation: String,
 }
 
 /// A shared resolution, as the next run takes it back.
@@ -105,6 +105,9 @@ pub(super) struct Memo {
     native: String,
     files: Vec<File>,
     entries: Vec<Used>,
+    /// Current file and directory proofs produced while validating `entries`.
+    #[serde(skip)]
+    witnesses: Vec<Proof>,
     /// The document's length and digest.
     document: (u64, String),
     external: Vec<crate::extract::ExternalBinding>,
@@ -142,6 +145,7 @@ impl Memo {
         Some(Proof::shared(
             entries.into_boxed_slice(),
             unhex(&self.native)?,
+            &self.witnesses,
         ))
     }
 
@@ -165,6 +169,7 @@ impl Memo {
                 key: used.key.clone(),
                 crate_name: used.crate_name.clone(),
                 scripts: used.scripts.clone(),
+                inputs: used.inputs.clone(),
             })
             .collect()
     }
@@ -178,6 +183,7 @@ pub(super) struct Resolution<'a> {
     pub(super) native: &'a [u8; 32],
     pub(super) files: &'a [File],
     pub(super) settled: &'a [Settled],
+    pub(super) generations: &'a [(String, String)],
     pub(super) materials: &'a super::Materials,
 }
 
@@ -190,18 +196,26 @@ pub(super) fn remember(rawr: &Path, bindings: &Path, resolution: &Resolution<'_>
             key,
             crate_name,
             scripts,
+            inputs,
         } = settled
         else {
             return;
         };
-        let Some(table) = table(bindings, key) else {
+        let Some((_, generation)) = resolution.generations.iter().find(|(used, _)| used == key)
+        else {
             return;
         };
+        // Keep the generation actually replayed, never a later publication
+        // observed while recording the memo. Replacement here is a miss.
+        if crate::extract::engine::home::generation(bindings, key).as_ref() != Some(generation) {
+            return;
+        }
         entries.push(Used {
             key: key.clone(),
             crate_name: crate_name.clone(),
             scripts: scripts.clone(),
-            table,
+            inputs: inputs.clone(),
+            generation: generation.clone(),
         });
     }
     let hex = crate::extract::engine::hex;
@@ -245,32 +259,28 @@ pub(super) fn recall(
     bindings: &Path,
     request: &[u8; 32],
     attestation: &[u8; 32],
+    current: &crate::input::bindings::Current,
 ) -> Option<Memo> {
-    let memo = serde_json::from_slice::<Memo>(&fs::read(rawr.join(FILE)).ok()?).ok()?;
+    let mut memo = serde_json::from_slice::<Memo>(&fs::read(rawr.join(FILE)).ok()?).ok()?;
     let hex = crate::extract::engine::hex;
     if memo.schema != SCHEMA
         || memo.request != hex(request)
         || memo.attestation != hex(attestation)
         || memo.entries.is_empty()
         || !memo.files.iter().all(File::current)
-        || !memo
-            .entries
-            .iter()
-            .all(|used| table(bindings, &used.key) == Some(used.table))
     {
         return None;
     }
     for used in &memo.entries {
-        crate::extract::engine::home::touch(bindings, &used.key);
+        let inputs = used.inputs.validate(current)?;
+        if crate::extract::engine::home::generation(bindings, &used.key).as_ref()
+            != Some(&used.generation)
+        {
+            return None;
+        }
+        memo.witnesses.push(inputs.into_filesystem());
     }
     Some(memo)
-}
-
-/// A shared entry's table file, by its length and modification time.
-fn table(bindings: &Path, key: &str) -> Option<(u64, u128)> {
-    let metadata = fs::metadata(crate::extract::engine::home::table(bindings, key)).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some((metadata.len(), modified.as_nanos()))
 }
 
 fn unhex(text: &str) -> Option<[u8; 32]> {
@@ -297,7 +307,7 @@ mod tests {
             .join(format!("rawr-remembered-shared-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("rawr/shared")).unwrap();
-        root
+        root.canonicalize().unwrap()
     }
 
     #[test]
@@ -308,6 +318,9 @@ mod tests {
         let bindings = root.join("bindings");
         crate::extract::engine::home::publish(&bindings, "iced", &[("table.json", b"units")])
             .unwrap();
+        let (lease, _) = crate::extract::engine::home::read(&bindings, "iced").unwrap();
+        let generations = [("iced".to_owned(), lease.generation().to_owned())];
+        drop(lease);
         let manifest = root.join("Cargo.toml");
         std::fs::write(&manifest, "[package]").unwrap();
         let lock = root.join("Cargo.lock");
@@ -320,13 +333,23 @@ mod tests {
             File::new(Role::Authority, manifest.to_str().unwrap(), read(&manifest)),
             File::new(Role::Authority, lock.to_str().unwrap(), read(&lock)),
         ];
+        let declared = root.join("declared.txt");
+        let missing = root.join("absent-input");
+        let tree = root.join("declared-tree");
+        std::fs::write(&declared, "first").unwrap();
+        std::fs::create_dir(&tree).unwrap();
         let settled = [Settled::Read {
             key: "iced".to_owned(),
             crate_name: "iced".to_owned(),
             scripts: std::collections::BTreeMap::new(),
+            inputs: crate::input::bindings::Inputs::fixture_paths(
+                std::slice::from_ref(&declared),
+                &[missing.clone(), tree.clone()],
+            ),
         }];
         let request = [1; 32];
         let attestation = [2; 32];
+        let current = crate::input::bindings::Current::fixture();
         remember(
             &rawr,
             &bindings,
@@ -337,6 +360,7 @@ mod tests {
                 native: &[4; 32],
                 files: &files,
                 settled: &settled,
+                generations: &generations,
                 materials: &super::super::Materials {
                     document: b"{\"schema\":1}".to_vec(),
                     external: Vec::new(),
@@ -344,29 +368,66 @@ mod tests {
                 },
             },
         );
-        let memo = recall(&rawr, &bindings, &request, &attestation).unwrap();
+        let memo = recall(&rawr, &bindings, &request, &attestation, &current).unwrap();
         assert_eq!(memo.identity(), Some([3; 32]));
-        assert!(memo.proof().is_some());
+        let proof = memo.proof().unwrap();
+        let watches = proof.watch().collect::<Vec<_>>();
+        assert!(watches.contains(&crate::input::proof::Watch::Exact(declared.clone())));
+        assert!(watches.contains(&crate::input::proof::Watch::Exact(missing.clone())));
+        assert!(watches.contains(&crate::input::proof::Watch::Tree(tree.clone())));
         assert_eq!(memo.settled().len(), 1);
         // What the API is built from comes back from disk alone, and a
         // document that changed does not.
         let materials = memo.materials(&rawr).unwrap();
         assert_eq!(materials.document, b"{\"schema\":1}");
         std::fs::write(rawr.join(super::DOCUMENT), "{}").unwrap();
-        let memo = recall(&rawr, &bindings, &request, &attestation).unwrap();
+        let memo = recall(&rawr, &bindings, &request, &attestation, &current).unwrap();
         assert!(memo.materials(&rawr).is_none());
+        // Declared input changes cannot return the historical API or its
+        // historical watch projection, including creation of an absent path.
+        std::fs::write(&declared, "second").unwrap();
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_none());
+        std::fs::write(&declared, "first").unwrap();
+        std::fs::write(&missing, "created").unwrap();
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_none());
+        std::fs::remove_file(&missing).unwrap();
+        std::fs::write(tree.join("new.txt"), "created").unwrap();
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_none());
+        std::fs::remove_file(tree.join("new.txt")).unwrap();
         // Another request, or another toolchain, runs the resolution.
-        assert!(recall(&rawr, &bindings, &[9; 32], &attestation).is_none());
-        assert!(recall(&rawr, &bindings, &request, &[9; 32]).is_none());
+        assert!(recall(&rawr, &bindings, &[9; 32], &attestation, &current).is_none());
+        assert!(recall(&rawr, &bindings, &request, &[9; 32], &current).is_none());
         // A lock that appears is a change.
         std::fs::write(&lock, "# lock").unwrap();
-        assert!(recall(&rawr, &bindings, &request, &attestation).is_none());
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_none());
         std::fs::remove_file(&lock).unwrap();
-        assert!(recall(&rawr, &bindings, &request, &attestation).is_some());
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_some());
         // A republished entry is a change.
         crate::extract::engine::home::publish(&bindings, "iced", &[("table.json", b"other")])
             .unwrap();
-        assert!(recall(&rawr, &bindings, &request, &attestation).is_none());
+        assert!(recall(&rawr, &bindings, &request, &attestation, &current).is_none());
+        // Replacement after replay but before remembering must not attach
+        // the new generation to the old document.
+        std::fs::remove_file(rawr.join(super::FILE)).unwrap();
+        remember(
+            &rawr,
+            &bindings,
+            &Resolution {
+                request: &request,
+                attestation: &attestation,
+                identity: &[3; 32],
+                native: &[4; 32],
+                files: &files,
+                settled: &settled,
+                generations: &generations,
+                materials: &super::super::Materials {
+                    document: b"old document".to_vec(),
+                    external: Vec::new(),
+                    context: crate::api::Context::fixture(),
+                },
+            },
+        );
+        assert!(!rawr.join(super::FILE).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

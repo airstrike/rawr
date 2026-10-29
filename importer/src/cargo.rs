@@ -1192,9 +1192,9 @@ impl Request {
                 let _placement = select_placement(&self, catalog, &provisional_manifest, limits)?;
             }
         }
-        let context = crate::context::Context::capture(
+        let context = crate::context::Context::capture_config(
             &self.project_root,
-            self.config.environment().clone(),
+            &self.config,
             &self.target,
             limits,
         )
@@ -1286,9 +1286,9 @@ impl Request {
         let mut request_allocation = self.allocation;
         let node_context = Arc::new(match cached {
             Some(cached) => cached.context.clone(),
-            None => crate::context::Context::capture(
+            None => crate::context::Context::capture_config(
                 &self.project_root,
-                self.config.environment().clone(),
+                &self.config,
                 &self.target,
                 limits,
             )
@@ -2538,7 +2538,7 @@ impl Request {
             None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
         };
         #[cfg(feature = "rustc-driver")]
-        let settlement = capture.settlement();
+        let mut settlement = capture.settlement(&build);
         #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture.artifact_inputs(limits)?;
         #[cfg(not(feature = "rustc-driver"))]
@@ -2573,6 +2573,26 @@ impl Request {
             command_build,
             limits,
         )?;
+        #[cfg(feature = "rustc-driver")]
+        if let Some(current) =
+            crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
+        {
+            for settled in &mut settlement {
+                if let crate::bindings::Settled::Extracted {
+                    inputs_packages,
+                    publish,
+                    ..
+                } = settled
+                {
+                    publish.meta.inputs = crate::input::bindings::Inputs::capture(
+                        &input,
+                        retained_build.build(),
+                        inputs_packages,
+                        &current,
+                    );
+                }
+            }
+        }
         let universe = universe
             .map(|pending| {
                 pending.complete(

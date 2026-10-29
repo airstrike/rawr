@@ -1150,7 +1150,7 @@ fn extract<'tcx>(
         Some(_) => None,
         None => tables
             .zip(key.as_deref())
-            .map(|(tables, key)| tables.load(key, &root, used)),
+            .map(|(tables, key)| tables.load(key, &root, crate_hash, used)),
     };
     if let Some(Some(memo)) = &kept {
         let mut replay = engine::Replay(memo);
@@ -1241,7 +1241,7 @@ fn extract<'tcx>(
         } else {
             Some(made)
         };
-        tables.store(key, &root, &kept, served);
+        tables.store(key, &root, crate_hash, &kept, served);
     }
     let body = extracted.body()?;
     let (sysroot, external) = units::registered(

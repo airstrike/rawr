@@ -113,7 +113,7 @@ impl Fixture {
             request.config.explicit_configs(),
             &[authority.join(".cargo/config.toml")]
         );
-        let context = Context::capture(&project, environment, toolchain::HOST, limits)
+        let context = Context::capture_config(&project, &request.config, toolchain::HOST, limits)
             .expect("store context captures");
         toolchain::Attestation::fixture_current(&context, &root.join("toolchain"));
         let store = context.open_store().expect("actual shared store opens");

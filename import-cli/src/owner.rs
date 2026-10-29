@@ -777,9 +777,12 @@ fn prepare_on_lane(
             .map_err(|error| framework(error, source.clone()))?;
         // The API phase has ended; hand its freed allocator pages back before the build.
         crate::release::freed_memory();
-        let mut built = lane
-            .build(generated)
-            .map_err(|error| framework(error, source.clone()))?;
+        let mut built =
+            lane.build(generated)
+                .map_err(|error| match settlement.drift_diagnostic() {
+                    Some(drift) => framework(format!("{drift}\n\n{error}"), source.clone()),
+                    None => framework(error, source.clone()),
+                })?;
         // Shared bindings are published, or refused, once the project's
         // own build has run their build scripts (D609.4).
         settlement
