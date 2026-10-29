@@ -67,7 +67,9 @@ export function linkIssues(html, items, repo) {
         return piece;
       }
       if (skip > 0) return piece;
-      return piece.replace(/\bT\d{3,}\b/g, (t) => {
+      // "T335 (#335)" says the issue twice once T numbers render as #N.
+      const once = piece.replace(/\b(T\d{3,}) \(#(\d+)\)/g, (m, t, n) => (byT.get(t) === +n ? t : m));
+      return once.replace(/\bT\d{3,}\b/g, (t) => {
         const issue = byT.get(t);
         if (issue === undefined) throw new Error(`${t} is no recorded item (plan/items.json)`);
         return `<a href="https://github.com/${repo}/issues/${issue}">#${issue}</a>`;

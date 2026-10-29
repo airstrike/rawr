@@ -271,7 +271,9 @@ export const ISSUE_REF = /(?<![\w&])#(\d+)\b/g;
 export const issueRefs = (text) => [...new Set([...text.matchAll(ISSUE_REF)].map((m) => +m[1]))];
 // Each T number written as its issue (#N), through the items. A T number no
 // item records is an error.
-export const tAsIssues = (text, items) => text.replace(/\bT\d{3,}\b/g, (t) => {
+export const tAsIssues = (text, items) => text
+  .replace(/\b(T\d{3,}) \(#(\d+)\)/g, (m, t, n) => (items.find((i) => i.t === t)?.issue === +n ? t : m))
+  .replace(/\bT\d{3,}\b/g, (t) => {
   const item = items.find((i) => i.t === t);
   if (!item) throw new Error(`${t} is no recorded item: ${text.slice(0, 120)}`);
   return `#${item.issue}`;
