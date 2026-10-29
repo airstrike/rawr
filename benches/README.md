@@ -19,7 +19,7 @@ Release hot reload measurements
 After installing each release, run this on macOS or Linux with Python 3.11+:
 
 ```bash
-python3.12 scripts/measure_reload.py --release 0.3.18 --wait-before-edits
+python3.12 scripts/measure_reload.py --release 0.3.19 --wait-before-edits
 ```
 
 The command starts the installed `rawr` and its adjacent `rawr-import` and
@@ -35,17 +35,27 @@ is selected for comparison.
 
 Recorded releases use the same Apple M2 Max machine, fixture and harness.
 The following comparison uses Python 3.12.0 and fresh benchmark caches for
-both releases. Each timed edit window began after other builds stopped.
+all three releases. Each timed edit window began after other builds stopped.
 
 | Release | First edit | Five later edits: median | Later maximum | Separate startup |
 |---|---:|---:|---:|---:|
 | [0.3.17](reload-results/0.3.17.json) | 999.733 ms | 1107.552 ms | 1134.842 ms | 136.474 s |
 | [0.3.18](reload-results/0.3.18-python3.12.json) | 1074.205 ms | 1133.550 ms | 1247.609 ms | 157.436 s |
+| [0.3.19](reload-results/0.3.19.json) | 1102.031 ms | 1169.356 ms | 1262.574 ms | 145.785 s |
 
-The 0.3.18 later-edit median increased **25.998 ms (2.35%)**, and its maximum
-increased **112.767 ms (9.94%)**. These are observed differences across two
-small samples, not an isolated measurement of a particular code change.
-Both startups overlapped other work and are not quiet-startup comparisons.
+From 0.3.17 to 0.3.18, the later-edit median increased **25.998 ms (2.35%)**,
+and its maximum increased **112.767 ms (9.94%)**.
+
+From 0.3.18 to 0.3.19, the first edit increased **27.825 ms (2.59%)**, the
+later-edit median increased **35.806 ms (3.16%)**, and its maximum increased
+**14.966 ms (1.20%)**. The fixture, harness, machine and observer match; all
+six 0.3.19 edits retained native PID 41586 and its increasing state counter.
+The five later samples are 1207.968, 1141.478, 1169.356, 1262.574 and
+1125.011 ms; the JSON preserves their full precision.
+
+These are observed differences across small samples, not an isolated
+measurement of a particular code change. All three startups overlapped
+other work and are not quiet-startup comparisons.
 Requested callback cadence was 20 ms; observed cadence and machine load are
 retained in each result.
 
