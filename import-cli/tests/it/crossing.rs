@@ -374,6 +374,28 @@ fn constants_of_no_scalar_and_a_sole_alias_run() {
     );
 }
 
+#[test]
+fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
+    let (rawr, cargo) = both_printed("crossing-alias-methods", "alias.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3)");
+}
+
+#[test]
+fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
+    let (rawr, cargo) = both_printed("crossing-provided", "provided.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr.matches("script widget").count(), 5, "{rawr}");
+    assert!(rawr.contains("last view pad 0"), "{rawr}");
+}
+
+#[test]
+fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
+    let (rawr, cargo) = both_printed("crossing-fields", "fields.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Shrink/Shrink\n13\n7\n7\n7\n13x14");
+}
+
 /// iced's tooltip: a derived `Default` builds a field of a crate enum by the
 /// crate's own `Default`, a `match` reads it, and a box of a string hint
 /// takes a crate function `fn(&Theme) -> Style` as its style. The output

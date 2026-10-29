@@ -21,6 +21,7 @@ const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
 const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
 const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
+const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -229,6 +230,16 @@ impl Definition {
         Self(framed.finish())
     }
 
+    /// The method `method` of the trait `trait_id` as a function generic
+    /// over the trait's `Self`, called on a program's own type that
+    /// implements the trait (`surface::member`).
+    pub(crate) fn self_member(trait_id: &api::Definition, method: &api::Definition) -> Self {
+        let mut framed = Framed::new(SELF_MEMBER_DOMAIN);
+        framed.definition(trait_id);
+        framed.definition(method);
+        Self(framed.finish())
+    }
+
     /// The type a Rust `impl Sipper<Output, Progress>` crosses as. Sipper is
     /// a trait, so no Rust definition names it; iced's facade declares it as
     /// `task::Sipper<Output, Progress>`.
@@ -388,6 +399,15 @@ impl Implementation {
         let mut framed = Framed::new(b"rawr.identity.opaque-implementation/v1");
         framed.definition(opaque);
         framed.definition(trait_id);
+        Self(framed.finish())
+    }
+
+    /// The methods of the trait whose identity is `trait_identity`, each a
+    /// function generic over the trait's `Self` (`surface::member`).
+    #[must_use]
+    pub fn self_members(trait_identity: &Definition) -> Self {
+        let mut framed = Framed::new(b"rawr.identity.self-members/v1");
+        framed.bytes(trait_identity.as_bytes());
         Self(framed.finish())
     }
 

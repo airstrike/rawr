@@ -4446,6 +4446,14 @@ fn assemble_accounted<B: crate::surface::Runner>(
                 1,
             ));
         }
+        // Each field's store, after them.
+        if has_store(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                store_identity(plan),
+                signature(plan)?,
+                2,
+            ));
+        }
     }
     let generated = crate::runner::manifest::GeneratedManifest::with_coverage(
         key.build,
@@ -4996,8 +5004,8 @@ fn render_source(
             .write_all(b", ")
             .map_err(|_| request::Error::Encoding)?;
         byte_array(output, &signature(plan)?)?;
-        writeln!(output, ", {}, {kind}),", arguments(plan)?)
-            .map_err(|_| request::Error::Encoding)?;
+        write!(output, ", {}, {kind})", arguments(plan)?).map_err(|_| request::Error::Encoding)?;
+        render_structural_instance(plan, output)?;
         if has_matcher(plan) {
             write!(
                 output,
@@ -5017,9 +5025,34 @@ fn render_source(
             byte_array(output, &signature(plan)?)?;
             writeln!(
                 output,
-                ", 1, __rawr_internal::package::import::runner::StructuralKind::Match),"
+                ", 1, __rawr_internal::package::import::runner::StructuralKind::Match)"
             )
             .map_err(|_| request::Error::Encoding)?;
+            render_structural_instance(plan, output)?;
+        }
+        if has_store(plan) {
+            write!(
+                output,
+                "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
+                plan.export().root_alias(),
+                structural_owner(plan),
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, selector)?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &store_identity(plan))?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &signature(plan)?)?;
+            writeln!(
+                output,
+                ", 2, __rawr_internal::package::import::runner::StructuralKind::Store)"
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            render_structural_instance(plan, output)?;
         }
     }
     output
@@ -5104,6 +5137,23 @@ fn render_source(
                 )
                 .map_err(|_| request::Error::Encoding)?;
             }
+            if has_store(plan) {
+                write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &store_identity(plan))?;
+                write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &signature(plan)?)?;
+                write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
+                write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &[0; 32])?;
+                writeln!(
+                    file,
+                    ", bound: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+                    plan.export().root_alias(),
+                    store_name(plan)
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
         }
         file.write_all(b"];\n\n")
             .map_err(|_| request::Error::Encoding)?;
@@ -5113,6 +5163,7 @@ fn render_source(
             let start = span_offset(&file)?;
             render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
             render_matcher(plan, &mut file)?;
+            render_store(plan, &mut file)?;
             let end = span_offset(&file)?;
             spans.push((plan.identity(), path.clone(), start..end));
         }
@@ -5734,6 +5785,112 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         .map_err(|_| request::Error::Encoding)
 }
 
+/// Key a structural row by the same concrete arguments as its adapter.
+fn render_structural_instance(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let types = plan.structural_instance();
+    if !types.is_empty() {
+        output
+            .write_all(b".with_instance(")
+            .map_err(|_| request::Error::Encoding)?;
+        byte_array(output, &crate::surface::instance::key(types))?;
+        output
+            .write_all(b")")
+            .map_err(|_| request::Error::Encoding)?;
+    }
+    output
+        .write_all(b",\n")
+        .map_err(|_| request::Error::Encoding)
+}
+
+fn structural_type(plan: &Plan) -> String {
+    let path = rust_path(plan);
+    let instance = plan.structural_instance();
+    if instance.is_empty() {
+        return path;
+    }
+    let arguments = instance
+        .iter()
+        .map(|ty| concrete_type(ty).unwrap_or_else(|| "_".to_owned()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{path}<{arguments}>")
+}
+
+/// A field has a store when the bridge can take its value without keeping
+/// a borrow of a scope frame's region (`render_store`).
+fn has_store(plan: &Plan) -> bool {
+    let Operation::StructField { field, .. } = plan.operation() else {
+        return false;
+    };
+    let path = rust_path(plan);
+    container_family(&path, &path).is_none()
+        && !may_borrow(field.ty())
+        && render_take(0, 1, field.ty(), &mut Vec::new()).is_ok()
+}
+
+/// The entry identity of a field's store: its reader's, tagged.
+fn store_identity(plan: &Plan) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rawr-field-store");
+    hasher.update(plan.identity().as_bytes());
+    hasher.finalize().into()
+}
+
+fn store_name(plan: &Plan) -> String {
+    format!("{}_store", adapter_name(plan))
+}
+
+/// The field set to the second argument in the value the first argument
+/// holds, in place: a value native code lent the script function `&mut`
+/// is reached through its accessor (D558.3); any other is in the arena,
+/// changed where it lives, as a `&mut self` method changes it.
+fn render_store(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let Operation::StructField { field, .. } = plan.operation() else {
+        return Ok(());
+    };
+    if !has_store(plan) {
+        return Ok(());
+    }
+    let path = structural_type(plan);
+    let name = field.name();
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        store_name(plan)
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    render_take(0, 1, field.ty(), output)?;
+    writeln!(
+        output,
+        "    let mut value = Some(argument_0);
+    match lent_value(arguments, 0) {{
+        Some(lent) => {{
+            let access: fn(u64, &mut dyn FnMut(&mut {path})) -> Result<(), u8> = lent
+                .accessor(true)
+                .map_err(|error| Error::Lent(lent.name(), error))?;
+            access(lent.nonce().bits(), &mut |receiver| {{
+                if let Some(value) = value.take() {{
+                    receiver.{name} = value;
+                }}
+            }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+            if value.is_some() {{
+                return Err(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy));
+            }}
+        }}
+        None => {{
+            let handle = native_handle(arguments, 0, false)?;
+            let value = value.take().ok_or(Error::TypeMismatch)?;
+            arguments.arena.mutable::<{path}, _>(handle, |receiver| receiver.{name} = value)?;
+        }}
+    }}
+    Ok(Dynamic::UNIT)
+}}
+"
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
 /// The path below the crate root of the type a structural adapter
 /// belongs to: `echo::Event` for its variant `Connected`.
 fn structural_owner(plan: &Plan) -> String {
@@ -6251,9 +6408,8 @@ fn render_adapter_body(
         }
         Operation::StructConstructor { form, fields, .. } => {
             render_fields(fields, 0, output)?;
-            // A generic struct is made at its defaulted instance, which its
-            // path names as a type (palette's `Rgb` is `Rgb<Srgb, f32>`).
-            write!(output, "    let output: {path} = {path}")
+            let ty = structural_type(plan);
+            write!(output, "    let output: {ty} = {path}")
                 .map_err(|_| request::Error::Encoding)?;
             render_constructor(*form, fields, output)?;
             output
@@ -6261,6 +6417,7 @@ fn render_adapter_body(
                 .map_err(|_| request::Error::Encoding)?;
         }
         Operation::StructField { field, .. } => {
+            let path = structural_type(plan);
             // A field of a value in a scope frame's region (D558 tier 1), as
             // quick-xml's `Attribute::value`: a copy, which stays in the
             // region when it carries the region's lifetime.
@@ -6285,6 +6442,17 @@ fn render_adapter_body(
                 .map_err(|_| request::Error::Encoding)?;
             }
             if copy_scalar(field.ty()) {
+                let mut converted = String::new();
+                render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
+                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut output = None;
+        access(lent.nonce().bits(), &mut |receiver| output = Some(receiver.{}))
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
+        return {converted};
+    }}", field.name()).map_err(|_| request::Error::Encoding)?;
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(|_| request::Error::Encoding)?;
@@ -8687,7 +8855,19 @@ fn rust_path(plan: &Plan) -> String {
     PATH_IDENTITIES
         .with_borrow(|identities| identities.get(&path).copied())
         .and_then(|identity| TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned()))
-        .unwrap_or(path)
+        .unwrap_or_else(|| {
+            // A trait reached through a macro's `$crate` is imported as
+            // a direct dependency by `render_source`. Its provided method
+            // uses that dependency's root, just as its trait import does.
+            let segments = path.split("::").collect::<Vec<_>>();
+            match segments
+                .iter()
+                .position(|segment| segment.starts_with(crate::api::ledger::CRATE_SEGMENT))
+            {
+                Some(at) => format!("::{}", segments[at..].join("::")),
+                None => path,
+            }
+        })
 }
 
 fn render_constructor(
@@ -12604,6 +12784,24 @@ impl TypePaths {
                 });
             });
         });
+        // A provided trait method can have arrived through a macro's
+        // `$crate` while the same trait has a public path in source.
+        for owner in facade
+            .into_iter()
+            .flat_map(crate::surface::facade::Plan::facades)
+        {
+            for header in owner.trait_headers() {
+                let path = format!("{}::{}", owner.root(), header.path());
+                PATH_IDENTITIES.with_borrow_mut(|identities| {
+                    identities.entry(path.clone()).or_insert(*header.identity());
+                });
+                if !path.contains(crate::api::ledger::CRATE_SEGMENT) {
+                    TYPE_PATHS.with_borrow_mut(|paths| {
+                        paths.entry(*header.identity()).or_insert(path);
+                    });
+                }
+            }
+        }
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXY_CRATE.with_borrow_mut(|named| *named = None);
