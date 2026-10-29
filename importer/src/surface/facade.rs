@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 21;
+const SCHEMA: u32 = 23;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -470,6 +470,11 @@ pub struct TypeDefinition {
     /// How many lifetime parameters the native type declares (D558 tier 1).
     #[serde(default, skip_serializing_if = "is_zero")]
     lifetimes: u32,
+    /// Whether the native type is covariant in each of its lifetimes, so
+    /// its value at `'static` is one at a shorter lifetime (rustc's
+    /// variance).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    covariant: bool,
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
@@ -678,6 +683,9 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// An output `Vec<T>` or slice, a Rawr array.
     Array(Box<Type>),
+    /// Rust's array `[T; length]`, a Rawr array of that length, as a
+    /// relation's case `From<[u16; 2]>` takes.
+    FixedArray { element: Box<Type>, length: u32 },
     /// An output tuple, a Rawr tuple.
     Tuple(Box<[Type]>),
     /// Rust's `Range<T>` of a float, a Rawr `Range<f64>` value.
@@ -736,7 +744,10 @@ impl Type {
                 left.opaque(opaque, found);
                 right.opaque(opaque, found);
             }
-            Self::Option(element) | Self::Array(element) | Self::Range(element) => {
+            Self::Option(element)
+            | Self::Array(element)
+            | Self::FixedArray { element, .. }
+            | Self::Range(element) => {
                 element.opaque(opaque, found);
             }
             Self::Tuple(members) => {
@@ -763,6 +774,7 @@ impl Type {
             | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
             Self::Option(element)
             | Self::Array(element)
+            | Self::FixedArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
                 target: element, ..
@@ -1113,6 +1125,7 @@ impl Plan {
                             eq: false,
                             hash: false,
                             lifetimes: 0,
+                            covariant: false,
                             iterator: false,
                             view: false,
                             widget: false,
@@ -1550,6 +1563,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         eq: false,
         hash: false,
         lifetimes: 0,
+        covariant: false,
         iterator: false,
         view: false,
         widget: false,
@@ -1627,6 +1641,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 eq: false,
                 hash: false,
                 lifetimes: 0,
+                covariant: false,
                 iterator: false,
                 view: false,
                 widget: false,
@@ -1672,6 +1687,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         eq: false,
         hash: false,
         lifetimes: 0,
+        covariant: false,
         iterator: false,
         view: false,
         widget: false,
@@ -2658,6 +2674,11 @@ impl TypeDefinition {
     pub const fn lifetimes(&self) -> u32 {
         self.lifetimes
     }
+    /// Return whether the native type is covariant in each of its
+    /// lifetimes.
+    pub const fn covariant(&self) -> bool {
+        self.covariant
+    }
     /// Return whether the crate implements `Iterator` for the native type.
     pub const fn iterator(&self) -> bool {
         self.iterator
@@ -2845,9 +2866,16 @@ fn type_definition(
             plan.iterator(),
             plan.view(),
             plan.widget(),
+            plan.covariant(),
         ),
-        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), false, false),
-        _ => (0, false, false, false),
+        Representability::Enum(plan) => (
+            plan.lifetimes(),
+            plan.iterator(),
+            false,
+            false,
+            plan.covariant(),
+        ),
+        _ => (0, false, false, false, false),
     };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
@@ -2917,6 +2945,7 @@ fn type_definition(
         eq: compare[1],
         hash: compare[2],
         lifetimes: borrowing.0,
+        covariant: borrowing.4,
         iterator: borrowing.1,
         view: borrowing.2,
         widget: borrowing.3,
@@ -3369,6 +3398,14 @@ fn ty(
             Box::new(ty(ok, parameters)?),
             Box::new(ty(err, parameters)?),
         ),
+        Source::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => Type::FixedArray {
+            element: Box::new(ty(element, parameters)?),
+            length: *length,
+        },
         Source::Sequence { element, .. } => Type::Array(Box::new(ty(element, parameters)?)),
         Source::Tuple(members) => {
             let mut converted = Vec::new();

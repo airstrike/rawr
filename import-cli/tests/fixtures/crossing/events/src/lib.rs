@@ -6,6 +6,7 @@
 use std::fmt::Debug;
 
 pub mod controls;
+pub mod conversions;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
@@ -70,8 +71,8 @@ where
 
 // ---- iced's shape: `run(update, view)` through traits over `Fn` ----
 
-/// A theme, as a GUI library's default one.
-#[derive(Default)]
+/// A theme, as a GUI library's default one, which clones as iced's does.
+#[derive(Default, Clone)]
 pub struct Theme;
 
 /// A renderer, as a GUI library's default one.
@@ -124,8 +125,9 @@ impl<Message: Clone, Theme, Renderer> Element<Message, Theme, Renderer>
     }
 }
 
-/// What `update` may give back: work to do after it, or none.
-pub struct Task<Message>(Option<Message>);
+/// What `update` may give back: work to do after it, or none. Its
+/// parameter is named as its impls name theirs, as iced's `Task<T>` is.
+pub struct Task<T>(Option<T>);
 
 impl<Message> From<()> for Task<Message> {
     fn from((): ()) -> Self {
@@ -139,10 +141,86 @@ impl<T> Task<T> {
         Task(None)
     }
 
-    /// The work that gives `value`.
-    pub fn done(value: T) -> Self {
+    /// The work that gives `value`, as iced's, which bounds its value.
+    pub fn done(value: T) -> Self
+    where
+        T: MaybeSend + 'static,
+    {
         Task(Some(value))
     }
+
+    /// The value this work gives, when it gives one.
+    pub fn value(self) -> Option<T> {
+        self.0
+    }
+
+    /// The work that gives `f` of this work's value, which `f` makes on
+    /// another thread, as iced's executor runs `Task::map`'s function.
+    pub fn map<A>(self, mut f: impl FnMut(T) -> A + MaybeSend + 'static) -> Task<A>
+    where
+        T: MaybeSend + 'static,
+        A: MaybeSend + 'static,
+    {
+        Task(
+            std::thread::spawn(move || self.0.map(&mut f))
+                .join()
+                .expect("the mapping thread finishes"),
+        )
+    }
+}
+
+/// What may cross to another thread, as iced's `MaybeSend` on native.
+pub trait MaybeSend: Send {}
+
+impl<T: Send> MaybeSend for T {}
+
+/// A font family, as iced's `font::Family`: a crate enum that `Display`s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Family {
+    /// Serif.
+    Serif,
+    /// Sans serif.
+    SansSerif,
+    /// Monospace.
+    Monospace,
+}
+
+impl std::fmt::Display for Family {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Family::Serif => "Serif",
+            Family::SansSerif => "Sans",
+            Family::Monospace => "Mono",
+        })
+    }
+}
+
+/// Why the families weren't listed, as iced's empty `font::Error`.
+#[derive(Debug, Clone)]
+pub enum Error {}
+
+/// The work of listing the system's font families, as iced's
+/// `font::list()`.
+pub fn families() -> Task<Result<Vec<Family>, Error>> {
+    Task(Some(Ok(vec![Family::Monospace, Family::Serif])))
+}
+
+/// What iced's `system::information()` gives: a crate value of fields.
+#[derive(Debug, Clone)]
+pub struct Info {
+    /// The system's name.
+    pub name: String,
+    /// Its processor cores, when known.
+    pub cores: Option<u32>,
+}
+
+/// The work of reading the system's information, as iced's
+/// `system::information()`.
+pub fn information() -> Task<Info> {
+    Task(Some(Info {
+        name: "fixture".to_string(),
+        cores: Some(4),
+    }))
 }
 
 /// The work of finding the latest window's id, as iced's
@@ -404,11 +482,12 @@ pub mod widgets {
         }
     }
 
-    /// Text showing a value, at a size.
+    /// Text showing a value, at a size. It is invariant in `'a`, as iced's
+    /// `Text<'a>` is through its `Theme::Class<'a>`.
     pub struct Text<'a, Theme = crate::Theme> {
         text: String,
         size: u32,
-        look: std::marker::PhantomData<&'a Theme>,
+        look: std::marker::PhantomData<fn(&'a Theme) -> &'a Theme>,
     }
 
     /// Text showing `value`.
@@ -811,6 +890,9 @@ pub struct Color {
 }
 
 impl Color {
+    /// Black, as iced's `Color::BLACK`.
+    pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
+
     /// The color of `r`, `g` and `b`, as iced's `Color::from_rgb8`.
     pub fn rgb(r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b }

@@ -973,9 +973,14 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
         },
         convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
-        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
             element: one(element)?,
             owned: *owned,
+            length: *length,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
@@ -1068,9 +1073,14 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
         convert::Type::Result(ok, err) => {
             convert::Type::Result(Box::new(clone_type(ok)?), Box::new(clone_type(err)?))
         }
-        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
             element: Box::new(clone_type(element)?),
             owned: *owned,
+            length: *length,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(clone_types(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {

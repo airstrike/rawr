@@ -917,12 +917,25 @@ fn validate_function_items(
             .outcome(selected.identity())
             .ok_or(Error::ForeignIdentity)?;
         // A generic function is selected at its instance's types, one per
-        // type parameter, as `window::close::<Message>` is.
+        // type parameter, as `window::close::<Message>` is. Its bounds, as
+        // `Task::done`'s `T: MaybeSend + 'static`, hold or fail where rustc
+        // checks the adapter's call.
         let selected_signature = match selected_outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan)
                 if plan.receiver().is_none()
-                    && plan.predicates().is_empty()
+                    && plan.call().is_none()
+                    && plan.crossings().is_empty()
+                    && plan.signature().parameters().iter().all(|parameter| {
+                        parameter.kind() == crate::classify::representability::signature::Kind::Type
+                    }) =>
+            {
+                plan.signature()
+            }
+            // An associated function of a generic impl, as `Task::done` of
+            // `impl<T> Task<T>` is, at the impl's types and its own.
+            Representability::Invocation(plan)
+                if plan.receiver().is_none()
                     && plan.call().is_none()
                     && plan.crossings().is_empty()
                     && plan.signature().parameters().iter().all(|parameter| {

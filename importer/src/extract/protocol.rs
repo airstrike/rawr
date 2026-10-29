@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 29;
+pub(crate) const SCHEMA: u32 = 30;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
@@ -467,6 +467,7 @@ pub(crate) struct Parameter {
 pub(crate) enum ParameterKind {
     Lifetime {
         bounds: Vec<Bound>,
+        covariant: bool,
     },
     Type {
         bounds: Vec<Bound>,
@@ -803,7 +804,7 @@ impl Population {
         self.generics = self.generics.saturating_add(1);
         for parameter in &generics.parameters {
             match &parameter.parameter_kind {
-                ParameterKind::Lifetime { bounds } => {
+                ParameterKind::Lifetime { bounds, .. } => {
                     for bound in bounds {
                         self.bound(bound);
                     }

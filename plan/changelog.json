@@ -8,6 +8,33 @@
   },
   "releases": [
     {
+      "version": "0.3.15",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A view's column of text made from an iterator, as iced's text and events examples make it, now builds. rawr reads each type's lifetime variance from rustc, and a value made outside the view joins the view's region only when its type is covariant.","issues":[335]},
+        {"text":"A function iced runs on its executor thread with crate values, such as `Task::map(Result::ok)` or `listen_with`'s filter, runs with an arena of its own for the call. Upstream text and events run with no rawr-iced.","issues":[347]}
+      ]
+    },
+    {
+      "version": "0.3.14",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A float range such as `1.0..=30.0` passes where a crate takes `RangeInclusive<T>`. `T` becomes the float the call's other arguments give, as in iced's `slider`.","issues":[355],"refs":[314]},
+        {"text":"An array literal such as `[10, 20]` passes where a crate takes `impl Into<T>` and `T` converts from an array of that length, as in iced's `padding([10, 20])`. iced's exit runs with no rawr-iced.","issues":[336]},
+        {"text":"`.into()` on a crate value converts into the crate type its use expects, even when the program never names that type, as in iced's modal `Some(Color { .. }.into())`.","issues":[340]},
+        {"text":"A borrowed `Vec` passes where a crate takes `impl IntoIterator<Item = T>`, and its items are borrows, as in iced's `table(columns, &self.events)`. A script type named `Event` no longer clashes with the generated runner's own code.","issues":[356],"refs":[345]}
+      ]
+    },
+    {
+      "version": "0.3.13",
+      "date": "2026-10-28",
+      "entries": [
+        {"text":"A boot function that returns the state and a task, as iced's `new() -> (Self, Task<Message>)`, runs as `application(Example::new, ..)` takes it.","issues":[300]},
+        {"text":"A message made from a crate value on another thread, as `Task::map(Message::InformationReceived)` on iced's executor, is made where it is delivered. iced's system_information runs with no rawr-iced.","issues":[300]},
+        {"text":"A `Vec` inside a crate type's arguments, a function-pointer parameter such as `event::listen_with`'s, a bounded generic associated function such as `Task::done` passed as a callable, an `Option` or `Result` of crate values, and a slice of crate values such as `pick_list` takes all cross. iced's text passes `rawr check`.","issues":[300]}
+      ]
+    },
+    {
       "version": "0.3.12",
       "date": "2026-10-28",
       "entries": [

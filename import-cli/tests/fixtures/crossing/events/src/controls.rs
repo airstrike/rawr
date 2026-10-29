@@ -253,8 +253,8 @@ pub trait Program {
     type State;
     /// The message.
     type Message: Debug;
-    /// The state the program starts from.
-    fn boot(&self) -> Self::State;
+    /// The state the program starts from, and the work it asks for.
+    fn boot(&self) -> (Self::State, crate::Task<Self::Message>);
     /// Change the state for the message, and give the message the work it
     /// asks for gives, if any.
     fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message>;
@@ -290,6 +290,34 @@ impl<T> Subscription<T> {
         Subscription {
             messages: self.messages.into_iter().map(f).collect(),
         }
+    }
+}
+
+/// An event a program may listen for, as iced's `Event`.
+#[derive(Debug, Clone, Copy)]
+pub enum Signal {
+    /// The window's scale factor changed.
+    Rescaled(f32),
+    /// Something else happened.
+    Moved,
+}
+
+/// The messages `f` makes of each event, as iced's
+/// `event::listen_with(fn(Event, Status, window::Id) -> Option<Message>)`
+/// takes a function pointer, which iced calls on another thread.
+pub fn listen_with<Message>(f: fn(Signal, bool, u32) -> Option<Message>) -> Subscription<Message>
+where
+    Message: crate::MaybeSend + 'static,
+{
+    Subscription {
+        messages: std::thread::spawn(move || {
+            [Signal::Moved, Signal::Rescaled(2.0)]
+                .into_iter()
+                .filter_map(|signal| f(signal, false, 1))
+                .collect()
+        })
+        .join()
+        .expect("the listening thread finishes"),
     }
 }
 
@@ -336,7 +364,7 @@ where
     type State = P::State;
     type Message = P::Message;
 
-    fn boot(&self) -> Self::State {
+    fn boot(&self) -> (Self::State, crate::Task<Self::Message>) {
         self.program.boot()
     }
 
@@ -358,19 +386,39 @@ where
     }
 }
 
-/// What makes a program's state: any `Fn()` whose output turns into it.
-pub trait BootFn<State> {
-    /// The state.
-    fn boot(&self) -> State;
+/// What makes a program's state and its first work, as iced's `BootFn`:
+/// any `Fn()` whose output turns into them.
+pub trait BootFn<State, Message> {
+    /// The state, and the work it asks for.
+    fn boot(&self) -> (State, crate::Task<Message>);
 }
 
-impl<T, C, State> BootFn<State> for T
+impl<T, C, State, Message> BootFn<State, Message> for T
 where
     T: Fn() -> C,
-    C: Into<State>,
+    C: IntoBoot<State, Message>,
 {
-    fn boot(&self) -> State {
-        self().into()
+    fn boot(&self) -> (State, crate::Task<Message>) {
+        self().into_boot()
+    }
+}
+
+/// What turns into a program's state and its first work, as iced's
+/// `IntoBoot`: the state alone, or the state and a task.
+pub trait IntoBoot<State, Message> {
+    /// The state, and the work it asks for.
+    fn into_boot(self) -> (State, crate::Task<Message>);
+}
+
+impl<State, Message> IntoBoot<State, Message> for State {
+    fn into_boot(self) -> (State, crate::Task<Message>) {
+        (self, crate::Task::none())
+    }
+}
+
+impl<State, Message> IntoBoot<State, Message> for (State, crate::Task<Message>) {
+    fn into_boot(self) -> (State, crate::Task<Message>) {
+        self
     }
 }
 
@@ -383,7 +431,7 @@ pub struct Application<P: Program> {
 /// The application of `boot`, `update` and `view`, as iced's
 /// `application(..)`.
 pub fn application<State, Message, Theme, Renderer>(
-    boot: impl BootFn<State>,
+    boot: impl BootFn<State, Message>,
     update: impl crate::UpdateFn<State, Message>,
     view: impl for<'a> crate::widgets::ViewFn<'a, State, Message, Theme, Renderer>,
 ) -> Application<impl Program<State = State, Message = Message>>
@@ -404,14 +452,14 @@ where
         for Instance<State, Message, Theme, Renderer, B, U, V>
     where
         Message: Debug,
-        B: BootFn<State>,
+        B: BootFn<State, Message>,
         U: crate::UpdateFn<State, Message>,
         V: for<'a> crate::widgets::ViewFn<'a, State, Message, Theme, Renderer>,
     {
         type State = State;
         type Message = Message;
 
-        fn boot(&self) -> State {
+        fn boot(&self) -> (State, crate::Task<Message>) {
             self.boot.boot()
         }
 
@@ -469,7 +517,7 @@ impl<P: Program> Application<P> {
             self.fonts.iter().map(|font| font.len()).sum::<usize>()
         );
         let presses = std::env::var("EVENTS_PRESS").unwrap_or_default();
-        let mut state = self.program.boot();
+        let (mut state, boot) = self.program.boot();
         // Each message the booted state listens for, before any press.
         // A message the work an update asks for gives, delivered after it.
         let deliver = |state: &mut P::State, message: P::Message| {
@@ -479,6 +527,11 @@ impl<P: Program> Application<P> {
                 next = self.program.update(state, message);
             }
         };
+        // The message the boot's work gives, before anything else.
+        if let Some(message) = boot.0 {
+            println!("boot message {message:?}");
+            deliver(&mut state, message);
+        }
         for message in self.program.subscription(&state).messages {
             println!("heard {message:?}");
             deliver(&mut state, message);

@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 53;
+const CLASSIFIER_VERSION: u32 = 56;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -2066,8 +2066,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 continue;
             }
-            // A tuple, as `(u8, u8, u8)`, is a value Rawr holds.
-            let Ok(source) = self.convert_value(source) else {
+            // A tuple, as `(u8, u8, u8)`, is a value Rawr holds, and so is
+            // an array of a known length, as `Padding`'s `From<[u16; 2]>`
+            // takes.
+            let source = match source {
+                model::Type::Array { element, length } => {
+                    array_length(length).ok_or(()).and_then(|length| {
+                        let element = self.convert_value(element).map_err(|_| ())?;
+                        Ok(representability::convert::Type::Sequence {
+                            element: Box::new(element),
+                            owned: true,
+                            length: Some(length),
+                        })
+                    })
+                }
+                source => self.convert_value(source).map_err(|_| ()),
+            };
+            let Ok(source) = source else {
                 continue;
             };
             if names_other_parameter(&source, u32::MAX) {
@@ -4931,6 +4946,7 @@ impl<P: api::Phase> Context<'_, P> {
         )
         .with_borrowing(
             lifetime_parameters(generics),
+            covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         )
         .with_view(
@@ -5127,6 +5143,7 @@ impl<P: api::Phase> Context<'_, P> {
         )
         .with_borrowing(
             lifetime_parameters(generics),
+            covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         ))
     }
@@ -5194,6 +5211,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(element),
                     owned: false,
+                    length: None,
                 })
             }
             model::Type::Definition { id, arguments }
@@ -5206,6 +5224,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(self.convert_value(element)?),
                     owned: true,
+                    length: None,
                 })
             }
             // A shared slice, as ratatui's `Layout::split` gives an
@@ -5224,6 +5243,7 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(Type::Sequence {
                     element: Box::new(element),
                     owned: false,
+                    length: None,
                 })
             }
             // An `Option` of a tuple, as pane_grid's `State::split` gives
@@ -5327,6 +5347,12 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.abi() != "\"Rust\"" {
             return Err(representability::reject::Kind::ForeignAbi.into());
         }
+        let pointers = self.pointer_callables(signature, generics);
+        let (signature, generics) = pointers
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         let opens_copies = self.late_binders_open_copies(signature);
         let borrows_receiver = borrows_receiver(signature);
         let outer_scope = self
@@ -5335,6 +5361,144 @@ impl<P: api::Phase> Context<'_, P> {
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
         self.scope_lifetimes.set(outer_scope);
         classified
+    }
+
+    /// `signature` and `generics` with each input that is a safe Rust
+    /// function pointer of other than one input, as iced's
+    /// `event::listen_with(f: fn(Event, Status, window::Id) ->
+    /// Option<Message>)` takes, read as a parameter `impl Fn(..) -> R` of
+    /// its own. A script function or a closure that captures nothing
+    /// fills it as a slot, a function item that coerces to the pointer
+    /// (D594), and so does a crate function. A pointer of one input stays
+    /// the function item it is (`convert_input`). `None` when there is none.
+    fn pointer_callables(
+        &self,
+        signature: &model::Signature,
+        generics: &model::Generics,
+    ) -> Option<(model::Signature, model::Generics)> {
+        fn pointer(ty: &model::Type) -> Option<&model::Signature> {
+            match ty {
+                model::Type::FunctionPointer(pointer)
+                    if pointer.safety() == model::Safety::Safe
+                        && !pointer.async_function()
+                        && !pointer.variadic()
+                        && pointer.abi() == "\"Rust\""
+                        && pointer.binders().len() == 0
+                        && matches!(pointer.receiver(), model::Receiver::None)
+                        && pointer.inputs().len() != 1 =>
+                {
+                    Some(pointer)
+                }
+                _ => None,
+            }
+        }
+        if !signature.inputs().any(|input| pointer(input).is_some()) {
+            return None;
+        }
+        let owner = generics.parameters().next()?.owner().clone();
+        let (callable, once, output) = self.callable_traits()?;
+        let mut next = generics
+            .parameters()
+            .map(model::Parameter::index)
+            .filter(|index| *index & representability::signature::FUTURE_OUTPUT == 0)
+            .max()
+            .map_or(0, |index| index + 1);
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        let mut predicates = generics.predicates().cloned().collect::<Vec<_>>();
+        let mut inputs = Vec::new();
+        for input in signature.inputs() {
+            let Some(pointer) = pointer(input) else {
+                inputs.push(input.clone());
+                continue;
+            };
+            let index = next;
+            next += 1;
+            let parameter = model::Type::Parameter {
+                owner: owner.clone(),
+                index,
+            };
+            let arguments = model::Type::Tuple(pointer.inputs().cloned().collect());
+            parameters.push(model::Parameter::new(
+                owner.clone(),
+                index,
+                format!("impl Fn#{index}").into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ));
+            predicates.push(model::Predicate::Bound {
+                ty: parameter.clone(),
+                bound: model::Bound::Trait {
+                    trait_id: callable.clone(),
+                    arguments: Box::from([model::Argument::Type(arguments.clone())]),
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                },
+            });
+            // A function pointer holds no borrow of its own.
+            predicates.push(model::Predicate::TypeOutlives {
+                ty: parameter.clone(),
+                lifetime: model::Lifetime::Static,
+            });
+            predicates.push(model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection {
+                    trait_id: once.clone(),
+                    associated: output.clone(),
+                    arguments: Box::from([
+                        model::Argument::Type(parameter.clone()),
+                        model::Argument::Type(arguments),
+                    ]),
+                },
+                ty: pointer.output().clone(),
+            });
+            inputs.push(parameter);
+        }
+        let rewritten = model::Signature::new(
+            signature.safety(),
+            signature.const_function(),
+            signature.async_function(),
+            signature.abi().into(),
+            signature.variadic(),
+            signature.binders().cloned().collect(),
+            signature.receiver().clone(),
+            inputs.into_boxed_slice(),
+            signature.output().clone(),
+        )
+        .with_guard(signature.guard().cloned());
+        Some((
+            rewritten,
+            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
+        ))
+    }
+
+    /// `core`'s `Fn` and `FnOnce` and `FnOnce::Output`, where the graph
+    /// holds them.
+    fn callable_traits(
+        &self,
+    ) -> Option<(
+        api::identity::Definition,
+        api::identity::Definition,
+        api::identity::Definition,
+    )> {
+        let mut callable = None;
+        let mut once = None;
+        for definition in self.graph.definitions() {
+            let id = definition.id();
+            if self.is_core_trait(id, "Fn") {
+                callable = Some(id.clone());
+            } else if self.is_core_trait(id, "FnOnce") {
+                once = Some(id.clone());
+            }
+        }
+        let once = once?;
+        let output = self.graph.definitions().find(|definition| {
+            let path = definition.display_path().collect::<Vec<_>>();
+            path.last() == Some(&"Output")
+                && (matches!(definition.owner(), model::Owner::Definition(owner) if *owner == once)
+                    || path.iter().rev().nth(1) == Some(&"FnOnce"))
+        })?;
+        Some((callable?, once, output.id().clone()))
     }
 
     fn function_with(
@@ -5469,6 +5633,7 @@ impl<P: api::Phase> Context<'_, P> {
                     representability::convert::Type::Sequence {
                         element: Box::new(self.convert_value(item)?),
                         owned: true,
+                        length: None,
                     }
                 }
                 input if futures.is_empty() => self.convert_input(&rewrite(input))?,
@@ -5719,6 +5884,24 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
+                } else if let Some(element) = range_inclusive_element(definition, arguments) {
+                    // A range of a type parameter or of a float, as a
+                    // crate's `slider(range: RangeInclusive<T>, value: T,
+                    // ..)` takes: Rawr's integer or float range as `T` is
+                    // an integer or a float.
+                    let element = self.convert(element)?;
+                    if !matches!(
+                        element,
+                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                    ) {
+                        return Err(
+                            representability::reject::Kind::UnsupportedGenericArgument.into()
+                        );
+                    }
+                    Type::Nominal {
+                        definition: crate::surface::identity::Definition::range_inclusive(),
+                        arguments: Box::new([element]),
+                    }
                 } else if let Some(element) = range_element(definition, arguments) {
                     // A float range, as rand's `random_range(0.5..1.0)` takes,
                     // or the impl parameter a relation case binds.
@@ -5741,6 +5924,7 @@ impl<P: api::Phase> Context<'_, P> {
                         model::Type::Slice(element) => Type::Sequence {
                             element: Box::new(self.convert(element)?),
                             owned: false,
+                            length: None,
                         },
                         model::Type::Primitive(name) if &**name == "str" => {
                             Type::Builtin(Builtin::Text)
@@ -5755,6 +5939,15 @@ impl<P: api::Phase> Context<'_, P> {
                     Type::Option(Box::new(self.convert(element)?))
                 } else if let Some((ok, err)) = result_elements(definition, arguments) {
                     Type::Result(Box::new(self.convert(ok)?), Box::new(self.convert(err)?))
+                } else if let Some(element) = vec_element(definition, arguments) {
+                    // A `Vec<T>`, as iced's `font::list()` gives inside a
+                    // `Task<Result<Vec<Family>, Error>>`: Rawr's array,
+                    // which generated code names as the `Vec` it is.
+                    Type::Sequence {
+                        element: Box::new(self.convert(element)?),
+                        owned: true,
+                        length: None,
+                    }
                 } else {
                     definition_is_publishable_nominal(definition)?;
                     let mut converted = Vec::new();
@@ -5793,6 +5986,7 @@ impl<P: api::Phase> Context<'_, P> {
                                     model::Type::Slice(element) => Type::Sequence {
                                         element: Box::new(self.convert(element)?),
                                         owned: false,
+                                        length: None,
                                     },
                                     _ => Type::Builtin(Builtin::Str),
                                 }),
@@ -6661,6 +6855,7 @@ impl<P: api::Phase> Context<'_, P> {
                 ty: Box::new(representability::convert::Type::Sequence {
                     element: Box::new(self.convert(element)?),
                     owned: true,
+                    length: None,
                 }),
             });
         }
@@ -6701,6 +6896,7 @@ impl<P: api::Phase> Context<'_, P> {
                         ty: Box::new(representability::convert::Type::Sequence {
                             element: Box::new(self.convert_value(element)?),
                             owned: false,
+                            length: None,
                         }),
                     });
                 }
@@ -7549,6 +7745,15 @@ fn is_lifetime_parameter(parameter: &model::Parameter) -> bool {
 }
 
 /// How many lifetime parameters `generics` declares.
+/// Whether a type is covariant in each lifetime it declares, as rustc's
+/// variance says.
+fn covariant_lifetimes(generics: &model::Generics) -> bool {
+    generics
+        .parameters()
+        .filter(|parameter| is_lifetime_parameter(parameter))
+        .all(model::Parameter::covariant)
+}
+
 fn lifetime_parameters(generics: &model::Generics) -> u32 {
     u32::try_from(
         generics
@@ -7943,6 +8148,19 @@ fn shared_slice_element<'a>(
     }
 }
 
+/// The length of an array type, when it is a literal, as the driver writes
+/// rustc's value (`2_usize`).
+fn array_length(length: &model::Const) -> Option<u32> {
+    let model::Const::Literal { value, .. } = length else {
+        return None;
+    };
+    value
+        .trim_end_matches("_usize")
+        .trim_end_matches("usize")
+        .parse()
+        .ok()
+}
+
 fn constant(value: &model::Const) -> Result<representability::convert::Constant, Failure> {
     let model::Const::Literal { ty, value } = value else {
         return Err(representability::reject::Kind::UnevaluatedConstant.into());
@@ -8066,23 +8284,36 @@ fn result_elements<'a>(
     }
 }
 
+/// Whether the type is core's `RangeInclusive` of a concrete integer:
+/// Rawr's `RangeInclusive<i64>`, converted to the integer type where the
+/// call takes it. A range of a type parameter is
+/// [`Definition::range_inclusive`](crate::surface::identity::Definition::range_inclusive)'s.
 fn is_i64_range(definition: &model::Definition, arguments: &[model::Argument]) -> bool {
+    matches!(
+        range_inclusive_element(definition, arguments),
+        Some(model::Type::Primitive(name)) if matches!(
+            name.as_ref(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+        )
+    )
+}
+
+/// `T` of core's `ops::RangeInclusive<T>`.
+fn range_inclusive_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
     let unit = definition.id().unit();
-    unit.authority().sysroot().is_some()
-        && unit.crate_name() == "core"
-        && definition.display_path().last() == Some("RangeInclusive")
-        && match arguments {
-            // Rawr's `RangeInclusive<i64>`, which a range of another integer
-            // type, or of a type parameter an integer fills, as iced's
-            // `slider(range: RangeInclusive<T>, value: T, ..)` takes, is
-            // converted to where the call takes it.
-            [model::Argument::Type(model::Type::Primitive(name))] => matches!(
-                name.as_ref(),
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
-            ),
-            [model::Argument::Type(model::Type::Parameter { .. })] => true,
-            _ => false,
-        }
+    if unit.authority().sysroot().is_none()
+        || unit.crate_name() != "core"
+        || definition.display_path().last() != Some("RangeInclusive")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Type(element)] => Some(element),
+        _ => None,
+    }
 }
 
 /// Classification failure that cannot expose a partial contract.
@@ -8652,6 +8883,7 @@ mod tests {
                 shared(Type::Sequence {
                     element: Box::new(point()),
                     owned: false,
+                    length: None,
                 }),
             ]
         );
@@ -8665,6 +8897,7 @@ mod tests {
             [shared(Type::Sequence {
                 element: Box::new(Type::Builtin(Builtin::U8)),
                 owned: false,
+                length: None,
             })]
         );
 
@@ -9011,6 +9244,7 @@ mod tests {
                     isize()
                 ]))),
                 owned: false,
+                length: None,
             }
         );
         assert!(plan.value().is_none());

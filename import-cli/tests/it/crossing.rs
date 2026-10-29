@@ -141,6 +141,59 @@ fn generic_functions_over_crate_types_run_once_per_instantiation() {
     );
 }
 
+/// iced's text, system_information and multi_window: `new` gives the
+/// state and its first task, `(Self, Task<Message>)`, which
+/// `application(..)` takes through `BootFn` and the tuple's `IntoBoot`.
+/// The task's message arrives first, and `update` calls `Self::new()`
+/// again. The output is `cargo run`'s.
+#[test]
+fn a_boot_function_giving_the_state_and_a_task_runs() {
+    let (rawr, cargo) = both_printed("crossing-boot", "boot.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("boot message Loaded(7)\n1 view pad 0 <x Refresh:0> \"7\"")
+            && rawr.contains("1 message Refresh(false)\ntask message Loaded(7)"),
+        "{rawr}"
+    );
+}
+
+/// iced's system_information: `Task::map(Message::InformationReceived)`
+/// calls the variant on another thread, as iced's executor does, with a
+/// crate value native code made. The message is made where it is
+/// delivered, and the view reads the crate value's fields from a variant.
+/// The output is `cargo run`'s.
+#[test]
+fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
+    let (rawr, cargo) = both_printed("crossing-system", "system.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "boot message InformationReceived(Info { name: \"fixture\", cores: Some(4) })"
+        ) && rawr.ends_with("last view pad 0 <Refresh:0> \"fixture with 4 cores\""),
+        "{rawr}"
+    );
+}
+
+/// iced's text: a `Task<Result<Vec<Family>, Error>>` of a crate enum is
+/// mapped on another thread by `Result::ok`, which gives back a crate
+/// value through an arena of the call's own, and then by a variant, whose
+/// message is made where it is delivered. `and_then` takes the bounded
+/// generic `Task::done`, `listen_with` takes a closure where it takes a
+/// function pointer and calls it on another thread with crate values, and
+/// `pick(..)` takes a slice of the crate enum with
+/// `Family::to_string`, which borrows each option. The output is `cargo
+/// run`'s.
+#[test]
+fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
+    let (rawr, cargo) = both_printed("crossing-fonts", "fonts.rs", "Mono");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("boot message FamiliesListed([Monospace, Serif])\nheard Rescaled(2.0)")
+            && rawr.ends_with("last view pad 0 <Mono: *Mono|Serif> \"Mono at 2 in 7\""),
+        "{rawr}"
+    );
+}
+
 /// `rawr-import run` and `cargo run` of the fixture copied to `name` with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.
@@ -250,17 +303,22 @@ fn a_tooltip_with_a_crate_default_field_and_a_crate_style_runs() {
 /// iced's `text!`: a macro's `$crate::Alias::new(format!(..))`, where the
 /// alias passes its parameters on to a type, reaches the type's associated
 /// function, as a `text` function of the same name sits beside it, and a
-/// lazy iterator fills a column's `impl IntoIterator`. The output is
-/// `cargo run`'s.
+/// lazy iterator fills a column's `impl IntoIterator`, over a range as
+/// iced's text example's `column(sizes.map(..))` and over the state as its
+/// events example's `column(self.last.iter().map(..))`. The text is
+/// invariant in its lifetime, as iced's is, so each is made in the view's
+/// region and none at `'static`. The output is `cargo run`'s.
 #[test]
 fn a_macro_reaches_an_associated_function_through_an_alias() {
     let (rawr, cargo) = both_printed("crossing-text", "text.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 20 [Increment] count 0 of 3@50 pad 0 0+1@16 0+2@16 [Decrement]")
-            && rawr.contains(
-                "last view pad 20 [Increment] count 2 of 3@50 pad 0 2+1@16 2+2@16 [Decrement]"
-            ),
+        rawr.contains(
+            "1 view pad 20 [Increment] count 0 of 3@50 pad 0 0+1@16 0+2@16 pad 0 [Decrement]"
+        ) && rawr.contains(
+            "last view pad 20 [Increment] count 2 of 3@50 pad 0 2+1@16 2+2@16 \
+             pad 0 Increment@40 Increment@40 Increment@40 Decrement@40 [Decrement]"
+        ),
         "{rawr}"
     );
 }
@@ -337,6 +395,41 @@ fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
             && rawr.contains("task message Closed(7)")
             && rawr.contains("2 message Confirm(false)\nclose 7")
             && rawr.contains("last view pad 0 <Exit:0> \"7\""),
+        "{rawr}"
+    );
+}
+
+/// iced's exit, toast, game_of_life and modal: an array literal passed to
+/// `padding(impl Into<Padding>)` is the `[u16; 2]` or `[f32; 2]` of the
+/// `From` impl its elements fit, a range of floats fills a slider's
+/// `RangeInclusive<T>` at the `f64` or `f32` its value gives `T`, and
+/// `Some(color.into())` where a field takes `Option<Background>` converts
+/// through `Background`'s `From<Color>`, which the program never names.
+/// The output is `cargo run`'s.
+#[test]
+fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
+    let (rawr, cargo) = both_printed("crossing-conversions", "conversions.rs", "pair,slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("[pair 10x20 None/0] [one 4x4 None/0] [floats 1.5x2.5 None/0]")
+            && rawr.contains("2 message Timeout(30.0)")
+            && rawr.contains("1.0..=30.0@30.0/None 0.0..=1.0@0.5/None")
+            && rawr.contains("[dim 0x0 Some(Color(Color { r: 9, g: 0, b: 0 }))/0]"),
+        "{rawr}"
+    );
+}
+
+/// iced's table: `table(columns, &self.events)` takes a borrowed `Vec` as
+/// rows of `impl IntoIterator<Item = T>`, whose items are the `&Event` the
+/// columns' `|event: &Event|` closures take, so `T: Clone` holds of a
+/// script type that isn't `Clone`. The script's `Event` is also a name the
+/// runner's own code used. The output is `cargo run`'s.
+#[test]
+fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
+    let (rawr, cargo) = both_printed("crossing-table", "table.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 \"Events\" |Name|Time|Talk|45 min|Workshop|120 min|"),
         "{rawr}"
     );
 }

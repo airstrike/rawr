@@ -1,10 +1,20 @@
 ---
-// /todo: the work plan as a Gantt chart. Nothing links here and robots skip
-// it. The groups come from plan/gantt.json through src/lib/todo.ts. Bar length
-// is complexity, not time. Each group folds, and the chart rescales to the
-// groups that are open. Each row links its GitHub issues; a row with many
-// folds them behind a count. All of it works without JavaScript.
-import { EXAMPLES, GROUPS, REPO, UPDATED, VERSION, issueUrl, noteParts, type Row } from "../lib/todo.ts";
+// /todo: the work plan. Nothing links here and robots skip it. Five tabs,
+// each linkable as /todo#<tab>: the Gantt chart (the default), the changelog,
+// the TODO items, and two private documents, the decisions and their code.
+// The data comes from plan/ through src/lib/todo.ts; issues are named #N.
+//
+// Gantt: bar length is complexity, not time. Each group folds, and the chart
+// rescales to the groups that are open. Each row links its GitHub issues; a
+// row with many folds them behind a count.
+//
+// Without JavaScript the tabs switch through :target, and the TODO filters
+// are radio buttons. With it, a tab is <html data-tab>, so a switch doesn't
+// scroll. The private tabs need JavaScript: they fetch their HTML from the
+// Worker (/todo/private/<doc>), which asks for the password first. None of
+// their content is in this page or the site's build.
+import Text from "../components/todo/Text.astro";
+import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, UPDATED, VERSION, categories, issueUrl, parts, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
 const open = GROUPS.filter((g) => g.open).flatMap((g) => g.rows);
@@ -22,6 +32,16 @@ const count = (r: Row) => {
   const open = r.issues.filter((i) => i.state === "open").length;
   return `${r.issues.length} issues${open ? `, ${open} open` : ""}`;
 };
+const cats = categories(ITEMS);
+const openItems = ITEMS.filter((i) => i.state === "open").length;
+const TABS = [
+  { id: "gantt", name: "Gantt" },
+  { id: "changelog", name: "Changelog" },
+  { id: "todo", name: "TODO" },
+  { id: "decisions", name: "Decisions" },
+  { id: "code", name: "Code" },
+];
+const DOCS = { decisions: "Decisions", code: "Decision code" } as const;
 const tally = (g: (typeof GROUPS)[number]) => {
   const n = (s: Row["state"]) => g.rows.filter((r) => r.state === s).length;
   return [n("done") && `${n("done")} done`, n("now") && `${n("now")} in progress`, n("next") && `${n("next")} next`]
@@ -38,6 +58,15 @@ const tally = (g: (typeof GROUPS)[number]) => {
 <title>rawr work plan</title>
 <link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
 <link rel="stylesheet" href="https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300">
+<script is:inline>
+  // The tab, before the page paints: /todo#<tab>, else the chart (whose
+  // groups and rows keep their own anchors).
+  (() => {
+    const tabs = ["gantt", "changelog", "todo", "decisions", "code"];
+    const hash = decodeURIComponent(location.hash.slice(1));
+    document.documentElement.dataset.tab = tabs.includes(hash) ? hash : "gantt";
+  })();
+</script>
 <style is:inline>
   :root {
     --ink: #000;
@@ -51,6 +80,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
     --cols: 8;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
   html { background: var(--paper); color: var(--ink); }
   body {
     font-family: "Abitaro Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -136,6 +166,105 @@ const tally = (g: (typeof GROUPS)[number]) => {
     display: grid; grid-template-columns: 1fr 1fr; font-size: 12px; color: var(--quiet);
   }
   footer p + p { text-align: right; }
+  /* Tabs. With JavaScript, <html data-tab> picks the panel; without, :target does. */
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: 0 28px; border-bottom: 1px solid var(--rule);
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .tabs a {
+    padding: 14px 0 10px; color: var(--quiet); text-decoration: none;
+    border-bottom: 3px solid transparent; margin-bottom: -1px;
+  }
+  .tabs a:hover { color: var(--ink); }
+  .tabs a:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  .panel { display: none; }
+  :root:not([data-tab]) #gantt { display: block; }
+  :root:not([data-tab]) body:has(.panel:target) #gantt { display: none; }
+  :root:not([data-tab]) .panel:target { display: block; }
+  :root[data-tab="gantt"] [data-panel="gantt"], :root[data-tab="changelog"] [data-panel="changelog"], :root[data-tab="todo"] [data-panel="todo"],
+  :root[data-tab="decisions"] [data-panel="decisions"], :root[data-tab="code"] [data-panel="code"] { display: block; }
+  :root:not([data-tab]) body:not(:has(.panel:target)) .tabs a[href="#gantt"],
+  :root:not([data-tab]) body:has(#changelog:target) .tabs a[href="#changelog"],
+  :root:not([data-tab]) body:has(#todo:target) .tabs a[href="#todo"],
+  :root:not([data-tab]) body:has(#decisions:target) .tabs a[href="#decisions"],
+  :root:not([data-tab]) body:has(#code:target) .tabs a[href="#code"],
+  .tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--red); }
+  .lede { max-width: 46rem; padding: 20px 0; font-size: 15px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+  a.issue { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
+  a.issue:hover { border-bottom-color: currentColor; }
+
+  /* Changelog: one release a row, its version on the left. */
+  .release { display: grid; grid-template-columns: var(--name) minmax(0, 46rem); column-gap: 20px; padding: 18px 0 20px; border-top: 2px solid var(--rule); }
+  .release + .release { border-top-width: 1px; }
+  .release h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
+  .release .date { display: block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--quiet); text-transform: uppercase; letter-spacing: 0.08em; }
+  .release .say { margin-bottom: 10px; }
+  .release ul { list-style: none; }
+  .release li { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  .release li:last-child { border-bottom: 0; }
+  .release .refs { display: inline; margin-left: 6px; color: var(--quiet); }
+  .release .refs a { color: inherit; }
+
+  /* TODO: radio filters, then the categories. */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 14px 0; border-bottom: 1px solid var(--rule); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .filters input { position: absolute; opacity: 0; pointer-events: none; }
+  .filters label { cursor: pointer; color: var(--quiet); border-bottom: 3px solid transparent; padding-bottom: 2px; }
+  .filters input:checked + label { color: var(--ink); border-bottom-color: var(--red); }
+  .filters input:focus-visible + label { outline: 2px solid var(--red); outline-offset: 2px; }
+  :has(> #f-open:checked) ~ .cat .item.closed, :has(> #f-closed:checked) ~ .cat .item.open,
+  :has(> #f-open:checked) ~ .cat:not(:has(.item.open)), :has(> #f-closed:checked) ~ .cat:not(:has(.item.closed)) { display: none; }
+  .cat > summary {
+    list-style: none; cursor: pointer; display: grid; grid-template-columns: 1fr auto; column-gap: 20px; align-items: baseline;
+    border-top: 2px solid var(--rule); padding: 9px 0 7px; margin-top: 22px;
+  }
+  details.cat[open] > summary .c::after { content: "−"; }
+  .item { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; column-gap: 20px; padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  .item .n { font-weight: 700; }
+  .item .n a { color: inherit; text-decoration: none; }
+  .item .n a:hover { color: var(--red); }
+  .item.closed .n, .item.closed .what { color: var(--quiet); }
+  .item .rel { font-size: 12px; color: var(--quiet); }
+
+  /* The private documents. */
+  .gate { padding: 28px 0; max-width: 28rem; }
+  .gate p { color: var(--quiet); margin-bottom: 14px; }
+  .gate form { display: flex; gap: 0; }
+  .gate input {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 10px 12px;
+    border: 2px solid var(--ink); border-right: 0; border-radius: 0; background: var(--paper); color: var(--ink);
+  }
+  .gate input:focus { outline: none; border-color: var(--red); }
+  button {
+    font: inherit; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 10px 16px; border: 2px solid var(--ink); border-radius: 0; background: var(--ink); color: var(--paper); cursor: pointer;
+  }
+  button:hover { background: var(--red); border-color: var(--red); }
+  button:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  button.quiet { background: transparent; color: var(--ink); border-width: 1px; padding: 6px 10px; }
+  button.quiet:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .gate .msg { margin: 10px 0 0; color: var(--red); min-height: 1.35em; }
+  .docbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 13px; color: var(--quiet); }
+  .docbar .grow { flex: 1; }
+  .doc { max-width: 52rem; padding-top: 8px; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+  .doc h1 { font-size: 40px; letter-spacing: -0.04em; line-height: 1; margin: 24px 0 16px; }
+  .doc h2 { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; margin: 40px 0 10px; padding-top: 10px; border-top: 2px solid var(--rule); scroll-margin-top: 8px; }
+  .doc h3 { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin: 22px 0 6px; }
+  .doc h4, .doc h5, .doc h6 { font-size: 14px; font-weight: 700; margin: 18px 0 4px; }
+  .doc p, .doc ul, .doc ol, .doc pre, .doc table, .doc blockquote { margin: 0 0 12px; }
+  .doc ul, .doc ol { padding-left: 1.4em; }
+  .doc li + li { margin-top: 3px; }
+  .doc a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
+  .doc a:hover { border-bottom-color: currentColor; }
+  .doc strong { font-weight: 700; }
+  .doc blockquote { border-left: 3px solid var(--red); padding-left: 14px; color: var(--quiet); }
+  .doc pre { overflow-x: auto; padding: 12px 14px; background: #f4f4f4; font-size: 13px; line-height: 1.45; }
+  .doc pre code { font-size: inherit; overflow-wrap: normal; }
+  .doc :not(pre) > code { background: #f4f4f4; padding: 0 3px; }
+  .doc table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 13px; }
+  .doc th, .doc td { text-align: left; vertical-align: top; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); min-width: 8rem; }
+  .doc th { border-bottom: 2px solid var(--rule); font-weight: 700; }
+  .doc hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
   @media (max-width: 1100px) {
     :root { --note: 0px; }
     .row, .axis { grid-template-columns: var(--name) 1fr; }
@@ -143,6 +272,11 @@ const tally = (g: (typeof GROUPS)[number]) => {
   }
   @media (max-width: 640px) {
     body { padding: 24px 16px 64px; }
+    .release { grid-template-columns: 1fr; row-gap: 10px; }
+    .item { grid-template-columns: 3.6rem minmax(0, 1fr); }
+    .item .rel { grid-column: 2; }
+    .tabs { gap: 0 14px; font-size: 11px; letter-spacing: 0.04em; }
+    .doc h1 { font-size: 30px; }
     header { grid-template-columns: 1fr; }
     .meta { text-align: left; margin-top: 16px; }
     .figures { grid-template-columns: repeat(2, 1fr); }
@@ -168,48 +302,122 @@ const tally = (g: (typeof GROUPS)[number]) => {
   <p class="meta">Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
 </header>
 
-<div class="figures">
-  <div><span class="n">{counts.done}</span><span class="k">Done</span></div>
-  <div><span class="n red">{counts.now}</span><span class="k">In progress</span></div>
-  <div><span class="n">{counts.next}</span><span class="k">Next, of {all}</span></div>
-  <div><span class="n">{EXAMPLES.running}/{EXAMPLES.total}</span><span class="k">iced examples, no rawr-iced</span></div>
-</div>
+<nav class="tabs" aria-label="Work plan">
+  {TABS.map((t) => <a href={`#${t.id}`} data-tab={t.id}>{t.name}</a>)}
+</nav>
 
-<div class="legend">
-  <span><i class="key done"></i>{label.done}</span>
-  <span><i class="key now"></i>{label.now}</span>
-  <span><i class="key next"></i>{label.next}</span>
-  <span class="say">Bar length is complexity, how much code changes. It is not time. The scale fits the open groups.</span>
-</div>
+<section class="panel" id="gantt" data-panel="gantt" aria-label="Gantt">
+  <div class="figures">
+    <div><span class="n">{counts.done}</span><span class="k">Done</span></div>
+    <div><span class="n red">{counts.now}</span><span class="k">In progress</span></div>
+    <div><span class="n">{counts.next}</span><span class="k">Next, of {all}</span></div>
+    <div><span class="n">{EXAMPLES.running}/{EXAMPLES.total}</span><span class="k">iced examples, no rawr-iced</span></div>
+  </div>
 
-<div class="axis" aria-hidden="true">
-  <span class="pad-l"></span>
-  <div class="scale" id="scale">{ticks.map((t) => <span style={`left:${pct(t - lo)}`}>{t}</span>)}</div>
-  <span class="pad-r"></span>
-</div>
+  <div class="legend">
+    <span><i class="key done"></i>{label.done}</span>
+    <span><i class="key now"></i>{label.now}</span>
+    <span><i class="key next"></i>{label.next}</span>
+    <span class="say">Bar length is complexity, how much code changes. It is not time. The scale fits the open groups.</span>
+  </div>
 
-{GROUPS.map((g) => (
-  <details class="group" open={g.open} id={g.id}>
-    <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
-    {g.rows.map((r) => (
-      <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
-        <div>
-          <span class="name">{r.name}</span>
-          {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
-          {r.issues.length > 4 && (
-            <details class="refs">
-              <summary>{count(r)}</summary>
-              <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
-            </details>
-          )}
+  <div class="axis" aria-hidden="true">
+    <span class="pad-l"></span>
+    <div class="scale" id="scale">{ticks.map((t) => <span style={`left:${pct(t - lo)}`}>{t}</span>)}</div>
+    <span class="pad-r"></span>
+  </div>
+
+  {GROUPS.map((g) => (
+    <details class="group" open={g.open} id={g.id}>
+      <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
+      {g.rows.map((r) => (
+        <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
+          <div>
+            <span class="name">{r.name}</span>
+            {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
+            {r.issues.length > 4 && (
+              <details class="refs">
+                <summary>{count(r)}</summary>
+                <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
+              </details>
+            )}
+          </div>
+          <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
+            <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
+          </div>
+          <span class="note"><Text text={r.note} /></span>
         </div>
-        <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
-          <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
-        </div>
-        <span class="note">{noteParts(r).map((p) => (p.issue ? <a href={issueUrl(p.issue)}>{p.text}</a> : p.text))}</span>
+      ))}
+    </details>
+  ))}
+</section>
+
+<section class="panel" id="changelog" data-panel="changelog" aria-label="Changelog">
+  {CHANGELOG.intro.map((p) => <p class="lede"><Text text={p} /></p>)}
+  <article class="release">
+    <div><h2>Unreleased</h2></div>
+    <div>
+      {CHANGELOG.unreleased.notes.map((n) => <p class="say"><Text text={n} /></p>)}
+      <ul>
+        {CHANGELOG.unreleased.entries.map((e) => (
+          <li><Text text={e.text} />{(e.issues.length > 0 || e.refs) && <span class="refs">({e.issues.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}{e.refs && <>{e.issues.length > 0 && "; "}part of {e.refs.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}</>})</span>}</li>
+        ))}
+      </ul>
+    </div>
+  </article>
+  {CHANGELOG.releases.map((r) => (
+    <article class="release" id={`v${r.version}`}>
+      <div><h2>{r.version}</h2><span class="date">{r.date}</span></div>
+      <div>
+        {r.lede && <p class="say"><Text text={r.lede} /></p>}
+        <ul>
+          {r.entries.map((e) => (
+            <li><Text text={e.text} />{(e.issues.length > 0 || e.refs) && <span class="refs">({e.issues.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}{e.refs && <>{e.issues.length > 0 && "; "}part of {e.refs.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}</>})</span>}</li>
+          ))}
+        </ul>
       </div>
-    ))}
-  </details>
+    </article>
+  ))}
+</section>
+
+<section class="panel" id="todo" data-panel="todo" aria-label="TODO">
+  <div class="filters" role="radiogroup" aria-label="Show">
+    <input type="radio" name="state" id="f-open" checked><label for="f-open">Open {openItems}</label>
+    <input type="radio" name="state" id="f-closed"><label for="f-closed">Closed {ITEMS.length - openItems}</label>
+    <input type="radio" name="state" id="f-all"><label for="f-all">All {ITEMS.length}</label>
+  </div>
+  {cats.map((c) => (
+    <details class="cat" open id={c.slug}>
+      <summary><span class="t"><Text text={c.name} /></span><span class="c">{[c.open && `${c.open} open`, c.items.length - c.open && `${c.items.length - c.open} closed`].filter(Boolean).join(" · ")}</span></summary>
+      {c.items.map((i) => (
+        <div class={`item ${i.state}`}>
+          <span class="n"><a href={issueUrl(i.issue)} title={i.state === "closed" ? "Closed" : "Open"}>#{i.issue}</a></span>
+          <span class="what"><Text text={i.title} /></span>
+          {i.release && <span class="rel">{i.release}</span>}
+        </div>
+      ))}
+    </details>
+  ))}
+</section>
+
+{(["decisions", "code"] as const).map((doc) => (
+  <section class="panel private" id={doc} data-panel={doc} data-doc={doc} aria-label={DOCS[doc]}>
+    <div class="gate">
+      <noscript><p>This tab is private. It needs JavaScript and the password.</p></noscript>
+      <p class="state" hidden>Loading…</p>
+      <form class="unlock" hidden>
+        <input type="password" name="password" aria-label="Password" placeholder="Password" autocomplete="current-password" required>
+        <button type="submit">Unlock</button>
+      </form>
+      <p class="msg" aria-live="polite"></p>
+    </div>
+    <div class="docbar" hidden>
+      <span class="grow">{DOCS[doc]}, private</span>
+      {doc === "decisions" && <button type="button" class="quiet latest">Latest</button>}
+      <button type="button" class="quiet lock">Lock</button>
+    </div>
+    <article class="doc" hidden></article>
+  </section>
 ))}
 
 <footer>
@@ -245,6 +453,128 @@ const tally = (g: (typeof GROUPS)[number]) => {
     };
     for (const d of document.querySelectorAll("details.group")) d.addEventListener("toggle", fit);
     fit();
+  })();
+</script>
+
+<script is:inline>
+  // Tabs: a click or a back/forward picks <html data-tab>, keeping the
+  // scroll. A private tab fetches its document once, when first opened.
+  (() => {
+    const root = document.documentElement;
+    const tabs = ["gantt", "changelog", "todo", "decisions", "code"];
+    const links = [...document.querySelectorAll(".tabs a")];
+    const docs = new Map();
+    // The panels' ids serve :target without JavaScript. Here they would make
+    // the browser scroll to a panel opened by its link, so they go.
+    for (const panel of document.querySelectorAll("[data-panel]")) panel.removeAttribute("id");
+    const show = (tab) => {
+      root.dataset.tab = tab;
+      for (const a of links) {
+        if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
+        else a.removeAttribute("aria-current");
+      }
+      const panel = document.querySelector(`[data-panel="${tab}"]`);
+      if (panel.dataset.doc) open(panel);
+    };
+    for (const a of links) {
+      a.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button) return;
+        event.preventDefault();
+        if (root.dataset.tab !== a.dataset.tab) history.pushState(null, "", `#${a.dataset.tab}`);
+        show(a.dataset.tab);
+      });
+    }
+    const fromHash = () => {
+      const hash = decodeURIComponent(location.hash.slice(1));
+      show(tabs.includes(hash) ? hash : "gantt");
+    };
+    addEventListener("popstate", fromHash);
+    addEventListener("hashchange", fromHash);
+
+    const parts = (panel) => ({
+      gate: panel.querySelector(".gate"),
+      state: panel.querySelector(".state"),
+      form: panel.querySelector("form"),
+      msg: panel.querySelector(".msg"),
+      bar: panel.querySelector(".docbar"),
+      doc: panel.querySelector(".doc"),
+    });
+    const locked = (panel, message = "") => {
+      const p = parts(panel);
+      docs.delete(panel.dataset.doc);
+      p.doc.replaceChildren();
+      p.doc.hidden = p.bar.hidden = p.state.hidden = true;
+      p.gate.hidden = p.form.hidden = false;
+      p.msg.textContent = message;
+    };
+    async function open(panel) {
+      if (docs.has(panel.dataset.doc)) return;
+      const p = parts(panel);
+      docs.set(panel.dataset.doc, "loading");
+      p.gate.hidden = p.state.hidden = false;
+      p.form.hidden = true;
+      p.msg.textContent = "";
+      let response;
+      try {
+        response = await fetch(`/todo/private/${panel.dataset.doc}`, { credentials: "same-origin", cache: "no-store" });
+      } catch {
+        docs.delete(panel.dataset.doc);
+        p.state.hidden = true;
+        p.msg.textContent = "The document could not be loaded. Check the connection and open the tab again.";
+        return;
+      }
+      if (response.status === 401) return locked(panel);
+      if (!response.ok) {
+        docs.delete(panel.dataset.doc);
+        p.state.hidden = true;
+        p.msg.textContent = (await response.text()) || `The server answered ${response.status}.`;
+        return;
+      }
+      p.doc.innerHTML = await response.text();
+      docs.set(panel.dataset.doc, "open");
+      p.gate.hidden = true;
+      p.bar.hidden = p.doc.hidden = false;
+    }
+    for (const panel of document.querySelectorAll(".panel.private")) {
+      const p = parts(panel);
+      p.form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const password = p.form.password.value.replace(/\r?\n$/, "");
+        p.msg.textContent = "";
+        let response;
+        try {
+          response = await fetch("/todo/unlock", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ password }),
+            credentials: "same-origin",
+          });
+        } catch {
+          p.msg.textContent = "The server could not be reached.";
+          return;
+        }
+        if (response.status === 204) {
+          p.form.reset();
+          for (const other of document.querySelectorAll(".panel.private")) if (docs.get(other.dataset.doc) !== "open") docs.delete(other.dataset.doc);
+          return open(panel);
+        }
+        if (response.status === 429) {
+          const wait = response.headers.get("retry-after");
+          p.msg.textContent = `Too many tries. Try again in ${wait ?? "a while"} s.`;
+          return;
+        }
+        p.msg.textContent = response.status === 403 ? "That is not the password." : (await response.text()) || `The server answered ${response.status}.`;
+      });
+      p.bar.querySelector(".lock").addEventListener("click", async () => {
+        await fetch("/todo/lock", { method: "POST", credentials: "same-origin" }).catch(() => null);
+        for (const other of document.querySelectorAll(".panel.private")) locked(other);
+      });
+      p.bar.querySelector(".latest")?.addEventListener("click", () => {
+        const heads = p.doc.querySelectorAll("h2");
+        heads[heads.length - 1]?.scrollIntoView();
+      });
+    }
+    fromHash();
   })();
 </script>
 </body>

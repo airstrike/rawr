@@ -266,6 +266,18 @@ export function shortTitle(text) {
 }
 
 export const tRefs = (text) => [...new Set(text.match(/\bT\d{3,}\b/g) ?? [])];
+// The issues a text names as #N. `r#for` and `&#123;` are not issues.
+export const ISSUE_REF = /(?<![\w&])#(\d+)\b/g;
+export const issueRefs = (text) => [...new Set([...text.matchAll(ISSUE_REF)].map((m) => +m[1]))];
+// Each T number written as its issue (#N), through the items. A T number no
+// item records is an error.
+export const tAsIssues = (text, items) => text
+  .replace(/\b(T\d{3,}) \(#(\d+)\)/g, (m, t, n) => (items.find((i) => i.t === t)?.issue === +n ? t : m))
+  .replace(/\bT\d{3,}\b/g, (t) => {
+  const item = items.find((i) => i.t === t);
+  if (!item) throw new Error(`${t} is no recorded item: ${text.slice(0, 120)}`);
+  return `#${item.issue}`;
+});
 export const dRefs = (text) => [...new Set((text.match(/\bD\d{3,}/g) ?? []))];
 // The commits of the first "Done in `abc1234`" in the text.
 export const doneCommits = (text) => {
@@ -277,14 +289,22 @@ export const doneCommits = (text) => {
   return [];
 };
 
+// Local paths become relative ones: ../<project>/ or ~.
+export const withoutLocalPaths = (text) => text
+  .replace(/\/(?:Users|home)\/[^/\s`]+\/projects\//g, "../")
+  .replace(/\/(?:Users|home)\/[^/\s`]+/g, "~")
+  .replace(/~\/projects\//g, "../");
+// Tokens and keys: GitHub, OpenAI-style, AWS, Slack, Discord bot tokens, PEM keys.
+export const SECRET = /\bgh[pousr]_[A-Za-z0-9]{20,}|\bsk-[A-Za-z0-9-]{20,}|\bAKIA[0-9A-Z]{16}\b|\bxox[bpas]-[A-Za-z0-9-]*|\b[MN][A-Za-z\d]{23,25}\.[\w-]{6}\.[\w-]{27,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+
+// The project's old name, which only the licenses and the README may name.
+export const OLD_NAME = /rhai/gi;
+
 // The repository is public: no local paths, no tokens, never the old name.
 export function publicText(text) {
-  const out = text
-    .replace(/\/(?:Users|home)\/[^/\s`]+\/projects\//g, "../")
-    .replace(/\/(?:Users|home)\/[^/\s`]+/g, "~")
-    .replace(/~\/projects\//g, "../");
-  if (/rhai/i.test(out)) throw new Error(`text names the old project: ${out.slice(0, 120)}`);
-  if (/\bgh[pousr]_[A-Za-z0-9]{20,}|\bsk-[A-Za-z0-9-]{20,}|\bAKIA[0-9A-Z]{16}\b|\bxox[bpas]-/.test(out)) {
+  const out = withoutLocalPaths(text);
+  if (new RegExp(OLD_NAME.source, "i").test(out)) throw new Error(`text names the old project: ${out.slice(0, 120)}`);
+  if (new RegExp(SECRET.source).test(out)) {
     throw new Error(`text looks like it holds a secret: ${out.slice(0, 120)}`);
   }
   return out;
@@ -490,23 +510,36 @@ export function changelogMarkdown(c) {
   return out.join("\n");
 }
 
+// The /todo page's data: the chart, the changelog and the items. Issues are
+// named as #N throughout, so a T number becomes its issue.
 export function siteData(plan) {
   const items = new Map(plan.items.items.map((i) => [i.issue, i]));
-  const ts = new Map(plan.items.items.map((i) => [i.t, i.issue]));
+  const text = (t) => tAsIssues(t, plan.items.items);
+  const title = (i) => text(i.title.replace(/^T\d{3,}: /, ""));
+  const entry = (e) => ({ text: text(e.text), issues: e.issues, ...(e.refs?.length ? { refs: e.refs } : {}) });
   const { updated, version, examples, groups } = plan.gantt;
+  const c = plan.changelog;
   return {
     repo: plan.project.repo,
     updated,
     version,
     examples,
+    changelog: {
+      intro: c.intro.map(text),
+      unreleased: { notes: c.unreleased.notes.map(text), entries: c.unreleased.entries.map(entry) },
+      releases: c.releases.map((r) => ({ version: r.version, date: r.date, ...(r.lede ? { lede: text(r.lede) } : {}), entries: r.entries.map(entry) })),
+    },
+    items: plan.items.items.map((i) => ({
+      issue: i.issue, title: title(i), state: i.state, category: text(i.category), ...(i.release ? { release: i.release } : {}),
+    })),
     groups: groups.map((g) => ({
       ...g,
       rows: g.rows.map((r) => ({
         ...r,
-        refs: Object.fromEntries(tRefs(r.note).filter((t) => ts.has(t)).map((t) => [t, ts.get(t)])),
+        note: text(r.note),
         issues: r.issues.map((n) => {
           const i = items.get(n);
-          return { number: n, t: i?.t ?? null, title: i?.title ?? `#${n}`, state: i?.state ?? "open" };
+          return { number: n, title: i ? title(i) : `#${n}`, state: i?.state ?? "open" };
         }),
       })),
     })),
@@ -597,6 +630,7 @@ export function drift(plan, todo, issues, projectItems) {
       if (rowIds.has(r.id)) say(`chart: ${g.id} has row id "${r.id}" twice`);
       rowIds.add(r.id);
       for (const t of tRefs(r.note)) if (!tExists(t)) say(`chart: ${g.id}/${r.id} names ${t}, which doesn't exist`);
+      for (const n of issueRefs(r.note)) if (!byIssue(plan, n)) say(`chart: ${g.id}/${r.id} names #${n}, which is no item's issue`);
       for (const n of r.issues) {
         const item = byIssue(plan, n);
         if (!item) say(`chart: ${g.id}/${r.id} lists #${n}, which is no item's issue`);
@@ -727,6 +761,12 @@ function checkRefs(ctx, text, self) {
   for (const t of tRefs(text)) if (t !== self && !byT(ctx.plan, t) && !todoItems.has(t)) fail(`the text names ${t}, which doesn't exist`);
 }
 
+// A chart note names issues as #N, each an item's.
+function checkNote(ctx, text) {
+  checkRefs(ctx, text);
+  for (const n of issueRefs(text)) if (!byIssue(ctx.plan, n)) fail(`the note names #${n}, which is no item's issue`);
+}
+
 function itemFor(ctx, op) {
   const item = byT(ctx.plan, op.t) ?? fail(`${op.t} isn't recorded`);
   if (item.issue !== op.issue) fail(`${op.t} is #${item.issue}, not #${op.issue}`);
@@ -848,7 +888,7 @@ const OPS = {
     const line = ctx.todo.parsed.items.get(op.t) ?? fail(`${op.t} isn't in TODO.md`);
     // "Done in `abc` (D640)." as the file's other done items say it.
     const said = (commit) => (op.note?.startsWith("(") ? `Done in ${commit} ${op.note}.` : `Done in ${commit}.${op.note ? ` ${op.note}` : ""}`);
-    ctx.comment(item.issue, said(op.commit));
+    ctx.comment(item.issue, op.comment ? `${said(op.commit)}\n\n${publicText(op.comment)}` : said(op.commit));
     ctx.close(item.issue);
     ctx.todo.set({ ...line, done: true, text: `${said(`\`${op.commit}\``)} ${line.text}` });
     Object.assign(item, { state: "closed", commit: op.commit });
@@ -882,7 +922,7 @@ const OPS = {
     const { group, row } = findRow(ctx.plan, op) ?? fail(`no chart group "${op.group}"`);
     if (!row) fail(`group "${op.group}" has no row "${op.row}"`);
     for (const key of ["name", "start", "size", "state", "note"]) if (key in op) row[key] = op[key];
-    if ("note" in op) checkRefs(ctx, op.note);
+    if ("note" in op) checkNote(ctx, op.note);
     if (op.issues) rowIssues(ctx, group, row, op.issues);
     for (const item of ctx.plan.items.items) if (item.gantt?.group === group.id && item.gantt.row === row.id) ctx.sync(item);
     ctx.plan.gantt.updated = today();
@@ -892,7 +932,7 @@ const OPS = {
   "add-row"(ctx, op) {
     const group = ctx.plan.gantt.groups.find((g) => g.id === op.group) ?? fail(`no chart group "${op.group}"`);
     if (group.rows.some((r) => r.id === op.row.id)) fail(`${op.group} already has a row "${op.row.id}"`);
-    checkRefs(ctx, op.row.note);
+    checkNote(ctx, op.row.note);
     const at = op.after ? group.rows.findIndex((r) => r.id === op.after) + 1 || fail(`no row "${op.after}"`) : group.rows.length;
     const row = { ...op.row, issues: [] };
     group.rows.splice(at, 0, row);
@@ -925,7 +965,7 @@ const OPS = {
     const group = { ...op.group, rows: [] };
     groups.splice(at, 0, group);
     for (const row of op.group.rows) {
-      checkRefs(ctx, row.note);
+      checkNote(ctx, row.note);
       const copy = { ...row, issues: [] };
       group.rows.push(copy);
       rowIssues(ctx, group, copy, row.issues);
@@ -1019,7 +1059,8 @@ const OPS = {
     }
     for (const n of new Set(entries.flatMap((e) => e.issues))) {
       const item = byIssue(ctx.plan, n);
-      ctx.comment(n, `Shipped in ${version}.`);
+      const shipped = entries.filter((e) => e.issues.includes(n)).map((e) => `- ${e.text}`).join("\n");
+      ctx.comment(n, shipped ? `Shipped in ${version}:\n\n${shipped}` : `Shipped in ${version}.`);
       if (item.state === "open") {
         ctx.close(n);
         const line = ctx.todo.parsed.items.get(item.t);
@@ -1029,7 +1070,10 @@ const OPS = {
       item.release = version;
       ctx.sync(item);
     }
-    for (const n of new Set(entries.flatMap((e) => e.refs ?? []))) ctx.comment(n, `Part of this shipped in ${version}.`);
+    for (const n of new Set(entries.flatMap((e) => e.refs ?? []))) {
+      const part = entries.filter((e) => (e.refs ?? []).includes(n)).map((e) => `- ${e.text}`).join("\n");
+      ctx.comment(n, `Part of this shipped in ${version}:\n\n${part}`);
+    }
     c.releases.unshift({ version, date, ...(op.lede ? { lede: op.lede } : {}), entries });
     c.unreleased.entries = [];
     Object.assign(ctx.plan.gantt, { version, updated: date });

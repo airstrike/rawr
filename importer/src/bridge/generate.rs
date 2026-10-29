@@ -133,6 +133,41 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
+/// The inputs of a script function native code calls on a thread with no
+/// arena for the native values among them, as iced's executor calls
+/// `Message::Loaded` for `Task::map`. When they are `Send`, the call is
+/// made on the owner thread where its value is first used
+/// (`Proxy::deferred`); else it fails there, by method resolution on a
+/// concrete `T`.
+#[allow(dead_code)]
+struct DeferProbe<T>(std::cell::Cell<Option<T>>);
+
+#[allow(dead_code)]
+trait DeferSend<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
+}
+
+impl<T: Send + 'static> DeferSend<T> for DeferProbe<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy> {
+        let mut inputs = Some(self.0.take()?);
+        Some(__rawr_internal::crossing::Proxy::deferred(move || {
+            arena_access(|_| ())?;
+            inputs.take().map(call)
+        }))
+    }
+}
+
+#[allow(dead_code)]
+trait DeferNot<T> {
+    fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
+}
+
+impl<T> DeferNot<T> for &DeferProbe<T> {
+    fn defer(&self, _: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy> {
+        None
+    }
+}
+
 fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(ToString::to_string)
 }
@@ -340,6 +375,86 @@ thread_local! {
 #[allow(dead_code)]
 fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
     __rawr_internal::island::lend::lend(arena, call)
+}
+
+/// The epochs of the arenas [`CallArena`] made, while each lives.
+static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec::new());
+
+/// An arena for one call on a thread that has none, as iced's executor
+/// calls `Task::map`'s function: the native values the call takes and gives
+/// move through it, and it ends with the call. A call that only moves its
+/// values, as `Result::ok` does, needs nothing of the owner's arena. A value
+/// the call keeps past its end, in a script value it gives, can't reach the
+/// owner's arena, so the call fails there and says so.
+#[allow(dead_code)]
+struct CallArena(Option<[u8; 32]>);
+
+#[allow(dead_code)]
+impl CallArena {
+    fn enter() -> Self {
+        if arena_access(|_| ()).is_some() {
+            return Self(None);
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut epoch = [0xca; 32];
+        epoch[..8].copy_from_slice(
+            &NEXT
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .to_le_bytes(),
+        );
+        let installed = NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
+            Ok(mut arena) if arena.is_none() => {
+                *arena = Some(Arena::new(epoch));
+                true
+            }
+            _ => false,
+        });
+        if !installed {
+            return Self(None);
+        }
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(epoch);
+        Self(Some(epoch))
+    }
+}
+
+impl Drop for CallArena {
+    fn drop(&mut self) {
+        let Some(epoch) = self.0 else {
+            return;
+        };
+        // What the call let go of is freed; what is left, a handle still
+        // holds.
+        let kept = NATIVE_ARENA.with(|cell| {
+            let mut arena = cell.borrow_mut().take()?;
+            arena.release_dropped();
+            let slot = arena.slots.iter().find(|slot| slot.value.is_some())?;
+            Some(
+                slot.debug
+                    .zip(slot.value.as_deref())
+                    .and_then(|(debug, value)| debug(value))
+                    .map(|text| format!(", {text},"))
+                    .unwrap_or_default(),
+            )
+        });
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|live| *live != epoch);
+        RELEASES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(released, ..)| *released != epoch);
+        if let Some(kept) = kept
+            && !std::thread::panicking()
+        {
+            panic!(
+                "rawr: a script function native code called on a thread with no arena kept a native value it was given{kept} past the call, which Rawr can't hand to the owner's thread"
+            );
+        }
+    }
 }
 
 /// `call` with this thread's arena: the one in its cell, or else the one a
@@ -841,19 +956,37 @@ impl Arena {
         for (handle, value) in restores {
             self.restore(handle, value);
         }
+        // Another live arena's releases wait for it: the owner's for the
+        // owner, and a call arena's for that call (`CallArena`). Those of a
+        // past program's arena are dropped.
+        let live = |epoch: &[u8; 32]| {
+            CALL_EPOCHS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(epoch)
+        };
+        let call = live(&self.epoch);
         loop {
-            let batch = std::mem::take(
-                &mut *RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
+            let batch = {
+                let mut queued = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (mine, others) = std::mem::take(&mut *queued)
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|(epoch, ..)| *epoch == self.epoch);
+                *queued = others;
+                mine
+            };
+            if !call {
+                RELEASES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .retain(|(epoch, ..)| live(epoch));
+            }
             if batch.is_empty() {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            for (epoch, slot, generation) in batch {
-                if epoch != self.epoch {
-                    continue;
-                }
+            for (_, slot, generation) in batch {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
                 };
@@ -1590,11 +1723,56 @@ fn attest_input(
     value: Dynamic,
     witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
 ) -> Result<Dynamic, Error> {
-    if let (Some(Some(witness)), Some(handle)) = (
-        witness,
-        value.read_lock::<NativeHandle>().map(|handle| handle.clone()),
-    ) {
+    match witness {
+        Some(Some(witness)) => attest_nested(arena, value, witness),
+        _ => Ok(value),
+    }
+}
+
+/// `value` with each native value in it attested, as its place in
+/// `witness` gives: inside an `Option`, a `Result` or an array too, as the
+/// `Vec<Family>` of iced's `Result<Vec<Family>, Error>` is.
+#[allow(dead_code)]
+fn attest_nested(
+    arena: &mut Arena,
+    mut value: Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+) -> Result<Dynamic, Error> {
+    if let Some(handle) = value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
         arena.attest(handle, witness.clone())?;
+        return Ok(value);
+    }
+    if __rawr_internal::option::is(&value) {
+        return Ok(match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {
+            Some(inner) => match witness.argument_witness(0) {
+                Some(element) => __rawr_internal::option::some(attest_nested(arena, inner, &element)?),
+                None => __rawr_internal::option::some(inner),
+            },
+            None => __rawr_internal::option::none(),
+        });
+    }
+    if __rawr_internal::result::is(&value) {
+        return Ok(match __rawr_internal::result::take(&mut value).ok_or(Error::TypeMismatch)? {
+            Ok(inner) => __rawr_internal::result::ok(match witness.argument_witness(0) {
+                Some(ok) => attest_nested(arena, inner, &ok)?,
+                None => inner,
+            }),
+            Err(inner) => __rawr_internal::result::err(match witness.argument_witness(1) {
+                Some(err) => attest_nested(arena, inner, &err)?,
+                None => inner,
+            }),
+        });
+    }
+    if value.is_array() {
+        let Some(element) = witness.argument_witness(0) else {
+            return Ok(value);
+        };
+        let items = value.into_array().map_err(|_| Error::TypeMismatch)?;
+        return items
+            .into_iter()
+            .map(|item| attest_nested(arena, item, &element))
+            .collect::<Result<Vec<_>, Error>>()
+            .map(Dynamic::from_array);
     }
     Ok(value)
 }
@@ -2598,18 +2776,20 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
 }
 
 /// What the protocol thread waits for: the parent's next frame, or a call
-/// from the program's native `main` into marked code (D501).
-enum Event {
+/// from the program's native `main` into marked code (D501). Its name is
+/// one no script type takes, since a script type's proxy is declared at the
+/// crate root beside it (`table`'s `Event`).
+enum __RawrProtocolEvent {
     Frame(std::io::Result<(u8, Vec<u8>)>),
     Call(__rawr_internal::island::Call),
 }
 
 /// The parent's next frame, answering the native calls that come first.
-fn next_frame(events: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<(u8, Vec<u8>)> {
+fn next_frame(events: &std::sync::mpsc::Receiver<__RawrProtocolEvent>) -> std::io::Result<(u8, Vec<u8>)> {
     loop {
         match events.recv() {
-            Ok(Event::Frame(frame)) => return frame,
-            Ok(Event::Call(call)) => call.answer(),
+            Ok(__RawrProtocolEvent::Frame(frame)) => return frame,
+            Ok(__RawrProtocolEvent::Call(call)) => call.answer(),
             Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
         }
     }
@@ -2662,7 +2842,7 @@ fn admitted() {
 /// restarts the program with it.
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
-    received: std::sync::mpsc::Receiver<Event>,
+    received: std::sync::mpsc::Receiver<__RawrProtocolEvent>,
     mut key: [u8; 32],
     mut live: Option<Live>,
 ) {
@@ -2801,13 +2981,13 @@ fn run_protocol(
     let mut prepared = false;
     let mut admitted = false;
     let mut first = Some(first);
-    let (events, received) = std::sync::mpsc::channel::<Event>();
+    let (events, received) = std::sync::mpsc::channel::<__RawrProtocolEvent>();
     let mut reader = stream.try_clone()?;
     let frames = events.clone();
     std::thread::spawn(move || loop {
         let frame = receive_frame(&mut reader);
         let end = frame.is_err();
-        if frames.send(Event::Frame(frame)).is_err() || end {
+        if frames.send(__RawrProtocolEvent::Frame(frame)).is_err() || end {
             break;
         }
     });
@@ -2997,7 +3177,7 @@ fn run_protocol(
                 }
                 let calls = events.clone();
                 let forward = move |call| {
-                    let _ = calls.send(Event::Call(call));
+                    let _ = calls.send(__RawrProtocolEvent::Call(call));
                 };
                 let started = match &mut program {
                     Some(program) => __rawr_profile::run(program, forward),
@@ -5767,6 +5947,7 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             convert::Type::Sequence {
                 element,
                 owned: true,
+                length: None,
             } => element,
             ty => ty,
         };
@@ -6915,7 +7096,14 @@ fn render_anchored_opening(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
-    if !functions.is_empty() || !mappers.is_empty() {
+    // A script closure, as `table::column(header, |event| ..)` takes with
+    // its `&str` header, is made by the call's own slot, outside this path.
+    if !functions.is_empty()
+        || !mappers.is_empty()
+        || signature.parameters().iter().any(|parameter| {
+            parameter.kind() == crate::classify::representability::signature::Kind::Callable
+        })
+    {
         return Ok(());
     }
     let mut call = Vec::new();
@@ -8997,6 +9185,17 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(|_| request::Error::Encoding)
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => {
+            output
+                .write_all(b"[")
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(element, facade, output)?;
+            write!(output, "; {length}]").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Sequence { element, .. } => {
             output
                 .write_all(b"Vec<")
@@ -9165,6 +9364,7 @@ fn render_slot(
     let mut restores = String::new();
     let mut pins = None;
     let mut native = false;
+    let mut lends = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
         let name = format!("input_{position}");
         match input {
@@ -9187,6 +9387,42 @@ fn render_slot(
                 values.push(format!("{name}.0.lend()"));
                 pins.get_or_insert_with(|| format!("{name}.0.pins()"));
             }
+            // A shared borrow of a native value, as iced's `pick_list`
+            // gives `font::Family::to_string` a `&Family`: a copy, as a
+            // closure's borrowed native input crosses
+            // (`render_callable_closure`), so script code reads it as the
+            // value it is, `Display` too.
+            convert::Type::Borrowed { mutable: false, ty }
+                if family.is_none()
+                    && matches!(**ty, convert::Type::Nominal { .. })
+                    && !is_value(ty)
+                    && !carries_lifetime(ty) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                parameters.push(format!("{name}: &{rust}"));
+                let mut converted = String::new();
+                render_to_dynamic(ty, &format!("Clone::clone({name})"), 0, &mut converted)?;
+                native = true;
+                values.push(format!(
+                    "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
+                ));
+            }
+            // A native value the function borrows `&mut`: lent for the
+            // call alone, as a script impl's function is (D558.3).
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if family.is_none()
+                && matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && !carries_lifetime(ty) =>
+            {
+                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let borrow = if *borrowed_mutably { "&mut " } else { "&" };
+                parameters.push(format!("{name}: {borrow}{rust}"));
+                values.push(lent_value(position, *borrowed_mutably, &rust));
+                lends.push((position, *borrowed_mutably, rust));
+            }
             convert::Type::Borrowed { .. } => {
                 return Err(drift(
                     "a slot's input borrows a value that isn't a script value",
@@ -9197,9 +9433,18 @@ fn render_slot(
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
                 render_to_dynamic(input, &name, 0, &mut converted)?;
-                native |= matches!(input, convert::Type::Nominal { .. })
-                    && !is_value(input)
-                    && !is_duration(input);
+                // A crate value, alone or inside an `Option`, a `Result`,
+                // a `Vec` or a tuple, enters the arena.
+                let crate_value = holds_native(input);
+                native |= crate_value;
+                // A native value takes the script function's parameter's
+                // witness, so script code reads it as its type, as a
+                // variant's field of an imported type is read.
+                if crate_value {
+                    converted = format!(
+                        "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
+                    );
+                }
                 values.push(format!("({converted})"));
             }
         }
@@ -9224,7 +9469,10 @@ fn render_slot(
             .collect::<Vec<_>>();
         format!(
             "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
-            in_arena(&format!("Ok::<_, Error>([{}])", values.join(", ")))
+            in_arena(&format!(
+                "let witnesses = WITNESSES_{local}.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone(); Ok::<_, Error>([{}])",
+                values.join(", ")
+            ))
         )
     } else {
         let values = values
@@ -9264,31 +9512,84 @@ fn render_slot(
             let rust = concrete_type(&returned).ok_or(drift("a slot's output"))?;
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
-            let native_output = matches!(returned, convert::Type::Nominal { .. })
-                && !is_value(&returned)
-                && !is_duration(&returned);
+            let native_output = holds_native(&returned);
+            // A script value made from native inputs on a thread with no
+            // arena is made where it is first used (`DeferProbe`).
+            let deferred = if native
+                && matches!(returned, convert::Type::Script { .. })
+                && !inputs
+                    .iter()
+                    .any(|input| matches!(input, convert::Type::Borrowed { .. }))
+            {
+                let names = (0..inputs.len())
+                    .map(|position| format!("input_{position},"))
+                    .collect::<String>();
+                format!(
+                    "let ({names}) = if arena_access(|_| ()).is_none() {{
+            let probe = DeferProbe(std::cell::Cell::new(Some(({names}))));
+            if let Some(proxy) = (&probe).defer(|({names})| slot_{local}({names}).0.into_dynamic()) {{
+                return <{rust}>::from_proxy(proxy);
+            }}
+            probe.0.take().expect(\"rawr: a slot's inputs are kept until deferred\")
+        }} else {{
+            ({names})
+        }};
+        "
+                )
+            } else {
+                String::new()
+            };
+            // On a thread with no arena, as iced's executor runs
+            // `Task::map`'s function and iced's `listen_with`, native
+            // values move in and out through an arena of the call's own
+            // (`CallArena`). A script value made of native inputs is made
+            // where it is used instead (`deferred`), when it can be.
+            let call_arena = if native || native_output {
+                "let _arena = CallArena::enter();\n        "
+            } else {
+                ""
+            };
+            // A conversion that gives its errors back by `?`, as an
+            // `Option` output's does, runs in a closure of its own.
             let converted = if native_output {
                 in_arena(&converted)
             } else {
-                format!("({converted})")
+                format!("(move || {converted})()")
             };
+            let invoked = format!(
+                "let mut values = {values};
+        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+        value"
+            );
+            let (items, invoked) = lent_around(&lends, invoked);
             (
                 "",
                 rust,
                 format!(
-                    "let mut values = {values};
-        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+                    "{items}{deferred}{call_arena}let value = {{ {invoked} }};
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
                 ),
             )
         }
+    };
+    // The witnesses of the script function's parameters, read where
+    // script code passes it, which its native inputs take.
+    let witnesses = if native {
+        format!(
+            "
+    static WITNESSES_{local}: std::sync::RwLock<Vec<Option<__rawr_internal::host::runtime::Witness>>> = std::sync::RwLock::new(Vec::new());
+    *WITNESSES_{local}.write().unwrap_or_else(std::sync::PoisonError::into_inner) = closure_inputs({index}, {});",
+            inputs.len()
+        )
+    } else {
+        String::new()
     };
     writeln!(
         output,
         "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
     SLOT_{local}
         .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())
-        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;
+        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}
     #[allow(unused_mut, clippy::needless_lifetimes)]
     fn slot_{local}{generics}({}) -> {rust} {{
         {body}
@@ -9711,17 +10012,30 @@ fn render_take_input(
         && let convert::Type::Sequence {
             element,
             owned: true,
+            length: None,
         } = substituted(ty, signature, substitutions)?
         && let Some(family) = family_of(&element)
     {
         // An element made outside any region is in the arena, at
-        // `'static`, which the region's lifetime shortens.
+        // `'static`, which the region's lifetime shortens when the type is
+        // covariant in it, as rustc's variance says. An invariant one, as
+        // iced's `Text<'a>` is through `Theme::Class<'a>`, can't be: Rust
+        // makes each element of a view at the view's lifetime, as Rawr
+        // makes it in the region, and one made before can't join them.
         let rust = concrete_type(&element).ok_or(request::Error::Drift {
             field: "a region array's element",
         })?;
+        let arena = if shortens(&element) {
+            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
+        } else {
+            format!(
+                "Err(Error::Value({:?}.to_owned()))",
+                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
+            )
+        };
         return writeln!(
             output,
-            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle)) }} }}).collect::<Result<Vec<_>, Error>>())?;"
+            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
         )
         .map_err(|_| request::Error::Encoding);
     }
@@ -9755,7 +10069,8 @@ fn render_take_input(
     let ty = if matches!(
         ty,
         convert::Type::Sequence { .. } | convert::Type::Option(_)
-    ) {
+    ) || range_inclusive_element(ty).is_some()
+    {
         deep = substituted(ty, signature, substitutions)?;
         &deep
     } else {
@@ -9766,10 +10081,17 @@ fn render_take_input(
         Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
         None => render_take(local, index, ty, &mut taken)?,
     }
-    let annotation = generic
+    // A crate type of no arguments is written out too: a trait's function
+    // the call reaches through one impl, as `Background::from(color)` of
+    // `impl From<Color> for Background`, takes the impl's type, which
+    // rustc can't infer beside the reflexive `From<Background>`.
+    let plain = matches!(ty, convert::Type::Nominal { arguments, .. } if arguments.is_empty())
+        && !is_value(ty)
+        && !is_future(ty);
+    let annotation = (generic || plain)
         .then(|| concrete_type(ty))
         .flatten()
-        .filter(|_| !is_value(ty));
+        .filter(|annotation| !is_value(ty) && annotation != "_");
     let Some(annotation) = annotation else {
         return output
             .write_all(&taken)
@@ -9928,7 +10250,7 @@ fn render_callable_closure(
         ty => !by_value(ty),
     };
     let native_inputs = inputs.iter().any(native);
-    let native_output = !by_value(&returned);
+    let native_output = !by_value(&returned) || holds_native(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
@@ -9997,8 +10319,14 @@ fn render_callable_closure(
     } else {
         format!("({converted})")
     };
+    // An arena of the call's own on a thread with none (`CallArena`).
+    let call_arena = if native_inputs || native_output {
+        "let _arena = CallArena::enter();\n            "
+    } else {
+        ""
+    };
     Ok(format!(
-        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
+        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
         parameters.join(", "),
     ))
 }
@@ -10061,6 +10389,17 @@ fn render_take(
         }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
+        // Rawr's float or integer range, as the range of the number the
+        // instance gives.
+        ty if range_inclusive_element(ty).is_some() => {
+            let mut converted = String::new();
+            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).
@@ -10068,6 +10407,7 @@ fn render_take(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_take(local, index, &owned, output);
         }
@@ -10276,6 +10616,31 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
+        // `RangeInclusive<i64>` as one of the integer the instance gives.
+        ty if let Some(element) = range_inclusive_element(ty) => match element {
+            convert::Type::Builtin(convert::Builtin::F64) => {
+                cast(output, "std::ops::RangeInclusive<f64>")
+            }
+            convert::Type::Builtin(convert::Builtin::F32) => write!(
+                output,
+                "{value}.try_cast_result::<std::ops::RangeInclusive<f64>>().map(|range| (*range.start() as f32)..=(*range.end() as f32)).map_err(|_| Error::TypeMismatch)"
+            ),
+            convert::Type::Builtin(builtin)
+                if *builtin == convert::Builtin::I64 || builtin.is_narrow_integer() =>
+            {
+                write!(
+                    output,
+                    "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from::<{}>)",
+                    builtin.rust_name().unwrap_or_default()
+                )
+            }
+            _ => {
+                return Err(request::Error::Drift {
+                    field: "an inclusive range of a type that is not a number",
+                })
+            }
+        },
         convert::Type::Builtin(convert::Builtin::StaticStr) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| static_pins().pin(value)).map_err(|_| Error::TypeMismatch)"
@@ -10376,6 +10741,7 @@ fn render_from_dynamic(
             let owned = convert::Type::Sequence {
                 element: Box::new(element.clone()),
                 owned: true,
+                length: None,
             };
             return render_from_dynamic(&owned, value, depth, output);
         }
@@ -10406,14 +10772,23 @@ fn render_from_dynamic(
             }
             write!(output, ")) }})")
         }
-        // A Rawr array, as the `Vec` of its converted elements.
-        convert::Type::Sequence { element, .. } => {
+        // A Rawr array, as the `Vec` of its converted elements, or as the
+        // Rust array of its length.
+        convert::Type::Sequence {
+            element, length, ..
+        } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            let fixed = match length {
+                Some(length) => format!(
+                    ".and_then(|items| <[_; {length}]>::try_from(items).map_err(|_| Error::TypeMismatch))"
+                ),
+                None => String::new(),
+            };
             write!(
                 output,
-                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>())"
+                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>()){fixed}"
             )
         }
     }
@@ -10515,7 +10890,7 @@ fn render_to_dynamic(
             )
         }
         // A `Vec`'s elements are moved out, a slice's cloned.
-        convert::Type::Sequence { element, owned } => {
+        convert::Type::Sequence { element, owned, .. } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
             render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
@@ -10589,6 +10964,20 @@ fn is_facade_value(ty: &convert::Type) -> bool {
         if FACADE_VALUES.with_borrow(|values| values.contains(definition.as_bytes())))
 }
 
+/// Whether converting `ty` takes a native value out of the arena: a crate
+/// value, alone or inside a tuple, as iced's boot `(State, Task<Message>)`.
+fn holds_native(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
+        convert::Type::Tuple(members) => members.iter().any(holds_native),
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
+            holds_native(element)
+        }
+        convert::Type::Result(ok, err) => holds_native(ok) || holds_native(err),
+        _ => false,
+    }
+}
+
 /// Rust's `std::time::Duration`, which crosses by value.
 /// Whether `ty` is std's `Duration` or `Instant`, which cross by value as
 /// Rawr's own.
@@ -10605,6 +10994,23 @@ fn std_time(ty: &convert::Type) -> Option<&'static str> {
         }
         convert::Type::Nominal { definition, .. } if *definition == Definition::instant() => {
             Some("std::time::Instant")
+        }
+        _ => None,
+    }
+}
+
+/// `T` of Rust's `RangeInclusive<T>` of a float or of a type parameter,
+/// which crosses by value as Rawr's float or integer range.
+fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::range_inclusive() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -10808,9 +11214,14 @@ fn substituted(
         },
         convert::Type::Range(element) => convert::Type::Range(one(element)?),
         convert::Type::Result(ok, err) => convert::Type::Result(one(ok)?, one(err)?),
-        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
             element: one(element)?,
             owned: *owned,
+            length: *length,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
@@ -11219,6 +11630,8 @@ impl Drop for LentArguments {
 #[derive(Clone, Copy)]
 struct Lifetimes {
     count: u32,
+    /// Covariant in each lifetime, as rustc's variance says.
+    covariant: bool,
     debug: bool,
     clone: bool,
     partial_eq: bool,
@@ -11327,6 +11740,24 @@ fn may_borrow(ty: &convert::Type) -> bool {
 }
 
 /// Whether a value of `ty` borrows when it is made in a scope frame.
+/// Whether a native value of `ty` at `'static` is one at any shorter
+/// lifetime: its type is covariant in each lifetime it declares, as rustc's
+/// variance says, and its type arguments carry none.
+fn shortens(ty: &convert::Type) -> bool {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return false;
+    };
+    TYPE_TRAITS.with_borrow(|types| {
+        types
+            .get(definition.as_bytes())
+            .is_some_and(|lifetimes| lifetimes.covariant)
+    }) && !arguments.iter().any(carries_lifetime)
+}
+
 fn carries_lifetime(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Nominal {
@@ -11759,15 +12190,8 @@ fn render_impl_function(
                 && !carries_lifetime(ty) =>
             {
                 let target = concrete_type(ty).ok_or(drift("a script impl function's input"))?;
-                lends.push((position, *borrowed_mutably, target.clone()));
-                values.push(format!(
-                    "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
-                    if *borrowed_mutably {
-                        format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
-                    } else {
-                        "None".to_owned()
-                    }
-                ));
+                values.push(lent_value(position, *borrowed_mutably, &target));
+                lends.push((position, *borrowed_mutably, target));
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
@@ -11829,15 +12253,33 @@ fn render_impl_function(
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
     );
     // Each borrowed native value is lent around the call, innermost last.
+    let (items, wrapped) = lent_around(&lends, call);
+    call = wrapped;
+    Ok(format!(
+        "    fn {}({}) -> {rust} {{
+{items}        {call}
+    }}
+",
+        function.name(),
+        parameters.join(", ")
+    ))
+}
+
+/// The call `call` with each borrowed native value of `lends` (its input's
+/// position, whether it is `&mut`, and its Rust type) lent around it,
+/// innermost last, and the items that reach each one (D558.3): what a script
+/// impl function and a slot write where native code lends them a value.
+fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String) {
+    let mut call = call;
     let mut items = String::new();
     for (position, borrowed_mutably, target) in lends.iter().rev() {
-        let (lend, input) = if *borrowed_mutably {
-            ("lend", format!("input_{position}"))
+        let lend = if *borrowed_mutably {
+            "lend"
         } else {
-            ("lend_ref", format!("input_{position}"))
+            "lend_ref"
         };
         call = format!(
-            "__rawr_internal::scope::{lend}::<Lend{position}, _>({input}, |lent_{position}| {{
+            "__rawr_internal::scope::{lend}::<Lend{position}, _>(input_{position}, |lent_{position}| {{
         {call}
         }})"
         );
@@ -11864,14 +12306,19 @@ fn render_impl_function(
             ));
         }
     }
-    Ok(format!(
-        "    fn {}({}) -> {rust} {{
-{items}        {call}
-    }}
-",
-        function.name(),
-        parameters.join(", ")
-    ))
+    (items, call)
+}
+
+/// The script value of a native value lent at `position` (`lent_around`).
+fn lent_value(position: usize, borrowed_mutably: bool, target: &str) -> String {
+    format!(
+        "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
+        if borrowed_mutably {
+            format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
+        } else {
+            "None".to_owned()
+        }
+    )
 }
 
 /// The scope families the adapters named, as the `rawr_families` module.
@@ -12057,6 +12504,7 @@ impl TypePaths {
                         for ty in owner.types() {
                             let lifetimes = Lifetimes {
                                 count: ty.lifetimes(),
+                                covariant: ty.covariant(),
                                 debug: ty.debug(),
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),
@@ -12191,6 +12639,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         {
             "__rawr_internal::Value".to_owned()
         }
+        ty if let Some(element) = range_inclusive_element(ty) => {
+            format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
+        }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         ty if let Some(time) = std_time(ty) => time.to_owned(),
@@ -12237,6 +12688,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 format!("crate::{path}<{}>", arguments.join(", "))
             }
         }
+        convert::Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => format!("[{}; {length}]", concrete_type(element)?),
         convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
         convert::Type::Tuple(members) => format!(
             "({},)",
@@ -12263,13 +12719,23 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
 /// with a script `&[Language]`. Rawr's array holds no Rust layout, so the
 /// runner makes the proxies whichever way it passes them; it passes them
 /// as an owned `Vec`, which borrows as the slice does and needs no
-/// lifetime to borrow at.
+/// lifetime to borrow at. So is a slice of crate values, as iced's text
+/// example fills it with `self.families.as_slice()` of `font::Family`:
+/// Rawr's array holds each in its own arena slot, so the `Vec` holds
+/// copies, as `Arena::take` clones a `Clone` value out.
 fn script_slice(ty: &convert::Type) -> Option<&convert::Type> {
     match ty {
         convert::Type::Sequence {
             element,
             owned: false,
-        } if matches!(element.as_ref(), convert::Type::Script { .. }) => Some(element),
+            ..
+        } if matches!(
+            element.as_ref(),
+            convert::Type::Script { .. } | convert::Type::Nominal { .. }
+        ) && !is_duration(element) =>
+        {
+            Some(element)
+        }
         _ => None,
     }
 }
@@ -12280,6 +12746,7 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
         convert::Type::Sequence {
             element,
             owned: false,
+            ..
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
         // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
@@ -13021,6 +13488,7 @@ mod tests {
                 Type::Sequence {
                     element: Box::new(Type::Builtin(Builtin::U8)),
                     owned: false,
+                    length: None,
                 },
                 "int_from::<u8>",
             ),
@@ -13205,7 +13673,7 @@ mod tests {
         assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
         assert!(runner.contains("__rawr_profile::run(program, forward)"));
         assert!(runner.contains("__rawr_profile::publish(program)"));
-        assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
+        assert!(runner.contains("Ok(__RawrProtocolEvent::Call(call)) => call.answer(),"));
         // The process's main thread is kept for a native `main`, and the
         // protocol runs beside it. A marked `main` runs the protocol, and
         // then itself, on the main thread.

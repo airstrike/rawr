@@ -1,8 +1,8 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-10-28",
-  "version": "0.3.12",
-  "examples": {"running":7,"total":56,"note":"Most others now stop further along"},
+  "version": "0.3.15",
+  "examples": {"running":11,"total":56,"note":"Most others now stop further along"},
   "groups": [
     {
       "id": "v000",
@@ -71,11 +71,11 @@
         {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281]},
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
         {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
-        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"next","note":"Atomic, with leases. T271","issues":[271]},
-        {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"next","note":"Kept across reinstalls. T272","issues":[272]},
-        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"next","note":"T252, T254, T276","issues":[252,254,276]},
+        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"next","note":"Atomic, with leases. #271","issues":[271]},
+        {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"next","note":"Kept across reinstalls. #272","issues":[272]},
+        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"next","note":"#252, #254, #276","issues":[252,254,276]},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[]},
-        {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"next","note":"Names the crate. T275","issues":[275]}
+        {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"next","note":"Names the crate. #275","issues":[275]}
       ]
     },
     {
@@ -88,7 +88,7 @@
         {"id":"equality-in-bounds","name":"Equality in bounds","start":51,"size":2,"state":"next","note":"Iterator<Item = Self::For>","issues":[320]},
         {"id":"qualified-self-paths","name":"Qualified Self paths","start":52,"size":1,"state":"next","note":"<Self as T>::A","issues":[320]},
         {"id":"higher-ranked-bounds","name":"Higher-ranked bounds","start":53,"size":2,"state":"next","note":"for<'a> Fn(&'a T)","issues":[320]},
-        {"id":"impl-for-a-reference","name":"Impl for a reference","start":54,"size":3,"state":"next","note":"impl<T> For for &T. T320","issues":[320]}
+        {"id":"impl-for-a-reference","name":"Impl for a reference","start":54,"size":3,"state":"next","note":"impl<T> For for &T. #320","issues":[320]}
       ]
     },
     {
@@ -97,9 +97,9 @@
       "subtitle": "Running now",
       "open": true,
       "rows": [
-        {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. T312, T338","issues":[312,338]},
-        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"now","note":"text, system_information, multi_window. T300","issues":[300]},
-        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"now","note":"Float ranges, padding, &Vec, From in Some. T336, T340, T345","issues":[336,340,345]}
+        {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. #312, #338","issues":[312,338]},
+        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. #300","issues":[300]},
+        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs. #336, #340, part of #345","issues":[336,340,345]}
       ]
     },
     {
@@ -108,11 +108,11 @@
       "subtitle": "Next",
       "open": true,
       "rows": [
-        {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"next","note":"custom_quad, component. T322–T324, T341","issues":[322,323,324,341]},
-        {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"T325, T326","issues":[325,326]},
-        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"T317–T319, T327","issues":[317,318,319,327]},
-        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. T335–T340","issues":[335,336,337,339,340,338]},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. T314, T283, T328, T334","issues":[283,314,328,334,345]}
+        {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"next","note":"custom_quad, component. #322–#324, #341","issues":[322,323,324,341]},
+        {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326]},
+        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327]},
+        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338]},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345]}
       ]
     },
     {

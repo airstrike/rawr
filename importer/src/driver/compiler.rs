@@ -81,7 +81,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // its where-clause names.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 29;
+const PROTOCOL_SCHEMA: u32 = 30;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -601,6 +601,10 @@ struct Parameter {
 enum ParameterKind {
     Lifetime {
         bounds: Vec<Bound>,
+        /// Whether a type's value at `'static` is one at any shorter
+        /// lifetime here, as rustc's variance says: a struct's or an enum's
+        /// covariant or bivariant lifetime. False for every other owner.
+        covariant: bool,
     },
     Type {
         bounds: Vec<Bound>,
@@ -4046,6 +4050,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             Some((reowned, id)) if *reowned == def_id => id.clone(),
             _ => self.id(def_id, definition_namespace(self.tcx.def_kind(def_id)))?,
         };
+        // A type's variances, by parameter index (rustc has them for types
+        // and functions alone).
+        let variances = matches!(
+            self.tcx.def_kind(def_id),
+            DefKind::Struct | DefKind::Enum | DefKind::Union
+        )
+        .then(|| self.tcx.variances_of(def_id));
         let mut parameters = Vec::new();
         for parameter in &generics.own_params {
             let name = self.budget.owned(parameter.name.as_str())?;
@@ -4073,7 +4084,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 }
             }
             let parameter_kind = match parameter.kind {
-                ty::GenericParamDefKind::Lifetime => ParameterKind::Lifetime { bounds },
+                ty::GenericParamDefKind::Lifetime => ParameterKind::Lifetime {
+                    bounds,
+                    covariant: variances
+                        .and_then(|variances| variances.get(parameter.index as usize))
+                        .is_some_and(|variance| {
+                            matches!(variance, ty::Variance::Covariant | ty::Variance::Bivariant)
+                        }),
+                },
                 ty::GenericParamDefKind::Type { has_default, .. } => ParameterKind::Type {
                     bounds,
                     default: if has_default {

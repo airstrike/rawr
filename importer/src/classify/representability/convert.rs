@@ -110,10 +110,14 @@ pub enum Type {
     /// Rust's `Result<T, E>`: a Rawr `Result` of the converted `T` and `E`.
     Result(Box<Type>, Box<Type>),
     /// An output `Vec<T>`, or a borrowed slice `&[T]` whose elements are
-    /// cloned (`owned` false): a Rawr array of the converted `T`.
+    /// cloned (`owned` false): a Rawr array of the converted `T`. With a
+    /// `length`, Rust's array `[T; length]`, as the `From<[u16; 2]>` a
+    /// crate's `impl Into<Padding>` reads as a case takes.
     Sequence {
         element: Box<Type>,
         owned: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<u32>,
     },
     /// An output tuple: a Rawr tuple of the converted members.
     Tuple(Box<[Type]>),

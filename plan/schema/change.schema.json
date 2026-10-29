@@ -67,7 +67,8 @@
         "t": { "$ref": "defs.schema.json#/$defs/t" },
         "issue": { "$ref": "defs.schema.json#/$defs/issue" },
         "commit": { "$ref": "defs.schema.json#/$defs/commit" },
-        "note": { "$ref": "defs.schema.json#/$defs/text", "description": "Added after \"Done in <commit>.\", such as the decision: \"(D640)\"." }
+        "note": { "$ref": "defs.schema.json#/$defs/text", "description": "Added after \"Done in <commit>.\", such as the decision: \"(D640)\"." },
+        "comment": { "$ref": "defs.schema.json#/$defs/text", "description": "Markdown posted on the issue under the commit line: what changed, measurements, which examples now run, what's left and where it went. Expected on every close." }
       }
     },
     "edit": {
