@@ -1503,9 +1503,66 @@ fn native_impl(
             Some(instance) => substitute_parameters(ty, &instance.types),
             None => ty.clone(),
         };
+        // An associated type Rust code holds as a script value, as
+        // the_matrix's `type State = RefCell<Vec<Cache>>`, has none of the
+        // bounds the trait may ask of it, such as `Default`. The runner
+        // names it by a proxy of its own beside the owner's, whose
+        // `Default` is the type's (`model::associated_path`), and the
+        // impl's signatures name it by that proxy where they name the type.
+        let owner_path = match &implementation.owner {
+            type_ref::Type::Path(type_ref::Path {
+                target: type_ref::Target::Script { definition, .. },
+                ..
+            }) => Some(models.script_path(*definition)),
+            _ => None,
+        };
+        let proxies = implementation
+            .associated
+            .iter()
+            .filter_map(|(name, ty)| {
+                let (krate, owner) = owner_path.as_deref()?.split_once("::")?;
+                let converted =
+                    impl_surface_type(models, &Ty::from_resolved(&at_instance(ty)), &generics)?;
+                holds_value(&converted).then(|| {
+                    (
+                        super::full_type_name(ty),
+                        rawr_import::classify::representability::convert::Type::Script {
+                            path: format!(
+                                "{krate}::{}",
+                                crate::program::model::associated_path(owner, &name.text)
+                            )
+                            .into(),
+                            arguments: Box::default(),
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let proxy = |ty: &type_ref::Type| {
+            let text = super::full_type_name(ty);
+            proxies
+                .iter()
+                .find(|(written, _)| *written == text)
+                .map(|(_, proxy)| proxy.clone())
+        };
         // A type the impl names that has no Rust type in the runner can't
         // cross, and rustc would refuse the runner without the impl.
         let convert = |ty: &type_ref::Type| {
+            if let Some(proxy) = proxy(ty) {
+                return Ok(proxy);
+            }
+            if let type_ref::Type::Reference {
+                mutable, target, ..
+            } = ty
+                && let Some(proxy) = proxy(target)
+            {
+                return Ok(
+                    rawr_import::classify::representability::convert::Type::Borrowed {
+                        mutable: *mutable,
+                        ty: Box::new(proxy),
+                    },
+                );
+            }
             impl_surface_type(models, &Ty::from_resolved(&at_instance(ty)), &generics).ok_or_else(
                 || {
                     super::ImportedFailure::Lowering(LoweringFailure::original(
@@ -1537,30 +1594,7 @@ fn native_impl(
         let associated = implementation
             .associated
             .iter()
-            .map(|(name, ty)| {
-                let converted = convert(ty)?;
-                // A type Rust holds as a script value, as `RefCell<Vec<
-                // Cache>>` is, has none of the bounds the trait may ask of it,
-                // such as `Default`. A script type's proxy has them.
-                if holds_value(&converted) {
-                    return Err(super::ImportedFailure::Lowering(LoweringFailure::original(
-                        shell.source,
-                        Error::UnsupportedNominalSyntax {
-                            construct: format!(
-                                "`type {} = {}` in an impl of `{path}`: Rust code holds the \
-                                 type as a script value, which has none of the trait's bounds \
-                                 on it",
-                                name.text,
-                                super::full_type_name(ty)
-                            )
-                            .into(),
-                            source: super::type_span(ty),
-                        }
-                        .into(),
-                    )));
-                }
-                Ok((Box::<str>::from(name.text.as_str()), converted))
-            })
+            .map(|(name, ty)| Ok((Box::<str>::from(name.text.as_str()), convert(ty)?)))
             .collect::<Result<Box<[_]>, super::ImportedFailure>>()?;
         let mut functions = Vec::new();
         for function in implementation.functions.iter() {

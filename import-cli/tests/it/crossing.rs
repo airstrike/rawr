@@ -228,6 +228,24 @@ fn a_script_impl_generic_over_a_crate_bound_is_compiled_per_use() {
     );
 }
 
+/// iced's the_matrix: a script impl of a crate trait whose associated
+/// `State` is a std type Rust code holds as a script value, `RefCell<Vec<
+/// i64>>`, which the trait asks `Default` of. The runner names it by a
+/// proxy whose `Default` is the type's, and `draw` changes the state the
+/// crate keeps between its calls. The output is `cargo run`'s.
+#[test]
+fn an_associated_state_held_as_a_script_value_crosses() {
+    let (rawr, cargo) = both_printed("crossing-state", "state.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view canvas[primary 3 cells [1, 10, 20] at 40x30 tick 0#1]")
+            && rawr.contains(
+                "pressed Increment: canvas[primary 3 cells [2, 10, 20] at 40x30 tick 0#1]"
+            ),
+        "{rawr}"
+    );
+}
+
 /// iced's multi_window: a view passes a window's view, a method whose
 /// `impl Widget` output is declared after its caller, to a generic crate
 /// function. The caller waits for that output, and a fresh build asks the

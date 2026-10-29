@@ -28,6 +28,23 @@ pub(crate) struct Model {
     /// where it has a runtime type: what a native value native code gives
     /// it is attested as (D594).
     members: BTreeMap<String, Box<[Option<crate::host::runtime::type_ref::Type>]>>,
+    /// Each associated type of a script's impl of a crate trait, by the
+    /// path of the type the runner names it by (`associated_path`): a type
+    /// Rust code holds as a script value, as the_matrix's `type State =
+    /// RefCell<Vec<Cache>>`, is a proxy whose `Default` is made here.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    associated: BTreeMap<String, type_ref::Type>,
+}
+
+/// The path, below its crate, of the type a runner names the associated
+/// type `name` of a script impl for the script type at `owner` by
+/// (`owner`'s modules, then its name): a proxy beside the owner's.
+#[must_use]
+pub(crate) fn associated_path(owner: &str, name: &str) -> String {
+    match owner.rsplit_once("::") {
+        Some((modules, owner)) => format!("{modules}::__Rawr{owner}{name}"),
+        None => format!("__Rawr{owner}{name}"),
+    }
 }
 
 #[derive(Clone)]
@@ -167,10 +184,40 @@ impl Model {
             );
         }
 
+        let mut associated = BTreeMap::new();
+        for shell in program.items() {
+            let crate::resolve::item::Kind::Impl(implementation) = &shell.kind else {
+                continue;
+            };
+            if implementation.trait_.is_none() {
+                continue;
+            }
+            let type_ref::Type::Path(type_ref::Path {
+                target: type_ref::Target::Script { identity, .. },
+                ..
+            }) = &implementation.owner
+            else {
+                continue;
+            };
+            let type_def::Identity::Script(owner) = identity else {
+                continue;
+            };
+            let owner = owner
+                .modules()
+                .iter()
+                .map(ImmutableString::as_str)
+                .chain([owner.name()])
+                .collect::<Vec<_>>()
+                .join("::");
+            for (name, ty) in implementation.associated.iter() {
+                associated.insert(associated_path(&owner, &name.text), ty.clone());
+            }
+        }
         let mut model = Self {
             generation,
             definitions: runtime,
             members: BTreeMap::new(),
+            associated,
         };
         let mut members = BTreeMap::new();
         for method in program.methods().iter().chain(program.builtin_methods()) {
@@ -419,6 +466,10 @@ impl Model {
         &self,
         path: &str,
     ) -> Option<Result<Dynamic, construction::Error>> {
+        // A script impl's associated type the runner names by a proxy.
+        if let Some(ty) = self.associated.get(path) {
+            return Some(self.default_for_type(ty, &mut BTreeSet::new()));
+        }
         let (identity, definition) = self.definitions.iter().find(|(identity, _)| {
             let type_def::Identity::Script(key) = identity else {
                 return false;
@@ -515,6 +566,12 @@ impl Model {
                 expected: type_name(ty),
                 actual: "no executable Default implementation".into(),
             }),
+            // `RefCell<T>` and `Cell<T>`: a cell of `T`'s default.
+            type_ref::Type::Path(_) if let Some((cell, inner)) = ty.cell_element() => {
+                let plain = cell == "Cell";
+                self.default_for_type(inner, active)
+                    .map(|value| crate::resolve::lower_nominal::cell::made(value, plain))
+            }
             type_ref::Type::Path(_) if let Some(inner) = ty.reverse_element() => self
                 .default_for_type(inner, active)
                 .map(|value| Dynamic::from(std::cmp::Reverse(value))),
