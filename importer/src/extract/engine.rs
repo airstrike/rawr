@@ -10,12 +10,12 @@
 //! in which order, and how their values combine.
 //!
 //! So the driver answers units from the compiler and records them in the
-//! crate's table, which grows with each demand the crate meets, and the
-//! same engine replays any demand whose units the table holds with no
-//! compiler at all. The two produce the same body, because they are the
-//! same walk over the same answers. Walking the whole crate up front cost
-//! the iced counter's first run about 18 s in a debug build, so units are recorded as demand reaches
-//! them.
+//! crate's table, and the same engine replays any demand whose units the
+//! table holds with no compiler at all. The two produce the same body,
+//! because they are the same walk over the same answers. A small crate's
+//! table holds its whole walk. A large crate's grows with each demand it
+//! meets: walking iced whole cost the counter's first run about 18 s in a
+//! debug build.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -35,7 +35,7 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 2;
+pub(crate) const TABLE_SCHEMA: u32 = 3;
 
 const MAX_DEFINITIONS: usize = 500_000;
 const MAX_PACKAGES: usize = 4_096;
@@ -323,6 +323,9 @@ pub(crate) struct Root {
 #[derive(Default)]
 pub(crate) struct Memo {
     pub(crate) whole: bool,
+    /// The crate's whole walk passed the driver's bound, so its table grows
+    /// with demand and the walk is not tried again.
+    pub(crate) large: bool,
     pub(crate) units: BTreeMap<Unit, Rc<[Emission]>>,
     pub(crate) modules: BTreeMap<Hash, Rc<[Child]>>,
     pub(crate) segments: BTreeMap<String, Option<Segment>>,
@@ -345,6 +348,7 @@ pub(crate) struct Table {
     pub(crate) schema: u32,
     pub(crate) root: Root,
     pub(crate) whole: bool,
+    pub(crate) large: bool,
     pub(crate) units: Vec<(Unit, Vec<Emission>)>,
     pub(crate) modules: Vec<Module>,
     pub(crate) segments: Vec<(String, Option<Segment>)>,
@@ -355,6 +359,7 @@ impl Memo {
     pub(crate) fn from_table(table: Table) -> Self {
         Self {
             whole: table.whole,
+            large: table.large,
             units: table
                 .units
                 .into_iter()
@@ -375,6 +380,7 @@ impl Memo {
             schema: TABLE_SCHEMA,
             root,
             whole: self.whole,
+            large: self.large,
             units: self
                 .units
                 .iter()
@@ -400,6 +406,7 @@ impl Memo {
     /// Take every answer `other` holds that this memo lacks.
     pub(crate) fn absorb(&mut self, other: &Self) {
         self.whole |= other.whole;
+        self.large |= other.large;
         for (unit, emissions) in &other.units {
             self.units
                 .entry(unit.clone())

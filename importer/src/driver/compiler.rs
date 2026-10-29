@@ -1062,8 +1062,48 @@ type Extracted = (Vec<Sysroot>, Vec<ExternalCrate>, Vec<u8>);
 /// external crates. The walk is the engine's (`engine.rs`). A table that
 /// recorded every unit the demand needs replays it with no compiler work;
 /// otherwise the compiler answers, and what it answered joins the table, so
-/// the table grows with each demand a crate meets. The whole crate is never
-/// walked on the way to a program's window.
+/// the table grows with each demand a crate meets. A crate whose whole walk
+/// is small is walked whole as well (`WHOLE_UNITS`).
+/// The units the compiler may answer for a whole walk beyond what the
+/// demand reached. semver's whole walk stays well within it; iced's whole
+/// API, walked on its first program's way to the window, cost the counter
+/// about 18 s, so iced's table grows with demand instead.
+const WHOLE_UNITS: usize = 4_096;
+
+/// Answers at most `left` units live, then refuses.
+struct WithinBound<'a, O: engine::Oracle> {
+    live: &'a mut O,
+    left: usize,
+}
+
+impl<O: engine::Oracle> engine::Oracle for WithinBound<'_, O> {
+    fn unit(
+        &mut self,
+        unit: &engine::Unit,
+    ) -> Result<std::rc::Rc<[engine::Emission]>, engine::Fault> {
+        self.left = self
+            .left
+            .checked_sub(1)
+            .ok_or_else(|| engine::Fault::Error("the whole walk passed its bound".to_owned()))?;
+        self.live.unit(unit)
+    }
+
+    fn module(
+        &mut self,
+        module: engine::Hash,
+    ) -> Result<std::rc::Rc<[engine::Child]>, engine::Fault> {
+        self.live.module(module)
+    }
+
+    fn segment(&mut self, name: &str) -> Result<Option<engine::Segment>, engine::Fault> {
+        self.live.segment(name)
+    }
+
+    fn index(&mut self) -> Result<std::rc::Rc<[Box<serde_json::value::RawValue>]>, engine::Fault> {
+        self.live.index()
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the extraction joins the session, the crate and its recorded table"
@@ -1137,6 +1177,38 @@ fn extract<'tcx>(
         let mut kept = kept.flatten().unwrap_or_default();
         if invocation.demand.is_empty() {
             memo.whole = true;
+        } else if !kept.whole && !kept.large {
+            // The whole crate, when its walk stays within `WHOLE_UNITS`,
+            // so a later program's other items replay too. A walk past it
+            // is dropped, and marked so that it is not tried again: its
+            // crate's table grows with each demand instead.
+            let mut whole = engine::Memo::default();
+            whole.absorb(&kept);
+            whole.absorb(&memo);
+            let complete = {
+                let mut bounded = WithinBound {
+                    live: &mut builder,
+                    left: WHOLE_UNITS,
+                };
+                let mut record = engine::Record {
+                    live: &mut bounded,
+                    memo: &mut whole,
+                };
+                engine::Engine::new(
+                    &mut record,
+                    root.clone(),
+                    aliases.clone(),
+                    session.to_owned(),
+                )
+                .run(&[])
+                .is_ok()
+            };
+            if complete {
+                whole.whole = true;
+                memo = whole;
+            } else {
+                memo.large = true;
+            }
         }
         kept.absorb(&memo);
         tables.store(key, &root, &kept);
