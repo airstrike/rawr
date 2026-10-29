@@ -210,11 +210,11 @@
           "start": 43,
           "size": 3,
           "state": "next",
-          "note": "Atomic, with leases. T271",
+          "note": "Atomic, with leases. #271",
           "issues": [
             {"number":271,"t":"T271","title":"T271: Generated bindings are built per project, so every project and script pays T255 again for the…","state":"open"}
           ],
-          "refs": {"T271":271}
+          "refs": {}
         },
         {
           "id": "removal-by-last-use",
@@ -222,11 +222,11 @@
           "start": 45,
           "size": 2,
           "state": "next",
-          "note": "Kept across reinstalls. T272",
+          "note": "Kept across reinstalls. #272",
           "issues": [
             {"number":272,"t":"T272","title":"T272: The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"open"}
           ],
-          "refs": {"T272":272}
+          "refs": {}
         },
         {
           "id": "key-holes",
@@ -234,13 +234,13 @@
           "start": 45,
           "size": 2,
           "state": "next",
-          "note": "T252, T254, T276",
+          "note": "#252, #254, #276",
           "issues": [
             {"number":252,"t":"T252","title":"T252: A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
             {"number":254,"t":"T254","title":"T254: With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"open"},
             {"number":276,"t":"T276","title":"T276: `importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"open"}
           ],
-          "refs": {"T252":252,"T254":254,"T276":276}
+          "refs": {}
         },
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"next","note":"Key from lock and build outputs","issues":[],"refs":{}},
         {
@@ -249,11 +249,11 @@
           "start": 49,
           "size": 2,
           "state": "next",
-          "note": "Names the crate. T275",
+          "note": "Names the crate. #275",
           "issues": [
             {"number":275,"t":"T275","title":"T275: Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"open"}
           ],
-          "refs": {"T275":275}
+          "refs": {}
         }
       ]
     },
@@ -317,11 +317,11 @@
           "start": 54,
           "size": 3,
           "state": "next",
-          "note": "impl<T> For for &T. T320",
+          "note": "impl<T> For for &T. #320",
           "issues": [
             {"number":320,"t":"T320","title":"T320: A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
           ],
-          "refs": {"T320":320}
+          "refs": {}
         }
       ]
     },
@@ -337,12 +337,12 @@
           "start": 40,
           "size": 2,
           "state": "done",
-          "note": "0.3.12. 8 examples past it. T312, T338",
+          "note": "0.3.12. 8 examples past it. #312, #338",
           "issues": [
             {"number":312,"t":"T312","title":"T312: No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
             {"number":338,"t":"T338","title":"T338: clock, the_matrix: `time::every` has no binding, likely with T312","state":"closed"}
           ],
-          "refs": {"T312":312,"T338":338}
+          "refs": {}
         },
         {
           "id": "boot-returning-a-task",
@@ -350,11 +350,11 @@
           "start": 40,
           "size": 3,
           "state": "done",
-          "note": "system_information runs; text to its runner build. T300",
+          "note": "system_information runs; text to its runner build. #300",
           "issues": [
             {"number":300,"t":"T300","title":"T300: Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
           ],
-          "refs": {"T300":300}
+          "refs": {}
         },
         {
           "id": "boundary-conversions",
@@ -362,13 +362,13 @@
           "start": 41,
           "size": 3,
           "state": "done",
-          "note": "exit runs. T336, T340, part of T345",
+          "note": "exit runs. #336, #340, part of #345",
           "issues": [
             {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
             {"number":340,"t":"T340","title":"T340: modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":345,"t":"T345","title":"T345: No-glue stops after T312 and T338","state":"open"}
           ],
-          "refs": {"T336":336,"T340":340,"T345":345}
+          "refs": {}
         }
       ]
     },
@@ -384,14 +384,14 @@
           "start": 43,
           "size": 4,
           "state": "next",
-          "note": "custom_quad, component. T322–T324, T341",
+          "note": "custom_quad, component. #322–#324, #341",
           "issues": [
             {"number":322,"t":"T322","title":"T322: A script impl generic over a crate-trait bound, such as…","state":"open"},
             {"number":323,"t":"T323","title":"T323: The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"open"},
             {"number":324,"t":"T324","title":"T324: A crate trait's associated type held as a script value (the_matrix's…","state":"open"},
             {"number":341,"t":"T341","title":"T341: D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"open"}
           ],
-          "refs": {"T322":322,"T324":324,"T341":341}
+          "refs": {}
         },
         {
           "id": "struct-literals-live-edits",
@@ -399,12 +399,12 @@
           "start": 44,
           "size": 2,
           "state": "next",
-          "note": "T325, T326",
+          "note": "#325, #326",
           "issues": [
             {"number":325,"t":"T325","title":"T325: A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open"},
             {"number":326,"t":"T326","title":"T326: A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open"}
           ],
-          "refs": {"T325":325,"T326":326}
+          "refs": {}
         },
         {
           "id": "projections-function-values",
@@ -412,14 +412,14 @@
           "start": 44,
           "size": 3,
           "state": "next",
-          "note": "T317–T319, T327",
+          "note": "#317–#319, #327",
           "issues": [
             {"number":317,"t":"T317","title":"T317: An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
             {"number":318,"t":"T318","title":"T318: Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open"},
             {"number":319,"t":"T319","title":"T319: A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
             {"number":327,"t":"T327","title":"T327: multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open"}
           ],
-          "refs": {"T317":317,"T319":319,"T327":327}
+          "refs": {}
         },
         {
           "id": "runner-build-gaps",
@@ -427,7 +427,7 @@
           "start": 45,
           "size": 3,
           "state": "next",
-          "note": "events, exit, theme, modal. T335–T340",
+          "note": "events, exit, theme, modal. #335–#340",
           "issues": [
             {"number":335,"t":"T335","title":"T335: events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"t":"T336","title":"T336: exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
@@ -436,7 +436,7 @@
             {"number":340,"t":"T340","title":"T340: modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":338,"t":"T338","title":"T338: clock, the_matrix: `time::every` has no binding, likely with T312","state":"closed"}
           ],
-          "refs": {"T335":335,"T340":340}
+          "refs": {}
         },
         {
           "id": "per-example-gaps",
@@ -444,7 +444,7 @@
           "start": 47,
           "size": 6,
           "state": "next",
-          "note": "About 18 examples. T314, T283, T328, T334",
+          "note": "About 18 examples. #314, #283, #328, #334",
           "issues": [
             {"number":283,"t":"T283","title":"T283: Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
             {"number":314,"t":"T314","title":"T314: No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
@@ -452,7 +452,7 @@
             {"number":334,"t":"T334","title":"T334: No-glue stops after T313","state":"open"},
             {"number":345,"t":"T345","title":"T345: No-glue stops after T312 and T338","state":"open"}
           ],
-          "refs": {"T314":314,"T283":283,"T328":328,"T334":334}
+          "refs": {}
         }
       ]
     },
