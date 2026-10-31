@@ -2,7 +2,6 @@
 
 pub mod debug;
 pub mod display;
-pub(crate) mod endpoint;
 mod error;
 pub mod export;
 pub mod facade;
@@ -14,7 +13,6 @@ pub(crate) mod projection;
 pub mod runtime;
 pub mod signature;
 pub(crate) mod structural;
-pub mod support;
 pub mod type_def;
 pub mod type_ref;
 pub mod usage;
@@ -146,8 +144,6 @@ impl ImportAllocation for TestImportAllocation {
 pub struct Registry {
     modules: Vec<path::Path>,
     types: Vec<type_def::Definition>,
-    supports: Vec<support::SignatureContract>,
-    endpoints: Vec<endpoint::Contract>,
     #[cfg(feature = "rust-import")]
     imported: Vec<ImportedIndex>,
     #[cfg(feature = "rust-import")]
@@ -203,7 +199,6 @@ pub(crate) enum Entry<'a> {
     ModuleItem(&'a [item::Definition]),
     Type(&'a type_def::Definition),
     Item(&'a [item::Definition]),
-    Endpoint(&'a endpoint::Contract),
     /// A facade's alias of a builtin type, as iced's `markdown::Uri` is
     /// `String`: the builtin's name.
     Builtin(&'a str),
@@ -231,8 +226,6 @@ impl Registry {
         Self {
             modules: Vec::new(),
             types: Vec::new(),
-            supports: Vec::new(),
-            endpoints: Vec::new(),
             #[cfg(feature = "rust-import")]
             imported: Vec::new(),
             #[cfg(feature = "rust-import")]
@@ -284,8 +277,6 @@ impl Registry {
         let items = Some(1_usize)
             .and_then(|items| items.checked_add(self.modules.len()))
             .and_then(|items| items.checked_add(self.types.len()))
-            .and_then(|items| items.checked_add(self.supports.len()))
-            .and_then(|items| items.checked_add(self.endpoints.len()))
             .and_then(|items| items.checked_add(self.imported.len()))
             .and_then(|items| items.checked_add(self.imported_aliases.len()))
             .and_then(|items| items.checked_add(self.structural.len()))
@@ -303,12 +294,6 @@ impl Registry {
         }
         for definition in &self.types {
             bytes = bytes.and_then(|bytes| bytes.checked_add(definition.retained_bytes()?));
-        }
-        for support in &self.supports {
-            bytes = bytes.and_then(|bytes| bytes.checked_add(support.retained_bytes()?));
-        }
-        for endpoint in &self.endpoints {
-            bytes = bytes.and_then(|bytes| bytes.checked_add(endpoint.retained_bytes()?));
         }
         bytes = bytes.and_then(|bytes| {
             bytes.checked_add(
@@ -359,20 +344,6 @@ impl Registry {
             .map_err(|_| rawr_import::surface::Error::Allocation)?;
         for definition in &self.types {
             clone.types.push(definition.try_clone()?);
-        }
-        clone
-            .supports
-            .try_reserve_exact(self.supports.len())
-            .map_err(|_| rawr_import::surface::Error::Allocation)?;
-        for support in &self.supports {
-            clone.supports.push(support.try_clone()?);
-        }
-        clone
-            .endpoints
-            .try_reserve_exact(self.endpoints.len())
-            .map_err(|_| rawr_import::surface::Error::Allocation)?;
-        for endpoint in &self.endpoints {
-            clone.endpoints.push(endpoint.try_clone()?);
         }
         clone
             .imported
@@ -520,8 +491,6 @@ impl Registry {
             .checked_add(1)
             .ok_or(Error::Allocation)?;
         let type_count = definition.type_map().len();
-        let support_count = definition.support_map().len();
-        let endpoint_count = definition.endpoint_map().len();
         let item_count = definition.items().len();
         #[cfg(feature = "rust-import")]
         let imported_count = definition
@@ -533,12 +502,6 @@ impl Registry {
             .map_err(|_| Error::Allocation)?;
         self.types
             .try_reserve(type_count)
-            .map_err(|_| Error::Allocation)?;
-        self.supports
-            .try_reserve(support_count)
-            .map_err(|_| Error::Allocation)?;
-        self.endpoints
-            .try_reserve(endpoint_count)
             .map_err(|_| Error::Allocation)?;
         self.items
             .try_reserve(item_count)
@@ -566,20 +529,6 @@ impl Registry {
                 .binary_search_by(|definition| definition.path_ref().cmp(entry.path_ref()))
                 .expect_err("registration preflight rejects occupied type paths");
             self.types.insert(index, entry);
-        }
-        for entry in parts.supports {
-            let index = self
-                .supports
-                .binary_search_by(|support| support.path_ref().cmp(entry.path_ref()))
-                .expect_err("registration preflight rejects occupied support paths");
-            self.supports.insert(index, entry);
-        }
-        for entry in parts.endpoints {
-            let index = self
-                .endpoints
-                .binary_search_by(|endpoint| endpoint.path_ref().cmp(entry.path_ref()))
-                .expect_err("registration preflight rejects occupied endpoint paths");
-            self.endpoints.insert(index, entry);
         }
         for item in parts.items {
             let index = self
@@ -966,9 +915,6 @@ impl Registry {
         } else if let Some(alias) = self.type_alias(&path) {
             Some(Entry::TypeAlias(alias))
         } else {
-            if let Some((endpoint, _)) = self.operation_endpoint(qualified) {
-                return Some(Entry::Endpoint(endpoint));
-            }
             if path
                 .parent()
                 .and_then(|parent| self.type_by_path(&parent))
@@ -1078,41 +1024,11 @@ impl Registry {
                 });
             }
         }
-        for incoming in definition.support_map() {
-            self.ensure_registry_vacant(incoming.path_ref(), "signature support")?;
-            if self
-                .supports
-                .binary_search_by(|support| support.path_ref().cmp(incoming.path_ref()))
-                .is_ok()
-            {
-                return Err(Error::RegistryConflict {
-                    path: incoming.path().into(),
-                    existing: "signature support",
-                    incoming: "signature support",
-                });
-            }
-        }
-        for incoming in definition.endpoint_map() {
-            if self
-                .endpoints
-                .binary_search_by(|endpoint| endpoint.path_ref().cmp(incoming.path_ref()))
-                .is_ok()
-            {
-                return Err(Error::RegistryConflict {
-                    path: incoming.path().into(),
-                    existing: "operation endpoint",
-                    incoming: "operation endpoint",
-                });
-            }
-        }
         for (path, items) in definition.item_sets() {
             self.ensure_registry_vacant(path, "item")?;
             for item in items {
                 for export in item.signature().external_types() {
                     self.validate_export(item.path(), export)?;
-                }
-                for export in item.signature().support_exports() {
-                    self.validate_support_export(item.path(), export)?;
                 }
             }
         }
@@ -1133,27 +1049,6 @@ impl Registry {
                 .as_ref()
                 != Some(export.contract())
         {
-            return Err(Error::FacadeDependencyMismatch {
-                source: source.into(),
-                target: export.path().into(),
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_support_export(
-        &self,
-        source: String,
-        export: &support::SupportExport,
-    ) -> Result<(), Error> {
-        let Some(installed_facade) = self.facade_fingerprint_path(export.facade_root()) else {
-            return Err(Error::MissingFacadeDependency {
-                source: source.into(),
-                facade: export.facade_root().to_string().into(),
-            });
-        };
-        let target = self.support_by_path(export.contract().path_ref());
-        if installed_facade != export.facade() || target != Some(export.contract()) {
             return Err(Error::FacadeDependencyMismatch {
                 source: source.into(),
                 target: export.path().into(),
@@ -1186,12 +1081,6 @@ impl Registry {
             .is_ok()
         {
             Some("type")
-        } else if self
-            .supports
-            .binary_search_by(|support| support.path_ref().cmp(path))
-            .is_ok()
-        {
-            Some("signature support")
         } else if item_group(&self.items, path).is_some() {
             Some("item")
         } else {
@@ -1325,47 +1214,6 @@ impl Registry {
             .ok()
             .and_then(|path| self.canonical(&path))
             .map_or_else(|| qualified.into(), |path| path.to_string().into())
-    }
-
-    pub(crate) fn support_by_path(&self, path: &path::Path) -> Option<&support::SignatureContract> {
-        self.supports
-            .binary_search_by(|support| support.path_ref().cmp(path))
-            .ok()
-            .map(|index| &self.supports[index])
-    }
-
-    pub(crate) fn support_type(
-        &self,
-        path: &str,
-    ) -> Option<(&support::SignatureContract, &facade::Dependency)> {
-        let path = path::Path::parse(path).ok()?;
-        let contract = self.support_by_path(&path)?;
-        let root = path.segments().first()?;
-        let owner = self
-            .facades
-            .binary_search_by(|facade| facade.root().cmp(root))
-            .ok()
-            .map(|index| &self.facades[index])?;
-        Some((contract, owner))
-    }
-
-    pub(crate) fn operation_endpoint(
-        &self,
-        path: &str,
-    ) -> Option<(&endpoint::Contract, &facade::Dependency)> {
-        let path = path::Path::parse(path).ok()?;
-        let contract = self
-            .endpoints
-            .binary_search_by(|endpoint| endpoint.path_ref().cmp(&path))
-            .ok()
-            .map(|index| &self.endpoints[index])?;
-        let root = path.segments().first()?;
-        let owner = self
-            .facades
-            .binary_search_by(|facade| facade.root().cmp(root))
-            .ok()
-            .map(|index| &self.facades[index])?;
-        Some((contract, owner))
     }
 
     fn item_slice(&self, path: &path::Path) -> Option<&[item::Definition]> {

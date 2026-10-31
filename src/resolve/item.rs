@@ -69,10 +69,6 @@ pub(crate) enum Import {
         definitions: Box<[crate::host::item::Definition]>,
         owner: Option<crate::host::facade::Dependency>,
     },
-    Endpoint {
-        contract: crate::host::endpoint::Contract,
-        owner: crate::host::facade::Dependency,
-    },
     /// A type alias, which the importing module's types name.
     Alias,
     /// A variant of a crate enum, as `use Shape::Circle;` or one name of

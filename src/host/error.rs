@@ -76,13 +76,6 @@ pub enum Error {
         /// Supplied generic arity.
         actual: usize,
     },
-    /// Signature-only support was nested inside an ordinary structural type.
-    InvalidSignatureSupport {
-        /// Item containing the invalid support position.
-        item: ImmutableString,
-        /// Structural type class containing the support proof.
-        ty: &'static str,
-    },
     /// A registered intrinsic list macro does not declare one repeated input.
     InvalidIntrinsicMacroSignature {
         /// Qualified macro item path.
@@ -253,10 +246,6 @@ impl fmt::Display for Error {
             } => write!(
                 formatter,
                 "invalid type arguments for `{ty}` in host item `{item}`: expected {expected}, found {actual}"
-            ),
-            Self::InvalidSignatureSupport { item, ty } => write!(
-                formatter,
-                "signature-only support in host item `{item}` must occupy one whole parameter or result, not a nested {ty}"
             ),
             Self::InvalidIntrinsicMacroSignature { item, actual } => write!(
                 formatter,

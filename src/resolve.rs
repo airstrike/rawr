@@ -1221,10 +1221,7 @@ fn resolve_imports(
                 None if std_fmt_import(&prefix) => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
                 Some(
-                    host::Entry::Item(_)
-                    | host::Entry::Endpoint(_)
-                    | host::Entry::Builtin(_)
-                    | host::Entry::TypeAlias(_),
+                    host::Entry::Item(_) | host::Entry::Builtin(_) | host::Entry::TypeAlias(_),
                 ) => {
                     return Err(Error::InvalidImport {
                         path: prefix,
@@ -1425,18 +1422,6 @@ fn resolve_import_binding(
         // the re-exported `use iced::Center;`.
         None if let Some(owner) = host.enum_variant(&qualified) => {
             item::Import::HostVariant { owner }
-        }
-        Some(host::Entry::Endpoint(contract)) => {
-            let (_, owner) =
-                host.operation_endpoint(&qualified)
-                    .ok_or_else(|| Error::UnknownImport {
-                        path: qualified.clone(),
-                        reference: name.span,
-                    })?;
-            item::Import::Endpoint {
-                contract: contract.clone(),
-                owner: owner.clone(),
-            }
         }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
         // and `use tokio::join;`, a macro Rawr expands.
