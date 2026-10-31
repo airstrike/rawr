@@ -5,7 +5,14 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"Every iced program runs and checks on generated bindings. rawr-iced and its CLI are gone, with `rawr preview`, `rawr snapshot`, `rawr cache`, `rawr new --template iced` and rawr-iced's agent tools.","issues":[430]},
+        {"text":"No message says \"facade\". The codes `RAWR-FRAMEWORK-FACADE` and `RAWR-FRAMEWORK-FACADE-DEPENDENCY` are now `RAWR-FRAMEWORK-BINDINGS` and `RAWR-FRAMEWORK-BINDINGS-DEPENDENCY`, and rawr's routing errors use `RAWR-FRAMEWORK-EXTENSION`. A failure registering generated bindings is one internal error that names the Rust item.","issues":[430]},
+        {"text":"`?play` and the browser playground run plain Rust programs. An iced or async snippet gets a message saying it doesn't run there yet.","issues":[432]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.31",
@@ -876,8 +883,20 @@
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
     {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"open","category":"Divergences from rustc"},
     {"issue":429,"title":"A tuple struct's constructor named through its module has no binding","state":"open","category":"No glue (D593)"},
-    {"issue":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"open","category":"No glue (D593)"},
-    {"issue":431,"title":"On Linux, `rawr run` compiles rawr's runtime again","state":"closed","category":"Platforms","release":"0.3.31"}
+    {"issue":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed","category":"No glue (D593)"},
+    {"issue":431,"title":"On Linux, `rawr run` compiles rawr's runtime again","state":"closed","category":"Platforms","release":"0.3.31"},
+    {"issue":432,"title":"`?play` and the browser playground run plain Rust programs","state":"open","category":"No glue (D593)"},
+    {"issue":433,"title":"rawr preview on the plain runner","state":"open","category":"No glue (D593)"},
+    {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open","category":"No glue (D593)"},
+    {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
+    {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"open","category":"No glue (D593)"},
+    {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"open","category":"No glue (D593)"},
+    {"issue":439,"title":"Delete the core's iced-only machinery rawr-iced drove","state":"open","category":"No glue (D593)"},
+    {"issue":440,"title":"Delete the importer's host-profile machinery","state":"open","category":"No glue (D593)"},
+    {"issue":441,"title":"Rename facade to bindings in the core, importer, store and generated output","state":"open","category":"No glue (D593)"},
+    {"issue":442,"title":"Remove the Worker's iced-only leftovers","state":"open","category":"No glue (D593)"},
+    {"issue":443,"title":"Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
