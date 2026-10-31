@@ -11664,3 +11664,46 @@ fn total<T: For>(t: &T) -> usize {
 "#,
     );
 }
+
+/// A crate type implementing `Iterator` fills `I: Iterator<Item = X>`,
+/// its items what its `next()` gives (T380). One whose item isn't `X` is
+/// refused, as rustc's E0271.
+#[test]
+fn language_script_iterators_fill_iterator_parameters() {
+    let printed = printed(
+        r#"
+struct Count { n: usize, end: usize }
+impl Iterator for Count {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        if self.n < self.end { self.n += 1; Some(self.n) } else { None }
+    }
+}
+fn sum<I: Iterator<Item = usize>>(items: I) -> usize {
+    let mut total = 0;
+    for x in items { total += x; }
+    total
+}
+fn doubled(items: impl Iterator<Item = usize>) -> Vec<usize> {
+    items.map(|x| x * 2).collect()
+}
+fn main() {
+    println!("{} {} {:?}", sum(Count { n: 0, end: 4 }), sum(0..4usize), doubled(Count { n: 1, end: 3 }));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "10 6 [4, 6]\n");
+    rejected(
+        r#"
+struct Words;
+impl Iterator for Words {
+    type Item = String;
+    fn next(&mut self) -> Option<String> { None }
+}
+fn sum<I: Iterator<Item = usize>>(items: I) -> usize { items.count() }
+fn run() -> usize { sum(Words) }
+run()
+"#,
+    );
+}

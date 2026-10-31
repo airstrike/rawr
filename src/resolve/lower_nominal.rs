@@ -32996,7 +32996,16 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         argument: &mut ParsedExpr,
     ) -> Result<(), Error> {
-        if parameter.iterator_item().is_some_and(|(_, into)| into)
+        // `I: IntoIterator<Item = X>` takes what Rust's `IntoIterator`
+        // walks; `I: Iterator<Item = X>` a crate or imported type that
+        // implements `Iterator` too, whose items its `next()` gives (T380).
+        let iterator = |this: &Self, ty: &Ty| {
+            let ty = this.inference.resolve(ty);
+            matches!(ty, Ty::Script(..) | Ty::Host { .. }) && this.type_implements(&ty, "Iterator")
+        };
+        if parameter
+            .iterator_item()
+            .is_some_and(|(_, into)| into || iterator(self, &argument.ty))
             && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(_))
             && let Some(iterator) = self.iterator_of(argument)
         {
