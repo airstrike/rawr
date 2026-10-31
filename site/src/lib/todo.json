@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"A native `&mut Vec<String>` or `&mut String` lent to a script callback, slot or closure is now the native storage itself. Element edits, pushes, whole assignment, moves, and writes made before an error or caught panic reach native code, with the vector's allocation and capacity kept. Element references such as `v[i]`, `last_mut()` or a helper's `&mut v[0]` reach the native element without copying it. Native functions that take `&mut Vec<String>` can now be called.","issues":[391],"refs":[365]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.23",
@@ -765,7 +770,13 @@
     {"issue":387,"title":"Route imported method misses through proved applications before demand","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":388,"title":"Acquire facts for the standard library's traits for proved calls","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":389,"title":"Widen proved applications: text types, literal arguments, generic receivers","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":390,"title":"Drop the cargo probe from warm runs with proved applications","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":390,"title":"Drop the cargo probe from warm runs with proved applications","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":391,"title":"A native `&mut Vec<String>` or `&mut String` lent to a script callback, slot or closure is now…","state":"open","category":"Divergences from rustc"},
+    {"issue":392,"title":"A `&mut` element reference re-reads its index expression at each use","state":"open","category":"Divergences from rustc"},
+    {"issue":393,"title":"Moving a Clone library value into native storage clones it and drops the original","state":"open","category":"Divergences from rustc"},
+    {"issue":394,"title":"A single non-'static Fn callable parameter is not bound","state":"open","category":"Divergences from rustc"},
+    {"issue":395,"title":"Script-written vectors of library values don't keep native allocation history","state":"open","category":"Divergences from rustc"},
+    {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -1134,7 +1145,7 @@
           "start": 47,
           "size": 4,
           "state": "now",
-          "note": "Native Vec writes are lost; borrowing and element-place implementation underway. #365",
+          "note": "Typed places landed. Operation audit and Miri left. #365",
           "issues": [
             {"number":365,"title":"Native mutable vectors lose script callback changes","state":"open"}
           ]
