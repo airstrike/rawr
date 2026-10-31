@@ -15,16 +15,6 @@ impl Engine {
         crate::package::compile::snapshot(self, snapshot)
     }
 
-    /// Compile one immutable runner snapshot into a complete reload generation.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn compile_package_snapshot_generation(
-        &self,
-        snapshot: &crate::package::snapshot::Snapshot,
-    ) -> Result<crate::reload::Candidate, crate::package::Error> {
-        crate::package::compile::snapshot_generation(self, snapshot)
-    }
-
     /// A reload generation of any program, a plain one (no application or
     /// previews, a `main` run once) included, retaining the same program for
     /// top-level evaluation before the generation is bound.
@@ -81,135 +71,6 @@ impl Engine {
         Ok((ast, main, positions))
     }
 
-    /// Compile one immutable reload candidate from a static package graph.
-    ///
-    /// The returned bundle retains the exact executable, canonical source
-    /// graph, application and preview contracts, schema manifest, callback
-    /// manifest, and generation identity produced by one compiler
-    /// transformation.
-    pub fn compile_package_generation(
-        &self,
-        target: &crate::project::Target,
-    ) -> Result<crate::reload::Candidate, crate::package::Error> {
-        crate::package::compile::generation(self, target, None)
-    }
-
-    /// Compile one reload candidate while recording the real compiler phases.
-    #[doc(hidden)]
-    pub fn compile_package_generation_observed(
-        &self,
-        target: &crate::project::Target,
-        session: &crate::timing::Session,
-    ) -> Result<crate::reload::Candidate, crate::package::Error> {
-        crate::package::compile::generation(self, target, Some(session))
-    }
-
-    /// [`Engine::compile_package_generation`] of a graph already loaded:
-    /// a host that judged the program from its load compiles that same parse.
-    #[doc(hidden)]
-    pub fn compile_loaded_package_generation(
-        &self,
-        graph: crate::package::Graph,
-        session: Option<&crate::timing::Session>,
-    ) -> Result<crate::reload::Candidate, crate::package::Error> {
-        crate::package::compile::generation_from_graph(self, graph, session)
-    }
-
-    /// [`Engine::compile_package_application_descriptor`] of a graph already
-    /// loaded.
-    #[doc(hidden)]
-    pub fn compile_loaded_package_application_descriptor(
-        &self,
-        graph: crate::package::Graph,
-        session: Option<&crate::timing::Session>,
-    ) -> Result<crate::application::Descriptor, crate::package::Error> {
-        crate::package::compile::descriptor_from_graph(self, graph, session)
-    }
-
-    /// Compile one loaded package graph into a preview catalog.
-    #[doc(hidden)]
-    pub fn compile_loaded_package_preview_catalog(
-        &self,
-        graph: crate::package::Graph,
-    ) -> Result<crate::preview::Catalog, crate::package::Error> {
-        crate::package::compile::catalog_from_graph(self, graph, None)
-    }
-
-    /// Compile and fully validate one application from a static package graph.
-    pub fn compile_package_application_descriptor(
-        &self,
-        target: &crate::project::Target,
-    ) -> Result<crate::application::Descriptor, crate::package::Error> {
-        self.compile_package_application_descriptor_with_session(target, None)
-    }
-
-    /// Compile one static source graph into a preview catalog.
-    pub fn compile_package_preview_catalog(
-        &self,
-        target: &crate::project::Target,
-    ) -> Result<crate::preview::Catalog, crate::package::Error> {
-        crate::package::compile::catalog(self, target, None)
-    }
-
-    /// Compile a preview catalog while recording the real compiler phases.
-    #[doc(hidden)]
-    pub fn compile_package_preview_catalog_observed(
-        &self,
-        target: &crate::project::Target,
-        session: &crate::timing::Session,
-    ) -> Result<crate::preview::Catalog, crate::package::Error> {
-        crate::package::compile::catalog(self, target, Some(session))
-    }
-
-    /// Compile a package application while recording the real compiler phases.
-    #[doc(hidden)]
-    pub fn compile_package_application_descriptor_observed(
-        &self,
-        target: &crate::project::Target,
-        session: &crate::timing::Session,
-    ) -> Result<crate::application::Descriptor, crate::package::Error> {
-        self.compile_package_application_descriptor_with_session(target, Some(session))
-    }
-
-    /// Compile and require one restricted application-root candidate.
-    ///
-    /// Callback/type/capability unification is a separate promotion; this API
-    /// proves only root shape, registered intrinsic identity, and stable
-    /// symbolic callback selection.
-    #[inline(always)]
-    pub fn compile_application(
-        &self,
-        script: impl AsRef<str>,
-    ) -> ParseResult<crate::application::Candidate> {
-        self.compile_executable(script)?
-            .require_application()
-            .map_err(|error| crate::resolve::Error::from(error).into())
-    }
-
-    /// Compile and fully validate one normalized application descriptor.
-    ///
-    /// Rawr requires the selected message type to prove `Clone + Send + 'static`.
-    /// This is intentionally stricter than iced's universal `Send + 'static`
-    /// minimum so reloadable framework values retain ordinary Rawr clone
-    /// semantics.
-    #[inline(always)]
-    pub fn compile_application_descriptor(
-        &self,
-        script: impl AsRef<str>,
-    ) -> ParseResult<crate::application::Descriptor> {
-        self.compile_application_descriptor_with_session(script.as_ref(), None, None)
-    }
-
-    /// Compile an application from one exact retained source snapshot.
-    #[doc(hidden)]
-    pub fn compile_application_descriptor_source(
-        &self,
-        source: crate::diagnostic::Source,
-    ) -> ParseResult<crate::application::Descriptor> {
-        let text = source.text().to_owned();
-        self.compile_application_descriptor_with_session(&text, Some(source), None)
-    }
-
     /// Compile one in-memory source this Engine already parsed (with
     /// [`Engine::parse_unit`]), naming its diagnostics by `source`: a host
     /// that judged the program from that parse (its
@@ -252,49 +113,6 @@ impl Engine {
             self.optimization_level,
         )
         .map(program::Executable::into_ast_with_positions)
-    }
-
-    /// Compile one exact retained source snapshot into a preview catalog.
-    #[doc(hidden)]
-    pub fn compile_preview_catalog_source(
-        &self,
-        source: crate::diagnostic::Source,
-    ) -> ParseResult<crate::preview::Catalog> {
-        let text = source.text().to_owned();
-        let executable = self.compile_executable_scripts_with_scope_raw(
-            Some(&Scope::new()),
-            &[text],
-            Some(source),
-            None,
-            self.optimization_level,
-        )?;
-        executable
-            .require_previews()
-            .map_err(|error| crate::resolve::Error::from(error).into())
-    }
-
-    /// Compile one application while recording the exact compiler phases.
-    ///
-    /// This is an inter-crate host seam. Timing remains observational and is
-    /// never retained by the returned application descriptor.
-    #[doc(hidden)]
-    pub fn compile_application_descriptor_observed(
-        &self,
-        script: impl AsRef<str>,
-        session: &crate::timing::Session,
-    ) -> ParseResult<crate::application::Descriptor> {
-        self.compile_application_descriptor_with_session(script.as_ref(), None, Some(session))
-    }
-
-    /// Compile an exact retained source snapshot while recording compiler phases.
-    #[doc(hidden)]
-    pub fn compile_application_descriptor_source_observed(
-        &self,
-        source: crate::diagnostic::Source,
-        session: &crate::timing::Session,
-    ) -> ParseResult<crate::application::Descriptor> {
-        let text = source.text().to_owned();
-        self.compile_application_descriptor_with_session(&text, Some(source), Some(session))
     }
 
     /// Compile source into an opaque authority-eligible executable bundle.
@@ -346,37 +164,6 @@ impl Engine {
         executable: program::Executable,
     ) -> Result<program::Authority, program::Error> {
         program::Authority::new(self.clone(), executable)
-    }
-
-    /// Consume a validated descriptor into an origin-checked launch proof.
-    pub fn launch_application(
-        self: &Shared<Self>,
-        descriptor: crate::application::Descriptor,
-    ) -> Result<crate::application::Launch, program::Error> {
-        let (executable, contract, fingerprint) = descriptor.into_parts();
-        let authority = self.authorize(executable)?;
-        Ok(crate::application::Launch::new(
-            contract,
-            fingerprint,
-            authority,
-        ))
-    }
-
-    /// Consume a preview catalog into an origin-checked launch proof.
-    pub fn launch_previews(
-        self: &Shared<Self>,
-        catalog: crate::preview::Catalog,
-    ) -> Result<crate::preview::Launch, program::Error> {
-        let (executable, application, dependencies, projections, boundary_types) =
-            catalog.into_parts();
-        let authority = self.authorize(executable)?;
-        Ok(crate::preview::Launch::new(
-            application,
-            dependencies,
-            projections,
-            boundary_types,
-            authority,
-        ))
     }
 
     /// Compile a string into an [`AST`], which can be used later for evaluation.
@@ -681,37 +468,6 @@ impl Engine {
         crate::timing::observe_optional(session, crate::timing::Phase::Lower, || {
             crate::resolve::lower_with_engine(self, program, scope, optimization_level)
         })
-    }
-
-    fn compile_application_descriptor_with_session(
-        &self,
-        script: &str,
-        evidence: Option<crate::diagnostic::Source>,
-        session: Option<&crate::timing::Session>,
-    ) -> ParseResult<crate::application::Descriptor> {
-        let executable = self.compile_executable_scripts_with_scope_raw(
-            Some(&Scope::new()),
-            [script],
-            evidence,
-            session,
-            self.optimization_level,
-        )?;
-
-        crate::timing::observe_optional(session, crate::timing::Phase::ApplicationContract, || {
-            executable
-                .require_application()
-                .map_err(crate::resolve::Error::from)?
-                .validate()
-                .map_err(|error| crate::resolve::Error::from(error).into())
-        })
-    }
-
-    fn compile_package_application_descriptor_with_session(
-        &self,
-        target: &crate::project::Target,
-        session: Option<&crate::timing::Session>,
-    ) -> Result<crate::application::Descriptor, crate::package::Error> {
-        crate::package::compile::descriptor(self, target, session)
     }
 
     /// Parse the lowered program text the evaluator runs. Only text the

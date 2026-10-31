@@ -79,8 +79,7 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
     };
     let retained = usage(&engine);
     assert!(retained.0 > before.0 && retained.1 > before.1);
-    let (candidate, semantic, carrier, coverage) = compiled.into_parts();
-    assert!(semantic.is_none());
+    let (candidate, carrier, coverage) = compiled.into_parts();
     assert_eq!(
         carrier,
         *engine
@@ -92,14 +91,12 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
     );
     assert_ne!(coverage, [0; 32]);
     let id = candidate.id();
-    let bootstrap = candidate.bind(&engine, preview_runtime()).unwrap();
+    let bootstrap = std::rc::Rc::new(candidate.bind(&engine, preview_runtime()).unwrap());
     assert_eq!(bootstrap.generation().id(), id);
-    // This transformation drops Generation metadata while the executable lives.
-    let catalog = bootstrap.into_snapshot_catalog();
-    let retained_catalog = catalog.clone();
-    drop(catalog);
+    let retained_bootstrap = bootstrap.clone();
+    drop(bootstrap);
     assert_eq!(usage(&engine), retained);
-    drop(retained_catalog);
+    drop(retained_bootstrap);
     assert_eq!(usage(&engine), before);
 }
 
@@ -114,7 +111,9 @@ fn initial_and_ordinary_generations_share_the_resident_account() {
         .unwrap();
     let live = usage(&engine);
     assert!(live.0 > baseline.0 && live.1 > baseline.1);
-    let ordinary = engine.compile_package_snapshot_generation(&pure).unwrap();
+    let ordinary = engine
+        .compile_package_snapshot_generation_with_top_level(&pure)
+        .unwrap();
     let overlapping = usage(&engine);
     assert!(overlapping.0 > live.0 && overlapping.1 > live.1);
     drop(ordinary);
@@ -270,10 +269,7 @@ mod top_level {
         let support = Shared::downgrade(ast.shared_support());
         let initial_usage = usage(&engine);
         assert!(initial_usage.0 > baseline.0 && initial_usage.1 > baseline.1);
-        let initial = initial
-            .bind(&engine, preview_runtime())
-            .unwrap()
-            .into_snapshot_catalog();
+        let initial = std::rc::Rc::new(initial.bind(&engine, preview_runtime()).unwrap());
         let last_good = initial.clone();
         let mut program = Program {
             engine: engine.clone(),
@@ -617,8 +613,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         else {
             panic!("the checked I32 native instance covers both actual snapshots");
         };
-        let (candidate, semantic, carrier, coverage) = compiled.into_parts();
-        assert!(semantic.is_none());
+        let (candidate, carrier, coverage) = compiled.into_parts();
         assert_eq!(
             carrier,
             *engine
@@ -656,8 +651,7 @@ fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
         panic!("a program with no native requirement needs no preparation");
     };
     let (compiled, top_level) = compiled.with_top_level();
-    let (candidate, semantic, ..) = compiled.into_parts();
-    assert!(semantic.is_none());
+    let (candidate, ..) = compiled.into_parts();
     drop((candidate, top_level));
     assert_eq!(usage(&engine), before);
     // The same boundaries as a profile's: a native miss needs preparation,

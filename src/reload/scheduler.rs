@@ -51,32 +51,6 @@ pub enum Admission<T, U> {
     Obsolete(T),
 }
 
-type SlotAdmission<T> = Admission<
-    super::installation::current::Prepared<T>,
-    Result<
-        (
-            Box<[super::compatibility::Evidence]>,
-            super::installation::current::Retired<T>,
-        ),
-        super::installation::current::Rejected<T>,
-    >,
->;
-
-type PublishedSlotAdmission<T> = Admission<
-    (
-        super::installation::current::Prepared<T>,
-        publication::Validated,
-    ),
-    Result<
-        (
-            Box<[super::compatibility::Evidence]>,
-            super::installation::current::Retired<T>,
-            publication::Retired,
-        ),
-        publication::Rejected<T>,
-    >,
->;
-
 /// Failure while observing or scheduling one reload revision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -369,85 +343,6 @@ impl Gate {
             Err(notice) => {
                 drop(scheduler);
                 Admission::Current(Err(notice))
-            }
-        }
-    }
-
-    /// Admit one complete prepared slot while its revision remains current.
-    ///
-    /// The lock spans only the revision check and
-    /// [`crate::reload::installation::current::Slot::admit`].
-    /// Obsolete, rejected, and retired values are returned without running any
-    /// of their destructors under the gate.
-    #[must_use = "the slot admission result must be handled"]
-    pub fn admit_slot<T>(
-        &self,
-        candidate: Candidate<super::installation::current::Prepared<T>>,
-        slot: &mut super::installation::current::Slot<T>,
-    ) -> SlotAdmission<T> {
-        let Candidate {
-            stamp,
-            revision,
-            value,
-        } = candidate;
-        let scheduler = lock(&self.scheduler);
-        if self.is_current(&stamp, revision, &scheduler) {
-            let admitted = slot.admit(value);
-            drop(scheduler);
-            Admission::Current(admitted)
-        } else {
-            drop(scheduler);
-            Admission::Obsolete(value)
-        }
-    }
-
-    /// Admit one prepared slot and publish its exact authority-free filter.
-    ///
-    /// The host bundle and filter change are linearized under the same revision
-    /// lock. Every replaced, rejected, or obsolete value is returned for
-    /// retirement after the lock has been released. Admission invokes no
-    /// caller callback and drops no payload while locked, so ordinary gate
-    /// admission exposes no user-code panic seam.
-    #[must_use = "the atomic installation result must be handled"]
-    pub fn admit_slot_and_publish<T>(
-        &self,
-        candidate: Candidate<(
-            super::installation::current::Prepared<T>,
-            publication::Validated,
-        )>,
-        slot: &mut super::installation::current::Slot<T>,
-        publication: &publication::Slot,
-    ) -> PublishedSlotAdmission<T> {
-        let Candidate {
-            stamp,
-            revision,
-            value,
-        } = candidate;
-        let scheduler = lock(&self.scheduler);
-        if !self.is_current(&stamp, revision, &scheduler) {
-            drop(scheduler);
-            return Admission::Obsolete(value);
-        }
-        let (prepared, validated) = value;
-        let Some(reservation) = publication.reserve(&validated) else {
-            let rejected = publication::Rejected::new(
-                super::installation::current::Slot::reject(prepared),
-                validated,
-            );
-            drop(scheduler);
-            return Admission::Current(Err(rejected));
-        };
-        match slot.admit(prepared) {
-            Ok((evidence, retired)) => {
-                let published = reservation.publish(validated);
-                drop(scheduler);
-                Admission::Current(Ok((evidence, retired, published)))
-            }
-            Err(rejected) => {
-                drop(reservation);
-                let rejected = publication::Rejected::new(rejected, validated);
-                drop(scheduler);
-                Admission::Current(Err(rejected))
             }
         }
     }

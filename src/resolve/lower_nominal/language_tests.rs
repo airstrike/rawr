@@ -3597,52 +3597,6 @@ fn language_conversions_to_generic_targets_and_prelude_containers() {
 }
 
 #[test]
-fn language_runtime_errors_in_builtin_impls_point_at_source() {
-    // A runtime error inside the function of a trait impl for a builtin
-    // type translates to the failing expression in the user's source, as
-    // one in the invoked function's own body does.
-    let source = "trait Shape { fn area(&self) -> i64; }
-impl Shape for i64 {
-    fn area(&self) -> i64 {
-        let v: Vec<i64> = Vec::new();
-        v[3]
-    }
-}
-pub fn run() -> i64 { 5.area() }
-pub fn own() -> i64 { let v: Vec<i64> = Vec::new(); v[2] }
-";
-    let authority = crate::Shared::new(Engine::new())
-        .compile_authority(source)
-        .unwrap_or_else(|error| panic!("{error}"));
-    let translated = |name: &str| {
-        let item = authority
-            .items()
-            .find(|item| item.key().name() == name)
-            .unwrap()
-            .clone();
-        let error = authority
-            .invoke(&item, &mut [])
-            .expect_err("indexing past the end fails at runtime");
-        authority
-            .item_evidence(&item)
-            .expect("a compiled function retains its source")
-            .translate(&error)
-            .unwrap_or_else(|| panic!("`{name}` failure has no source location: {error}"))
-    };
-    let own = translated("own");
-    assert_eq!(
-        (own.start().line(), own.start().position()),
-        (Some(9), Some(53))
-    );
-    let nested = translated("run");
-    assert_eq!(
-        (nested.start().line(), nested.start().position()),
-        (Some(5), Some(9)),
-        "the error is `v[3]` in the impl for `i64`"
-    );
-}
-
-#[test]
 fn language_generic_supertraits() {
     // `trait Both<T>: Convert<T>` and `trait Ord2: PartialOrd2<Self>`: a
     // supertrait takes arguments, substituted through elaboration, impl
@@ -7973,9 +7927,8 @@ fn language_precise_capture_bounds_and_async_functions() {
         "async fn go() -> i64 { 1 } pub fn run() -> i64 { 0 } run()",
         "struct S; impl S { async fn go(&self) -> i64 { 1 } } pub fn run() -> i64 { 0 } run()",
     ] {
-        // A future runs as iced's `Task`, so a program without iced has none.
-        let error = rejected(source);
-        assert!(error.contains("without iced"), "{error}");
+        // A program without the core's future has no future to give.
+        rejected(source);
     }
 }
 

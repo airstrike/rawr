@@ -817,33 +817,6 @@ impl Builder {
         Ok(self)
     }
 
-    /// Declare the facade's one-parameter durable stream subscription plan type.
-    ///
-    /// This role is compiler authority for lowering a direct
-    /// [`StreamOperation`](host::item::Kind::StreamOperation) call. The Rust
-    /// representation is Rawr's opaque [`host::stream::Plan`]; native stream
-    /// factories never enter the value.
-    pub fn stream_plan_type(
-        &mut self,
-        path: impl Into<ImmutableString>,
-        parameter: &str,
-    ) -> Result<&mut Self, host::Error> {
-        let relative = host::path::Path::parse(path)?;
-        let path = host::path::Path::qualify(&self.root, &relative);
-        self.ensure_vacant(&path, "type")?;
-        let definition = host::type_def::Definition::declared::<host::stream::Plan>(
-            path,
-            &[parameter],
-            &[],
-            host::type_def::Storage::Owned,
-            host::type_def::Role::StreamPlan,
-            host::usage::Policy::Required,
-            host::type_def::Visibility::Public,
-        )?;
-        self.insert_type(definition)?;
-        Ok(self)
-    }
-
     /// Declare a trait that source names as `impl Trait<..>`: the type it
     /// [projects](Self::project) to, which every implementor converts into.
     pub fn trait_<T: 'static>(
@@ -2033,12 +2006,9 @@ impl TypeProof {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::write_slice;
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::write_slice;
 
         writer.tag(0x2900);
         writer.tag(0x2901);
@@ -2062,11 +2032,8 @@ impl crate::preview::digest::Write for Fingerprint {
     }
 }
 
-impl crate::preview::digest::Write for Dependency {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Dependency {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2a00);
         writer.tag(0x2a01);
         writer.text(&self.root);
@@ -2076,12 +2043,9 @@ impl crate::preview::digest::Write for Dependency {
     }
 }
 
-impl crate::preview::digest::Write for TypeProof {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::write_slice;
+impl crate::digest::Write for TypeProof {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::write_slice;
 
         writer.tag(0x2b00);
         writer.tag(0x2b01);

@@ -19,6 +19,8 @@ use std::hash::{Hash, Hasher};
 pub struct Fingerprint(crate::Shared<Parts>);
 
 #[derive(Clone)]
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 struct Parts {
     authority: Box<[Part]>,
     atoms: Box<[Atom]>,
@@ -169,54 +171,6 @@ impl Manifest {
             .ok()
             .map(|index| &self.0[index].schema)
     }
-
-    pub(crate) fn reachable(
-        &self,
-        roots: &BTreeSet<type_def::Identity>,
-        opaque_root: bool,
-    ) -> Reachability {
-        if opaque_root {
-            return Reachability {
-                definitions: self.0.clone(),
-                opaque: true,
-            };
-        }
-
-        let mut pending = roots.clone();
-        let mut visited = BTreeSet::new();
-        while let Some(identity) = pending.pop_first() {
-            if !visited.insert(identity.clone()) {
-                continue;
-            }
-            let Ok(index) = self
-                .0
-                .binary_search_by(|definition| definition.identity.cmp(&identity))
-            else {
-                return Reachability {
-                    definitions: self.0.clone(),
-                    opaque: true,
-                };
-            };
-            let definition = &self.0[index];
-            if definition.opaque {
-                return Reachability {
-                    definitions: self.0.clone(),
-                    opaque: true,
-                };
-            }
-            pending.extend(definition.references.iter().cloned());
-        }
-
-        Reachability {
-            definitions: self
-                .0
-                .iter()
-                .filter(|definition| visited.contains(&definition.identity))
-                .cloned()
-                .collect(),
-            opaque: false,
-        }
-    }
 }
 
 impl Reachability {
@@ -351,6 +305,8 @@ enum Part {
 }
 
 #[derive(Clone, Debug)]
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 enum Atom {
     Marker(Marker),
     Count(usize),
@@ -574,11 +530,8 @@ fn write_type(encoder: &mut Encoder, ty: &type_ref::Type) {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2e00);
         writer.count(self.0.atoms.len());
         for atom in &self.0.atoms {
@@ -595,7 +548,7 @@ impl crate::preview::digest::Write for Fingerprint {
                     writer.text(path);
                 }
                 Atom::OpaqueHost => {
-                    return Err(crate::preview::digest::Error::OpaqueHostIdentity {
+                    return Err(crate::digest::Error::OpaqueHostIdentity {
                         context: "preview script schema identity",
                     });
                 }
@@ -605,6 +558,8 @@ impl crate::preview::digest::Write for Fingerprint {
     }
 }
 
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 fn schema_tag(marker: Marker) -> u16 {
     match marker {
         Marker::Version1 => 0x2e01,

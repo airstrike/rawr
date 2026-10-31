@@ -6,7 +6,6 @@
 //   - the data the island reads from #play-data: the snippet (a share's, or
 //     the first example), the examples, Turnstile's site key and whether the
 //     browser holds a pass, and the share's id;
-//   - a share's theme, pinned on <html> so the page opens in it;
 //   - Turnstile's script up front when the browser has no pass.
 // The island (site/src/play/session.ts) keeps the address, the draft, the
 // browser and server runs and sharing.
@@ -17,11 +16,7 @@ import { ogTags, type Og, type Snippet } from "./play.ts";
 export interface Example {
   name: string;
   code: string;
-  /** Messages sent before the preview. */
-  messages?: string[];
-  /** The canvas size, WxH, when the default would cut the view off. */
-  size?: string;
-  /** The menu group: "Rust" or "iced". */
+  /** The menu group: "Rust". */
   group?: string;
 }
 
@@ -64,9 +59,5 @@ export function inject(html: string, page: Page): string {
   const head = [ogTags(page.og, escape)];
   if (sitekey && !pass) head.push(`<script src="${TURNSTILE_JS}" async defer></script>`);
   out = out.replace("</head>", () => `${head.join("\n")}\n</head>`);
-  if (shared) {
-    const theme = snippet.theme === "light" ? "light" : "dark";
-    out = out.replace(/<html lang="en">/, `<html lang="en" data-theme-pin="${theme}">`);
-  }
   return out.replace(DATA, () => `<script type="application/json" id="play-data">${scriptJson(data)}</script>`);
 }

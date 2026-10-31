@@ -5,7 +5,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
-use crate::reload::{installation::current, source};
+use crate::reload::source;
 
 /// One shared exact-input publication with current and in-flight stages.
 pub struct Slot {
@@ -61,18 +61,6 @@ pub struct Retired {
     previous: Arc<source::Inputs>,
     _stage: Proof,
     _stamp: Stamp,
-}
-
-/// A rejected host bundle paired with its never-published input proof.
-#[must_use = "rejected host and input state must retire outside the gate"]
-pub struct Rejected<T> {
-    host: current::Rejected<T>,
-    inputs: Validated,
-}
-
-pub(super) struct Reservation<'a> {
-    state: RwLockWriteGuard<'a, State>,
-    index: usize,
 }
 
 struct State {
@@ -157,19 +145,6 @@ impl Slot {
     #[must_use]
     pub fn read(&self) -> Read<'_> {
         Read(read(&self.state))
-    }
-
-    pub(super) fn reserve(&self, validated: &Validated) -> Option<Reservation<'_>> {
-        let proof = validated.0.as_ref()?;
-        if !proof.observation.identity.matches(&self.identity) {
-            return None;
-        }
-        let state = write(&self.state);
-        let index = state.staged.iter().position(|entry| {
-            entry.stamp.matches(&proof.observation.stamp)
-                && Arc::ptr_eq(&entry.inputs, &proof.observation.inputs)
-        })?;
-        Some(Reservation { state, index })
     }
 
     fn withdraw(&self, proof: &Observation) -> Option<Entry> {
@@ -421,25 +396,6 @@ impl Validated {
         };
         &proof.observation.inputs
     }
-
-    fn take(&mut self) -> Proof {
-        match self.0.take() {
-            Some(proof) => proof,
-            None => unreachable!("validated proof is consumed once"),
-        }
-    }
-}
-
-impl<'a> Reservation<'a> {
-    pub(super) fn publish(mut self, mut validated: Validated) -> Retired {
-        let entry = self.state.staged.swap_remove(self.index);
-        let previous = std::mem::replace(&mut self.state.current, entry.inputs);
-        Retired {
-            previous,
-            _stage: validated.take(),
-            _stamp: entry.stamp,
-        }
-    }
 }
 
 impl Retired {
@@ -452,20 +408,6 @@ impl Retired {
     /// Release the retired publication after reconciliation and gate exit.
     pub fn release(self) {
         drop(self);
-    }
-}
-
-impl<T> Rejected<T> {
-    pub(super) fn new(host: current::Rejected<T>, inputs: Validated) -> Self {
-        Self { host, inputs }
-    }
-
-    /// Release rejected authority and withdraw its staged exact inputs.
-    #[must_use]
-    pub fn release(self) -> T {
-        let Self { host, inputs } = self;
-        drop(inputs);
-        host.release()
     }
 }
 
@@ -547,12 +489,6 @@ impl fmt::Debug for Validated {
 impl fmt::Debug for Retired {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Retired(<private>)")
-    }
-}
-
-impl<T> fmt::Debug for Rejected<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Rejected(<private>)")
     }
 }
 

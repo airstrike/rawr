@@ -354,19 +354,6 @@ impl Graph {
         )
     }
 
-    /// Every `#[preview]` written in the graph's sources, without checking
-    /// them, in source order.
-    #[must_use]
-    pub fn previews(&self) -> Vec<crate::preview::Listed> {
-        self.units
-            .iter()
-            .flat_map(|unit| {
-                let source = &self.sources[unit.source.index()];
-                crate::preview::listed(source.package(), source.modules(), unit.parsed.items())
-            })
-            .collect()
-    }
-
     pub(crate) fn diagnostic_sources(&self) -> Box<[diagnostic::Source]> {
         self.sources
             .iter()

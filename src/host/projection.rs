@@ -41,10 +41,6 @@ impl Key {
         &self.owner
     }
 
-    pub(crate) const fn projection(&self) -> &host::type_def::Projection {
-        &self.projection
-    }
-
     pub(crate) fn diagnostic_name(&self) -> ImmutableString {
         format!("{} -> {}", self.source.path(), self.projection.target()).into()
     }
@@ -79,10 +75,6 @@ impl Site {
 
     pub(crate) const fn span(&self) -> Span {
         self.span
-    }
-
-    pub(crate) const fn projection(&self) -> &host::type_def::Projection {
-        self.key.projection()
     }
 
     pub(crate) fn dependencies(&self) -> BTreeSet<host::facade::Dependency> {
@@ -126,11 +118,8 @@ impl Hash for Site {
     }
 }
 
-impl crate::preview::digest::Write for Key {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Key {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2c00);
         writer.tag(0x2c01);
         self.owner.write(writer)?;
@@ -142,11 +131,8 @@ impl crate::preview::digest::Write for Key {
     }
 }
 
-impl crate::preview::digest::Write for Site {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Site {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2d00);
         writer.tag(0x2d01);
         self.key.write(writer)?;

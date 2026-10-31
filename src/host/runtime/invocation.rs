@@ -48,25 +48,6 @@ pub(crate) struct Proof {
     proof: Shared<dyn Payload>,
 }
 
-impl<T: SendSync + 'static> Invocation<T> {
-    /// Bind one value to an exact invocation-scoped facade type.
-    pub fn bind(export: host::type_def::Export, value: T) -> Result<Self, Error> {
-        if export.storage() != host::type_def::Storage::Invocation {
-            return Err(Error::OwnedStorage);
-        }
-
-        Ok(Self {
-            proof: Shared::new(Value { export, value }),
-        })
-    }
-
-    pub(crate) fn proof(&self) -> Proof {
-        Proof {
-            proof: self.proof.clone(),
-        }
-    }
-}
-
 impl<T> Clone for Invocation<T> {
     fn clone(&self) -> Self {
         Self {

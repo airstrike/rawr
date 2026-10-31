@@ -187,17 +187,11 @@ same id).
 
 A shared link unfurls with its first line of output as the description and
 the site's card (`site/public/og/card.png`) as the image. A busy or
-unreachable server is retried after ten minutes. Uncached previews are
-limited per IP (10 a minute, 60 an hour), without Turnstile. Shares not
+unreachable server is retried after ten minutes. Shares not
 visited for 30 days are purged by the cron once a day, with their previews.
 The editor keeps the latest snippet in the browser (`localStorage`): bare
 `/play` restores it; a share shows the share until it is edited; Examples →
 Reset brings back the first example.
-
-The Worker still keeps a share's theme, size and messages, reads `?play`
-options on the site's Run blocks, and stores a PNG preview when the bot
-sends one. Those served iced snippets, and the bot no longer reads or sends
-them.
 
 Server runs go Worker → Durable Object → the bot's HTTP port
 (`PLAY_HTTP_PORT`, 8080, reachable only through the Durable Object) → the

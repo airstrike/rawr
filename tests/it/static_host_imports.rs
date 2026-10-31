@@ -91,22 +91,6 @@ fn derives_use_explicit_host_capabilities_and_legacy_types_remain_opaque() {
 }
 
 #[test]
-fn facade_operations_reject_direct_calls_and_value_references() {
-    let mut engine = Engine::new();
-    engine.register_host_facade(test_facade()).unwrap();
-
-    for source in ["use iced::load; pub fn start() { load() }", "use iced::load; pub fn start() { let operation = load; () }"] {
-        let error = engine.compile_executable(source).unwrap_err();
-        assert!(matches!(
-            error.err_type(),
-            ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, .. })
-                if item == "iced::load"
-        ));
-        assert!(!error.primary_span().is_none());
-    }
-}
-
-#[test]
 fn inclusive_integer_ranges_are_exact_static_host_operands() {
     let mut engine = Engine::new();
     engine.register_host_facade(test_facade()).unwrap();
@@ -139,51 +123,6 @@ fn inclusive_integer_range_changes_the_canonical_facade_fingerprint() {
     assert_eq!(ranged.fingerprint(), range_facade(type_ref::Builtin::InclusiveRange).fingerprint());
 }
 
-#[test]
-fn task_perform_accepts_only_exact_positioned_operation_selectors() {
-    let mut engine = Engine::new();
-    engine.register_host_facade(test_facade()).unwrap();
-
-    let valid = r#"
-use iced;
-use iced::{Task, combine, load};
-enum Message { Loaded(String), Count(i64) }
-pub fn loaded(value: String) -> Message { Message::Loaded(value) }
-pub fn count(value: i64) -> Message { Message::Count(value) }
-pub fn string_task() -> Task<Message> { Task::perform(iced::load(), loaded) }
-pub fn integer_task() -> Task<Message> { Task::perform(load(1), count) }
-pub fn many_task() -> Task<Message> { Task::perform(combine(1, " rawr"), loaded) }
-"#;
-    engine.compile_executable(valid).unwrap();
-
-    let wrong_input = valid.replace("Task::perform(load(1), count)", "Task::perform(load(true), count)");
-    let error = engine.compile_executable(&wrong_input).unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, .. })
-            if item == "iced::load"
-    ));
-    assert!(!error.primary_span().is_none());
-
-    let wrong_arity = valid.replace("Task::perform(load(1), count)", "Task::perform(load(1, 2), count)");
-    let error = engine.compile_executable(&wrong_arity).unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, .. })
-            if item == "iced::load"
-    ));
-    assert!(!error.primary_span().is_none());
-
-    let missing = valid.replace("Task::perform(load(1), count)", "Task::perform(missing(1), count)");
-    let error = engine.compile_executable(&missing).unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::UnknownFunction { name, .. })
-            if name == "missing"
-    ));
-    assert!(!error.primary_span().is_none());
-}
-
 fn test_facade() -> facade::Definition {
     let mut builder = facade::Builder::new("iced", facade::Abi::new(1).unwrap()).unwrap();
     builder.module("widget").unwrap();
@@ -194,19 +133,6 @@ fn test_facade() -> facade::Definition {
 
     builder.item(item::Definition::value("Center", type_ref::Type::registered("Result").unwrap()).unwrap()).unwrap();
     builder.item(item::Definition::function("run", signature::Builder::new().finish()).unwrap()).unwrap();
-
-    let mut load = signature::Builder::new();
-    load.output(type_ref::Type::builtin(type_ref::Builtin::String));
-    builder.item(item::Definition::operation("load", load.finish()).unwrap()).unwrap();
-    let mut load = signature::Builder::new();
-    load.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::I64));
-    builder.item(item::Definition::operation("load", load.finish()).unwrap()).unwrap();
-
-    let mut combine = signature::Builder::new();
-    combine.parameter(type_ref::Type::builtin(type_ref::Builtin::I64));
-    combine.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
-    combine.output(type_ref::Type::builtin(type_ref::Builtin::String));
-    builder.item(item::Definition::operation("combine", combine.finish()).unwrap()).unwrap();
 
     let mut range_value = signature::Builder::new();
     range_value.parameter(type_ref::Type::builtin(type_ref::Builtin::InclusiveRange));

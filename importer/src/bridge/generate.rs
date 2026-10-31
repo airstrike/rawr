@@ -12,7 +12,6 @@ use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
 mod place;
-mod view;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
@@ -3208,7 +3207,7 @@ fn compile_resident(
         Err(error) => return Err(std::io::Error::other(error.to_string())),
     };
     let (compiled, ast) = compiled.with_top_level();
-    let (candidate, semantic, carrier, coverage) = compiled.into_parts();
+    let (candidate, carrier, coverage) = compiled.into_parts();
     if let Some(running) = resident.running
         && __rawr_internal::island::refusal(running, &candidate).is_some()
     {
@@ -3223,7 +3222,7 @@ fn compile_resident(
         observation: None,
         marked_main: snapshot.marked_root(),
     };
-    Ok(ResidentResult::Compiled(program, semantic.map(|semantic| *semantic.as_bytes()), carrier, coverage))
+    Ok(ResidentResult::Compiled(program, None, carrier, coverage))
 }
 
 fn resident_response(
@@ -4367,10 +4366,8 @@ fn live_protocol(
                     [engine.imported_native_snapshot(), None])?;
                 let (response_tag, diagnostic) = match output {
                     ResidentResult::Compiled(compiled) => {
-                        let (candidate, semantic, carrier, coverage) = compiled.into_parts();
-                        let compiled = attempt.compiled(
-                            carrier, coverage, semantic.map(|semantic| *semantic.as_bytes()),
-                        );
+                        let (candidate, carrier, coverage) = compiled.into_parts();
+                        let compiled = attempt.compiled(carrier, coverage, None);
                         pending = Some(PendingLive {
                             installation,
                             key: compiled.key(),
@@ -5538,7 +5535,7 @@ fn render_source(
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
-    let _type_paths = TypePaths::install(facade.as_ref(), profile.has_generated_projections());
+    let _type_paths = TypePaths::install(facade.as_ref());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
             // A macro's `$crate` path to a trait names the crate that
@@ -5833,7 +5830,6 @@ fn render_source(
     sources.push((APPLICATIONS_PATH.into(), applications));
     let mut families = Vec::new();
     render_families(&mut families)?;
-    view::render_families(&mut families)?;
     sources.push((FAMILIES_PATH.into(), families));
     // The impls name the proxies of their owners, so they come first.
     let mut impls = Vec::new();
@@ -6715,17 +6711,6 @@ fn render_adapter(
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
     let name = adapter_name(plan);
-    // A call that makes or takes an iced view value keeps a recipe (D558
-    // tier 2).
-    if view::is_view_call(plan)? {
-        writeln!(
-            output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{\n    let _ = &mut *arguments;"
-        )
-        .map_err(encoding)?;
-        view::render(plan, output)?;
-        return output.write_all(b"}\n\n").map_err(encoding);
-    }
     // A call that takes a value whose type holds an opaque `impl Trait`
     // type runs what the call that made the value compiled for it.
     if let Some((position, key)) = opaque_operand(plan)? {
@@ -13602,12 +13587,9 @@ fn passed_on(alias: &crate::surface::facade::TypeAlias) -> Option<[u8; 32]> {
 struct TypePaths;
 
 impl TypePaths {
-    /// `views` when a host profile makes view recipes (D558 tier 2); a
-    /// runner with the neutral profile makes none, and an imported type
-    /// that renders is an ordinary scoped type (D594).
-    fn install(facade: Option<&crate::surface::facade::Plan>, views: bool) -> Self {
+    /// An imported type that renders is an ordinary scoped type (D594).
+    fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
         place::clear();
-        view::install(facade.filter(|_| views));
         TYPE_PATHS.with_borrow_mut(|paths| {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
@@ -13723,11 +13705,8 @@ impl TypePaths {
                                 clone: ty.cloneable(),
                                 partial_eq: ty.partial_eq(),
                             };
-                            // A view type's value is a recipe, not a scope
-                            // frame's, where a host profile makes view
-                            // recipes (D558 tier 2). With the neutral profile
-                            // it is an ordinary scoped type (D594).
-                            if ty.lifetimes() != 0 && !(views && ty.view()) {
+                            // A view type is an ordinary scoped type (D594).
+                            if ty.lifetimes() != 0 {
                                 types.entry(*ty.identity()).or_insert(lifetimes);
                             }
                             traits.entry(*ty.identity()).or_insert(lifetimes);
@@ -13797,7 +13776,6 @@ impl Drop for TypePaths {
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
-        view::clear();
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);

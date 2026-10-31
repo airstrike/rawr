@@ -35,7 +35,7 @@ const examples = [
   { name: "Word count", code: wordCount, group: "Rust" },
 ];
 const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
-  snippet: { code: histogram, theme: "dark", size: "", messages: [] }, examples, sitekey: null, shared: null, og,
+  snippet: { code: histogram }, examples, sitekey: null, shared: null, og,
 });
 const brotli: string[] = [];
 const siteRuns: unknown[] = [];

@@ -1,6 +1,5 @@
 //! Promotion of parsed Rawr units into opaque resolved programs.
 
-pub(crate) mod application;
 pub(crate) mod borrowck;
 mod error;
 mod forward;
@@ -71,10 +70,6 @@ pub struct Program {
     /// The functions of trait impls for builtin types (`impl Shape for
     /// i64`): lowered with the methods, but not program members.
     builtin_methods: Box<[method::Definition]>,
-    application: Option<application::Entry>,
-    previews: Box<[crate::preview::Definition]>,
-    widgets: Box<[crate::widget::Definition]>,
-    preview_paths: BTreeMap<(program::source::Id, Span), crate::preview::PathTarget>,
     qualified_functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     qualified_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
     qualified_pattern_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
@@ -258,26 +253,6 @@ impl Program {
     #[allow(dead_code)]
     pub(crate) const fn builtin_methods(&self) -> &[method::Definition] {
         &self.builtin_methods
-    }
-
-    pub(crate) const fn application(&self) -> Option<&application::Entry> {
-        self.application.as_ref()
-    }
-
-    pub(crate) const fn previews(&self) -> &[crate::preview::Definition] {
-        &self.previews
-    }
-
-    pub(crate) const fn widgets(&self) -> &[crate::widget::Definition] {
-        &self.widgets
-    }
-
-    pub(crate) fn preview_path(
-        &self,
-        source: program::source::Id,
-        span: Span,
-    ) -> Option<&crate::preview::PathTarget> {
-        self.preview_paths.get(&(source, span))
     }
 }
 
@@ -511,9 +486,8 @@ fn resolve_with_evidence_and_namespace(
     let (methods, builtin_methods) =
         resolve_methods(&mut items, &definitions, host).map_err(LocatedError::into_error)?;
     resolve_functions(&mut items).map_err(LocatedError::into_error)?;
-    let application = application::resolve(&mut items, &methods, host, None)?;
 
-    let mut program = Program {
+    let program = Program {
         #[cfg(feature = "rust-import")]
         native: None,
         package: namespace.package.clone(),
@@ -522,10 +496,6 @@ fn resolve_with_evidence_and_namespace(
         types: definitions.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         builtin_methods: builtin_methods.into_boxed_slice(),
-        application,
-        previews: Box::new([]),
-        widgets: Box::new([]),
-        preview_paths: BTreeMap::new(),
         qualified_functions: BTreeMap::new(),
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
@@ -542,8 +512,6 @@ fn resolve_with_evidence_and_namespace(
         lexical,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
-    program.widgets = crate::widget::resolve(&program, host).map_err(LocatedError::into_error)?;
-    program.previews = crate::preview::resolve(&program, host).map_err(LocatedError::into_error)?;
     Ok(program)
 }
 
@@ -597,20 +565,9 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
                 }
             }
             item::Kind::Impl(item) => {
-                let marked = item
-                    .header
-                    .attributes
-                    .iter()
-                    .any(crate::item::Attribute::is_widget);
                 for function in &item.functions {
                     for parameter in &function.parameters {
-                        if marked
-                            && function.name.text == "draw"
-                            && invocation_path(&parameter.ty).is_some()
-                        {
-                            continue;
-                        }
-                        if let Some(error) = reject(&parameter.ty, "a non-draw method parameter") {
+                        if let Some(error) = reject(&parameter.ty, "a method parameter") {
                             return Err(error);
                         }
                     }
@@ -1580,10 +1537,9 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
 }
 
 /// Whether async code in this program gives the core's
-/// `rawr::future::Future`: its facade is installed and no host's own type,
-/// such as iced's `Task`, runs futures.
+/// `rawr::future::Future`: its facade is installed.
 pub(crate) fn core_futures(host: &host::Registry) -> bool {
-    host.type_(crate::future::facade::FUTURE).is_some() && host.type_("iced::Task").is_none()
+    host.type_(crate::future::facade::FUTURE).is_some()
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,
@@ -2934,7 +2890,7 @@ fn resolve_methods(
                 && matches!(name.text.as_str(), "Debug" | "Display");
             for function in &mut item.functions {
                 if !formatter {
-                    validate_method_signature(owner.name(), function, false, true)
+                    validate_method_signature(owner.name(), function, true)
                         .map_err(|error| LocatedError::primary(shell.source, error))?;
                 }
             }
@@ -3043,7 +2999,7 @@ fn resolve_methods(
                 .into()
             };
             for function in &mut item.functions {
-                validate_method_signature(owner.name(), function, false, true)
+                validate_method_signature(owner.name(), function, true)
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
                 if let Some((previous_source, previous_declaration)) = declarations.insert(
@@ -3078,13 +3034,8 @@ fn resolve_methods(
             continue;
         }
 
-        let widget_protocol = item
-            .header
-            .attributes
-            .iter()
-            .any(crate::item::Attribute::is_widget);
         for function in &mut item.functions {
-            validate_method_signature(owner.name(), function, widget_protocol, true)
+            validate_method_signature(owner.name(), function, true)
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
             let name = function.name.text.clone();
             let duplicate_key = (owner_id, name.clone());
@@ -4719,7 +4670,7 @@ fn resolve_functions(items: &mut [item::Shell]) -> Result<(), LocatedError> {
         let item::Kind::Function(function) = &mut shell.kind else {
             continue;
         };
-        validate_method_signature("<module>", function, false, true)
+        validate_method_signature("<module>", function, true)
             .map_err(|error| LocatedError::primary(shell.source, error))?;
         function.body.lowering = item::Lowering::NominalFunction;
     }
@@ -5505,25 +5456,16 @@ fn impl_owner(ty: &type_ref::Type) -> Result<(type_def::Id, ImmutableString), Er
 fn validate_method_signature(
     owner: &str,
     function: &item::Function,
-    widget_protocol: bool,
     copied: bool,
 ) -> Result<(), Error> {
-    let preview_subject = function
-        .header
-        .attributes
-        .iter()
-        .any(|attribute| attribute.preview().is_some());
     // A free function's one `&mut` parameter is its receiver at runtime
     // (`lower_nominal::this_parameter`).
     let mut receiver_free = owner == "<module>";
     for parameter in &function.parameters {
         if let type_ref::Type::Reference { mutable, .. } = parameter.ty {
-            // Invocation-scoped references are validated once the full program and
-            // widget marker context are available below.
+            // Invocation-scoped references are validated once the full program
+            // is available below.
             if direct_mutable_invocation(&parameter.ty) {
-                continue;
-            }
-            if widget_protocol {
                 continue;
             }
             // Shared borrows are passed by value, as an iced style
@@ -5540,13 +5482,9 @@ fn validate_method_signature(
             return Err(Error::InvalidMethodSignature {
                 owner: owner.into(),
                 method: function.name.text.clone(),
-                reason: if preview_subject {
-                    "preview function inputs may use only shared references".into()
-                } else {
-                    "mutable references are supported only for `self` receivers and the \
-                     parameters of free functions and inherent methods"
-                        .into()
-                },
+                reason: "mutable references are supported only for `self` receivers and the \
+                         parameters of free functions and inherent methods"
+                    .into(),
                 signature: type_span(&parameter.ty),
             });
         }

@@ -71,97 +71,6 @@ pub(crate) fn inline_modules(
     }))
 }
 
-pub(crate) fn descriptor(
-    engine: &Engine,
-    target: &project::Target,
-    session: Option<&timing::Session>,
-) -> Result<crate::application::Descriptor, Error> {
-    descriptor_from_graph(engine, load(engine, target, session)?, session)
-}
-
-/// [`descriptor`] of a graph already loaded.
-pub(crate) fn descriptor_from_graph(
-    engine: &Engine,
-    graph: Graph,
-    session: Option<&timing::Session>,
-) -> Result<crate::application::Descriptor, Error> {
-    let (executable, sources, entry, _) = executable_from_graph(engine, graph, session, false)?;
-    timing::observe_optional(session, timing::Phase::ApplicationContract, || {
-        executable
-            .require_application()
-            .map_err(|error| (program::source::Id::from_index(entry.index()), error))?
-            .validate_package()
-    })
-    .map_err(|(source, error)| {
-        Error::resolution(
-            sources,
-            resolve::package::Failure {
-                primary: crate::package::source::Id::from_index(source.index()),
-                secondary: None,
-                error: resolve::Error::from(error),
-            },
-        )
-    })
-}
-
-pub(crate) fn catalog(
-    engine: &Engine,
-    target: &project::Target,
-    session: Option<&timing::Session>,
-) -> Result<crate::preview::Catalog, Error> {
-    catalog_from_graph(engine, load(engine, target, session)?, session)
-}
-
-/// [`catalog`] of a graph already loaded.
-pub(crate) fn catalog_from_graph(
-    engine: &Engine,
-    graph: Graph,
-    session: Option<&timing::Session>,
-) -> Result<crate::preview::Catalog, Error> {
-    let (executable, sources, _, _) = executable_from_graph(engine, graph, session, false)?;
-    timing::observe_optional(session, timing::Phase::ApplicationContract, || {
-        crate::preview::Catalog::from_package_executable(executable)
-    })
-    .map_err(|(source, error)| {
-        Error::resolution(
-            sources,
-            resolve::package::Failure {
-                primary: crate::package::source::Id::from_index(source.index()),
-                secondary: None,
-                error: resolve::Error::from(error),
-            },
-        )
-    })
-}
-
-pub(crate) fn generation(
-    engine: &Engine,
-    target: &project::Target,
-    session: Option<&timing::Session>,
-) -> Result<crate::reload::Candidate, Error> {
-    generation_from_graph(engine, load(engine, target, session)?, session)
-}
-
-/// [`generation`] of a graph already loaded.
-pub(crate) fn generation_from_graph(
-    engine: &Engine,
-    graph: Graph,
-    session: Option<&timing::Session>,
-) -> Result<crate::reload::Candidate, Error> {
-    let (executable, sources, _, source) = executable_from_graph(engine, graph, session, true)?;
-    let source = source.expect("reload compilation retains its canonical source graph");
-    crate::reload::Candidate::from_package(executable, source).map_err(|(source, error)| {
-        Error::resolution(
-            sources,
-            resolve::package::Failure {
-                primary: crate::package::source::Id::from_index(source.index()),
-                secondary: None,
-                error: resolve::Error::from(error),
-            },
-        )
-    })
-}
-
 #[cfg(feature = "rust-import")]
 pub(crate) fn snapshot(
     engine: &Engine,
@@ -174,14 +83,6 @@ pub(crate) fn snapshot(
     snapshot_executable(engine, program, &sources).map(program::Executable::into_hosted_ast)
 }
 
-#[cfg(feature = "rust-import")]
-pub(crate) fn snapshot_generation(
-    engine: &Engine,
-    snapshot: &super::snapshot::Snapshot,
-) -> Result<crate::reload::Candidate, Error> {
-    snapshot_generation_with(engine, snapshot, Semantics::Generation)
-}
-
 /// A generation of any program, a plain one included, for a runner with no
 /// host profile.
 #[cfg(feature = "rust-import")]
@@ -189,43 +90,15 @@ pub(crate) fn snapshot_generation_plain(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    snapshot_generation_with(engine, snapshot, Semantics::Plain)
-}
-
-#[cfg(feature = "rust-import")]
-enum Semantics {
-    /// No application or previews required.
-    Plain,
-    /// An application or previews, unchecked.
-    Generation,
-}
-
-#[cfg(feature = "rust-import")]
-fn snapshot_generation_with(
-    engine: &Engine,
-    snapshot: &super::snapshot::Snapshot,
-    semantics: Semantics,
-) -> Result<crate::reload::Candidate, Error> {
     let graph = Graph::load_snapshot(engine, snapshot)?;
     let sources = graph.diagnostic_sources();
     let source = crate::reload::source::Graph::from_package(&graph);
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
-    let candidate = match semantics {
-        Semantics::Generation => crate::reload::Candidate::from_package(executable, source),
-        Semantics::Plain => crate::reload::Candidate::from_package_plain(executable, source),
-    };
-    candidate.map_err(|(source, error)| {
-        Error::resolution(
-            sources,
-            resolve::package::Failure {
-                primary: crate::package::source::Id::from_index(source.index()),
-                secondary: None,
-                error: resolve::Error::from(error),
-            },
-        )
-    })
+    Ok(crate::reload::Candidate::from_package_plain(
+        executable, source,
+    ))
 }
 
 #[cfg(feature = "rust-import")]

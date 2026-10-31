@@ -17,7 +17,9 @@ mod __rawr_internal {
         pub eligible: super::Arc<super::AtomicBool>,
     }
     impl Engine {
-        pub fn imported_native_snapshot(&self) -> Option<package::import::runner::account::Snapshot> {
+        pub fn imported_native_snapshot(
+            &self,
+        ) -> Option<package::import::runner::account::Snapshot> {
             Some(package::import::runner::account::Snapshot(
                 self.compiled.load(super::Ordering::SeqCst),
             ))
@@ -38,23 +40,16 @@ mod __rawr_internal {
                 }
             }
             pub mod resident {
-                pub struct Semantic([u8; 32]);
-                impl Semantic {
-                    pub fn as_bytes(&self) -> &[u8; 32] {
-                        &self.0
-                    }
-                }
                 pub struct Compiled(pub crate::__rawr_internal::reload::Candidate);
                 impl Compiled {
                     pub fn into_parts(
                         self,
                     ) -> (
                         crate::__rawr_internal::reload::Candidate,
-                        Option<Semantic>,
                         [u8; 32],
                         [u8; 32],
                     ) {
-                        (self.0, Some(Semantic([21; 32])), [22; 32], [23; 32])
+                        (self.0, [22; 32], [23; 32])
                     }
                 }
                 pub enum Outcome {
@@ -466,8 +461,14 @@ fn main() {
         &mut sender,
         37,
         &[1; 100],
-        [Some(__rawr_internal::package::import::runner::account::Snapshot(1)), None],
-    ).unwrap_err();
+        [
+            Some(__rawr_internal::package::import::runner::account::Snapshot(
+                1,
+            )),
+            None,
+        ],
+    )
+    .unwrap_err();
     assert_eq!(error.to_string(), "original compiler refusal");
     // Each edit interval must consume the pending candidate without advancing
     // the old owner, and a subsequent fresh request must still succeed.
@@ -587,8 +588,8 @@ fn resident_scenarios() {
         assert_eq!(bytes.len(), 197);
         assert_eq!(&bytes[100..132], &[22; 32]);
         assert_eq!(&bytes[132..164], &[23; 32]);
-        assert_eq!(bytes[164], 1);
-        assert_eq!(&bytes[165..], &[21; 32]);
+        assert_eq!(bytes[164], 0);
+        assert_eq!(&bytes[165..], &[0; 32]);
         assert_eq!(s.compiled.load(Ordering::SeqCst), 1);
         assert_eq!(s.installed.load(Ordering::SeqCst), 0);
         let commit = resident_commit();

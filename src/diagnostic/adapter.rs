@@ -1,6 +1,6 @@
 //! Lossless transformations from existing error families.
 
-use crate::{application, program, resolve, EvalAltResult, ParseError, ParseErrorType, Span};
+use crate::{program, resolve, EvalAltResult, ParseError, ParseErrorType, Span};
 
 use super::{code, Builder, Error, Report, Source};
 
@@ -13,9 +13,6 @@ impl Report {
     /// exact source snapshot.
     pub fn from_parse(source: Source, error: &ParseError) -> Result<Self, Error> {
         match error.err_type() {
-            ParseErrorType::Resolution(resolve::Error::Application(error)) => {
-                application_report(source, error)
-            }
             ParseErrorType::Resolution(error) => resolution_report(source, error),
             ParseErrorType::Unexpected { .. } => unexpected_report(source, error.err_type(), None),
             error_type => {
@@ -37,9 +34,6 @@ impl Report {
         span: Span,
     ) -> Result<Self, Error> {
         match error.err_type() {
-            ParseErrorType::Resolution(resolve::Error::Application(error)) => {
-                application_report_at(source, error, span)
-            }
             ParseErrorType::Resolution(error) => resolution_report_at(source, error, span),
             ParseErrorType::Unexpected { .. } => {
                 unexpected_report(source, error.err_type(), Some(span))
@@ -62,9 +56,6 @@ impl Report {
         reason: impl Into<crate::ImmutableString>,
     ) -> Self {
         let builder = match error.err_type() {
-            ParseErrorType::Resolution(resolve::Error::Application(error)) => {
-                application_builder(error)
-            }
             ParseErrorType::Resolution(error) => resolution_builder(error),
             error_type => {
                 let (stable_code, help) = parse_code(error_type);
@@ -84,10 +75,7 @@ impl Report {
         secondary: Option<Source>,
         error: &resolve::Error,
     ) -> Result<Self, Error> {
-        match error {
-            resolve::Error::Application(error) => application_report(primary, error),
-            error => resolution_report_with_sources(primary, secondary, error),
-        }
+        resolution_report_with_sources(primary, secondary, error)
     }
 
     /// Transform an evaluator error, recursively retaining its deepest source
@@ -186,88 +174,6 @@ impl Report {
             return Self::from_evaluation_at(source, declaration, error);
         }
         Self::from_program(Some(source), error)
-    }
-
-    /// Transform an invocation error through compiler-retained original-position evidence.
-    pub(crate) fn from_program_mapped(
-        source: Source,
-        original: Span,
-        error: &program::Error,
-    ) -> Result<Self, Error> {
-        if let program::Error::Evaluation { error, .. } = error {
-            return Self::from_evaluation_mapped(source, original, error);
-        }
-        Self::from_program(Some(source), error)
-    }
-
-    /// Transform a bound application runtime failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error only when nested evaluator evidence is out of bounds.
-    pub fn from_application_runtime(
-        source: Option<Source>,
-        error: &application::RuntimeError,
-    ) -> Result<Self, Error> {
-        match error {
-            application::RuntimeError::Invocation(error)
-            | application::RuntimeError::Task(error) => Self::from_program(source, error),
-            application::RuntimeError::StateConstruction(..)
-            | application::RuntimeError::State(..)
-            | application::RuntimeError::Message(..)
-            | application::RuntimeError::Startup(..)
-            | application::RuntimeError::TaskRepresentation { .. } => {
-                let builder = Report::error(code::RUNTIME_VALUE, error.to_string());
-                Ok(finish_with_source(builder, source))
-            }
-            application::RuntimeError::DefaultBoot | application::RuntimeError::ExplicitBoot => {
-                let builder = Report::error(code::RUNTIME_BOOT, error.to_string());
-                Ok(finish_with_source(builder, source))
-            }
-        }
-    }
-
-    /// Transform a bound application runtime failure at its exact callback declaration.
-    pub fn from_application_runtime_at(
-        source: Source,
-        declaration: Span,
-        error: &application::RuntimeError,
-    ) -> Result<Self, Error> {
-        match error {
-            application::RuntimeError::Invocation(error)
-            | application::RuntimeError::Task(error) => {
-                Self::from_program_at(source, declaration, error)
-            }
-            application::RuntimeError::StateConstruction(..)
-            | application::RuntimeError::State(..)
-            | application::RuntimeError::Message(..)
-            | application::RuntimeError::Startup(..)
-            | application::RuntimeError::TaskRepresentation { .. } => {
-                Ok(Report::error(code::RUNTIME_VALUE, error.to_string())
-                    .primary(source, declaration, Some("callback declared here".into()))?
-                    .finish())
-            }
-            application::RuntimeError::DefaultBoot | application::RuntimeError::ExplicitBoot => {
-                Ok(Report::error(code::RUNTIME_BOOT, error.to_string())
-                    .primary(source, declaration, Some("callback declared here".into()))?
-                    .finish())
-            }
-        }
-    }
-
-    /// Transform an application callback failure through original-position evidence.
-    pub(crate) fn from_application_runtime_mapped(
-        source: Source,
-        original: Span,
-        error: &application::RuntimeError,
-    ) -> Result<Self, Error> {
-        match error {
-            application::RuntimeError::Invocation(error)
-            | application::RuntimeError::Task(error) => {
-                Self::from_program_mapped(source, original, error)
-            }
-            _ => Self::from_application_runtime(Some(source), error),
-        }
     }
 
     /// Transform a project/environment discovery failure.
@@ -607,9 +513,6 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_UNEXPECTED,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
-        resolve::Category::InvalidPreview => code::RESOLVE_PREVIEW,
-        resolve::Category::InvalidWidget => code::RESOLVE_WIDGET,
-        resolve::Category::InvalidApplication => unreachable!(),
     };
     let builder = Report::error(stable_code, resolution_message(error));
     match error {
@@ -649,78 +552,6 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => builder.help(format!("derive `{capability}` for `{owner}`")),
-        _ => builder,
-    }
-}
-
-fn application_report(source: Source, error: &application::Error) -> Result<Report, Error> {
-    let builder = application_builder(error);
-    let secondary_message = error
-        .secondary_span()
-        .map(|_| "first application entry or related declaration is here");
-    attach(
-        builder,
-        source,
-        error.primary_span(),
-        error.secondary_span(),
-        secondary_message,
-    )
-}
-
-fn application_report_at(
-    source: Source,
-    error: &application::Error,
-    primary: Span,
-) -> Result<Report, Error> {
-    Ok(application_builder(error)
-        .source(source.clone())
-        .primary(source, primary, None)?
-        .finish())
-}
-
-fn application_builder(error: &application::Error) -> Builder {
-    use application::Category as ApplicationCategory;
-
-    let stable_code = match error.category() {
-        ApplicationCategory::MissingEntry => code::FRAMEWORK_MISSING_ENTRY,
-        ApplicationCategory::InvalidMain => code::FRAMEWORK_INVALID_MAIN,
-        ApplicationCategory::MultipleEntries => code::FRAMEWORK_MULTIPLE_ENTRIES,
-        ApplicationCategory::ConditionalEntry => code::FRAMEWORK_CONDITIONAL_ENTRY,
-        ApplicationCategory::NestedEntry => code::FRAMEWORK_NESTED_ENTRY,
-        ApplicationCategory::HiddenEntry => code::FRAMEWORK_HIDDEN_ENTRY,
-        ApplicationCategory::NonTailEntry => code::FRAMEWORK_NON_TAIL_ENTRY,
-        ApplicationCategory::MalformedEntry => code::FRAMEWORK_MALFORMED_ENTRY,
-        ApplicationCategory::NonSymbolicCallback => code::FRAMEWORK_NON_SYMBOLIC_CALLBACK,
-        ApplicationCategory::UnknownCallback => code::FRAMEWORK_UNKNOWN_CALLBACK,
-        ApplicationCategory::InvalidCallbackKind => code::FRAMEWORK_CALLBACK_KIND,
-        ApplicationCategory::InvalidReceiver => code::FRAMEWORK_CALLBACK_RECEIVER,
-        ApplicationCategory::InvalidArity => code::FRAMEWORK_CALLBACK_ARITY,
-        ApplicationCategory::TypeMismatch => code::FRAMEWORK_TYPE_MISMATCH,
-        ApplicationCategory::InvalidOutput => code::FRAMEWORK_INVALID_OUTPUT,
-        ApplicationCategory::MissingDefault => code::FRAMEWORK_MISSING_DEFAULT,
-        ApplicationCategory::MissingCapability => code::FRAMEWORK_CAPABILITY,
-        ApplicationCategory::InvalidFacadeContract => code::FRAMEWORK_BINDINGS,
-        ApplicationCategory::FacadeDependencyConflict => code::FRAMEWORK_BINDINGS_DEPENDENCY,
-        ApplicationCategory::UnsupportedRuntimeType => code::FRAMEWORK_RUNTIME_TYPE,
-    };
-    let builder = Report::error(stable_code, application_message(error));
-    match error {
-        application::Error::MissingEntry => builder.help(
-            "define one public `main` whose tail is `iced::run(...)` or `iced::application(...)`",
-        ),
-        application::Error::UnknownCallback { path, .. } => builder.help(format!(
-            "define `{path}` or pass an existing symbolic callback"
-        )),
-        application::Error::MissingDefault { state, .. } => builder.help(format!(
-            "derive `Default` for `{state}` or use an explicit boot callback"
-        )),
-        application::Error::MissingCapability {
-            message,
-            capability,
-            ..
-        } => builder.help(format!(
-            "derive `{capability}` for application message `{message}`"
-        )),
         _ => builder,
     }
 }
@@ -894,102 +725,6 @@ fn resolution_message(error: &resolve::Error) -> String {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
-        resolve::Error::Application(error) => application_message(error),
-        resolve::Error::InvalidPreview {
-            preview, reason, ..
-        } => format!("invalid preview `{preview}`: {reason}"),
-        resolve::Error::InvalidWidget { widget, reason, .. } => {
-            format!("invalid widget protocol for `{widget}`: {reason}")
-        }
-    }
-}
-
-fn application_message(error: &application::Error) -> String {
-    match error {
-        application::Error::MissingEntry => "application compilation requires one public `main` tail entry using registered `iced` intrinsics".into(),
-        application::Error::InvalidMain { reason, .. } => {
-            format!("invalid application `main`: {reason}")
-        }
-        application::Error::MultipleEntries { .. } => "multiple application entries".into(),
-        application::Error::ConditionalEntry { .. } => {
-            "application entry cannot be conditional".into()
-        }
-        application::Error::NestedEntry { .. } => {
-            "application entry cannot be nested in another expression or block".into()
-        }
-        application::Error::HiddenEntry { function, .. } => {
-            format!("application entry cannot be hidden in helper `{function}`")
-        }
-        application::Error::NonTailEntry { .. } => {
-            "application entry must be the complete tail expression of `pub fn main`".into()
-        }
-        application::Error::MalformedEntry { reason, .. } => {
-            format!("malformed application entry: {reason}")
-        }
-        application::Error::NonSymbolicCallback { role, .. } => {
-            format!("application {role} callback must be a symbolic script item")
-        }
-        application::Error::UnknownCallback { role, path, .. } => {
-            format!("unknown application {role} callback `{path}`")
-        }
-        application::Error::InvalidCallbackKind {
-            role,
-            callback,
-            expected,
-            actual,
-            ..
-        } => format!(
-            "application {role} callback `{callback}` must be {expected}, found {actual:?}"
-        ),
-        application::Error::InvalidReceiver {
-            role,
-            callback,
-            expected,
-            actual,
-            ..
-        } => format!(
-            "application {role} callback `{callback}` requires {expected}, found {actual:?}"
-        ),
-        application::Error::InvalidArity {
-            role,
-            callback,
-            expected,
-            actual,
-            ..
-        } => format!(
-            "application {role} callback `{callback}` expects {expected} parameter(s), found {actual}"
-        ),
-        application::Error::TypeMismatch {
-            role,
-            expected,
-            actual,
-            ..
-        } => format!("application {role} type must be `{expected}`, found `{actual}`"),
-        application::Error::InvalidOutput {
-            role,
-            expected,
-            actual,
-            ..
-        } => format!(
-            "application {role} output must be {expected}, found `{actual}`"
-        ),
-        application::Error::MissingDefault { state, .. } => {
-            format!("application state `{state}` does not provide `Default`")
-        }
-        application::Error::MissingCapability {
-            message,
-            capability,
-            ..
-        } => format!("application message `{message}` does not provide `{capability}`"),
-        application::Error::InvalidFacadeContract { required, .. } => {
-            format!("application requires the canonical type `{required}`")
-        }
-        application::Error::FacadeDependencyConflict { root } => format!(
-            "application dependency root `{root}` has conflicting exact fingerprints"
-        ),
-        application::Error::UnsupportedRuntimeType { role, ty, .. } => format!(
-            "application {role} type `{ty}` reaches a structural tuple, which has no runtime value semantics"
-        ),
     }
 }
 

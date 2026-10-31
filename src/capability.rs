@@ -216,11 +216,8 @@ impl From<Kind> for Name {
     }
 }
 
-impl crate::preview::digest::Write for Set {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Set {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2200);
         writer.count(self.iter().count());
         for capability in self.iter() {
@@ -230,11 +227,8 @@ impl crate::preview::digest::Write for Set {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2210);
         writer.count(self.0.len());
         for capability in &self.0 {
@@ -258,7 +252,9 @@ impl crate::preview::digest::Write for Fingerprint {
     }
 }
 
-fn write_kind(writer: &mut crate::preview::digest::Writer, capability: Kind) {
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+fn write_kind(writer: &mut crate::digest::Writer, capability: Kind) {
     writer.tag(match capability {
         Kind::Default => 0x2231,
         Kind::Debug => 0x2232,

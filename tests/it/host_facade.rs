@@ -281,44 +281,10 @@ fn facade_proofs_change_with_abi_signature_receiver_kind_and_capabilities() {
     let intrinsic = item::Definition::intrinsic_function("run", signature).unwrap();
     assert_ne!(function.fingerprint(), intrinsic.fingerprint());
 
-    let mut signature = signature::Builder::new();
-    signature.parameter(type_ref::Type::unit());
-    let operation = item::Definition::operation("run", signature.finish()).unwrap();
-    assert_ne!(function.fingerprint(), operation.fingerprint());
-
     let signature = signature::Builder::new().finish();
     let method = item::Definition::method("Application::run", receiver::Mode::Owned, signature.clone()).unwrap();
     let intrinsic = item::Definition::intrinsic_method("Application::run", receiver::Mode::Owned, signature).unwrap();
     assert_ne!(method.fingerprint(), intrinsic.fingerprint());
-}
-
-#[test]
-fn facade_operations_retain_exact_zero_to_many_parameter_proofs() {
-    for actual in [0, 1, 2] {
-        let mut signature = signature::Builder::new();
-        for _ in 0..actual {
-            signature.parameter(type_ref::Type::builtin(type_ref::Builtin::I64));
-        }
-        signature.output(type_ref::Type::builtin(type_ref::Builtin::String));
-        let operation = item::Definition::operation("load", signature.finish()).unwrap();
-        assert_eq!(operation.signature().parameters().len(), actual);
-    }
-
-    let mut signature = signature::Builder::new();
-    signature.parameter(type_ref::Type::unit()).output(type_ref::Type::builtin(type_ref::Builtin::String));
-    let operation = item::Definition::operation("load", signature.finish()).unwrap();
-    let mut builder = facade::Builder::new("effects", facade::Abi::new(1).unwrap()).unwrap();
-    builder.item(operation).unwrap();
-    let facade = builder.finish().unwrap();
-
-    assert_eq!(facade.items().next().unwrap().kind(), item::Kind::Operation);
-    assert_eq!(facade.items().next().unwrap().path(), "effects::load");
-
-    let mut changed = signature::Builder::new();
-    changed.parameter(type_ref::Type::unit()).output(type_ref::Type::builtin(type_ref::Builtin::I64));
-    let mut builder = facade::Builder::new("effects", facade::Abi::new(1).unwrap()).unwrap();
-    builder.item(item::Definition::operation("load", changed.finish()).unwrap()).unwrap();
-    assert_ne!(facade.fingerprint(), builder.finish().unwrap().fingerprint());
 }
 
 #[test]
@@ -757,7 +723,7 @@ fn associated_counter_item(kind: item::Kind) -> item::Definition {
         item::Kind::AssociatedValue => item::Definition::associated_value("Counter::new", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap(),
         item::Kind::AssociatedFunction => item::Definition::associated_function("Counter::new", signature).unwrap(),
         item::Kind::Method => item::Definition::method("Counter::new", receiver::Mode::Shared, signature).unwrap(),
-        item::Kind::Value | item::Kind::Function | item::Kind::Operation | item::Kind::StreamOperation | item::Kind::IntrinsicFunction | item::Kind::IntrinsicMacro | item::Kind::IntrinsicMethod | item::Kind::MacroRules => panic!("expected associated item kind"),
+        item::Kind::Value | item::Kind::Function | item::Kind::IntrinsicFunction | item::Kind::IntrinsicMacro | item::Kind::IntrinsicMethod | item::Kind::MacroRules => panic!("expected associated item kind"),
     }
 }
 

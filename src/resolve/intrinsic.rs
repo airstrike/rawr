@@ -625,8 +625,6 @@ mod tests {
                 &[owner],
                 &[proof.runtime_requirement()],
                 &[],
-                &[],
-                &[],
             ),
             Err(host::runtime::Error::FacadeMismatch { facade })
                 if facade == "overloaded"

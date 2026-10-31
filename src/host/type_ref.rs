@@ -1036,12 +1036,9 @@ fn resolve_types(
     Ok(resolved.into_boxed_slice())
 }
 
-impl crate::preview::digest::Write for Type {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::write_slice;
+impl crate::digest::Write for Type {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::write_slice;
 
         match &self.0 {
             Shape::Unit => writer.tag(0x2301),

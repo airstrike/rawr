@@ -91,7 +91,7 @@ impl State {{
     fn update(&mut self, message: Message) {{ self.value = native::echo(7); }}
     fn view(&self) -> iced::Element<Message> {{ panic!("{label}") }}
 }}
-pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
+pub fn main() {{ let mut state = State::default(); state.update(Message::Tick); }}
 "#
     )
 }
@@ -126,7 +126,6 @@ fn snapshot_pass_retains_candidate_and_native_uses_together() {
     let mut allocation = host::TestImportAllocation::default();
     let output = Output::transform_plain(&engine, &snapshot, &mut allocation).unwrap();
     assert_eq!(output.candidate.source().entry_source().text(), text);
-    assert!(output.candidate.has_application());
     assert_eq!(output.imported.uses.len(), 1);
     let use_ = &output.imported.uses[0];
     assert_eq!(use_.path, "native::echo");

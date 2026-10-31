@@ -223,8 +223,6 @@ mod tests {
                 std::slice::from_ref(&owner),
                 std::slice::from_ref(&requirement),
                 &[],
-                &[],
-                &[]
             )
             .is_err());
 
@@ -246,7 +244,7 @@ mod tests {
         let mut registry = Registry::new();
         registry.install(builder.finish()).unwrap();
         registry
-            .validate(&[owner], std::slice::from_ref(&requirement), &[], &[], &[])
+            .validate(&[owner], std::slice::from_ref(&requirement), &[])
             .unwrap();
         let program = crate::resolve::resolve(
             Engine::new().parse_unit("()").unwrap(),
@@ -273,7 +271,7 @@ mod tests {
         let mut foreign = site.clone();
         foreign.key.mapper = [8; 16];
         assert!(registry
-            .validate(&[], &[foreign.requirement()], &[], &[], &[])
+            .validate(&[], &[foreign.requirement()], &[])
             .is_err());
         let mut value = Dynamic::from(1_i64);
         assert!(registry

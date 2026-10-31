@@ -870,12 +870,9 @@ impl Fingerprint {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::write_slice;
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::write_slice;
 
         writer.tag(0x2400);
         writer.tag(0x2401);

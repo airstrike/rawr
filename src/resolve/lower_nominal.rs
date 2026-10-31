@@ -67,8 +67,6 @@ const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
 /// The last parameter of an async body's step function: `()` to start, or
 /// the frame it resumes from.
 const ASYNC_RESUME: &str = "__rawr_resume";
-/// The facade function that makes an async body's step function a `Task`.
-const ASYNC_TASK: &str = "rawr_iced::task::script";
 /// The core's function an async body's step function is passed to, where
 /// no host's `Task` runs futures.
 const CORE_ASYNC: &str = "rawr::future::script";
@@ -90,10 +88,6 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
 ];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 const TASK_PERFORM_PATH: &str = "iced::Task::perform";
-const SUBSCRIPTION_RUN_PATH: &str = "iced::Subscription::run";
-/// The stream operation behind `Subscription::run`, which takes the
-/// sipper the builder returns and the builder's path.
-const SUBSCRIPTION_RUN_STREAM: &str = "iced::subscription::run";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
@@ -152,12 +146,6 @@ const WIDGET_VOID_PATH: &str = "iced::widget::void";
 /// parameters and the trait's arguments.
 type ImplArguments = Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>;
 
-type OperationSelector = (
-    Box<[crate::host::item::Definition]>,
-    Option<crate::host::facade::Dependency>,
-    Span,
-);
-
 #[cfg(feature = "rust-import")]
 pub(super) fn imported<A: crate::host::ImportAllocation>(
     engine: &Engine,
@@ -179,12 +167,6 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         let item::Kind::Function(definition) = &shell.kind else {
             continue;
         };
-        if program.application.is_some()
-            && shell.source == program.source.entry()
-            && definition.name.text == "main"
-        {
-            continue;
-        }
         // A template compiled per instantiation is lowered as its
         // instances only (D629).
         if shell
@@ -213,7 +195,6 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
                 .expect("resolved functions retain stable item keys"),
             offset,
             0,
-            false,
             Some(ImportedContext {
                 native: None,
                 allocation,
@@ -254,7 +235,6 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
             definition,
             offset,
             0,
-            false,
             Some(ImportedContext {
                 native: None,
                 allocation,
@@ -438,7 +418,6 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             .expect("resolved functions retain stable item keys"),
                         0,
                         0,
-                        false,
                         Some(ImportedContext {
                             native: None,
                             allocation,
@@ -478,7 +457,6 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                         definition,
                         0,
                         0,
-                        false,
                         Some(ImportedContext {
                             native: None,
                             allocation,
@@ -1031,7 +1009,6 @@ fn body_templates<A: crate::host::ImportAllocation>(
                         key.clone(),
                         0,
                         0,
-                        false,
                         Some(context),
                     );
                     parser.symbolic_only = true;
@@ -1054,7 +1031,6 @@ fn body_templates<A: crate::host::ImportAllocation>(
                         definition,
                         0,
                         0,
-                        false,
                         Some(context),
                     ) {
                         Ok(mut parser) => {
@@ -1138,7 +1114,6 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 key,
                 0,
                 0,
-                false,
                 Some(ImportedContext {
                     native: None,
                     allocation,
@@ -1179,7 +1154,6 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 definition,
                 0,
                 0,
-                false,
                 Some(ImportedContext {
                     native: None,
                     allocation,
@@ -2513,10 +2487,6 @@ fn lower_with_context(
     let mut locations = Vec::new();
     let mut ops = Vec::new();
     let mut patterns = Vec::new();
-    let boot = program
-        .application
-        .as_ref()
-        .and_then(super::application::Entry::boot);
 
     // `type Output: Clone;`: each impl's associated type has its trait's
     // bounds, and its owner the trait's supertraits, as Rust checks at the
@@ -2555,12 +2525,6 @@ fn lower_with_context(
         let item::Kind::Function(definition) = &shell.kind else {
             continue;
         };
-        if program.application.is_some()
-            && shell.source == program.source.entry()
-            && definition.name.text == "main"
-        {
-            continue;
-        }
         // A template compiled per instantiation is lowered as its
         // instances only (D629).
         if shell
@@ -2589,7 +2553,6 @@ fn lower_with_context(
                 .expect("resolved functions retain stable item keys"),
             ops.len(),
             patterns.len(),
-            boot.is_some_and(|boot| shell.key.as_ref() == Some(boot)),
             #[cfg(feature = "rust-import")]
             imported
                 .as_mut()
@@ -2650,7 +2613,6 @@ fn lower_with_context(
             definition,
             ops.len(),
             patterns.len(),
-            boot.is_some_and(|boot| definition.key() == boot),
             #[cfg(feature = "rust-import")]
             imported
                 .as_mut()
@@ -2757,18 +2719,6 @@ fn lower_with_context(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let widget_requirements = ops
-        .iter()
-        .filter_map(ExecutableOp::widget_requirement)
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let widget_promotions = ops
-        .iter()
-        .filter_map(ExecutableOp::widget_promotion)
-        .cloned()
-        .collect();
     let nominal_patterns: BTreeMap<ImmutableString, NominalPattern> = patterns
         .into_iter()
         .enumerate()
@@ -2826,8 +2776,6 @@ fn lower_with_context(
         dependencies,
         runtime_requirements,
         projection_requirements,
-        widget_requirements,
-        widget_promotions,
         closures: closures.into_boxed_slice(),
     })
 }
@@ -2874,8 +2822,6 @@ pub(crate) struct Output {
     pub(crate) dependencies: Box<[crate::host::facade::Dependency]>,
     pub(crate) runtime_requirements: Box<[crate::host::runtime::Requirement]>,
     pub(crate) projection_requirements: Box<[crate::host::projection::Site]>,
-    pub(crate) widget_requirements: Box<[crate::host::runtime::widget::Requirement]>,
-    pub(crate) widget_promotions: Box<[crate::widget::Promotion]>,
     pub(crate) closures: Box<[ClosureCallable]>,
 }
 
@@ -3609,13 +3555,11 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
 
 /// `copied_parameters` of a method, a trait's too (every impl of a trait
 /// function copies the same parameters, so a dispatcher passes the copies
-/// through); not the formatter of a `Debug` or `Display` `fmt`, and not a
-/// widget hook's State, whose sealed change carries it back.
-fn method_copied(definition: &method::Definition, models: &Models) -> Vec<usize> {
+/// through); not the formatter of a `Debug` or `Display` `fmt`.
+fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize> {
     if definition
         .trait_name()
         .is_some_and(|name| matches!(name.as_str(), "Debug" | "Display"))
-        || models.widget_hook(definition).is_some()
     {
         return Vec::new();
     }
@@ -4022,10 +3966,6 @@ fn source_full_span(source: &str) -> Span {
     Span::new(Position::START, Position::new(line, column))
 }
 
-const fn is_tuple(ty: &type_ref::Type) -> bool {
-    matches!(ty, type_ref::Type::Tuple { .. })
-}
-
 fn exact_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
     match ty {
         type_ref::Type::Unit(_) | type_ref::Type::Path(_) => Some(Ty::from_resolved(ty)),
@@ -4135,13 +4075,9 @@ struct Tables {
     std_traits: BTreeSet<ImmutableString>,
     functions: BTreeMap<(crate::program::source::Id, ImmutableString), ScriptFunction>,
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
-    widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
     sources: crate::program::source::Table,
     /// The program's root file: the crate root Cargo built the target from.
     entry: crate::program::source::Id,
-    application_runtime: crate::application::RuntimeGraph,
-    /// The application boot item, whose tuple output is a startup envelope.
-    boot: Option<crate::item::Key>,
     /// The generic functions compiled per instantiation (D629).
     instances: crate::resolve::Instances,
     /// The script's impls of crate traits for its own types, which a
@@ -4345,13 +4281,6 @@ impl Models {
         let mut functions = BTreeMap::new();
         let mut functions_by_key = BTreeMap::new();
         let mut imports = BTreeMap::new();
-        let widgets = program
-            .widgets
-            .iter()
-            .cloned()
-            .map(|definition| (definition.owner().clone(), definition))
-            .collect();
-        let application_runtime = crate::application::RuntimeGraph::new(program);
 
         for shell in program.items.iter() {
             let nominal = match &shell.kind {
@@ -4764,15 +4693,8 @@ impl Models {
                 .collect(),
             functions,
             functions_by_key,
-            widgets,
             sources: program.source.table().clone(),
             entry: program.source.entry(),
-            application_runtime,
-            boot: program
-                .application
-                .as_ref()
-                .and_then(super::application::Entry::boot)
-                .cloned(),
             instances: program.instances.clone(),
             script_impls: program
                 .items
@@ -5069,83 +4991,6 @@ impl Models {
             .collect();
         crate::program::schema::symbol_id(&proof)
     }
-
-    fn widget(&self, definition: type_def::Id) -> Option<&crate::widget::Definition> {
-        let identity = self.definition(definition).identity();
-        self.widgets.get(&identity)
-    }
-
-    fn widget_hook(
-        &self,
-        definition: &method::Definition,
-    ) -> Option<&crate::widget::hook::Definition> {
-        self.widgets
-            .get(definition.owner_identity())?
-            .hooks()
-            .iter()
-            .find(|hook| hook.item().key() == definition.key())
-    }
-
-    fn application_type(&self, ty: &Ty) -> Option<crate::application::Type> {
-        Some(match ty {
-            Ty::Unit => crate::application::Type::unit(),
-            Ty::Bool => crate::application::Type::builtin("bool"),
-            Ty::Char => crate::application::Type::builtin("char"),
-            Ty::Int(_) => crate::application::Type::builtin("i64"),
-            Ty::Float(_) => crate::application::Type::builtin("f64"),
-            Ty::String | Ty::Str => crate::application::Type::builtin("String"),
-            Ty::Host { proof, arguments } => crate::application::Type::host(
-                &proof.definition,
-                arguments
-                    .iter()
-                    .map(|argument| self.application_type(argument))
-                    .collect::<Option<Box<[_]>>>()?,
-                proof.owner.clone(),
-            ),
-            Ty::Script(definition, ..) => crate::application::Type::from_definition(
-                self.definition(*definition).definition(),
-                &self.application_runtime,
-            ),
-            #[cfg(feature = "rust-import")]
-            Ty::ImportedFunctionItem { .. } => return None,
-            #[cfg(feature = "rust-import")]
-            Ty::ProfileMessage { script, .. } => return self.application_type(script),
-            #[cfg(feature = "rust-import")]
-            Ty::ProfileMapper { .. } => return None,
-            Ty::Never
-            | Ty::Callable { .. }
-            | Ty::Fn { .. }
-            | Ty::FnItem { .. }
-            | Ty::FnChoice { .. }
-            | Ty::Array { .. }
-            | Ty::Tuple(_)
-            | Ty::Option(_)
-            | Ty::Result(..)
-            | Ty::InclusiveRange
-            | Ty::FloatRange
-            | Ty::Range(_)
-            | Ty::Ordering
-            | Ty::Time(_)
-            | Ty::ParseError(_)
-            | Ty::Reference { .. }
-            | Ty::Cell(..)
-            | Ty::Boxed(..)
-            | Ty::Iter(_)
-            | Ty::Keyed(..)
-            | Ty::Reverse(_)
-            | Ty::Dyn(..)
-            | Ty::Support(_)
-            | Ty::Endpoint(_)
-            | Ty::Param(_)
-            | Ty::Projection(..)
-            | Ty::Infer(_)
-            | Ty::Unknown => return None,
-        })
-    }
-
-    fn location(&self, span: Span) -> crate::widget::Location {
-        crate::widget::Location::new(self.sources.key(self.context.index()), span)
-    }
 }
 
 impl Nominal {
@@ -5241,13 +5086,6 @@ enum Op {
         contract: crate::host::endpoint::Contract,
         owner: crate::host::facade::Dependency,
     },
-    Perform {
-        operation: PendingIndex,
-        span: Span,
-    },
-    Stream {
-        operation: Box<StreamOperation>,
-    },
     #[cfg(feature = "rust-import")]
     Event {
         key: crate::host::runtime::event::Key,
@@ -5258,22 +5096,6 @@ enum Op {
     Projection {
         operation: Box<ProjectionOperation>,
     },
-    Widget {
-        promotion: Box<crate::widget::Promotion>,
-        source: Ty,
-        activation: crate::host::runtime::widget::Requirement,
-    },
-    Change {
-        operation: PendingIndex,
-        span: Span,
-    },
-    Startup {
-        state: Ty,
-        task: Ty,
-    },
-    /// The boot's startup envelope as the `(State, Task)` tuple it is in
-    /// Rust, where script code calls the boot.
-    OpenStartup,
     Struct {
         definition: type_def::Definition,
         item: item::Struct,
@@ -6946,6 +6768,10 @@ fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
 
 /// Fully proven operations that may cross into sync runtime support.
 #[derive(Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "intrinsic and structural proofs are most executable ops; boxing them would allocate per op"
+)]
 enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     Sequence(sequence::Constructor),
@@ -6968,14 +6794,6 @@ enum ExecutableOp {
         contract: crate::host::endpoint::Contract,
         owner: crate::host::facade::Dependency,
     },
-    Perform {
-        producer: intrinsic::Proof,
-        selected: Box<crate::host::operation::Proof>,
-    },
-    Stream {
-        selected: Box<crate::host::stream::Proof>,
-        target: crate::host::runtime::type_ref::Type,
-    },
     #[cfg(feature = "rust-import")]
     Event {
         proof: Box<crate::host::runtime::event::Site>,
@@ -6983,23 +6801,6 @@ enum ExecutableOp {
     Projection {
         proof: Box<crate::host::projection::Site>,
     },
-    Widget {
-        promotion: Box<crate::widget::Promotion>,
-        source: TypeId,
-        activation: crate::host::runtime::widget::Requirement,
-    },
-    Change {
-        definition: type_def::Definition,
-        generation: crate::program::GenerationId,
-        hook: Box<crate::widget::hook::Definition>,
-        state: crate::host::runtime::type_ref::Type,
-        output: crate::host::runtime::type_ref::Type,
-    },
-    Startup {
-        state: TypeId,
-        task: TypeId,
-    },
-    OpenStartup,
     Struct {
         definition: type_def::Definition,
         item: item::Struct,
@@ -7088,92 +6889,6 @@ impl ImportedOperation {
         }
         self.output.collect_dependencies(dependencies);
     }
-}
-
-#[derive(Clone)]
-struct Perform {
-    facade: crate::host::facade::Fingerprint,
-    owner: crate::host::facade::Dependency,
-    item: crate::host::item::Definition,
-    requirements: Box<[(ImmutableString, Ty, capability::Set)]>,
-    selected_owner: crate::host::facade::Dependency,
-    selected_item: crate::host::item::Definition,
-    selected_inputs: Box<[Ty]>,
-    selected_output: Ty,
-    arguments: Box<[(Ty, Span, bool)]>,
-    mapper: (Ty, Span, bool),
-    output: Ty,
-    selector: Span,
-    span: Span,
-}
-
-#[derive(Clone)]
-struct ChangeOperation {
-    definition: type_def::Definition,
-    generation: crate::program::GenerationId,
-    hook: crate::widget::hook::Definition,
-    state: crate::host::runtime::type_ref::Type,
-    output: crate::host::runtime::type_ref::Type,
-}
-
-#[derive(Clone, Copy)]
-struct PendingIndex(u32);
-
-impl PendingIndex {
-    fn new(index: usize) -> Option<Self> {
-        u32::try_from(index).ok().map(Self)
-    }
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static PERFORM_PROOF_BOXES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-fn box_perform_proof<T>(proof: T) -> Box<T> {
-    #[cfg(test)]
-    PERFORM_PROOF_BOXES.with(|allocations| allocations.set(allocations.get() + 1));
-    Box::new(proof)
-}
-
-fn take_pending<T>(
-    entries: &mut std::vec::IntoIter<T>,
-    next: &mut u32,
-    index: PendingIndex,
-) -> Option<T> {
-    if index.0 != *next {
-        return None;
-    }
-    *next = next.checked_add(1)?;
-    entries.next()
-}
-
-fn pending_operation_error(operation: &str, span: Span) -> Error {
-    Error::InvalidHostOperation {
-        item: operation.into(),
-        reason: "compiler pending-operation index is inconsistent".into(),
-        operation: span,
-    }
-}
-
-fn pending_operation_capacity_error(operation: &str, span: Span, reason: &str) -> Error {
-    Error::InvalidHostOperation {
-        item: operation.into(),
-        reason: format!("compiler pending-operation storage {reason}").into(),
-        operation: span,
-    }
-}
-
-#[derive(Clone)]
-struct StreamOperation {
-    selected_owner: crate::host::facade::Dependency,
-    selected_item: crate::host::item::Definition,
-    selected_inputs: Box<[Ty]>,
-    selected_output: Ty,
-    requirements: Box<[(ImmutableString, Ty, capability::Set)]>,
-    arguments: Box<[(Ty, Span, bool)]>,
-    target: Ty,
-    selector: Span,
 }
 
 #[derive(Clone)]
@@ -7336,36 +7051,10 @@ impl ExecutableOp {
             Self::Symbolic { .. } => BTreeSet::new(),
             Self::Intrinsic { proof } => proof.dependencies(),
             Self::Endpoint { owner, .. } => BTreeSet::from([owner.clone()]),
-            Self::Perform { producer, selected } => {
-                let mut dependencies = producer.dependencies();
-                dependencies.extend(selected.dependencies());
-                dependencies
-            }
-            Self::Stream { selected, target } => {
-                let mut dependencies = selected.dependencies();
-                target.collect_dependencies(&mut dependencies);
-                dependencies
-            }
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => proof.dependencies(),
             Self::Projection { proof } => proof.dependencies(),
-            Self::Widget { promotion, .. } => {
-                let mut dependencies = BTreeSet::from([
-                    promotion.definition().dependency().clone(),
-                    promotion.definition().lifecycle().clone(),
-                ]);
-                promotion.message().collect_dependencies(&mut dependencies);
-                dependencies
-            }
-            Self::Change { state, output, .. } => {
-                let mut dependencies = BTreeSet::new();
-                state.collect_dependencies(&mut dependencies);
-                output.collect_dependencies(&mut dependencies);
-                dependencies
-            }
-            Self::Startup { .. }
-            | Self::OpenStartup
-            | Self::Struct { .. }
+            Self::Struct { .. }
             | Self::Enum { .. }
             | Self::Clone { .. }
             | Self::Debug { .. }
@@ -7388,12 +7077,6 @@ impl ExecutableOp {
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Endpoint { .. }
-            | Self::Perform { .. }
-            | Self::Stream { .. }
-            | Self::Startup { .. }
-            | Self::OpenStartup
-            | Self::Widget { .. }
-            | Self::Change { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
             | Self::Clone { .. }
@@ -7418,15 +7101,9 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::Sequence(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
-            Self::Perform { producer, .. } => Some(producer.runtime_requirement()),
             Self::Symbolic { .. }
             | Self::Endpoint { .. }
             | Self::Projection { .. }
-            | Self::Stream { .. }
-            | Self::Startup { .. }
-            | Self::OpenStartup
-            | Self::Widget { .. }
-            | Self::Change { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
             | Self::Clone { .. }
@@ -7438,20 +7115,6 @@ impl ExecutableOp {
             | Self::Prelude(_)
             | Self::Kinded { .. }
             | Self::Shaped { .. } => None,
-        }
-    }
-
-    fn widget_promotion(&self) -> Option<&crate::widget::Promotion> {
-        match self {
-            Self::Widget { promotion, .. } => Some(promotion),
-            _ => None,
-        }
-    }
-
-    fn widget_requirement(&self) -> Option<&crate::host::runtime::widget::Requirement> {
-        match self {
-            Self::Widget { activation, .. } => Some(activation),
-            _ => None,
         }
     }
 
@@ -7508,30 +7171,6 @@ impl ExecutableOp {
                     ))
                 );
             }
-            Self::Perform { producer, selected } => {
-                return format!(
-                    "\0rawr.perform.{}.{:016x}",
-                    selected.path(),
-                    crate::program::schema::symbol_id(&(producer.symbol_id(), selected))
-                );
-            }
-            Self::Stream { selected, target } => {
-                return format!(
-                    "\0rawr.stream.{}.{:016x}",
-                    selected.path(),
-                    crate::program::schema::symbol_id(&(
-                        selected.path(),
-                        selected.identity_version().get(),
-                        selected
-                            .inputs()
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>(),
-                        selected.output().to_string(),
-                        target.to_string(),
-                    ))
-                );
-            }
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => {
                 return format!("\0rawr.event-finalize.{:016x}", proof.symbol_id())
@@ -7542,26 +7181,6 @@ impl ExecutableOp {
                     proof.key().diagnostic_name(),
                     proof.symbol_id()
                 );
-            }
-            Self::Widget { promotion, .. } => {
-                return format!(
-                    "\0rawr.widget.{}.{:016x}",
-                    widget_name(promotion.definition().owner()),
-                    crate::program::schema::symbol_id(&(
-                        promotion.definition().fingerprint(),
-                        promotion.message(),
-                        promotion.site(),
-                    ))
-                );
-            }
-            Self::Change {
-                definition, hook, ..
-            } => (definition, format!("change.{}", hook.kind().name())),
-            Self::Startup { .. } => {
-                return format!("\0rawr.application.startup.{support_id:016x}");
-            }
-            Self::OpenStartup => {
-                return format!("\0rawr.application.open-startup.{support_id:016x}");
             }
             Self::Struct { definition, .. } => (definition, "construct".to_string()),
             Self::Enum {
@@ -7625,35 +7244,9 @@ impl ExecutableOp {
                 .map(|operand| place_operand(operand.ty().runtime()))
                 .collect(),
             Self::Endpoint { .. } => vec![TypeId::of::<ImmutableString>()],
-            Self::Perform { producer, selected } => {
-                let mut arguments = selected
-                    .inputs()
-                    .iter()
-                    .map(crate::host::runtime::type_ref::Type::runtime)
-                    .collect::<Vec<_>>();
-                arguments.extend(
-                    producer
-                        .operands()
-                        .iter()
-                        .skip(1)
-                        .map(|operand| operand.ty().runtime()),
-                );
-                arguments
-            }
-            Self::Stream { selected, .. } => selected
-                .inputs()
-                .iter()
-                .map(|input| input.runtime())
-                .collect(),
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => vec![proof.source().runtime()],
             Self::Projection { proof } => vec![proof.source().runtime()],
-            Self::Widget { source, .. } => vec![*source],
-            Self::Change { state, output, .. } => {
-                vec![output.runtime(), state.runtime()]
-            }
-            Self::Startup { state, task } => vec![*state, *task],
-            Self::OpenStartup => vec![TypeId::of::<crate::application::startup::Envelope>()],
             Self::Struct { item, .. } => item
                 .fields
                 .iter()
@@ -7777,62 +7370,6 @@ impl ExecutableOp {
                     .map_err(|_| invariant("operation endpoint input changed after checking"))?;
                 Ok(contract.invoke(input))
             }
-            Self::Perform { producer, selected } => {
-                let Some(context) = context else {
-                    return Err(EvalAltResult::ErrorRuntime(
-                        format!("missing runtime binding for `{}`", producer.path()).into(),
-                        producer.span().start(),
-                    )
-                    .into());
-                };
-                let Some(runtime) = context.host_runtime() else {
-                    return Err(EvalAltResult::ErrorRuntime(
-                        format!("missing runtime binding for `{}`", producer.path()).into(),
-                        producer.span().start(),
-                    )
-                    .into());
-                };
-                let Some((mapper, arguments)) = args.split_last_mut() else {
-                    return Err(invariant(
-                        "private task operation requires a symbolic mapper",
-                    ));
-                };
-                let values = arguments
-                    .iter_mut()
-                    .map(|argument| argument.take())
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let mut call = Dynamic::from(crate::host::operation::Call::seal(
-                    selected.as_ref().clone(),
-                    values,
-                ));
-                producer.invoke_prepared(
-                    runtime,
-                    requirement
-                        .ok_or_else(|| invariant("registered producer requirement missing"))?,
-                    context.host_invocation(),
-                    &mut [&mut call, &mut **mapper],
-                    &models.runtime,
-                    None,
-                )
-            }
-            Self::Stream { selected, target } => {
-                let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
-                    return Err(invariant(
-                        "missing runtime authority for a sealed stream plan",
-                    ));
-                };
-                let values = args
-                    .iter_mut()
-                    .map(|argument| argument.take())
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let call = crate::host::stream::Call::seal((**selected).clone(), values);
-                Ok(Dynamic::from(crate::host::stream::Plan::stream(
-                    call,
-                    runtime.witness_for(target),
-                )))
-            }
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => {
                 let runtime = context
@@ -7855,74 +7392,6 @@ impl ExecutableOp {
                     .into());
                 };
                 runtime.invoke_projection(proof, args, &models.runtime)
-            }
-            Self::Widget {
-                promotion,
-                activation,
-                ..
-            } => {
-                let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
-                    return Err(EvalAltResult::ErrorRuntime(
-                        format!(
-                            "missing scripted-widget activation for `{}`",
-                            widget_name(promotion.definition().owner())
-                        )
-                        .into(),
-                        promotion.location().span().start(),
-                    )
-                    .into());
-                };
-                let descriptor =
-                    crate::widget::Descriptor::new(promotion.as_ref().clone(), args[0].take());
-                runtime.activate_widget(activation, descriptor, &models.runtime)
-            }
-            Self::Change {
-                generation,
-                hook,
-                state,
-                output,
-                ..
-            } => {
-                let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
-                    return Err(invariant(
-                        "missing runtime binding for private widget hook change",
-                    ));
-                };
-                if args.len() != 2 {
-                    return Err(invariant(
-                        "private widget hook change requires output and State",
-                    ));
-                }
-                output
-                    .validate(args[0], &models.runtime, runtime)
-                    .map_err(|error| invariant(&format!("invalid widget hook output: {error}")))?;
-                state
-                    .validate(args[1], &models.runtime, runtime)
-                    .map_err(|error| invariant(&format!("invalid widget hook State: {error}")))?;
-                let output_value = args[0].take();
-                let state_value = args[1].take();
-                Ok(Dynamic::from(crate::widget::hook::change::Change::seal(
-                    *generation,
-                    hook.item().clone(),
-                    hook.kind(),
-                    state.clone(),
-                    output.clone(),
-                    state_value,
-                    output_value,
-                )))
-            }
-            Self::Startup { .. } => Ok(Dynamic::from(crate::application::startup::Envelope::seal(
-                models.runtime.generation(),
-                args[0].take(),
-                args[1].take(),
-            ))),
-            Self::OpenStartup => {
-                let (state, task) = crate::application::startup::Envelope::open(
-                    args[0].take(),
-                    models.runtime.generation(),
-                )
-                .map_err(|error| invariant(&error.to_string()))?;
-                Ok(Dynamic::from_array(vec![state, task]))
             }
             Self::Struct {
                 definition,
@@ -8169,13 +7638,6 @@ fn names_variant(definition: &crate::host::type_def::Definition, member: &str) -
 
 fn invariant(message: &str) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into()
-}
-
-fn widget_name(identity: &type_def::Identity) -> String {
-    match identity {
-        type_def::Identity::Script(key) => key.to_string(),
-        type_def::Identity::Host(_) => "<host>".to_string(),
-    }
 }
 
 fn construction_invariant(error: crate::program::construction::Error) -> Box<EvalAltResult> {
@@ -11403,15 +10865,12 @@ struct Parser<'a> {
     bindings: BTreeMap<ImmutableString, Binding>,
     output: origin::Fragment,
     ops: Vec<Op>,
-    performs: Vec<Perform>,
-    changes: Vec<ChangeOperation>,
     patterns: Vec<NominalPattern>,
     op_offset: usize,
     pattern_offset: usize,
     last_type: Ty,
     last_expression: Option<(usize, Span)>,
     inference: Inference,
-    startup: bool,
     callable: Option<crate::item::Key>,
     /// In a trait's default body copied into an impl: the owner and the
     /// trait, whose own functions `self.f()` names, as with a generic `Self`.
@@ -11817,8 +11276,6 @@ impl<'a> Parser<'a> {
             bindings: BTreeMap::new(),
             output: origin::Fragment::default(),
             ops: Vec::new(),
-            performs: Vec::new(),
-            changes: Vec::new(),
             patterns: Vec::new(),
             op_offset,
             pattern_offset,
@@ -11828,7 +11285,6 @@ impl<'a> Parser<'a> {
                 associated,
                 ..Inference::default()
             },
-            startup: false,
             callable: None,
             default_trait: None,
             formatter: None,
@@ -11970,7 +11426,6 @@ impl<'a> Parser<'a> {
         definition: &method::Definition,
         op_offset: usize,
         pattern_offset: usize,
-        startup: bool,
         #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
     ) -> Result<Self, Error> {
         let mut parser = Self::new_with_offset(
@@ -11982,7 +11437,6 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             imported,
         );
-        parser.startup = startup;
         parser.callable = Some(definition.key().clone());
         parser.default_trait = definition
             .trait_default()
@@ -12115,7 +11569,6 @@ impl<'a> Parser<'a> {
         key: crate::item::Key,
         op_offset: usize,
         pattern_offset: usize,
-        startup: bool,
         #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
     ) -> Self {
         let mut parser = Self::new_with_offset(
@@ -12127,7 +11580,6 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             imported,
         );
-        parser.startup = startup;
         parser.callable = Some(key);
         parser.return_ty = Some(
             definition
@@ -12427,21 +11879,6 @@ impl<'a> Parser<'a> {
             });
         }
         self.expect(Token::LeftBrace, "'{' to start a method body")?;
-        let mut startup_tail = false;
-        if self.startup {
-            self.return_blocked = Some("from a startup boot; use its tail");
-        } else if self.models.widget_hook(definition).is_some_and(|hook| {
-            matches!(
-                hook.kind(),
-                crate::widget::hook::Kind::Diff
-                    | crate::widget::hook::Kind::Layout
-                    | crate::widget::hook::Kind::Update
-                    | crate::widget::hook::Kind::Operate
-                    | crate::widget::hook::Kind::Overlay
-            )
-        }) {
-            self.return_blocked = Some("from a stateful widget hook; use its tail");
-        }
 
         if definition.receiver().is_some() && definition.builtin_owner().is_none() {
             let model = self.models.definition(definition.owner()).clone();
@@ -12473,10 +11910,6 @@ impl<'a> Parser<'a> {
                     self.skip_nested_fn()?;
                 }
                 Token::Const => self.parse_binding(false)?,
-                Token::LeftParen if self.startup && is_tuple(definition.output()) => {
-                    self.parse_startup_tail(definition.output())?;
-                    startup_tail = true;
-                }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
@@ -12489,12 +11922,9 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("tokens after a method body"));
         }
 
-        if !startup_tail {
-            let expected = self.tail_expected(Some(definition.output()));
-            self.coerce_tail(&expected, definition.body())?;
-        }
+        let expected = self.tail_expected(Some(definition.output()));
+        self.coerce_tail(&expected, definition.body())?;
         self.close_body_drops()?;
-        self.wrap_widget_change(definition)?;
         self.wrap_formatter(definition);
 
         self.check_borrows()?;
@@ -12944,23 +12374,20 @@ impl<'a> Parser<'a> {
 
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.check_function_signature(definition)?;
-        let mut startup_tail = false;
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.
             self.flow().constant();
             self.parse_statement()?;
         } else {
-            self.parse_block_function_body(definition, &mut startup_tail)?;
+            self.parse_block_function_body(definition)?;
         }
         if !matches!(self.peek(), Token::EOF) {
             return Err(self.unsupported("tokens after a function body"));
         }
 
-        if !startup_tail {
-            let expected = self.tail_expected(definition.output.as_ref());
-            self.coerce_tail(&expected, definition.body.span)?;
-        }
+        let expected = self.tail_expected(definition.output.as_ref());
+        self.coerce_tail(&expected, definition.body.span)?;
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
         }
@@ -13018,11 +12445,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_block_function_body(
-        &mut self,
-        definition: &item::Function,
-        startup_tail: &mut bool,
-    ) -> Result<(), Error> {
+    fn parse_block_function_body(&mut self, definition: &item::Function) -> Result<(), Error> {
         if definition.body.asynchronous {
             let output = definition
                 .output
@@ -13064,9 +12487,6 @@ impl<'a> Parser<'a> {
             return self.parse_async_body(&output, definition.body.span);
         }
         self.expect(Token::LeftBrace, "'{' to start a function body")?;
-        if self.startup {
-            self.return_blocked = Some("from a startup boot; use its tail");
-        }
         self.validate_parameters(definition);
         self.open_body_drops(
             definition
@@ -13085,17 +12505,6 @@ impl<'a> Parser<'a> {
                     self.skip_nested_fn()?;
                 }
                 Token::Const => self.parse_binding(false)?,
-                Token::LeftParen
-                    if self.startup && definition.output.as_ref().is_some_and(is_tuple) =>
-                {
-                    self.parse_startup_tail(
-                        definition
-                            .output
-                            .as_ref()
-                            .expect("guard proves an explicit tuple output"),
-                    )?;
-                    *startup_tail = true;
-                }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
@@ -15373,11 +14782,10 @@ impl<'a> Parser<'a> {
 
     /// tokio's `join!(a, b, ..)`, `try_join!(a, b, ..)` and
     /// `select! { pattern = future => body, .. else => body }`, at the `!`,
-    /// written again as Rawr code: an `.await` on rawr-iced's
-    /// `tokio::__join2` (and the others for each count), and for `select!` a
-    /// `match` of its output. Plan `i` of a select gives `Err` `i` times
-    /// around its output, then `Ok` unless it is the last
-    /// (`rawr_iced::task::Kind::Select`).
+    /// written again as Rawr code: an `.await` on `rawr::future::__join2`
+    /// (and the others for each count), and for `select!` a `match` of its
+    /// output. Plan `i` of a select gives `Err` `i` times around its output,
+    /// then `Ok` unless it is the last.
     fn parse_tokio_macro(&mut self, name: &str, start: Span) -> Result<ParsedExpr, Error> {
         const MOST: usize = 5;
         let at = start.start();
@@ -15609,25 +15017,19 @@ impl<'a> Parser<'a> {
             spliced.push((Token::RightParen, at));
         } else {
             let function = if filtered { "select_some" } else { name };
-            if crate::resolve::core_futures(&self.models.host) {
-                // The core has `join!` only, so far (D513.7).
-                if name != "join" {
-                    return Err(unsupported(
-                        format!(
-                            "`{name}!` in a program without iced; Rawr runs `join!` here so far"
-                        ),
-                        end,
-                    ));
-                }
-                spliced.extend([
-                    ident("rawr"),
-                    (Token::DoubleColon, at),
-                    ident("future"),
-                    (Token::DoubleColon, at),
-                ]);
-            } else {
-                spliced.extend([ident("tokio"), (Token::DoubleColon, at)]);
+            // The core has `join!` only, so far (D513.7).
+            if name != "join" {
+                return Err(unsupported(
+                    format!("`{name}!`; Rawr runs `join!` here so far"),
+                    end,
+                ));
             }
+            spliced.extend([
+                ident("rawr"),
+                (Token::DoubleColon, at),
+                ident("future"),
+                (Token::DoubleColon, at),
+            ]);
             spliced.extend([
                 ident(&format!("__{function}{count}")),
                 (Token::LeftParen, at),
@@ -17003,10 +16405,6 @@ impl<'a> Parser<'a> {
     }
 
     fn prove_ops(&mut self, ops: Vec<Op>) -> Result<Vec<ExecutableOp>, Error> {
-        let mut performs = std::mem::take(&mut self.performs).into_iter();
-        let mut changes = std::mem::take(&mut self.changes).into_iter();
-        let mut next_perform = 0;
-        let mut next_change = 0;
         ops.into_iter()
             .enumerate()
             .map(|(index, op)| {
@@ -17014,13 +16412,7 @@ impl<'a> Parser<'a> {
                 if let Some(names) = &witnesses {
                     *self.template_params.borrow_mut() = names.clone();
                 }
-                let op = self.prove_executable_op(
-                    op,
-                    &mut performs,
-                    &mut next_perform,
-                    &mut changes,
-                    &mut next_change,
-                );
+                let op = self.prove_executable_op(op);
                 let Some(names) = witnesses else {
                     return op;
                 };
@@ -17040,22 +16432,13 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.collect_imported_ops(&ops)?;
         if self.symbolic_only {
-            self.performs.clear();
-            self.changes.clear();
             Ok(Vec::new())
         } else {
             self.prove_ops(ops)
         }
     }
 
-    fn prove_executable_op(
-        &self,
-        op: Op,
-        performs: &mut std::vec::IntoIter<Perform>,
-        next_perform: &mut u32,
-        changes: &mut std::vec::IntoIter<ChangeOperation>,
-        next_change: &mut u32,
-    ) -> Result<ExecutableOp, Error> {
+    fn prove_executable_op(&self, op: Op) -> Result<ExecutableOp, Error> {
         Ok(match op {
             #[cfg(feature = "rust-import")]
             Op::Imported {
@@ -17217,142 +16600,6 @@ impl<'a> Parser<'a> {
                         .with_copies(copies),
                 }
             }
-            Op::Perform {
-                operation,
-                span: operation_span,
-            } => {
-                let Perform {
-                    facade,
-                    owner,
-                    item,
-                    requirements,
-                    selected_owner,
-                    selected_item,
-                    selected_inputs,
-                    selected_output,
-                    arguments,
-                    mapper,
-                    output,
-                    selector,
-                    span,
-                } = take_pending(performs, next_perform, operation)
-                    .ok_or_else(|| pending_operation_error("task operation", operation_span))?;
-                for (parameter, ty, required) in requirements.iter() {
-                    let ty = self.inference.resolve(ty);
-                    for capability in required.iter() {
-                        if !self.type_provides(&ty, capability) {
-                            return Err(Error::MissingCapability {
-                                owner: format!(
-                                    "{} parameter `{parameter}` instantiated as {}",
-                                    item.path(),
-                                    ty.name(&self.models)
-                                )
-                                .into(),
-                                capability: capability.name().into(),
-                                operation: span,
-                            });
-                        }
-                    }
-                }
-                let selected_path = selected_item.path();
-                let selected_inputs = selected_inputs
-                    .iter()
-                    .zip(arguments.iter())
-                    .map(|(input, (_, span, _))| self.proven_type(input, &selected_path, *span))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_boxed_slice();
-                let selected_output =
-                    self.proven_type(&selected_output, &selected_path, selector)?;
-                let selected = crate::host::operation::Proof::new(
-                    selected_owner,
-                    &selected_item,
-                    selected_inputs,
-                    selected_output,
-                );
-                let item_path = item.path();
-                let output = self.proven_type(&output, &item_path, span)?;
-                let producer = intrinsic::Proof::new(
-                    facade,
-                    owner,
-                    &item,
-                    vec![
-                        intrinsic::Operand::new(
-                            intrinsic::Type::builtin(
-                                "host operation call",
-                                TypeId::of::<crate::host::operation::Call>(),
-                            ),
-                            selector,
-                            false,
-                        ),
-                        intrinsic::Operand::new(
-                            self.proven_type(&mapper.0, &item_path, mapper.1)?,
-                            mapper.1,
-                            mapper.2,
-                        ),
-                    ]
-                    .into_boxed_slice(),
-                    output,
-                    span,
-                );
-                ExecutableOp::Perform {
-                    producer,
-                    selected: box_perform_proof(selected),
-                }
-            }
-            Op::Stream { operation } => {
-                let StreamOperation {
-                    selected_owner,
-                    selected_item,
-                    selected_inputs,
-                    selected_output,
-                    requirements,
-                    arguments,
-                    target,
-                    selector,
-                } = *operation;
-                for (parameter, ty, required) in requirements.iter() {
-                    let ty = self.inference.resolve(ty);
-                    for capability in required.iter() {
-                        if !self.type_provides(&ty, capability) {
-                            return Err(Error::MissingCapability {
-                                owner: format!(
-                                    "{} parameter `{parameter}` instantiated as {}",
-                                    selected_item.path(),
-                                    ty.name(&self.models)
-                                )
-                                .into(),
-                                capability: capability.name().into(),
-                                operation: selector,
-                            });
-                        }
-                    }
-                }
-                let selected_path = selected_item.path();
-                let selected_inputs = selected_inputs
-                    .iter()
-                    .zip(arguments.iter())
-                    .map(|(input, (_, span, _))| self.proven_type(input, &selected_path, *span))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_boxed_slice();
-                let selected_output =
-                    self.proven_type(&selected_output, &selected_path, selector)?;
-                let selected = crate::host::stream::Proof::new(
-                    selected_owner,
-                    &selected_item,
-                    selected_inputs,
-                    selected_output,
-                )
-                .ok_or_else(|| Error::InvalidHostOperation {
-                    item: selected_path.clone().into(),
-                    reason: "stream operation has no canonical identity protocol".into(),
-                    operation: selector,
-                })?;
-                let target = self.proven_type(&target, &selected_path, selector)?;
-                ExecutableOp::Stream {
-                    selected: Box::new(selected),
-                    target,
-                }
-            }
             #[cfg(feature = "rust-import")]
             Op::Event {
                 key,
@@ -17383,41 +16630,6 @@ impl<'a> Parser<'a> {
                     )),
                 }
             }
-            Op::Widget {
-                promotion,
-                source,
-                activation,
-            } => ExecutableOp::Widget {
-                source: self.executable_type_id(
-                    &source,
-                    "scripted widget",
-                    promotion.location().span(),
-                )?,
-                promotion,
-                activation,
-            },
-            Op::Change { operation, span } => {
-                let ChangeOperation {
-                    definition,
-                    generation,
-                    hook,
-                    state,
-                    output,
-                } = take_pending(changes, next_change, operation)
-                    .ok_or_else(|| pending_operation_error("change operation", span))?;
-                ExecutableOp::Change {
-                    definition,
-                    generation,
-                    hook: Box::new(hook),
-                    state,
-                    output,
-                }
-            }
-            Op::Startup { state, task } => ExecutableOp::Startup {
-                state: self.executable_type_id(&state, "application startup state", Span::NONE)?,
-                task: self.executable_type_id(&task, "application startup task", Span::NONE)?,
-            },
-            Op::OpenStartup => ExecutableOp::OpenStartup,
             Op::Struct { definition, item } => ExecutableOp::Struct { definition, item },
             Op::Enum {
                 definition,
@@ -17471,17 +16683,6 @@ impl<'a> Parser<'a> {
                 ExecutableOp::MatchSubject { definition, item }
             }
         })
-    }
-
-    fn executable_type_id(&self, ty: &Ty, item: &str, span: Span) -> Result<TypeId, Error> {
-        self.inference
-            .resolve(ty)
-            .native_type_id(&self.models)
-            .ok_or_else(|| Error::InvalidHostOperation {
-                item: item.into(),
-                reason: "symbolic imported type has no executable runtime identity".into(),
-                operation: span,
-            })
     }
 
     fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
@@ -19873,34 +19074,8 @@ impl<'a> Parser<'a> {
         if item.path() == TASK_PERFORM_PATH
             && item.kind() == crate::host::item::Kind::AssociatedFunction
         {
-            return self.parse_task_perform(items, owner, name_span);
-        }
-        if item.kind() == crate::host::item::Kind::StreamOperation {
-            return self.parse_stream_operation(items, owner, name_span);
-        }
-        if item.path() == SUBSCRIPTION_RUN_PATH {
-            let stream = self
-                .models
-                .host_items(SUBSCRIPTION_RUN_STREAM)
-                .map(<[_]>::to_vec)
-                .ok_or_else(|| Error::InvalidHostOperation {
-                    item: SUBSCRIPTION_RUN_STREAM.into(),
-                    reason: "the bindings lack this item".into(),
-                    operation: name_span,
-                })?;
-            let owner = self.models.item_owner(SUBSCRIPTION_RUN_STREAM).cloned();
-            return self.parse_stream_operation(stream.into_boxed_slice(), owner, name_span);
-        }
-        if matches!(
-            item.kind(),
-            crate::host::item::Kind::Operation | crate::host::item::Kind::StreamOperation
-        ) {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "symbolic host operations require their exact compiler-owned call position"
-                    .into(),
-                operation: name_span,
-            });
+            self.expect(Token::LeftParen, "'(' after Task::perform")?;
+            return self.parse_task_perform_future(name_span);
         }
         if !matches!(
             item.kind(),
@@ -20378,13 +19553,12 @@ impl<'a> Parser<'a> {
             self.inference.rollback(checkpoint);
             return Ok(false);
         }
-        let seal = crate::preview::digest::event_mapper(&mapper).map_err(|_| {
-            Error::InvalidHostOperation {
+        let seal =
+            crate::digest::event_mapper(&mapper).map_err(|_| Error::InvalidHostOperation {
                 item: invocation.path().into(),
                 reason: "profile event mapper has no stable symbolic identity".into(),
                 operation: argument.span,
-            }
-        })?;
+            })?;
         let message = Ty::ProfileMessage {
             payload: input.clone(),
             script: output.clone(),
@@ -20667,309 +19841,6 @@ impl<'a> Parser<'a> {
         self.parse_primary()
     }
 
-    fn parse_stream_operation(
-        &mut self,
-        items: Box<[crate::host::item::Definition]>,
-        owner: Option<crate::host::facade::Dependency>,
-        name_span: Span,
-    ) -> Result<ParsedExpr, Error> {
-        let Some(first) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: "<stream operation>".into(),
-                reason: "registered stream operation has no declarations".into(),
-                operation: name_span,
-            });
-        };
-        if items
-            .iter()
-            .any(|item| item.kind() != crate::host::item::Kind::StreamOperation)
-        {
-            return Err(Error::InvalidHostOperation {
-                item: first.path().into(),
-                reason: "stream operation overload set contains another item kind".into(),
-                operation: name_span,
-            });
-        }
-        // `event::listen_with(f)`: a stream of tuples with no inputs, called
-        // with one argument, is filtered through it, as
-        // `event::listen_with().filter_map(f)`. Each tuple is spread over
-        // the closure's parameters.
-        if matches!(self.peek(), Token::LeftParen)
-            && items.iter().all(|item| {
-                item.signature().parameters().is_empty()
-                    && matches!(
-                        item.signature().output().shape(),
-                        crate::host::type_ref::Shape::Tuple(_)
-                    )
-            })
-        {
-            let (_, at) = self.next();
-            self.splice_tokens(vec![
-                (Token::Unit, at),
-                (Token::Period, at),
-                (Token::Identifier(Box::new("filter_map".into())), at),
-                (Token::LeftParen, at),
-            ]);
-        }
-        if first.path() == SUBSCRIPTION_RUN_STREAM {
-            self.splice_subscription_builder()?;
-        }
-        let (mut arguments, end) = self.parse_call_arguments("stream operation arguments")?;
-        let call = span(name_span.start(), end);
-        let (selected_item, signature) =
-            self.select_host_signature(&items, None, &mut arguments, false, call)?;
-        if signature.inputs.len() != arguments.len() {
-            return Err(Error::InvalidHostOperation {
-                item: selected_item.path().into(),
-                reason: format!(
-                    "symbolic stream operation expects {} argument(s), found {}",
-                    signature.inputs.len(),
-                    arguments.len()
-                )
-                .into(),
-                operation: call,
-            });
-        }
-        for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
-            self.coerce_expr(expected, argument)?;
-        }
-        let selected_owner = owner.ok_or_else(|| Error::InvalidHostOperation {
-            item: selected_item.path().into(),
-            reason: "stream operation is not owned by installed validated bindings".into(),
-            operation: call,
-        })?;
-        let plan_types = self
-            .models
-            .host
-            .stream_plan_types()
-            .map(|(definition, owner)| (definition.clone(), owner.clone()))
-            .collect::<Vec<_>>();
-        let [(plan, plan_owner)] = plan_types.as_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: selected_item.path().into(),
-                reason: format!(
-                    "stream lowering requires one exact authenticated stream plan type, found {}",
-                    plan_types.len()
-                )
-                .into(),
-                operation: call,
-            });
-        };
-        if plan.parameters().len() != 1
-            || plan.native_identity() != Some(TypeId::of::<crate::host::stream::Plan>())
-        {
-            return Err(Error::InvalidHostOperation {
-                item: plan.path().into(),
-                reason: "authenticated stream plan type has an invalid runtime contract".into(),
-                operation: call,
-            });
-        }
-        let selected_output = self.inference.resolve(&signature.output);
-        self.reject_invocation(&selected_output, call, "used as a symbolic stream item")?;
-        let target = Ty::Host {
-            proof: HostTyProof::new(plan.clone(), None, Some(plan_owner.clone())),
-            arguments: vec![selected_output.clone()].into_boxed_slice(),
-        };
-        let selected_inputs = signature
-            .inputs
-            .iter()
-            .map(|input| self.inference.resolve(input))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let operation = StreamOperation {
-            selected_owner,
-            selected_item: selected_item.clone(),
-            selected_inputs,
-            selected_output,
-            requirements: signature.requirements,
-            arguments: arguments
-                .iter()
-                .map(|argument| (argument.ty.clone(), argument.span, false))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            target: target.clone(),
-            selector: call,
-        };
-        let helper = self.push_op(Op::Stream {
-            operation: Box::new(operation),
-        });
-        let (prelude, source) = self.private_call(&helper, arguments);
-        Ok(ParsedExpr {
-            prelude,
-            source,
-            ty: target,
-            span: call,
-            lvalue: None,
-            outcome: selected_item.outcome(),
-            evaluation: selected_item.evaluation(),
-        }
-        .retain_origin())
-    }
-
-    fn parse_task_perform(
-        &mut self,
-        items: Box<[crate::host::item::Definition]>,
-        owner: Option<crate::host::facade::Dependency>,
-        name_span: Span,
-    ) -> Result<ParsedExpr, Error> {
-        let [item] = items.as_ref() else {
-            return Err(Error::InvalidHostOperation {
-                item: TASK_PERFORM_PATH.into(),
-                reason: "the authenticated task producer must have one exact declaration".into(),
-                operation: name_span,
-            });
-        };
-        self.expect(Token::LeftParen, "'(' after Task::perform")?;
-        if !self.operation_selector_ahead() {
-            return self.parse_task_perform_future(name_span);
-        }
-        let (selected_items, selected_owner, selector) = self.parse_operation_selector()?;
-        let (mut arguments, _) = self.parse_call_arguments("host operation arguments")?;
-        self.expect(Token::Comma, "',' after the host operation call")?;
-        let mut mapper = self.parse_expr()?;
-        if matches!(self.peek(), Token::Comma) {
-            self.next();
-        }
-        let end = self.expect(Token::RightParen, "')' after Task::perform arguments")?;
-        let call = span(name_span.start(), end);
-
-        let signature = self.instantiate_host_signature(item, None, None)?;
-        let [expected_output, expected_mapper] = signature.inputs.as_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: format!(
-                    "authenticated task producer declares {} parameter(s), expected operation call and mapper",
-                    signature.inputs.len()
-                )
-                .into(),
-                operation: call,
-            });
-        };
-
-        let (selected_item, selected_signature) =
-            self.select_host_signature(&selected_items, None, &mut arguments, false, selector)?;
-        if selected_signature.inputs.len() != arguments.len() {
-            return Err(Error::InvalidHostOperation {
-                item: selected_item.path().into(),
-                reason: format!(
-                    "symbolic host operation expects {} argument(s), found {}",
-                    selected_signature.inputs.len(),
-                    arguments.len()
-                )
-                .into(),
-                operation: selector,
-            });
-        }
-        for (argument, expected) in arguments.iter_mut().zip(selected_signature.inputs.iter()) {
-            self.coerce_expr(expected, argument)?;
-        }
-        self.require_type(expected_output, &selected_signature.output, selector)?;
-        self.coerce_expr(expected_mapper, &mut mapper)?;
-
-        let owner = owner.ok_or_else(|| Error::InvalidHostOperation {
-            item: item.path().into(),
-            reason: "task producer is not owned by installed validated bindings".into(),
-            operation: call,
-        })?;
-        let selected_owner = selected_owner.ok_or_else(|| Error::InvalidHostOperation {
-            item: selected_item.path().into(),
-            reason: "operation is not owned by installed validated bindings".into(),
-            operation: selector,
-        })?;
-        let output = self.inference.resolve(&signature.output);
-        let selected_inputs = selected_signature
-            .inputs
-            .iter()
-            .map(|input| self.inference.resolve(input))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let selected_output = self.inference.resolve(&selected_signature.output);
-        let mut requirements = signature.requirements.into_vec();
-        requirements.extend(selected_signature.requirements);
-        let operation = Perform {
-            facade: owner.fingerprint().clone(),
-            owner,
-            item: item.clone(),
-            requirements: requirements.into_boxed_slice(),
-            selected_owner,
-            selected_item,
-            selected_inputs,
-            selected_output,
-            arguments: arguments
-                .iter()
-                .map(|argument| (argument.ty.clone(), argument.span, false))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            mapper: (mapper.ty.clone(), mapper.span, false),
-            output: output.clone(),
-            selector,
-            span: call,
-        };
-        let helper = self.push_perform(operation)?;
-        let (prelude, source) = self.private_call(
-            &helper,
-            arguments.into_iter().chain(std::iter::once(mapper)),
-        );
-        Ok(ParsedExpr {
-            prelude,
-            source,
-            ty: output,
-            span: call,
-            lvalue: None,
-            outcome: item.outcome(),
-            evaluation: item.evaluation(),
-        }
-        .retain_origin())
-    }
-
-    /// iced's `Subscription::run(builder)` takes a function, and its
-    /// identity is that function. Rawr calls the Rust function here and
-    /// passes its path: `Subscription::run(echo::connect)` reads as
-    /// `Subscription::run(echo::connect(), "echo::connect")`.
-    fn splice_subscription_builder(&mut self) -> Result<(), Error> {
-        let mut ahead = self.input.clone();
-        let mut path = Vec::new();
-        let mut text = String::new();
-        let Some((Token::LeftParen, open)) = ahead.next() else {
-            return Err(self.unsupported("`Subscription::run` takes a function's path"));
-        };
-        loop {
-            match ahead.next() {
-                Some((Token::Identifier(name), at)) => {
-                    text.push_str(name.as_str());
-                    path.push((Token::Identifier(name), at));
-                }
-                _ => return Err(self.unsupported(
-                    "`Subscription::run` takes the path of a Rust function that returns a sipper",
-                )),
-            }
-            match ahead.next() {
-                Some((Token::DoubleColon, at)) => {
-                    text.push_str("::");
-                    path.push((Token::DoubleColon, at));
-                }
-                Some((Token::RightParen, close)) => {
-                    for _ in 0..path.len() + 2 {
-                        self.next();
-                    }
-                    let mut tokens = vec![(Token::LeftParen, open)];
-                    tokens.extend(path);
-                    tokens.extend([
-                        (Token::Unit, close),
-                        (Token::Comma, close),
-                        (Token::StringConstant(Box::new(text.as_str().into())), close),
-                        (Token::RightParen, close),
-                    ]);
-                    self.splice_tokens(tokens);
-                    return Ok(());
-                }
-                _ => return Err(self.unsupported(
-                    "`Subscription::run` takes the path of a Rust function that returns a sipper",
-                )),
-            }
-        }
-    }
-
     /// Rewrite the call arguments ahead, `(f)`, into `((f)())`: the one
     /// argument called with no arguments. `false` leaves the tokens alone.
     fn splice_immediate_call(&mut self) -> bool {
@@ -21008,47 +19879,6 @@ impl<'a> Parser<'a> {
         true
     }
 
-    /// Whether the tokens ahead name an imported symbolic host operation,
-    /// which `Task::perform` seals itself. Anything else is a future.
-    fn operation_selector_ahead(&mut self) -> bool {
-        let mut ahead = self.input.clone();
-        let Some((Token::Identifier(first), _)) = ahead.next() else {
-            return false;
-        };
-        let Some(binding) = self.models.import(first.as_str()) else {
-            return false;
-        };
-        let module = matches!(ahead.peek(), Some((Token::DoubleColon, _)));
-        let items = match &binding.target {
-            item::Import::Item { definitions, .. }
-            | item::Import::ModuleItem { definitions, .. }
-                if !module =>
-            {
-                definitions.to_vec()
-            }
-            item::Import::Module | item::Import::ModuleItem { .. } if module => {
-                let mut path = binding.qualified.to_string();
-                while matches!(ahead.peek(), Some((Token::DoubleColon, _))) {
-                    ahead.next();
-                    let Some((Token::Identifier(member), _)) = ahead.next() else {
-                        return false;
-                    };
-                    path.push_str("::");
-                    path.push_str(member.as_str());
-                }
-                match self.models.host_items(&path) {
-                    Some(items) => items.to_vec(),
-                    None => return false,
-                }
-            }
-            _ => return false,
-        };
-        !items.is_empty()
-            && items
-                .iter()
-                .all(|item| item.kind() == crate::host::item::Kind::Operation)
-    }
-
     /// `Task::perform(future, f)` over a Rust future, which crosses as a
     /// `Task`: iced's own definition, `Task::future(future).map(f)`.
     fn parse_task_perform_future(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
@@ -21085,88 +19915,12 @@ impl<'a> Parser<'a> {
         self.parse_host_method(task, "map".into(), call)
     }
 
-    fn parse_operation_selector(&mut self) -> Result<OperationSelector, Error> {
-        let (name, first) = self.expect_name("host operation selector")?;
-        let Some(binding) = self.models.import(&name).cloned() else {
-            return Err(Error::InvalidHostOperation {
-                item: name,
-                reason: "no imported symbolic host operation owns this selector".into(),
-                operation: first,
-            });
-        };
-        let (items, owner, selected) = match binding.target {
-            item::Import::Item { definitions, owner }
-            | item::Import::ModuleItem { definitions, owner }
-                if !matches!(self.peek(), Token::DoubleColon) =>
-            {
-                (definitions, owner, first)
-            }
-            item::Import::Module | item::Import::ModuleItem { .. }
-                if matches!(self.peek(), Token::DoubleColon) =>
-            {
-                let mut path = binding.qualified.to_string();
-                let mut end = first.end();
-                while matches!(self.peek(), Token::DoubleColon) {
-                    self.next();
-                    let (member, member_span) = self.expect_qualified_name()?;
-                    path.push_str("::");
-                    path.push_str(&member);
-                    end = member_span.end();
-                }
-                let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
-                    return Err(Error::InvalidHostOperation {
-                        item: path.into(),
-                        reason: "no registered symbolic host operation owns this selector".into(),
-                        operation: span(first.start(), end),
-                    });
-                };
-                let owner = self.models.item_owner(&path).cloned();
-                (items.into_boxed_slice(), owner, span(first.start(), end))
-            }
-            _ => {
-                return Err(Error::InvalidHostOperation {
-                    item: binding.qualified,
-                    reason: "selector does not name a symbolic host operation".into(),
-                    operation: first,
-                });
-            }
-        };
-        let Some(definition) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: binding.qualified,
-                reason: "operation selector retained no exact declarations".into(),
-                operation: selected,
-            });
-        };
-        if items
-            .iter()
-            .any(|item| item.kind() != crate::host::item::Kind::Operation)
-        {
-            return Err(Error::InvalidHostOperation {
-                item: definition.path().into(),
-                reason: "selector does not name a symbolic host operation".into(),
-                operation: selected,
-            });
-        }
-        Ok((items, owner, selected))
-    }
-
     fn parse_host_value(
         &mut self,
         item: crate::host::item::Definition,
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        if matches!(
-            item.kind(),
-            crate::host::item::Kind::Operation | crate::host::item::Kind::StreamOperation
-        ) {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "symbolic host operations require exact call syntax".into(),
-                operation: name_span,
-            });
-        }
         if !matches!(
             item.kind(),
             crate::host::item::Kind::Value | crate::host::item::Kind::AssociatedValue
@@ -25726,8 +24480,6 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self, pending: usize) -> Result<(), Error> {
         let start = self.position();
         let operation_count = self.ops.len();
-        let perform_count = self.performs.len();
-        let change_count = self.changes.len();
         let checkpoint = self.inference.checkpoint();
         let block_like = self.peek_block_like();
         let value = self.parse_expr_in(block_like)?;
@@ -25798,8 +24550,6 @@ impl<'a> Parser<'a> {
                     self.collect_imported_ops(&ops[operation_count..])?;
                     ops.truncate(operation_count);
                     self.ops = ops;
-                    self.performs.truncate(perform_count);
-                    self.changes.truncate(change_count);
                     self.inference.rollback(checkpoint);
                     self.last_type = Ty::Unit;
                     self.last_expression = None;
@@ -25982,57 +24732,6 @@ impl<'a> Parser<'a> {
             },
         };
         Ok((rendered, replacement.span))
-    }
-
-    /// `source`, a call of the boot, opened into its `(State, Task)` tuple
-    /// when `opens` is set.
-    fn opened_startup(&mut self, opens: bool, source: origin::Fragment) -> origin::Fragment {
-        if !opens {
-            return source;
-        }
-        let helper = self.push_op(Op::OpenStartup);
-        origin::Fragment::call(&helper, [source])
-    }
-
-    fn parse_startup_tail(&mut self, output: &type_ref::Type) -> Result<(), Error> {
-        let type_ref::Type::Tuple { members, .. } = output else {
-            return Err(self.unsupported("startup envelope outside an explicit tuple boot"));
-        };
-        if members.len() != 2 {
-            return Err(self.unsupported(
-                "explicit boot startup envelope with anything other than two members",
-            ));
-        }
-
-        let start = self.expect(Token::LeftParen, "'(' to start the startup envelope")?;
-        let mut state = self.parse_expr()?;
-        self.expect(Token::Comma, "',' between startup State and Task")?;
-        let mut task = self.parse_expr()?;
-        if matches!(self.peek(), Token::Comma) {
-            self.next();
-        }
-        self.expect(Token::RightParen, "')' after the startup envelope")?;
-        if !matches!(self.peek(), Token::RightBrace) {
-            return Err(self.unsupported(
-                "the explicit boot startup envelope must be the terminal expression",
-            ));
-        }
-
-        let state_type = Ty::from_resolved(&members[0]);
-        let task_type = Ty::from_resolved(&members[1]);
-        self.coerce_expr(&state_type, &mut state)?;
-        self.coerce_expr(&task_type, &mut task)?;
-        let helper = self.push_op(Op::Startup {
-            state: state_type,
-            task: task_type,
-        });
-        self.write_output(
-            origin::Fragment::call(&helper, [state.rendered_source(), task.rendered_source()]),
-            span(start, task.span.end()),
-        );
-        self.last_type = Ty::Unknown;
-        self.last_expression = None;
-        Ok(())
     }
 
     /// A pattern, with top-level alternatives: `p | q`.
@@ -35940,21 +34639,6 @@ impl<'a> Parser<'a> {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
-            // tokio's `mutex.lock().await` without tokio: a `RefCell`
-            // borrow once no other borrow holds it.
-            let mutex = match &builtin {
-                Ty::Reference { target, .. } => (**target).clone(),
-                ty => ty.clone(),
-            };
-            if member.as_str() == "lock"
-                && let Ty::Host { proof, arguments } = &mutex
-                && proof.definition.path() == "rawr_iced::tokio::sync::Mutex"
-                && let [inner] = &arguments[..]
-            {
-                let inner = inner.clone();
-                value = self.parse_mutex_lock(value, inner, member_span)?;
-                continue;
-            }
             let tuple = match &builtin {
                 Ty::Tuple(members) => Some(members.clone()),
                 Ty::Reference { target, .. } => match &**target {
@@ -36443,14 +35127,6 @@ impl<'a> Parser<'a> {
         if let Some(definition) = self.probed_method(owner, &member, &value.ty) {
             let summary = self.method_summary(&definition);
             self.note_call(end, summary);
-            if self.models.widget_hook(&definition).is_some() {
-                return Err(Error::InvalidWidget {
-                    widget: owner_name.clone(),
-                    reason: "lifecycle hooks are invoked only by the bound widget adapter".into(),
-                    reference: member_span,
-                    declaration: Some(definition.name_span()),
-                });
-            }
             let Some(mode) = definition.receiver() else {
                 return Err(Error::InvalidMethodCall {
                     owner: owner_name.clone(),
@@ -42886,22 +41562,13 @@ impl<'a> Parser<'a> {
         moved: bool,
         output: Option<Ty>,
     ) -> Result<ParsedExpr, Error> {
-        // iced's `Task` runs an iced program's async bodies, and the core's
-        // future any other program's (D511.3).
-        let runner = if self.models.host_items(ASYNC_TASK).is_some() {
-            ASYNC_TASK
-        } else {
-            CORE_ASYNC
-        };
+        // The core's future runs async bodies (D511.3).
         let items = self
             .models
-            .host_items(runner)
+            .host_items(CORE_ASYNC)
             .map(<[_]>::to_vec)
-            .ok_or_else(|| Error::UnsupportedNominalSyntax {
-                construct: "`async` in a program without iced, whose `Task` runs it".into(),
-                source: start,
-            })?;
-        let owner = self.models.item_owner(runner).cloned();
+            .ok_or_else(|| self.unsupported("`async`"))?;
+        let owner = self.models.item_owner(CORE_ASYNC).cloned();
         self.async_step = Some(output);
         let step = self.parse_closure(Token::Or, start, moved)?;
         let call = span(start.start(), step.span.end());
@@ -43656,20 +42323,6 @@ impl<'a> Parser<'a> {
                     call,
                 });
             };
-            let tokio = matches!(
-                self.inference.resolve(&argument.ty),
-                Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
-            );
-            if tokio
-                && let Some(items) = self
-                    .models
-                    .host_items("rawr_iced::tokio::__drop")
-                    .map(<[_]>::to_vec)
-            {
-                self.move_local(argument)?;
-                let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
-                return self.call_host_function(&items, owner, arguments, call);
-            }
             self.move_local(argument)?;
             // A value with drop glue runs it here.
             let source = if self.needs_drop(&argument.ty, argument.span)? {
@@ -43741,7 +42394,6 @@ impl<'a> Parser<'a> {
             )?;
         }
         let mut witnesses = Vec::new();
-        let mut opens_startup = false;
         let output = if let Some(function) = function {
             if arguments.len() != function.definition.parameters.len() {
                 return Err(Error::InvalidMethodCall {
@@ -43774,10 +42426,6 @@ impl<'a> Parser<'a> {
             // instance for the types this call gives it (D629).
             #[cfg(feature = "rust-import")]
             let function = self.bind_instance(function, &substitution, call)?;
-            // The boot returns its sealed startup envelope: script code
-            // that calls it gets the tuple back.
-            opens_startup = function.definition.output.as_ref().is_some_and(is_tuple)
-                && self.models.boot.as_ref() == Some(&function.key);
             let output = instantiate(
                 &function
                     .definition
@@ -43818,7 +42466,7 @@ impl<'a> Parser<'a> {
                     .collect();
                 // `biggest(&mut v)` of `fn biggest(v: &mut Vec<i32>) ->
                 // &mut i32`: the place below `v` the output borrows.
-                if !opens_startup && let Some(borrowed) = self.place_output(&output) {
+                if let Some(borrowed) = self.place_output(&output) {
                     let receiver = self.borrowed_receiver(&place, call)?;
                     let mut source =
                         origin::Fragment::plain(format!("{}.{name}(", places::RECEIVER_PLACE));
@@ -43859,7 +42507,6 @@ impl<'a> Parser<'a> {
                     _ => self.mutation_call(&place, &name, operands)?,
                 };
                 let source = self.copied_call(source, &places[1..])?;
-                let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));
             }
             if !places.is_empty() {
@@ -43871,7 +42518,6 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                 );
                 let source = self.copied_call(source, &places)?;
-                let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));
             }
             output
@@ -43893,7 +42539,7 @@ impl<'a> Parser<'a> {
         );
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: self.opened_startup(opens_startup, source),
+            source,
             ty: output,
             span: span(name_span.start(), end),
             lvalue: None,
@@ -46798,8 +45444,6 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(owner_span.start(), end),
             )?;
-            let opens_startup = is_tuple(definition.output())
-                && self.models.boot.as_ref() == Some(definition.key());
             let witnesses = self.witness_arguments(
                 definition.generics(),
                 &substitution,
@@ -46822,7 +45466,7 @@ impl<'a> Parser<'a> {
             self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
-                source: self.opened_startup(opens_startup, source),
+                source,
                 ty: instantiate(&Ty::from_resolved(definition.output()), &substitution),
                 span: span(owner_span.start(), end),
                 lvalue: None,
@@ -48647,40 +47291,6 @@ impl<'a> Parser<'a> {
             value.source.cover(value.span);
             return Ok(Some(helper));
         }
-        self.infer_widget_message(&source, &target);
-        let resolved = self.inference.resolve(&target);
-        if let Some(promotion) = self.selected_widget_promotion(&source, &resolved, value.span)? {
-            let runtime_target = self
-                .models
-                .application_type(&resolved)
-                .and_then(|target| target.exact_runtime_type())
-                .ok_or_else(|| Error::InvalidWidget {
-                    widget: widget_name(promotion.definition().owner()).into(),
-                    reason: "the open widget target has no exact runtime type proof".into(),
-                    reference: value.span,
-                    declaration: Some(promotion.definition().declaration().span()),
-                })?;
-            let activation = crate::host::runtime::widget::Requirement::bind(
-                promotion.definition().dependency().clone(),
-                runtime_target,
-            );
-            let helper = self.push_op(Op::Widget {
-                promotion: Box::new(promotion),
-                source,
-                activation,
-            });
-            if self.normalize_private_calls {
-                let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = self.op_call(&helper, [operand]);
-            } else {
-                debug_assert!(value.prelude.is_empty());
-                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
-            }
-            value.ty = target;
-            value.lvalue = None;
-            value.source.cover(value.span);
-            return Ok(Some(helper));
-        }
         if self.coerce_children(&source, &target, value)? {
             return Ok(None);
         }
@@ -49445,11 +48055,9 @@ impl<'a> Parser<'a> {
     }
 
     /// A widget that converts into an erased type by its widget protocol
-    /// rather than a facade projection: a scripted `#[widget]`, or an
-    /// imported native widget.
+    /// rather than a facade projection: an imported native widget.
     fn erased_widget(&self, source: &Ty) -> bool {
         match source {
-            Ty::Script(id, _) => self.models.widget(*id).is_some(),
             #[cfg(feature = "rust-import")]
             Ty::Host { arguments, .. } => matches!(arguments.as_ref(), [Ty::ProfileMessage { .. }]),
             _ => false,
@@ -49499,120 +48107,6 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|target| self.inference.resolve(target))
             .collect()
-    }
-
-    /// A scripted widget promoted where the boundary Message is still being
-    /// inferred, as in `column![Dial {}, ..]`, takes its protocol's exact
-    /// Message, as Rust infers it.
-    fn infer_widget_message(&mut self, source: &Ty, target: &Ty) {
-        let Ty::Script(definition, ..) = source else {
-            return;
-        };
-        let Some(exact) = self
-            .models
-            .widget(*definition)
-            .and_then(|protocol| protocol.message().exact().cloned())
-        else {
-            return;
-        };
-        let Ty::Host { arguments, .. } = self.inference.resolve(target) else {
-            return;
-        };
-        let [Ty::Infer(variable)] = arguments.as_ref() else {
-            return;
-        };
-        let message = self.models.by_definition.keys().copied().find(|id| {
-            self.models
-                .application_type(&Ty::Script(*id, Box::default()))
-                .as_ref()
-                == Some(&exact)
-        });
-        if let Some(message) = message {
-            self.inference
-                .bind(*variable, Ty::Script(message, Box::default()));
-        }
-    }
-
-    fn selected_widget_promotion(
-        &self,
-        source: &Ty,
-        target: &Ty,
-        location: Span,
-    ) -> Result<Option<crate::widget::Promotion>, Error> {
-        let Ty::Script(definition, ..) = source else {
-            return Ok(None);
-        };
-        let Some(protocol) = self.models.widget(*definition) else {
-            return Ok(None);
-        };
-        let Ty::Host {
-            proof: target_proof,
-            arguments,
-        } = target
-        else {
-            return Ok(None);
-        };
-        let Some(owner) = target_proof.owner.as_ref() else {
-            return Ok(None);
-        };
-        let target_definition = &target_proof.definition;
-        if target_definition.path() != "iced::Element"
-            || owner != protocol.dependency()
-            || arguments.len() != 1
-        {
-            return Ok(None);
-        }
-        let message =
-            self.models
-                .application_type(&arguments[0])
-                .ok_or_else(|| Error::InvalidWidget {
-                    widget: self.models.definition(*definition).name().into(),
-                    reason: "the exact widget boundary Message has no stable structural proof"
-                        .into(),
-                    reference: location,
-                    declaration: Some(protocol.declaration().span()),
-                })?;
-        if let Some(exact) = protocol.message().exact()
-            && exact != &message
-        {
-            return Err(Error::InvalidWidget {
-                widget: self.models.definition(*definition).name().into(),
-                reason: format!(
-                    "protocol Message `{}` does not match boundary Message `{}`",
-                    exact.display_name(),
-                    message.display_name()
-                )
-                .into(),
-                reference: location,
-                declaration: Some(protocol.declaration().span()),
-            });
-        }
-        let Some(callable) = self.callable.clone() else {
-            return Err(Error::InvalidWidget {
-                widget: self.models.definition(*definition).name().into(),
-                reason: "implicit widget promotion requires one containing callable".into(),
-                reference: location,
-                declaration: Some(protocol.declaration().span()),
-            });
-        };
-        let path = self
-            .expression_paths
-            .iter()
-            .rev()
-            .find_map(|(candidate, path)| (*candidate == location).then(|| path.clone()))
-            .ok_or_else(|| Error::InvalidWidget {
-                widget: self.models.definition(*definition).name().into(),
-                reason: "the compiler could not retain this widget expression's structural site"
-                    .into(),
-                reference: location,
-                declaration: Some(protocol.declaration().span()),
-            })?;
-        Ok(Some(crate::widget::Promotion::new(
-            protocol.clone(),
-            message,
-            crate::widget::Site::new(callable, path),
-            self.models.location(location),
-        )))
     }
 
     fn coerce_tail(&mut self, expected: &Ty, body: Span) -> Result<(), Error> {
@@ -49666,69 +48160,6 @@ impl<'a> Parser<'a> {
         self.returned(value.span, &value.ty);
         self.write_output(value.rendered_source(), value.span);
         self.last_type = value.ty;
-        Ok(())
-    }
-
-    fn wrap_widget_change(&mut self, definition: &method::Definition) -> Result<(), Error> {
-        let Some(hook) = self.models.widget_hook(definition).cloned() else {
-            return Ok(());
-        };
-        if !matches!(
-            hook.kind(),
-            crate::widget::hook::Kind::Diff
-                | crate::widget::hook::Kind::Layout
-                | crate::widget::hook::Kind::Update
-                | crate::widget::hook::Kind::Operate
-                | crate::widget::hook::Kind::Overlay
-        ) {
-            return Ok(());
-        }
-        if matches!(self.last_type, Ty::Never) {
-            return Ok(());
-        }
-        let Some(parameter) = definition.parameters().first() else {
-            return Ok(());
-        };
-        let type_ref::Type::Reference { target, .. } = &parameter.ty else {
-            return Ok(());
-        };
-        let state =
-            crate::host::runtime::type_ref::Type::from_resolved(target, &self.models.runtime)
-                .map_err(|error| Error::InvalidWidget {
-                    widget: definition.owner_name().into(),
-                    reason: format!("stateful hook transport cannot prove State: {error}").into(),
-                    reference: parameter.name.span,
-                    declaration: Some(definition.name_span()),
-                })?;
-        let output = hook.output().clone();
-        let model = self
-            .models
-            .definition(definition.owner())
-            .definition()
-            .clone();
-        let generation = self.models.runtime.generation();
-        let (value, original) = match self.last_expression {
-            Some((start, original)) => {
-                let mut value = self.output.split_off(start);
-                value.trim_end();
-                (value, original)
-            }
-            None => (origin::Fragment::plain("()"), definition.body()),
-        };
-        let helper = self.push_change(
-            ChangeOperation {
-                definition: model,
-                generation,
-                hook,
-                state,
-                output,
-            },
-            original,
-        )?;
-        let mut rendered = origin::Fragment::plain(format!("{helper}("));
-        rendered.push(value);
-        rendered.push_text(format!(", {})", parameter.name.text));
-        self.write_output(rendered, original);
         Ok(())
     }
 
@@ -50985,41 +49416,6 @@ impl<'a> Parser<'a> {
         let name = format!("{SENTINEL}{}", self.op_offset + self.ops.len());
         self.ops.push(op);
         name
-    }
-
-    fn push_perform(&mut self, operation: Perform) -> Result<String, Error> {
-        let span = operation.span;
-        let index = PendingIndex::new(self.performs.len()).ok_or_else(|| {
-            pending_operation_capacity_error("task operation", span, "index space exhausted")
-        })?;
-        self.performs.try_reserve(1).map_err(|_| {
-            pending_operation_capacity_error("task operation", span, "allocation failed")
-        })?;
-        self.ops.try_reserve(1).map_err(|_| {
-            pending_operation_capacity_error("task operation", span, "allocation failed")
-        })?;
-        self.performs.push(operation);
-        Ok(self.push_op(Op::Perform {
-            operation: index,
-            span,
-        }))
-    }
-
-    fn push_change(&mut self, operation: ChangeOperation, span: Span) -> Result<String, Error> {
-        let index = PendingIndex::new(self.changes.len()).ok_or_else(|| {
-            pending_operation_capacity_error("change operation", span, "index space exhausted")
-        })?;
-        self.changes.try_reserve(1).map_err(|_| {
-            pending_operation_capacity_error("change operation", span, "allocation failed")
-        })?;
-        self.ops.try_reserve(1).map_err(|_| {
-            pending_operation_capacity_error("change operation", span, "allocation failed")
-        })?;
-        self.changes.push(operation);
-        Ok(self.push_op(Op::Change {
-            operation: index,
-            span,
-        }))
     }
 
     fn expect_name(&mut self, construct: &str) -> Result<(ImmutableString, Span), Error> {
@@ -55317,61 +53713,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 952);
-        assert_eq!(
-            std::mem::size_of::<Box<crate::host::operation::Proof>>(),
-            std::mem::size_of::<usize>()
-        );
-    }
-
-    #[test]
-    fn perform_proof_allocates_once_and_moves_into_its_callback() {
-        super::PERFORM_PROOF_BOXES.with(|allocations| allocations.set(0));
-        let selected = super::box_perform_proof(42_u8);
-        assert_eq!(super::PERFORM_PROOF_BOXES.with(std::cell::Cell::get), 1);
-
-        let callback = move || *selected;
-        assert_eq!(callback(), 42);
-        assert_eq!(
-            super::PERFORM_PROOF_BOXES.with(std::cell::Cell::get),
-            1,
-            "moving the boxed proof into the registered callback does not allocate again",
-        );
-    }
-
-    #[test]
-    fn pending_operation_indices_preserve_order_and_reject_overflow() {
-        let mut entries = vec!["first", "second"].into_iter();
-        let mut next = 0;
-        assert_eq!(
-            super::take_pending(
-                &mut entries,
-                &mut next,
-                super::PendingIndex::new(0).expect("zero fits the compact index"),
-            ),
-            Some("first")
-        );
-        assert_eq!(
-            super::take_pending(
-                &mut entries,
-                &mut next,
-                super::PendingIndex::new(0).expect("zero fits the compact index"),
-            ),
-            None,
-            "a stale index cannot consume the next typed payload",
-        );
-        assert_eq!(
-            super::take_pending(
-                &mut entries,
-                &mut next,
-                super::PendingIndex::new(1).expect("one fits the compact index"),
-            ),
-            Some("second")
-        );
-        assert!(super::PendingIndex::new(u32::MAX as usize).is_some());
-        if usize::BITS > u32::BITS {
-            assert!(super::PendingIndex::new(u32::MAX as usize + 1).is_none());
-        }
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 936);
     }
 
     #[cfg(feature = "rust-import")]

@@ -150,24 +150,6 @@ pub fn structural_equal(lhs: &Dynamic, rhs: &Dynamic) -> bool {
     crate::resolve::lower_nominal::equal_value(lhs, rhs)
 }
 
-/// The carried type's name and the bytes of `value`, when it is a host
-/// value whose type has a [`Carry`].
-pub(crate) fn encode_host(value: &Dynamic, out: &mut Vec<u8>) -> Option<&'static str> {
-    {
-        let (name, encode) = *ENCODERS.read().ok()?.get(&value.type_id())?;
-        encode(value, out)?;
-        Some(name)
-    }
-}
-
-/// The host value of the type named `name` that `bytes` encode.
-pub(crate) fn decode_host(name: &str, bytes: &[u8]) -> Option<Dynamic> {
-    {
-        let decode = *DECODERS.read().ok()?.get(name)?;
-        decode(bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{host_compare, host_equal, register_relations};
