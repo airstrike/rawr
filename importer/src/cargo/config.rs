@@ -48,7 +48,7 @@ const WRAPPER_ENVIRONMENT: [&str; 4] = [
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
 /// The dynamic loader's search path on the ELF hosts the importer supports.
-const LOADER_PATH: &str = "LD_LIBRARY_PATH";
+pub(crate) const LOADER_PATH: &str = "LD_LIBRARY_PATH";
 const INTERNAL_ENVIRONMENT_PREFIX: &str = "RAWR_IMPORT_";
 const UNSTABLE_ENVIRONMENT_PREFIX: &str = "CARGO_UNSTABLE_";
 pub(crate) const INTERNAL_ALIAS: &str = "__rawr_internal";
@@ -619,7 +619,7 @@ impl Environment {
     /// load libLLVM unless the toolchain's own `lib` is also on the path.
     /// macOS needs nothing. Cargo sets `DYLD_FALLBACK_LIBRARY_PATH` there, and
     /// the loader consults it only after rustc's `@rpath`.
-    fn loader_path(&self, rustc: &Path) -> Option<OsString> {
+    pub(crate) fn loader_path(&self, rustc: &Path) -> Option<OsString> {
         if cfg!(target_vendor = "apple") {
             return None;
         }
