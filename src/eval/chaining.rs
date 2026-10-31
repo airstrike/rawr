@@ -949,6 +949,16 @@ impl Engine {
                         let idx_val = &mut idx_values.pop().unwrap();
                         let idx = &mut idx_val.clone();
                         if let Some(place) = crate::place::get(obj) {
+                            // The element's own place, given back after a
+                            // swap through it, is already where it is.
+                            if !op_info.is_op_assignment()
+                                && let Some(incoming) = crate::place::get(&new_val)
+                                && let Ok(at) = idx_val.as_int()
+                                && let Ok(at) = usize::try_from(at)
+                                && place.project(at)?.same_storage(&incoming)
+                            {
+                                return Ok((Dynamic::UNIT, true));
+                            }
                             if !op_info.is_op_assignment() {
                                 let _ = place.invoke(
                                     crate::place::Operation::Set,
@@ -1040,13 +1050,10 @@ impl Engine {
                         let new_scope = x!(s, b);
                         let idx_val = &mut idx_values.pop().unwrap();
 
+                        // `v[i]` of a native sequence: a copy of a `Copy`
+                        // element, or the element's own place (D651).
                         if let Some(place) = crate::place::get(obj) {
-                            return place
-                                .invoke(
-                                    crate::place::Operation::CopyElement,
-                                    &mut [idx_val.clone()],
-                                )
-                                .map(|value| (value, false));
+                            return place.element(idx_val).map(|value| (value, false));
                         }
                         self.get_indexed_mut(
                             global, caches, new_scope, this_ptr, obj, idx_val, pos, op_pos, false,

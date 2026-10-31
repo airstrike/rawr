@@ -396,3 +396,107 @@ fn native_borrowed_extension_and_string_retain_keep_owners() {
     assert_eq!(values.capacity(), 9);
     assert_eq!(values[0].as_ptr(), text_pointer);
 }
+
+#[test]
+fn element_borrows_reach_the_native_element_without_a_copy() {
+    let mut a = Vec::with_capacity(4);
+    a.push(String::with_capacity(30));
+    a.push("a1".to_owned());
+    a[0].push_str("a0");
+    let mut b = vec!["b0".to_owned()];
+    let (text, vector) = (a[0].as_ptr(), a.as_ptr());
+    let result = run_two(
+        r#"
+        fn first(values: &mut Vec<String>) -> &mut String { &mut values[0] }
+        pub fn run(a: &mut Vec<String>, b: &mut Vec<String>) {
+            let x = first(a);
+            x.push_str("-helper");
+            let last = a.last_mut().unwrap();
+            last.push_str("-last");
+            let copy = a[0].clone();
+            b.push(copy);
+            let x = &mut a[1];
+            let y = &mut b[0];
+            std::mem::swap(x, y);
+            a.push("after".to_string());
+        }
+    "#,
+        &mut a,
+        &mut b,
+    );
+    assert_eq!(result.map(|_| ()), Ok(()));
+    assert_eq!(a, ["a0-helper", "b0", "after"]);
+    assert_eq!(b, ["a1-last", "a0-helper"]);
+    assert_eq!(a[0].as_ptr(), text);
+    assert_eq!(a.as_ptr(), vector);
+}
+
+#[test]
+fn copy_elements_are_read_by_copy_and_written_in_place() {
+    let engine = Shared::new(Engine::new());
+    let authority = engine
+        .compile_authority(
+            r#"
+        fn first(values: &mut Vec<i64>) -> &mut i64 { &mut values[0] }
+        pub fn run(values: &mut Vec<i64>) -> i64 {
+            let x = first(values);
+            *x += 5;
+            let read = values[0];
+            *first(values) = read * 2;
+            read
+        }
+    "#,
+        )
+        .unwrap();
+    let runtime = Shared::new(Registry::new());
+    let witness = runtime.witness_for(&Type::array(
+        Type::builtin("i64", TypeId::of::<i64>()),
+        None,
+    ));
+    let run = authority
+        .items()
+        .find(|item| item.key().name() == "run")
+        .unwrap()
+        .clone();
+    let mut values = vec![1, 2];
+    let result = crate::place::borrow::<Vector<Integer>, _>(&mut values, &witness, |value| {
+        authority.invoke_bound(&run, &mut [value], runtime.clone())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(result.as_int(), Ok(6), "{result:?}");
+    assert_eq!(values, [12, 2]);
+}
+
+#[test]
+fn an_element_kept_past_its_callback_is_refused() {
+    let witness = Shared::new(Registry::new()).witness_for(&Type::array(
+        Type::builtin("String", TypeId::of::<ImmutableString>()),
+        None,
+    ));
+    let mut values = vec!["kept".to_owned()];
+    let mut kept = None;
+    crate::place::borrow::<Vector<Text>, _>(&mut values, &witness, |value| {
+        let place = crate::place::get(&value).unwrap();
+        let element = place.project(0).unwrap();
+        assert_eq!(
+            element
+                .invoke(crate::place::Operation::Len, &mut [])
+                .unwrap()
+                .as_int(),
+            Ok(4)
+        );
+        assert!(place.project(1).is_err());
+        kept = Some(element);
+    })
+    .unwrap();
+    let kept = kept.unwrap();
+    assert!(kept.invoke(crate::place::Operation::Len, &mut []).is_err());
+    assert!(kept
+        .invoke(
+            crate::place::Operation::PushStr,
+            &mut [Dynamic::from("late")]
+        )
+        .is_err());
+    assert_eq!(values, ["kept"]);
+}

@@ -5445,6 +5445,9 @@ enum PreludeOp {
     ReferentStore,
     /// Whether a checked argument uses direct native place transport.
     NativePlace,
+    /// Whether a `Memory` swap exchanged two native places where they are,
+    /// leaving nothing to store back.
+    Swapped,
     /// Ownership-preserving `mem::take`, `replace` and `swap` on sequences/text.
     Memory,
     /// The parts of a value the drop glue goes on to after the value's own
@@ -5548,6 +5551,7 @@ impl PreludeOp {
             Self::PathSet => "place.set",
             Self::ReferentStore => "place.store",
             Self::NativePlace => "place.native",
+            Self::Swapped => "place.swapped",
             Self::Memory => "place.memory",
             Self::DropParts => "drop.parts",
         }
@@ -5589,6 +5593,7 @@ impl PreludeOp {
             Self::None => Vec::new(),
             Self::Some
             | Self::NativePlace
+            | Self::Swapped
             | Self::IsSome
             | Self::Unwrap
             | Self::Ok
@@ -5802,6 +5807,7 @@ impl PreludeOp {
         match self {
             Self::Some => return Ok(crate::option::some(args[0].take())),
             Self::NativePlace => return Ok(crate::place::get(args[0]).is_some().into()),
+            Self::Swapped => return Ok(args[0].is_unit().into()),
             Self::None => return Ok(crate::option::none()),
             Self::Ok => return Ok(crate::result::ok(args[0].take())),
             Self::Err => return Ok(crate::result::err(args[0].take())),
@@ -6048,11 +6054,7 @@ impl PreludeOp {
                         0 => place.invoke(crate::place::Operation::Take, &mut []),
                         1 => place.invoke(crate::place::Operation::Replace, &mut [incoming]),
                         2 if crate::place::get(&incoming).is_some() => {
-                            let _ = place.invoke(
-                                crate::place::Operation::SwapValues,
-                                &mut [incoming.clone()],
-                            )?;
-                            Ok(incoming)
+                            place.invoke(crate::place::Operation::SwapValues, &mut [incoming])
                         }
                         2 => place.invoke(crate::place::Operation::Replace, &mut [incoming]),
                         _ => Err(invariant("unknown native memory operation")),
@@ -6353,8 +6355,12 @@ impl PreludeOp {
                 };
             }
         }
-        let option = crate::option::read(args[0])
-            .ok_or_else(|| invariant("an `Option` operand is not an option at runtime"))?;
+        // `unwrap` and `expect` consume their operand, so its value moves out.
+        let option = match self {
+            Self::IsSome => crate::option::read(args[0]),
+            _ => crate::option::take(args[0]),
+        }
+        .ok_or_else(|| invariant("an `Option` operand is not an option at runtime"))?;
         match (self, option) {
             (Self::IsSome, option) => Ok(option.is_some().into()),
             (_, Some(value)) => Ok(value),
@@ -7558,11 +7564,13 @@ impl ExecutableOp {
                 .fields
                 .iter()
                 .map(|field| Ty::from_resolved(&field.ty).type_id(models))
+                .map(place_operand)
                 .collect(),
             Self::Enum { item, variant, .. } => item.variants[*variant]
                 .payload
                 .iter()
                 .map(|ty| Ty::from_resolved(ty).type_id(models))
+                .map(place_operand)
                 .collect(),
             Self::Clone { definition } | Self::Debug { definition } => {
                 vec![models.definition(definition.id()).ty().type_id(models)]
@@ -7993,10 +8001,11 @@ fn copied_input(inference: &Inference, ty: &Ty) -> bool {
     )
 }
 
-/// The dispatch type of a host operand. A sequence or string may be a typed
-/// native place (D651) as well as a script value: the proof validates either
-/// against the operand's exact type before the binding runs, and each
-/// binding's name is unique to its proof, so no overload is widened.
+/// The dispatch type of an operand. A sequence or string may be a typed
+/// native place (D651) as well as a script value, as a native vector a
+/// script made and keeps in a struct's field is: a host proof validates
+/// either against the operand's exact type before the binding runs, and
+/// each operation's name is unique to it, so no overload is widened.
 fn place_operand(ty: TypeId) -> TypeId {
     if ty == TypeId::of::<crate::Array>() || ty == TypeId::of::<ImmutableString>() {
         TypeId::of::<Dynamic>()
@@ -21156,10 +21165,10 @@ impl<'a> Parser<'a> {
                 Ty::Reference { target, .. } => *target,
                 ty => ty,
             };
-            // In parentheses, so the copy is not a move of the receiver.
-            let mut source = origin::Fragment::plain("(");
-            source.push(receiver.rendered_source());
-            source.push_text(")");
+            // A copy of the handle, not a move of the receiver; a native
+            // element's place is cloned now, by the element's own `Clone`,
+            // since the element may change before the copy is used (D651).
+            let source = self.prelude_op(PreludeOp::ValueClone, [receiver.rendered_source()]);
             return Ok(self.operator_expr(source, owned, span(receiver.span.start(), end)));
         }
         if self.models.host_items(&path).is_none()
@@ -37396,10 +37405,15 @@ impl<'a> Parser<'a> {
             source.push(operand);
             source.push_text(")");
             if function == "swap" {
+                // Two native places swap where they are (`Swapped`); else
+                // the second place takes the first's old value.
                 let old = self.temporary("swapped");
-                source = source.surrounded(&format!("{{ let {old} = "), "; ");
+                let swapped = self.prelude_op(PreludeOp::Swapped, [old.as_str().into()]);
+                source = source.surrounded(&format!("{{ let {old} = "), "; if !");
+                source.push(swapped);
+                source.push_text(" { ");
                 source.push(self.store_into(&places[1], &old)?);
-                source.push_text(" }");
+                source.push_text(" } }");
             }
             return Ok(self.operator_expr(
                 source,

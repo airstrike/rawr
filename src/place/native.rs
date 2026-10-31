@@ -85,27 +85,54 @@ impl<P: Policy> Storage for Source<P> {
     fn invoke(
         &self,
         witness: &Witness,
+        path: &[usize],
         operation: Operation,
         arguments: &mut [Dynamic],
         rest: Option<&mut crate::scope::Rest<'_>>,
     ) -> RawrResult {
-        self.access(operation.mutable(), |mut value| {
-            if operation == Operation::SwapValues {
-                let other = super::argument(arguments, 0)?;
-                let other = super::get(&other)
-                    .ok_or_else(|| failure("a native swap operand must be a checked place"))?;
-                return access::<P, _>(&other, witness, |other| {
-                    std::mem::swap(value.write()?, other);
-                    Ok(Dynamic::UNIT)
-                });
-            }
-            P::invoke(value, witness, operation, arguments, rest)
+        self.access(operation.mutable(), |value| {
+            P::project(value, witness, path, operation, arguments, rest)
         })
+    }
+
+    fn reach(
+        &self,
+        _witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult {
+        self.access(mutable, |value| P::reach_element(value, path, visit))
+    }
+
+    fn copies(&self, path: &[usize]) -> bool {
+        P::copies_at(path)
     }
 
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// An operation on the value a place names itself, its own element or
+/// root, under the claim already held on it.
+pub(super) fn leaf<P: Policy>(
+    mut value: Access<'_, P::Value>,
+    witness: &Witness,
+    operation: Operation,
+    arguments: &mut [Dynamic],
+    rest: Option<&mut crate::scope::Rest<'_>>,
+) -> RawrResult {
+    if operation == Operation::SwapValues {
+        let other = super::argument(arguments, 0)?;
+        let other = super::get(&other)
+            .ok_or_else(|| failure("a native swap operand must be a checked place"))?;
+        return access::<P, _>(&other, witness, |other| {
+            std::mem::swap(value.write()?, other);
+            Ok(Dynamic::UNIT)
+        });
+    }
+    P::invoke(value, witness, operation, arguments, rest)
 }
 
 fn checked<P: Policy>(source: Source<P>, witness: &Witness, mutable: bool) -> RawrResultOf<Place> {
@@ -175,6 +202,17 @@ pub fn take<P: Policy>(value: &Place, witness: &Witness) -> RawrResultOf<P::Valu
     if !value.witness.same_native_type(witness) || !P::accepts(witness) {
         return Err(failure("a moved native value has the wrong logical type"));
     }
+    // Rust moves no value out of a borrowed element, so an element's place
+    // reaches an owned operand only where a script copies it, as `.clone()`
+    // of a native value copies its handle: the element's own `Clone` makes
+    // the owned value, as the arena's `take` of a copied handle does.
+    if super::projection::is(value) {
+        let cloning = P::cloning()
+            .ok_or_else(|| failure("cannot move a native element out of its borrowed place"))?;
+        return reach::<P, _>(value, witness, false, |element| {
+            Ok((cloning.element)(element.read()))
+        });
+    }
     let source = value
         .storage
         .as_any()
@@ -207,6 +245,9 @@ pub fn reach<P: Policy, R>(
 ) -> RawrResultOf<R> {
     if !place.witness.same_native_type(witness) || !P::accepts(witness) {
         return Err(failure("the native operand has the wrong logical type"));
+    }
+    if super::projection::is(place) {
+        return super::projection::reach::<P, R>(place, mutable, visit);
     }
     let source = place
         .storage

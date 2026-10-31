@@ -8,6 +8,7 @@
 mod callback;
 mod native;
 pub mod ownership;
+mod projection;
 pub mod reading;
 pub mod sequence;
 pub mod slice;
@@ -282,6 +283,53 @@ pub trait Policy: crate::func::SendSync + 'static {
         lend_ref::<Self>(value, witness, rest)
     }
 
+    /// Run `operation` on the element `path` names below this value,
+    /// under the claim already held on the value. A value without
+    /// elements names only itself.
+    fn project(
+        value: Access<'_, Self::Value>,
+        witness: &Witness,
+        path: &[usize],
+        operation: Operation,
+        arguments: &mut [Dynamic],
+        rest: Option<&mut crate::scope::Rest<'_>>,
+    ) -> RawrResult
+    where
+        Self: Sized,
+    {
+        if !path.is_empty() {
+            return Err(failure("the native place has no elements"));
+        }
+        native::leaf::<Self>(value, witness, operation, arguments, rest)
+    }
+
+    /// Reach the element `path` names below this value, as its concrete
+    /// type erased; the caller recovers it by the exact descriptor.
+    fn reach_element(
+        value: Access<'_, Self::Value>,
+        path: &[usize],
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult
+    where
+        Self: Sized,
+    {
+        if !path.is_empty() {
+            return Err(failure("the native place has no elements"));
+        }
+        visit(match value {
+            Access::Shared(value) => Access::Shared(value as &dyn Any),
+            Access::Mutable(value) => Access::Mutable(value as &mut dyn Any),
+        })
+    }
+
+    /// Whether the element `path` names has native `Copy` evidence.
+    fn copies_at(path: &[usize]) -> bool
+    where
+        Self: Sized,
+    {
+        path.is_empty() && Self::copying().is_some()
+    }
+
     /// Execute an operation under the exact native access claim.
     fn invoke(
         value: Access<'_, Self::Value>,
@@ -295,13 +343,27 @@ pub trait Policy: crate::func::SendSync + 'static {
 /// Private erased dispatch. Downcasting can recover only the concrete
 /// descriptor that originally checked and stored the native value.
 trait Storage: Any + crate::func::SendSync {
+    /// Run `operation` on the element `path` names below the storage.
     fn invoke(
         &self,
         witness: &Witness,
+        path: &[usize],
         operation: Operation,
         arguments: &mut [Dynamic],
         rest: Option<&mut crate::scope::Rest<'_>>,
     ) -> RawrResult;
+
+    /// Reach the element `path` names below the storage.
+    fn reach(
+        &self,
+        witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult;
+
+    /// Whether the element `path` names has native `Copy` evidence.
+    fn copies(&self, path: &[usize]) -> bool;
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -338,14 +400,47 @@ impl Place {
     /// Whether two handles carry the same checked native storage authority.
     #[must_use]
     pub fn same_storage(&self, other: &Self) -> bool {
-        self.witness == other.witness && Shared::ptr_eq(&self.storage, &other.storage)
+        self.witness == other.witness
+            && (Shared::ptr_eq(&self.storage, &other.storage) || projection::same(self, other))
+    }
+
+    /// The element at `at` of this sequence, as a place below it: a
+    /// borrow of the native element, reached from this place's root at
+    /// each use, never a copy (D651). It names an element in bounds now;
+    /// the borrow checker keeps the sequence from changing shape while a
+    /// borrow of the element lives, and the root's loan ends with its
+    /// callback, after which the place is expired.
+    pub fn project(&self, at: usize) -> RawrResultOf<Self> {
+        projection::project(self, at)
+    }
+
+    /// The element at `index` as Rust's `v[i]` reads it: a copy of a `Copy`
+    /// element, or else the element's place, which only a borrow can use.
+    pub fn element(&self, index: &Dynamic) -> RawrResult {
+        let at = index
+            .as_int()
+            .ok()
+            .and_then(|at| usize::try_from(at).ok())
+            .ok_or_else(|| failure("a native element index is not a usize"))?;
+        let element = self.project(at)?;
+        if element.copies() {
+            element.invoke(Operation::Copy, &mut [])
+        } else {
+            Ok(Dynamic::from(element))
+        }
+    }
+
+    /// Whether this place's value has native `Copy` evidence.
+    #[must_use]
+    pub fn copies(&self) -> bool {
+        self.storage.copies(&[])
     }
 
     /// Perform an operation immediately. No callback-exit reconciliation is
     /// involved, including when an operation or a later statement fails.
     pub fn invoke(&self, operation: Operation, arguments: &mut [Dynamic]) -> RawrResult {
         self.storage
-            .invoke(&self.witness, operation, arguments, None)
+            .invoke(&self.witness, &[], operation, arguments, None)
     }
 
     /// Invoke within an interpreter call, allowing native collection callbacks
@@ -367,7 +462,7 @@ impl Place {
         rest: &mut crate::scope::Rest<'_>,
     ) -> RawrResult {
         self.storage
-            .invoke(&self.witness, operation, arguments, Some(rest))
+            .invoke(&self.witness, &[], operation, arguments, Some(rest))
     }
 }
 

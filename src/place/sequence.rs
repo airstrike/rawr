@@ -216,6 +216,72 @@ impl<E: Policy> Policy for Vector<E> {
         super::owned::<Self>(value, witness)
     }
 
+    fn project(
+        value: Access<'_, Self::Value>,
+        witness: &Witness,
+        path: &[usize],
+        operation: Operation,
+        arguments: &mut [Dynamic],
+        rest: Option<&mut crate::scope::Rest<'_>>,
+    ) -> RawrResult {
+        let Some((&at, path)) = path.split_first() else {
+            return super::native::leaf::<Self>(value, witness, operation, arguments, rest);
+        };
+        let element = witness
+            .sequence_element()
+            .ok_or_else(|| failure("a native vector has no element witness"))?;
+        let out_of_bounds = || failure("native sequence index out of bounds");
+        match value {
+            Access::Shared(value) => E::project(
+                Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+                &element,
+                path,
+                operation,
+                arguments,
+                rest,
+            ),
+            Access::Mutable(value) => E::project(
+                Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+                &element,
+                path,
+                operation,
+                arguments,
+                rest,
+            ),
+        }
+    }
+
+    fn reach_element(
+        value: Access<'_, Self::Value>,
+        path: &[usize],
+        visit: &mut dyn FnMut(Access<'_, dyn std::any::Any>) -> RawrResult,
+    ) -> RawrResult {
+        let Some((&at, path)) = path.split_first() else {
+            return visit(match value {
+                Access::Shared(value) => Access::Shared(value as &dyn std::any::Any),
+                Access::Mutable(value) => Access::Mutable(value as &mut dyn std::any::Any),
+            });
+        };
+        let out_of_bounds = || failure("native sequence index out of bounds");
+        match value {
+            Access::Shared(value) => E::reach_element(
+                Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+                path,
+                visit,
+            ),
+            Access::Mutable(value) => E::reach_element(
+                Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+                path,
+                visit,
+            ),
+        }
+    }
+
+    fn copies_at(path: &[usize]) -> bool {
+        path.split_first()
+            .is_some_and(|(_, path)| E::copies_at(path))
+    }
+
     fn invoke(
         mut value: Access<'_, Self::Value>,
         witness: &Witness,

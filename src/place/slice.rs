@@ -51,17 +51,75 @@ impl<E: Policy> Storage for Source<E> {
     fn invoke(
         &self,
         witness: &Witness,
+        path: &[usize],
         operation: Operation,
         arguments: &mut [Dynamic],
         rest: Option<&mut crate::scope::Rest<'_>>,
     ) -> RawrResult {
         self.access(operation.mutable(), |value| {
-            invoke::<E>(value, witness, operation, arguments, rest)
+            let Some((&at, path)) = path.split_first() else {
+                return invoke::<E>(value, witness, operation, arguments, rest);
+            };
+            let element = witness
+                .sequence_element()
+                .ok_or_else(|| failure("a native slice has no element witness"))?;
+            match value {
+                Access::Shared(value) => E::project(
+                    Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+                    &element,
+                    path,
+                    operation,
+                    arguments,
+                    rest,
+                ),
+                Access::Mutable(value) => E::project(
+                    Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+                    &element,
+                    path,
+                    operation,
+                    arguments,
+                    rest,
+                ),
+            }
         })
     }
+
+    fn reach(
+        &self,
+        _witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult {
+        let Some((&at, path)) = path.split_first() else {
+            return Err(failure("a native slice is reached by its own descriptor"));
+        };
+        self.access(mutable, |value| match value {
+            Access::Shared(value) => E::reach_element(
+                Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+                path,
+                visit,
+            ),
+            Access::Mutable(value) => E::reach_element(
+                Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+                path,
+                visit,
+            ),
+        })
+    }
+
+    fn copies(&self, path: &[usize]) -> bool {
+        path.split_first()
+            .is_some_and(|(_, path)| E::copies_at(path))
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+fn out_of_bounds() -> Box<crate::EvalAltResult> {
+    failure("native slice index out of bounds")
 }
 
 fn checked<E: Policy>(nonce: crate::scope::Nonce, mutable: bool, witness: &Witness) -> RawrResult {
