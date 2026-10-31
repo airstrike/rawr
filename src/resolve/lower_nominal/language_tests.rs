@@ -11207,6 +11207,52 @@ main();
     );
 }
 
+/// `<Self as Trait>::Name` in an impl's signature is the impl's own
+/// associated type, or another trait's for the owner, as in rustc; `<T as
+/// Trait>::f(..)` and `<T as Trait>::Name` name `T`'s impl in a body.
+#[test]
+fn language_qualified_self_paths_in_impls() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+trait Shape {
+    type Output;
+    fn area(&self) -> Self::Output;
+    fn unit() -> Self;
+}
+trait Named {
+    type Label;
+    fn label(&self) -> Self::Label;
+}
+#[derive(Clone, Copy)]
+struct Square(i64);
+impl Named for Square {
+    type Label = &'static str;
+    fn label(&self) -> &'static str { "square" }
+}
+impl Shape for Square {
+    type Output = i64;
+    fn area(&self) -> <Self as Shape>::Output { self.0 * self.0 }
+    fn unit() -> Self { Square(1) }
+}
+impl Square {
+    fn tag(&self) -> <Self as Named>::Label { self.label() }
+}
+fn total<T: Shape<Output = i64>>(t: T) -> i64 {
+    let one: T = <T as Shape>::unit();
+    <T as Shape>::area(&t) + <T as Shape>::area(&one)
+}
+fn main() {
+    let s = Square(3);
+    let a: <Square as Shape>::Output = <Square as Shape>::area(&s);
+    println!("{} {} {}", a, total(s), s.tag());
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "9 10 square\n");
+}
+
 /// A closure bound by `let` to a function type takes the annotation's
 /// parameter types, as rustc infers them: `|x| *x` of `fn(&usize) ->
 /// usize` dereferences its `&usize`.

@@ -2067,18 +2067,22 @@ fn parse_impl(
     let close = expect(input, Token::RightBrace, "to close an impl block")?;
     let end = after(close, 1);
 
-    // `Self` in a signature names the impl's owner, and `Self::Output` the
-    // impl's associated type, as in Rust.
+    // `Self` in a signature names the impl's owner, and `Self::Output` (or
+    // `<Self as Trait>::Output`) the impl's associated type, as in Rust.
+    let implemented = trait_
+        .as_ref()
+        .and_then(|path| path.segments.last())
+        .map(|last| last.name.text.as_str());
     for (_, ty) in &mut associated {
         replace_self(ty, &owner);
     }
     for function in &mut functions {
         for parameter in function.parameters.iter_mut() {
-            replace_associated(&mut parameter.ty, &associated, &owner);
+            replace_associated(&mut parameter.ty, &associated, &owner, implemented);
             replace_self(&mut parameter.ty, &owner);
         }
         if let Some(output) = &mut function.output {
-            replace_associated(output, &associated, &owner);
+            replace_associated(output, &associated, &owner, implemented);
             replace_self(output, &owner);
         }
     }
@@ -2121,8 +2125,41 @@ fn replace_associated(
     ty: &mut type_ref::Type,
     associated: &[(crate::item::Name, type_ref::Type)],
     owner: &type_ref::Type,
+    implemented: Option<&str>,
 ) {
     match ty {
+        // `<Self as Trait>::Name`: the impl's own type when `Trait` is the
+        // trait it implements, else `<Owner as Trait>::Name`.
+        type_ref::Type::Path(path)
+            if path.segments.len() == 3
+                && path.segments[0].name.text == "Self"
+                && path.segments[0].arguments.is_empty()
+                && path.segments[1].name.text == type_ref::QUALIFIED_SEGMENT
+                && path.segments[2].arguments.is_empty() =>
+        {
+            let written = match &path.segments[1].arguments[..] {
+                [type_ref::Argument::Type(type_ref::Type::Path(written))] => {
+                    written.segments.last().map(|last| last.name.text.as_str())
+                }
+                _ => None,
+            };
+            let name = &path.segments[2].name;
+            if written.is_some()
+                && written == implemented
+                && let Some((_, bound)) = associated
+                    .iter()
+                    .find(|(declared, _)| declared.text == name.text)
+            {
+                *ty = bound.clone();
+            } else if let type_ref::Type::Path(owner) = owner {
+                path.segments = owner
+                    .segments
+                    .iter()
+                    .chain(&path.segments[1..])
+                    .cloned()
+                    .collect();
+            }
+        }
         type_ref::Type::Path(path)
             if path.segments.len() == 2
                 && path.segments[0].name.text == "Self"
@@ -2148,17 +2185,19 @@ fn replace_associated(
             for segment in path.segments.iter_mut() {
                 for argument in segment.arguments.iter_mut() {
                     if let type_ref::Argument::Type(argument) = argument {
-                        replace_associated(argument, associated, owner);
+                        replace_associated(argument, associated, owner, implemented);
                     }
                 }
             }
         }
         type_ref::Type::Tuple { members, .. } => {
             for member in members.iter_mut() {
-                replace_associated(member, associated, owner);
+                replace_associated(member, associated, owner, implemented);
             }
         }
-        type_ref::Type::Reference { target, .. } => replace_associated(target, associated, owner),
+        type_ref::Type::Reference { target, .. } => {
+            replace_associated(target, associated, owner, implemented);
+        }
         type_ref::Type::Unit(_) => {}
     }
 }
