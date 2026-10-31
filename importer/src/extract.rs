@@ -3992,6 +3992,7 @@ impl Candidate {
         let mut scalar_predicate_proofs = Vec::new();
         let mut exports = BTreeMap::new();
         let mut anonymous = BTreeSet::new();
+        let mut imports = Vec::new();
         let mut invocations = Vec::new();
         let mut index = Vec::new();
         let mut definition_count = 0_usize;
@@ -4194,12 +4195,12 @@ impl Candidate {
                         allocation.items(1)?;
                         exports.insert(key, export);
                     }
+                    // Checked once every fragment is in: a trait another
+                    // selected crate spells its own way is spelled so
+                    // only when that crate's fragment is.
                     protocol::Binding::AnonymousImport => {
-                        let import = anonymous_import(export, &definitions)?;
-                        if !anonymous.contains(&import) {
-                            allocation.items(1)?;
-                            anonymous.insert(import);
-                        }
+                        allocation.items(1)?;
+                        imports.push(export);
                     }
                 }
             }
@@ -4258,6 +4259,12 @@ impl Candidate {
                 allocation.reserve(&mut scalar_predicate_proofs, 1)?;
                 scalar_predicate_proofs
                     .push(scalar_predicate_proof(raw, catalog, limits, allocation)?);
+            }
+        }
+        for export in imports {
+            let import = anonymous_import(export, &definitions, &spellings)?;
+            if !anonymous.contains(&import) {
+                anonymous.insert(import);
             }
         }
         allocation.sort_keys(invocations.len());
@@ -6571,6 +6578,7 @@ fn export(
 fn anonymous_import(
     export: Export,
     definitions: &BTreeMap<identity::Definition, model::Definition>,
+    spellings: &BTreeMap<identity::Definition, Box<[Box<str>]>>,
 ) -> Result<ledger::AnonymousImport> {
     if export.key.namespace() != identity::Namespace::Type {
         return Err(extraction(
@@ -6596,7 +6604,7 @@ fn anonymous_import(
     if export.aliases.is_empty() {
         return Err(extraction("anonymous-import-alias", target.def_path_hash()));
     }
-    validate_alias_chain(&export, definitions, &BTreeMap::new())?;
+    validate_alias_chain(&export, definitions, spellings)?;
     if !matches!(
         export.reexports.last(),
         Some(ledger::Reexport::Identified {

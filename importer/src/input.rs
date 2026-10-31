@@ -410,6 +410,20 @@ impl Evidence {
             if unit_matches.next().is_some() {
                 return Err(input("ambiguous-selected-unit-output", unit.semantic_key()));
             }
+            // Cargo's public message has no platform, so a crate built for the
+            // host and for the target with one feature set gives two equal
+            // keys (unicode-ident under naga and under proc-macro2). The
+            // target's build sits under its triple, `<build>/<triple>/<profile>/deps`.
+            let placed = |artifact: &&Artifact| {
+                output.platform().is_none_or(|platform| {
+                    artifact
+                        .dep_info
+                        .ancestors()
+                        .nth(3)
+                        .and_then(Path::file_name)
+                        .is_some_and(|name| name == platform)
+                })
+            };
             let mut matches = self
                 .artifacts
                 .iter()
@@ -417,9 +431,18 @@ impl Evidence {
             let artifact = matches
                 .next()
                 .ok_or_else(|| input("missing-selected-artifact", unit.semantic_key()))?;
-            if matches.next().is_some() {
-                return Err(input("ambiguous-selected-artifact", unit.semantic_key()));
-            }
+            let artifact = match matches.next() {
+                None => artifact,
+                Some(other) => {
+                    let mut placed = [artifact, other].into_iter().chain(matches).filter(placed);
+                    match (placed.next(), placed.next()) {
+                        (Some(artifact), None) => artifact,
+                        _ => {
+                            return Err(input("ambiguous-selected-artifact", unit.semantic_key()));
+                        }
+                    }
+                }
+            };
             let mut metadata = artifact
                 .outputs
                 .iter()
