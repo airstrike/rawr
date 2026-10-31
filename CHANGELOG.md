@@ -5,7 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
-- rawr-iced is being retired step by step, so that removing it ends up a no-op.
+- Each library in a program's dependency set gets its own name, including one crate version that comes from two sources, so the import request no longer stops at "dependency aliases must be unique". (#438)
 
 ## 0.3.37 (2026-10-31)
 

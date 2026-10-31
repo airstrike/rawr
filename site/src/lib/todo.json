@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Each library in a program's dependency set gets its own name, including one crate version that comes from two sources, so the import request no longer stops at \"dependency aliases must be unique\".","issues":[438]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.37",
@@ -934,7 +939,7 @@
     {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
     {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.36"},
     {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.34"},
-    {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"open","category":"No glue (D593)"},
+    {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"closed","category":"No glue (D593)"},
     {"issue":439,"title":"Delete the core's iced-only machinery rawr-iced drove","state":"open","category":"No glue (D593)"},
     {"issue":440,"title":"Delete the importer's host-profile machinery","state":"open","category":"No glue (D593)"},
     {"issue":441,"title":"Rename facade to bindings in the core, importer, store and generated output","state":"open","category":"No glue (D593)"},
@@ -946,7 +951,7 @@
     {"issue":447,"title":"Upstream component's generated runner fails to compile","state":"open","category":"No glue (D593)"},
     {"issue":448,"title":"rawr no longer carries the application, preview and widget protocols, host operations and…","state":"closed","category":"No glue (D593)","release":"0.3.35"},
     {"issue":449,"title":"Remove the profile event projection","state":"open","category":"No glue (D593)"},
-    {"issue":450,"title":"Remove signature supports and operation endpoints","state":"open","category":"No glue (D593)"},
+    {"issue":450,"title":"Remove signature supports and operation endpoints","state":"closed","category":"No glue (D593)"},
     {"issue":451,"title":"Reduce the importer's profile to the plain profile","state":"open","category":"No glue (D593)"},
     {"issue":452,"title":"Decide on the parse-time application rewrites","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":453,"title":"Remove the dead select! and try_join! wrapping in parse_tokio_macro","state":"closed","category":"No glue (D593)","release":"0.3.37"},
