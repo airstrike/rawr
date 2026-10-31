@@ -1138,6 +1138,145 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
     );
 }
 
+/// A project that depends on a crate the runner also needs under a name of
+/// its own, as serde is for a `$crate` path, builds its runner: Cargo takes
+/// one name per package, so the runner reaches the project's crate by both.
+#[test]
+fn a_project_dependency_the_runner_also_needs_coexists() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-shared-dependency");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\n[package]\nname='runner-shared-dependency'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nsemver='1'\nserde='1'\n",
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn main() {\n    println!(\"{}\", semver::Version::new(1, 2, 3));\n}\n",
+    )
+    .unwrap();
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "1.2.3\n");
+    let manifest = fs::read_to_string(root.join("target/rawr/runner/Cargo.toml")).unwrap();
+    assert_eq!(
+        manifest.matches("\"serde\"").count() + manifest.matches("serde =").count(),
+        1,
+        "the runner depends on serde once:\n{manifest}"
+    );
+}
+
+/// A save that names a new path of a path dependency, here a function,
+/// replays the crates' whole tables kept with the project, after checking
+/// their files: no nightly build runs (#398). A changed path crate is
+/// extracted again.
+#[test]
+fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("path-tables");
+    let crates = base.join("crates");
+    let root = base.join("app");
+    let _ = fs::remove_dir_all(&base);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
+    for name in ["a", "b", "c"] {
+        copy(
+            &fixtures.join(format!("applicability-{name}")),
+            &crates.join(format!("applicability-{name}")),
+        );
+    }
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[workspace]\n[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\n",
+            crates.join("applicability-a"),
+            crates.join("applicability-c"),
+        ),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let run = |source: &str, expected: &str| {
+        fs::write(root.join("src/main.rs"), source).unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), expected);
+    };
+    // The nightly check build and its extraction leave files where they run.
+    let nightly = |since: std::time::SystemTime| {
+        fn walk(path: &Path, since: std::time::SystemTime, found: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, since, found);
+                } else if !path.to_string_lossy().ends_with(".lock")
+                    && entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(|modified| modified > since)
+                {
+                    found.push(path);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for directory in ["build", "extraction"] {
+            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        }
+        found
+    };
+    let bound =
+        "// rawr\nfn main() {\n    let _bound = facts_a::left();\n    println!(\"{}\", 1);\n}\n";
+    run(bound, "1\n");
+    run(bound, "1\n");
+    assert!(
+        root.join("target/rawr/bindings").is_dir(),
+        "the path crates' tables are kept with the project"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let saved = std::time::SystemTime::now();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    run(
+        "// rawr\nfn main() {\n    let _bound = facts_a::left();\n    let both = facts_a::both();\n    let _ = both;\n    println!(\"{}\", 2);\n}\n",
+        "2\n",
+    );
+    let traces = nightly(saved);
+    assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
+    assert!(
+        !home
+            .join("bindings")
+            .read_dir()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                fs::read_to_string(entry.path().join("meta.json"))
+                    .is_ok_and(|meta| meta.contains("\"crate_name\":\"facts_a\""))
+            }),
+        "a path crate never enters rawr's home"
+    );
+}
+
 /// A cargo script that declares a dependency runs as `cargo -Zscript`
 /// runs it (D608 point 6). Nothing is kept beside it: its manifest and
 /// lockfile are in rawr's area, keyed by its path, and a second script

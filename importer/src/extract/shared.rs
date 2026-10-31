@@ -24,6 +24,9 @@ use crate::cargo::unit::{Metadata, PackageSource};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shared {
     pub(crate) key: Box<str>,
+    /// The closure has a path package: the table stays with the project,
+    /// and its files are checked before each replay (#398).
+    pub(crate) local: bool,
     pub(crate) scripts: Box<[Box<str>]>,
     pub(crate) packages: Box<[Box<str>]>,
 }
@@ -72,6 +75,42 @@ pub(crate) fn keys(
     host: &str,
     target: &str,
 ) -> BTreeMap<Box<str>, Shared> {
+    keys_with(
+        units,
+        metadata,
+        selected,
+        [compiler_commit, host, target],
+        false,
+    )
+}
+
+/// As [`keys`], and also each selected unit whose closure reaches a path
+/// package, keyed for the project alone. Its sources can change under its
+/// key, so its table is replayed only after its files are checked.
+pub(crate) fn keys_local(
+    units: &[u8],
+    metadata: &Metadata,
+    selected: &[Selected<'_>],
+    compiler_commit: &str,
+    host: &str,
+    target: &str,
+) -> BTreeMap<Box<str>, Shared> {
+    keys_with(
+        units,
+        metadata,
+        selected,
+        [compiler_commit, host, target],
+        true,
+    )
+}
+
+fn keys_with(
+    units: &[u8],
+    metadata: &Metadata,
+    selected: &[Selected<'_>],
+    [compiler_commit, host, target]: [&str; 3],
+    local: bool,
+) -> BTreeMap<Box<str>, Shared> {
     let Ok(document) = serde_json::from_slice::<Document>(units) else {
         return BTreeMap::new();
     };
@@ -102,6 +141,7 @@ pub(crate) fn keys(
             metadata,
             unit.unit_key,
             [compiler_commit, host, target],
+            local,
         ) {
             keys.insert(Box::from(unit.unit_key), shared);
         }
@@ -115,7 +155,9 @@ fn key(
     metadata: &Metadata,
     unit_key: &str,
     toolchain: [&str; 3],
+    local: bool,
 ) -> Option<Shared> {
+    let mut path = false;
     let mut seen = BTreeSet::from([root]);
     let mut queue = VecDeque::from([root]);
     let mut sources = BTreeSet::new();
@@ -128,6 +170,12 @@ fn key(
                 ..
             } => crate::extract::engine::hex(checksum),
             PackageSource::Git { oid, .. } => oid.to_string(),
+            // A path package's files are checked before replay, not named
+            // by the key; only the project keeps such a table.
+            PackageSource::Path { .. } if local => {
+                path = true;
+                "path".to_owned()
+            }
             PackageSource::Registry { checksum: None, .. } | PackageSource::Path { .. } => {
                 return None;
             }
@@ -147,7 +195,11 @@ fn key(
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     };
-    frame(b"rawr.bindings/v1");
+    frame(if path {
+        b"rawr.bindings.local/v1".as_slice()
+    } else {
+        b"rawr.bindings/v1".as_slice()
+    });
     frame(&crate::extract::engine::TABLE_SCHEMA.to_le_bytes());
     frame(&crate::extract::protocol::SCHEMA.to_le_bytes());
     for value in toolchain {
@@ -161,6 +213,7 @@ fn key(
     }
     Some(Shared {
         key: crate::extract::engine::hex(&digest.finalize()).into_boxed_str(),
+        local: path,
         scripts: scripts.into_iter().map(Box::from).collect(),
         packages: sources
             .into_iter()

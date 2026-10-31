@@ -556,7 +556,7 @@ impl Request {
                 features: unit.features(),
             })
             .collect::<Vec<_>>();
-        let shared = crate::extract::shared::keys(
+        let shared = crate::extract::shared::keys_local(
             bytes.bytes(),
             &metadata,
             &selected_units,
@@ -578,6 +578,7 @@ impl Request {
         .share(
             shared,
             crate::bindings::directory(cached.context.cargo_home()),
+            cached.context.rawr().join("bindings"),
         );
         let command_target = extraction_plan.command_target()?;
         allocation.path(paths.root())?;

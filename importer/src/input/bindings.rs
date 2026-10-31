@@ -118,7 +118,9 @@ impl Inputs {
         let selected = packages.iter().map(String::as_str).collect::<BTreeSet<_>>();
         if selected.is_empty()
             || selected.iter().any(|id| {
-                !(id.starts_with("registry+") || id.starts_with("git+"))
+                // A path package's files are checked before its table's
+                // replay; its table stays with the project (#398).
+                !(id.starts_with("registry+") || id.starts_with("git+") || id.starts_with("path+"))
                     || !build.evidence.packages.contains_key(id)
             })
         {

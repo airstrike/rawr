@@ -5049,7 +5049,13 @@ fn render<B: crate::surface::Runner>(
         &mut spans,
     )?;
     let lock = runner_lock(harness.lock(), &hidden)?;
-    let manifest = runner_manifest(harness.manifest(), named.as_deref(), &hidden)?;
+    let (manifest, aliases) = runner_manifest_aliased(
+        harness.manifest(),
+        named.as_deref(),
+        &hidden,
+        harness.lock(),
+    )?;
+    alias_crates(&aliases, &mut sources)?;
     let source = encode_sources(&sources)?;
     let mut source_map = Vec::new();
     super::source_map::write(request, &spans, &mut source_map)?;
@@ -5202,11 +5208,97 @@ fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
     table
 }
 
+#[cfg(test)]
 fn runner_manifest(
     bytes: &[u8],
     binary: Option<&str>,
     hidden: &[HiddenCrate],
 ) -> Result<Vec<u8>, request::Error> {
+    runner_manifest_aliased(bytes, binary, hidden, &[]).map(|(manifest, _)| manifest)
+}
+
+/// The crate names a dependency key gives Rust code.
+fn crate_ident(key: &str) -> String {
+    key.replace('-', "_")
+}
+
+/// The package a dependency entry names: its `package`, or its key.
+fn dependency_package<'a>(key: &'a str, item: &'a Item) -> &'a str {
+    item.as_table_like()
+        .and_then(|table| table.get("package"))
+        .and_then(Item::as_str)
+        .unwrap_or(key)
+}
+
+/// Whether the lock holds exactly one package of this name: then every
+/// dependency on that name is the same package.
+fn single_locked(lock: &[u8], name: &str) -> bool {
+    let Some(document) = std::str::from_utf8(lock)
+        .ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+    else {
+        return false;
+    };
+    document
+        .get("package")
+        .and_then(Item::as_array_of_tables)
+        .is_some_and(|packages| {
+            packages
+                .iter()
+                .filter(|package| package.get("name").and_then(Item::as_str) == Some(name))
+                .count()
+                == 1
+        })
+}
+
+/// Make each extra name the runner needs for a crate the project already
+/// depends on: `extern crate` at the crate root puts the project's crate in
+/// the extern prelude under that name too, as Cargo allows one name per
+/// package.
+fn alias_crates(
+    aliases: &[(String, String)],
+    sources: &mut [(Box<str>, Vec<u8>)],
+) -> Result<(), request::Error> {
+    if aliases.is_empty() {
+        return Ok(());
+    }
+    let main = sources
+        .iter_mut()
+        .find(|(path, _)| path.as_ref() == SOURCE_PATH)
+        .ok_or(request::Error::Drift {
+            field: "generated runner root",
+        })?;
+    let first = main
+        .1
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    let mut lines = Vec::new();
+    for (existing, required) in aliases {
+        writeln!(
+            lines,
+            "#[allow(unused_extern_crates)]\nextern crate {existing} as {required};"
+        )
+        .map_err(|_| request::Error::Encoding)?;
+    }
+    main.1.splice(first..first, lines);
+    Ok(())
+}
+
+/// Each `(crate, name)` a runner reaches a project dependency by too.
+type Aliases = Vec<(String, String)>;
+
+/// The runner's manifest, and each `(crate, name)` the runner must also
+/// reach a crate by: a crate Rawr's runner needs under its own name that
+/// the project already depends on under another. Cargo refuses one package
+/// under two names, so the project's dependency serves both.
+fn runner_manifest_aliased(
+    bytes: &[u8],
+    binary: Option<&str>,
+    hidden: &[HiddenCrate],
+    lock: &[u8],
+) -> Result<(Vec<u8>, Aliases), request::Error> {
+    let mut aliases = Vec::new();
     let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
         reason: error.to_string().into_boxed_str(),
     })?;
@@ -5246,6 +5338,17 @@ fn runner_manifest(
                 reason: "final-form harness has no dependencies table".into(),
             })?;
         for (key, item) in build {
+            let package = dependency_package(&key, &item).to_owned();
+            if let Some((existing, _)) = dependencies
+                .iter()
+                .find(|(existing, present)| dependency_package(existing, present) == package)
+                .filter(|_| single_locked(lock, &package))
+            {
+                if crate_ident(existing) != crate_ident(&key) {
+                    aliases.push((crate_ident(existing), crate_ident(&key)));
+                }
+                continue;
+            }
             dependencies.insert(&key, item);
         }
         dependencies.sort_values();
@@ -5259,6 +5362,18 @@ fn runner_manifest(
                 reason: "final-form harness has no dependencies table".into(),
             })?;
         for hidden in hidden {
+            // `hidden_crate` found exactly one locked package of this name,
+            // so a project dependency on it is the same package.
+            let existing = dependencies
+                .iter()
+                .find(|(key, item)| {
+                    dependency_package(key, item) == hidden.package && *key != hidden.segment
+                })
+                .map(|(key, _)| key.to_owned());
+            if let Some(existing) = existing {
+                aliases.push((crate_ident(&existing), hidden.segment.clone()));
+                continue;
+            }
             dependencies.insert(
                 &hidden.segment,
                 Item::Value(toml_edit::Value::InlineTable(hidden_dependency(hidden))),
@@ -5278,7 +5393,9 @@ fn runner_manifest(
     // The project's own profile, `[patch]` and `[replace]` come with the
     // harness manifest unchanged, so the runner's units are the ones the
     // project's `cargo build` compiles (D609.1).
-    Ok(normalize(document.to_string().as_bytes()))
+    aliases.sort_unstable();
+    aliases.dedup();
+    Ok((normalize(document.to_string().as_bytes()), aliases))
 }
 
 fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
