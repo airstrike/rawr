@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.37 (2026-10-31)
+
 - A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand round, and keeps Cargo's answers for the project's next run. Upstream counter's warm check fell from about 21 s to 12 s. (#466; part of #446)
 - Replaying a crate's shared table reads only the parts a program reaches, instead of parsing iced's whole 89 MB table every time. (#420)
 - `rawr run` of a crate method whose output names its closure type, as iced's `Widget::map` does, runs. Before, it failed with `Unknown member Canvas::map` although `rawr check` passed. (#423)

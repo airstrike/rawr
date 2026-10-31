@@ -1,21 +1,23 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.36",
+  "version": "0.3.37",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand round, and keeps Cargo's answers for the project's next run. Upstream counter's warm check fell from about 21 s to 12 s.","issues":[466],"refs":[446]},
-        {"text":"Replaying a crate's shared table reads only the parts a program reaches, instead of parsing iced's whole 89 MB table every time.","issues":[420]},
-        {"text":"`rawr run` of a crate method whose output names its closure type, as iced's `Widget::map` does, runs. Before, it failed with `Unknown member Canvas::map` although `rawr check` passed.","issues":[423]},
-        {"text":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2) go in by name and version, a crate built for host and target is told apart by its path, and each crate gets its own byte budget.","issues":[467],"refs":[438]},
-        {"text":"rawr drops more of what rawr-iced drove: the parse-time application rewrites, the tokio macro wrapping nothing used, unused reload stages, and the site's iced render leftovers.","issues":[452,453,454,455]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.37",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand round, and keeps Cargo's answers for the project's next run. Upstream counter's warm check fell from about 21 s to 12 s.","issues":[466],"refs":[446]},
+          {"text":"Replaying a crate's shared table reads only the parts a program reaches, instead of parsing iced's whole 89 MB table every time.","issues":[420]},
+          {"text":"`rawr run` of a crate method whose output names its closure type, as iced's `Widget::map` does, runs. Before, it failed with `Unknown member Canvas::map` although `rawr check` passed.","issues":[423]},
+          {"text":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2) go in by name and version, a crate built for host and target is told apart by its path, and each crate gets its own byte budget.","issues":[467],"refs":[438]},
+          {"text":"rawr drops more of what rawr-iced drove: the parse-time application rewrites, the tokio macro wrapping nothing used, unused reload stages, and the site's iced render leftovers.","issues":[452,453,454,455]}
+        ]
+      },
       {
         "version": "0.3.36",
         "date": "2026-10-31",
@@ -914,10 +916,10 @@
     {"issue":417,"title":"Widget::map, whose output names its callable F, is refused","state":"open","category":"No glue (D593)"},
     {"issue":418,"title":"Widen tests of slots on generic-impl methods","state":"open","category":"No glue (D593)"},
     {"issue":419,"title":"Path crates inside the project root keep no tables","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":420,"title":"Load only what a demand needs from a large whole table","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":420,"title":"Load only what a demand needs from a large whole table","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
     {"issue":421,"title":"Binding store unit tests fail under parallel test threads","state":"open","category":"Health"},
     {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","release":"0.3.30"},
-    {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)"},
+    {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"open","category":"No glue (D593)"},
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"open","category":"No glue (D593)"},
     {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
@@ -946,10 +948,10 @@
     {"issue":449,"title":"Remove the profile event projection","state":"open","category":"No glue (D593)"},
     {"issue":450,"title":"Remove signature supports and operation endpoints","state":"open","category":"No glue (D593)"},
     {"issue":451,"title":"Reduce the importer's profile to the plain profile","state":"open","category":"No glue (D593)"},
-    {"issue":452,"title":"Decide on the parse-time application rewrites","state":"closed","category":"No glue (D593)"},
-    {"issue":453,"title":"Remove the dead select! and try_join! wrapping in parse_tokio_macro","state":"closed","category":"No glue (D593)"},
-    {"issue":454,"title":"Remove the reload scheduler's unused publication chain","state":"closed","category":"No glue (D593)"},
-    {"issue":455,"title":"Remove the site's and play's leftovers from iced renders","state":"closed","category":"No glue (D593)"},
+    {"issue":452,"title":"Decide on the parse-time application rewrites","state":"closed","category":"No glue (D593)","release":"0.3.37"},
+    {"issue":453,"title":"Remove the dead select! and try_join! wrapping in parse_tokio_macro","state":"closed","category":"No glue (D593)","release":"0.3.37"},
+    {"issue":454,"title":"Remove the reload scheduler's unused publication chain","state":"closed","category":"No glue (D593)","release":"0.3.37"},
+    {"issue":455,"title":"Remove the site's and play's leftovers from iced renders","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":456,"title":"A view's Element used outside a native callback ends with the call that made it","state":"open","category":"No glue (D593)"},
     {"issue":457,"title":"Generated bindings hold iced::Application<_> with unfilled parameters and a non-Send boot closure","state":"open","category":"No glue (D593)"},
     {"issue":458,"title":"A generic local's family keeps inferred _ parameters","state":"open","category":"No glue (D593)"},
@@ -960,8 +962,8 @@
     {"issue":463,"title":"The universe runner covers only its seed program's calls","state":"open","category":"No glue (D593)"},
     {"issue":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open","category":"No glue (D593)"},
     {"issue":465,"title":"Build the play image's universe stage","state":"open","category":"No glue (D593)"},
-    {"issue":466,"title":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"open","category":"No glue (D593)"},
+    {"issue":466,"title":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
+    {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"open","category":"Shared dependency cache (D607)"},
