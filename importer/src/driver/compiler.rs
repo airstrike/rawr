@@ -78,10 +78,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // alias reaches under its crate's `$crate` segment, and gives an alias of an
 // associated type as the type it names at its defaults. Schema 29 applies a
 // blanket implementation through a type's own implementation of the trait
-// its where-clause names.
+// its where-clause names. Schema 34 keeps each implementation of a trait
+// whose associated type a selected signature projects from a parameter.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 33;
+const PROTOCOL_SCHEMA: u32 = 34;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2218,8 +2219,78 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             return Ok(());
         }
+        // A projection of a parameter a selected signature names, as iced's
+        // `Cache<Renderer>::draw` gives `Renderer::Geometry`: the trait's
+        // implementations for each type only one of the selected crate's
+        // aliases names (iced's `Renderer`) and for that type's arguments,
+        // each with its associated type, so the classifier can read what
+        // the projection is there (T318).
+        if let Some(trait_item) = obligation.associated {
+            if obligation.polarity != ty::PredicatePolarity::Positive
+                || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
+                || self.is_sysroot_crate(obligation.trait_id.krate)?
+                || self.tcx.def_kind(trait_item) != DefKind::AssocTy
+                || self.tcx.opt_rpitit_info(trait_item).is_some()
+            {
+                return Ok(());
+            }
+            self.find_aliases();
+            let mut selves = self
+                .instance_aliases
+                .iter()
+                .flatten()
+                .map(|(_, aliased)| *aliased)
+                .collect::<Vec<_>>();
+            let mut arguments = Vec::new();
+            for self_ty in &selves {
+                if let ty::Adt(_, adt_arguments) = self_ty.kind() {
+                    arguments.extend(adt_arguments.types());
+                }
+            }
+            selves.extend(arguments);
+            let mut implementations = Vec::new();
+            for self_ty in selves {
+                self.budget.edge(1)?;
+                self.tcx
+                    .for_each_relevant_impl(obligation.trait_id, self_ty, |impl_id| {
+                        implementations.push(impl_id)
+                    });
+                if implementations.len() > RELATION_IMPLEMENTATIONS {
+                    return Ok(());
+                }
+            }
+            implementations.sort_unstable_by_key(|impl_id| {
+                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+            });
+            implementations.dedup();
+            let associated = Some(AssociatedObligation {
+                kind: AssociatedDemandKind::SelectedMember,
+                trait_item: Some(trait_item),
+                arguments: Some(obligation.arguments),
+                param_env: obligation.param_env,
+            });
+            for impl_id in implementations {
+                // One that passes the item on from a parameter of its own,
+                // as `impl<P: Program> Program for Application<P>` gives
+                // `P::State`, tells nothing of its own.
+                let Some(value) = self.tcx.impl_item_implementor_ids(impl_id).get(&trait_item)
+                else {
+                    continue;
+                };
+                let value = self
+                    .tcx
+                    .type_of(*value)
+                    .instantiate_identity()
+                    .skip_norm_wip();
+                if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                    && !matches!(value.kind(), ty::Alias(..))
+                {
+                    self.request_implementation(impl_id, obligation.relevance, associated)?;
+                }
+            }
+            return Ok(());
+        }
         if obligation.polarity != ty::PredicatePolarity::Positive
-            || obligation.associated.is_some()
             || obligation.arguments.len() < 2
             || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
             || self.is_sysroot_crate(obligation.trait_id.krate)?

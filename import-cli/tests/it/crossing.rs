@@ -551,15 +551,18 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,
 /// and its associated functions and methods run. `canvas::Geometry` names
 /// an associated type of that renderer, at its default a type of its own,
-/// and `Note<'a>` passes a lifetime and a defaulted theme on, as iced's
-/// `widget::Text` does. The output is `cargo run`'s.
+/// which `Cache::sketch` gives as `R::Geometry` (T318), and `Note<'a>`
+/// passes a lifetime and a defaulted theme on, as iced's `widget::Text`
+/// does. `Option::map` takes a crate function and a crate method named as
+/// values (T327). The output is `cargo run`'s.
 #[test]
 fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     let (rawr, cargo) = both_printed("crossing-canvas", "canvas.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\nnote 3"
+        "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\n\
+         primary dial\nprimary face\nboard frame,dial\ngrouped group\nSome(7) captured true\nnote 3"
     );
 }
 

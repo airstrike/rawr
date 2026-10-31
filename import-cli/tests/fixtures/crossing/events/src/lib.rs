@@ -710,6 +710,36 @@ pub mod canvas {
         <crate::widgets::Renderer as parts::geometry::Renderer>::draw(label)
     }
 
+    /// What a program's update gives, as iced's `canvas::Action`.
+    pub struct Action<Message> {
+        message: Option<Message>,
+        captured: bool,
+    }
+
+    impl<Message> Action<Message> {
+        /// An action that publishes `message`.
+        pub fn publish(message: Message) -> Self {
+            Self {
+                message: Some(message),
+                captured: false,
+            }
+        }
+
+        /// The same action, which also captures the event.
+        pub fn and_capture(mut self) -> Self {
+            self.captured = true;
+            self
+        }
+
+        /// What it publishes and whether it captures.
+        pub fn summary(&self) -> String
+        where
+            Message: std::fmt::Debug,
+        {
+            format!("{:?} captured {}", self.message, self.captured)
+        }
+    }
+
     /// What `geometry` shows.
     pub fn describe(geometry: &Geometry) -> String {
         match geometry {
