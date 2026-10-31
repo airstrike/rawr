@@ -2201,6 +2201,7 @@ fn parse_trait(
     let mut provided = Vec::new();
     let mut associated = Vec::new();
     let mut associated_bounds = Vec::new();
+    let mut associated_projections = Vec::new();
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
         {
@@ -2213,24 +2214,16 @@ fn parse_trait(
             if is_associated_type(input) {
                 input.next();
                 let name = parse_name(input, "after 'type'")?;
-                // `type Output: Clone + Shape;`
+                // `type Output: Clone + Shape;`, `type Fore: Iterator<Item =
+                // Self::For>;`.
+                let mut projections = Vec::new();
                 let bounds = if matches!(input.peek(), Some((Token::Colon, _))) {
                     input.next();
-                    let mut projections = Vec::new();
-                    let bounds = parse_bounds(input, &mut projections, None)?;
-                    if let Some((_, name, _)) = projections.first() {
-                        return Err(PERR::MissingToken(
-                            ";".into(),
-                            "after an associated type's bounds (equalities in them are not \
-                             supported)"
-                                .into(),
-                        )
-                        .into_err(name.span.start()));
-                    }
-                    bounds
+                    parse_bounds(input, &mut projections, None)?
                 } else {
                     Vec::new()
                 };
+                associated_projections.push(projections.into_boxed_slice());
                 expect(
                     input,
                     Token::SemiColon,
@@ -2288,6 +2281,7 @@ fn parse_trait(
         provided: provided.into_boxed_slice(),
         associated: associated.into_boxed_slice(),
         associated_bounds: associated_bounds.into_boxed_slice(),
+        associated_projections: associated_projections.into_boxed_slice(),
         supertraits: supertraits.into_boxed_slice(),
         generics: generics.into_boxed_slice(),
         span: Span::new(start, end),

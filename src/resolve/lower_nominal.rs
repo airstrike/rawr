@@ -4537,6 +4537,23 @@ impl Models {
                     .insert(key, (ty.clone(), parameters.clone()));
             }
         }
+        // `type Fore: Iterator<Item = Self::For>;`.
+        for (_, declared) in traits.values() {
+            for (name, equalities) in declared
+                .associated
+                .iter()
+                .zip(declared.associated_equalities.iter())
+                .filter(|(_, equalities)| !equalities.is_empty())
+            {
+                associated.equalities.insert(
+                    (declared.name.text.clone(), name.text.clone()),
+                    equalities
+                        .iter()
+                        .map(|(bound, item, ty)| (bound.clone(), item.text.clone(), ty.clone()))
+                        .collect(),
+                );
+            }
+        }
 
         // The prelude's own `From` instances (`From<bool>` for `i64`), and
         // one `Into` instance per conversion target.
@@ -9311,7 +9328,14 @@ struct AssociatedTypes {
     /// each of the owner's type arguments names (`impl<T> Shape for
     /// Wrapper<T>`).
     impls: BTreeMap<(type_def::Id, ImmutableString, ImmutableString), AssociatedType>,
+    /// The equalities of each trait's associated types' bounds, by trait
+    /// and name, in the trait's `Self`: `(Iterator, Item, Self::For)` of
+    /// `type Fore: Iterator<Item = Self::For>;`.
+    equalities: BTreeMap<(ImmutableString, ImmutableString), Box<[AssociatedEquality]>>,
 }
+
+/// An equality of an associated type's bound, as `(trait, name, type)`.
+type AssociatedEquality = (ImmutableString, ImmutableString, type_ref::Type);
 
 /// An associated type's `T`, with the impl parameter each of the owner's
 /// type arguments names.
@@ -9601,9 +9625,57 @@ impl Inference {
                     return self.resolve(ty);
                 }
             }
+            // `<T::Fore as Shape>::Output` of `type Fore: Shape<Output =
+            // i64>;`: the equality.
+            Ty::Projection(owner, owner_trait, owner_name) => {
+                if let Some(ty) = self.associated_equality(
+                    owner,
+                    owner_trait,
+                    owner_name,
+                    |bound| {
+                        bound == trait_name
+                            || is_iterator_trait(bound) && is_iterator_trait(trait_name)
+                    },
+                    name,
+                ) {
+                    return ty;
+                }
+            }
             _ => {}
         }
+        // `T::Fore` of `type Fore: Iterator<Item = T::For>;` is Rawr's
+        // iterator of `T::For`, as a parameter `I: Iterator<Item = U>` is
+        // (`erase_fn_bounds`).
+        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+            && let Some(item) =
+                self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
+        {
+            return Ty::Iter(Box::new(item));
+        }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
+    }
+
+    /// The equality `item = U` that the trait `trait_name` declares on its
+    /// associated type `name`'s bound by a trait `bound` accepts, with
+    /// `Self` as `base`: `T::For` for `T`, `For`, `Fore` and `Item` of `type
+    /// Fore: Iterator<Item = Self::For>;`.
+    fn associated_equality(
+        &self,
+        base: &Ty,
+        trait_name: &str,
+        name: &str,
+        bound: impl Fn(&str) -> bool,
+        item: &str,
+    ) -> Option<Ty> {
+        let equalities = self
+            .associated
+            .equalities
+            .get(&(trait_name.into(), name.into()))?;
+        let (_, _, ty) = equalities
+            .iter()
+            .find(|(written, equal, _)| bound(written) && equal == item)?;
+        let substitution = BTreeMap::from([(ImmutableString::from("Self"), base.clone())]);
+        Some(self.resolve(&instantiate(&Ty::from_resolved(ty), &substitution)))
     }
 
     fn bind(&mut self, id: usize, ty: Ty) {
@@ -10849,6 +10921,15 @@ fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
             .collect(),
         item::Kind::Use(_) => Vec::new(),
     }
+}
+
+/// `Iterator` and the traits whose `Item` is its own, which Rawr's iterator
+/// type stands for.
+fn is_iterator_trait(name: &str) -> bool {
+    matches!(
+        name,
+        "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+    )
 }
 
 /// `T::Output = U` of each `T: Trait<Output = U>` in `generics`.
@@ -13512,6 +13593,8 @@ impl<'a> Parser<'a> {
                         .any(|parent| parent == trait_name)
             }
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
+            // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
+            Ty::Iter(_) if is_iterator_trait(trait_name) => true,
             // An imported type the crate implements `Iterator` for.
             Ty::Host { proof, .. }
                 if trait_name == "Iterator"
@@ -14062,6 +14145,65 @@ impl<'a> Parser<'a> {
                     .into(),
                     capability,
                     operation: name.span,
+                });
+            }
+            self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;
+        }
+        Ok(())
+    }
+
+    /// The impl's associated type `ty` for `name` has the types its trait's
+    /// bound equalities name (rustc's E0271): `type Fore = Range<usize>;`
+    /// for `type Fore: Iterator<Item = Self::For>;` needs `type For =
+    /// usize;`.
+    fn check_associated_equalities(
+        &mut self,
+        trait_name: &ImmutableString,
+        name: &crate::item::Name,
+        ty: &Ty,
+        owner: &Ty,
+    ) -> Result<(), Error> {
+        let Some(equalities) = self
+            .inference
+            .associated
+            .equalities
+            .get(&(trait_name.clone(), name.text.clone()))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let substitution = BTreeMap::from([(ImmutableString::from("Self"), owner.clone())]);
+        for (bound, item, expected) in equalities.iter() {
+            let expected = instantiate(&Ty::from_resolved(expected), &substitution);
+            let actual = if is_iterator_trait(bound) && item == "Item" {
+                // Rawr's iterator type stands for the projection
+                // (`Inference::project`), so the impl's type must be one.
+                let Ty::Iter(item) = self.inference.resolve(ty) else {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "`{}` as an associated type bounded by `{bound}<Item = ..>`: Rawr \
+                             reads such a type as one of Rust's own iterators (a `Range`, an \
+                             iterator chain)",
+                            ty.name(&self.models)
+                        )
+                        .into(),
+                        source: name.span,
+                    });
+                };
+                *item
+            } else {
+                Ty::Projection(Box::new(ty.clone()), bound.clone(), item.clone())
+            };
+            if !self.unify_type(&expected, &actual) {
+                return Err(Error::TypeMismatch {
+                    expected: format!(
+                        "{} (`<{} as {bound}>::{item}`)",
+                        self.inference.resolve(&expected).name(&self.models),
+                        ty.name(&self.models)
+                    )
+                    .into(),
+                    actual: self.inference.resolve(&actual).name(&self.models),
+                    expression: name.span,
                 });
             }
         }
@@ -17115,9 +17257,12 @@ impl<'a> Parser<'a> {
                         || self.type_provides(&inner, capability::Kind::Copy))
                     && self.type_provides(&inner, capability)
             }
-            // Rawr's iterators are `Clone` when their items are.
+            // Rawr's iterators are iterators, and `Clone` when their items
+            // are.
             Ty::Iter(item) => {
-                capability == capability::Kind::Clone && self.type_provides(&item, capability)
+                capability == capability::Kind::Iterator
+                    || capability == capability::Kind::Clone
+                        && self.type_provides(&item, capability)
             }
             // `Box<T>` derives from `T`, and is never `Copy`. `Rc<T>` and
             // `Arc<T>` are `Clone` for any `T`, and an `Rc` stays on its

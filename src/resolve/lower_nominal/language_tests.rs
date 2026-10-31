@@ -11113,3 +11113,96 @@ main();
         assert!(error.contains(&format!("r#{word}")), "{error}");
     }
 }
+
+/// An equality in an associated type's bound (`type Fore: Iterator<Item =
+/// Self::For>;`) holds for every impl, as in rustc: a generic function
+/// iterates `T::Fore` as `T::For`s and reads `<T::Held as Shape>::Output`
+/// as the type the bound names. An impl whose type breaks it is rustc's
+/// E0271.
+#[test]
+fn language_associated_type_bound_equalities() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+use std::ops::Range;
+trait For {
+    type For;
+    type Fore: Iterator<Item = Self::For>;
+    fn go(self) -> Self::Fore;
+}
+struct Four(usize);
+impl For for Four {
+    type For = usize;
+    type Fore = Range<usize>;
+    fn go(self) -> Self::Fore { 0..self.0 }
+}
+fn each<T: For, F: Fn(&T::For) -> usize>(t: T, f: F) -> usize {
+    let mut n = 0;
+    for x in t.go() { n += f(&x); }
+    n
+}
+trait Shape {
+    type Output;
+    fn area(&self) -> Self::Output;
+}
+trait Holder {
+    type Held: Shape<Output = i64>;
+    fn held(&self) -> Self::Held;
+}
+struct Square(i64);
+impl Shape for Square {
+    type Output = i64;
+    fn area(&self) -> i64 { self.0 * self.0 }
+}
+struct Frame;
+impl Holder for Frame {
+    type Held = Square;
+    fn held(&self) -> Square { Square(3) }
+}
+fn double<H: Holder>(h: H) -> i64 {
+    let area: i64 = h.held().area();
+    area * 2
+}
+fn main() {
+    let f: fn(&usize) -> usize = |x: &usize| *x * 4;
+    println!("{} {}", each(Four(4), f), double(Frame));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 18\n");
+    let error = rejected(
+        r#"
+        use std::ops::Range;
+        trait For {
+            type For;
+            type Fore: Iterator<Item = Self::For>;
+        }
+        struct Four;
+        impl For for Four {
+            type For = usize;
+            type Fore = Range<i64>;
+        }
+        0
+    "#,
+    );
+    assert!(
+        error.contains("usize (`<impl Iterator<Item = i64> as Iterator>::Item`)"),
+        "{error}"
+    );
+    let error = rejected(
+        r#"
+        trait Shape { type Output; }
+        trait Holder { type Held: Shape<Output = i64>; }
+        struct Square;
+        impl Shape for Square { type Output = i32; }
+        struct Frame;
+        impl Holder for Frame { type Held = Square; }
+        0
+    "#,
+    );
+    assert!(
+        error.contains("i64 (`<Square as Shape>::Output`)"),
+        "{error}"
+    );
+}

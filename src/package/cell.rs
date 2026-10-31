@@ -30,7 +30,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 8;
+const FORMAT: u32 = 9;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -471,7 +471,7 @@ record! {
     item::Variant { name, payload, fields, default, discriminant, span }
     item::Impl { header, generics, lifetimes, trait_, owner, functions, associated, span }
     item::Trait {
-        header, name, functions, provided, associated, associated_bounds,
+        header, name, functions, provided, associated, associated_bounds, associated_projections,
         supertraits, generics, span,
     }
     item::Function {

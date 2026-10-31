@@ -7,6 +7,10 @@ use crate::{item, type_def, Span};
 /// `Convert<i64>`.
 pub type TraitArgument = (crate::ImmutableString, Box<[type_ref::Type]>);
 
+/// An associated type equality of a bound, as `(trait, name, type)`:
+/// `(Iterator, Item, Self::For)` of `Iterator<Item = Self::For>`.
+pub type Equality = (crate::ImmutableString, crate::item::Name, type_ref::Type);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shell {
     pub id: item::Id,
@@ -134,6 +138,11 @@ pub(crate) struct Trait {
     /// `associated_bounds`, in this trait's parameters and `Self`:
     /// `String` of `type Item: Into<String>;`.
     pub associated_bound_arguments: Box<[Box<[TraitArgument]>]>,
+    /// The associated type equalities among each of `associated_bounds`,
+    /// in this trait's parameters and `Self`: `(Iterator, Item, Self::For)`
+    /// of `type Fore: Iterator<Item = Self::For>;`, as `(trait, name,
+    /// type)`.
+    pub associated_equalities: Box<[Box<[Equality]>]>,
     /// Supertraits (`trait Named: Shape + Clone`): their capabilities and
     /// user traits. Every impl of this trait needs them, and a bound by it
     /// implies them.

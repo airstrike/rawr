@@ -2341,6 +2341,40 @@ fn resolve_item(
                         .collect::<Result<Box<[_]>, _>>()?,
                 );
             }
+            // `type Fore: Iterator<Item = Self::For>;`: each equality's type,
+            // in this trait's parameters and `Self`.
+            let associated_equalities = parsed
+                .associated_projections
+                .into_vec()
+                .into_iter()
+                .map(|equalities| {
+                    equalities
+                        .into_vec()
+                        .into_iter()
+                        .map(|(bound, name, ty)| {
+                            type_ref::resolve(
+                                ty,
+                                &scope,
+                                host,
+                                #[cfg(feature = "rust-import")]
+                                native,
+                            )
+                            .map(|ty| (bound.text, name, ty))
+                        })
+                        .collect::<Result<Box<[_]>, _>>()
+                })
+                .collect::<Result<Box<[_]>, _>>()?;
+            // A projection does not carry its trait's arguments, which such
+            // an equality's type may name.
+            if !trait_generics.is_empty()
+                && let Some((_, name, _)) = associated_equalities.iter().flatten().next()
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "an equality in the bounds of a generic trait's associated type"
+                        .into(),
+                    source: name.span,
+                });
+            }
             item::Kind::Trait(item::Trait {
                 header: parsed.header,
                 name: parsed.name,
@@ -2349,6 +2383,7 @@ fn resolve_item(
                 associated: parsed.associated,
                 associated_bounds: associated_bounds.into_boxed_slice(),
                 associated_bound_arguments: associated_bound_arguments.into_boxed_slice(),
+                associated_equalities,
                 supertraits: (supertrait_bounds, supertrait_names),
                 supertrait_arguments,
                 sized: parsed
@@ -4028,6 +4063,8 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         } else {
             Box::default()
         },
+        // No builtin trait's associated type has an equality.
+        associated_equalities: Box::default(),
         // `trait Ord: Eq + PartialOrd`.
         supertraits: if name == "Ord" {
             (
@@ -4361,10 +4398,25 @@ fn resolve_projections(items: &mut [item::Shell]) -> Result<(), LocatedError> {
                 let own = std::iter::once(declared.name.text.clone())
                     .chain(declared.supertraits.1.iter().map(|name| name.text.clone()))
                     .collect::<Vec<_>>();
-                declared.functions.iter_mut().try_for_each(|function| {
-                    let generics = function.generics.clone();
-                    resolve_item(&generics, &own, &mut signature(function))
-                })
+                declared
+                    .functions
+                    .iter_mut()
+                    .try_for_each(|function| {
+                        let generics = function.generics.clone();
+                        resolve_item(&generics, &own, &mut signature(function))
+                    })
+                    .and_then(|()| {
+                        // `Self::For` of `type Fore: Iterator<Item = Self::For>;`.
+                        resolve_item(
+                            &[],
+                            &own,
+                            &mut declared
+                                .associated_equalities
+                                .iter_mut()
+                                .flat_map(|equalities| equalities.iter_mut())
+                                .map(|(_, _, ty)| ty),
+                        )
+                    })
             }
             item::Kind::Struct(item) => {
                 let generics = item.generics.clone();
