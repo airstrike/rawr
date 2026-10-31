@@ -782,48 +782,31 @@
   ],
   "groups": [
     {
-      "id": "v000",
-      "title": "0.0.0",
-      "subtitle": "Before rawr's own version numbers",
+      "id": "foundations",
+      "title": "Foundations",
+      "subtitle": "Typed Rust, hot reload and the playground",
       "open": false,
       "rows": [
-        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[]},
-        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[]},
-        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[]},
-        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[]},
-        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[]},
-        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[]},
-        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[]},
-        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[]}
+        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[],"milestone":"0.0"},
+        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"milestone":"0.0"},
+        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[],"milestone":"0.0"},
+        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[],"milestone":"0.0"},
+        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[],"milestone":"0.0"},
+        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[],"milestone":"0.0"},
+        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[],"milestone":"0.0"},
+        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[],"milestone":"0.0"},
+        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[],"milestone":"0.1"},
+        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[],"milestone":"0.1"},
+        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[],"milestone":"0.1"},
+        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[],"milestone":"0.2"},
+        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[],"milestone":"0.2"},
+        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"Optional callables","issues":[],"milestone":"0.2"}
       ]
     },
     {
-      "id": "v010",
-      "title": "0.1.0",
-      "subtitle": "First release under rawr's own numbers",
-      "open": false,
-      "rows": [
-        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[]},
-        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[]},
-        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[]}
-      ]
-    },
-    {
-      "id": "v020",
-      "title": "0.2.0",
-      "subtitle": "rawr checks borrows",
-      "open": false,
-      "rows": [
-        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[]},
-        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[]},
-        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[]},
-        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"0.2.9. Optional callables","issues":[]}
-      ]
-    },
-    {
-      "id": "shipped",
-      "title": "0.3",
-      "subtitle": "Shipped",
+      "id": "cache",
+      "title": "Shared dependency cache",
+      "subtitle": "Your own cargo, one runtime per machine",
       "open": true,
       "rows": [
         {
@@ -832,13 +815,14 @@
           "start": 26,
           "size": 3,
           "state": "done",
-          "note": "0.3.0–0.3.1. No added files, check build",
+          "note": "No added files, check build",
           "issues": [
             {"number":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open"},
             {"number":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed"},
             {"number":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed"},
             {"number":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "scripts-with-dependencies",
@@ -846,7 +830,7 @@
           "start": 29,
           "size": 3,
           "state": "done",
-          "note": "0.3.2–0.3.4",
+          "note": "Marked scripts name their crates",
           "issues": [
             {"number":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed"},
             {"number":295,"title":"A script that sets its own `[profile.*]` gives rawr's crates another hash in the shared script…","state":"closed"},
@@ -854,7 +838,8 @@
             {"number":297,"title":"A script with dependencies and no rawr-import installed is told about \"Rust dependencies in…","state":"closed"},
             {"number":298,"title":"The literal `18446744073709551615` in a `u64` array fails with \"-1 is out of range for `u64`\"","state":"closed"},
             {"number":299,"title":"`std::process::id()` is not available","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "runtime-once-per-machine",
@@ -862,91 +847,82 @@
           "start": 32,
           "size": 4,
           "state": "done",
-          "note": "0.3.5–0.3.6. Second project in 13 s",
+          "note": "Second project in 13 s",
           "issues": [
             {"number":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open"},
             {"number":301,"title":"Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed"},
             {"number":302,"title":"A user setting outside the crate's files lowers the runtime's opt-level","state":"closed"},
             {"number":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed"}
-          ]
-        },
+          ],
+          "milestone": "0.3"
+        }
+      ]
+    },
+    {
+      "id": "gnar",
+      "title": "The gnarly snippet",
+      "subtitle": "A ?play snippet, as rustc runs it",
+      "open": true,
+      "rows": [
         {
-          "id": "deploy-gate",
-          "name": "Deploy gate",
-          "start": 36,
+          "id": "raw-identifiers",
+          "name": "Raw identifiers",
+          "start": 51,
           "size": 1,
           "state": "done",
-          "note": "Waits for Cloudflare's rollout",
+          "note": "r#for",
           "issues": [
-            {"number":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed"}
-          ]
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
-          "id": "pick-list-svg",
-          "name": "pick_list, svg",
-          "start": 26,
+          "id": "equality-in-bounds",
+          "name": "Equality in bounds",
+          "start": 51,
           "size": 2,
           "state": "done",
-          "note": "No glue",
+          "note": "Iterator<Item = Self::For>",
           "issues": [
-            {"number":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed"}
-          ]
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
-          "id": "aliases-and-names",
-          "name": "Aliases and names",
-          "start": 30,
-          "size": 3,
+          "id": "qualified-self-paths",
+          "name": "Qualified Self paths",
+          "start": 52,
+          "size": 1,
           "state": "done",
-          "note": "0.3.7. slider runs again",
+          "note": "<Self as T>::A",
           "issues": [
-            {"number":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed"},
-            {"number":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open"}
-          ]
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
-          "id": "script-impls-of-crate-traits",
-          "name": "Script impls of crate traits",
-          "start": 33,
-          "size": 4,
-          "state": "done",
-          "note": "0.3.8. impl canvas::Program",
-          "issues": [
-            {"number":310,"title":"No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed"}
-          ]
-        },
-        {
-          "id": "host-type-parameters",
-          "name": "Host type parameters",
-          "start": 37,
+          "id": "higher-ranked-bounds",
+          "name": "Higher-ranked bounds",
+          "start": 53,
           "size": 2,
           "state": "done",
-          "note": "0.3.9. 11 examples past it",
+          "note": "for<'a> Fn(&'a T)",
           "issues": [
-            {"number":313,"title":"No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed"}
-          ]
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
-          "id": "subscription",
-          "name": "Subscription",
-          "start": 37,
+          "id": "impl-for-a-reference",
+          "name": "Impl for a reference",
+          "start": 54,
           "size": 3,
           "state": "done",
-          "note": "0.3.10. url_handler runs",
+          "note": "impl<T> For for &T. #320",
           "issues": [
-            {"number":309,"title":"No-glue: member lookups on crate types","state":"closed"}
-          ]
-        },
-        {
-          "id": "widget-extension-trait",
-          "name": "Widget extension trait",
-          "start": 37,
-          "size": 3,
-          "state": "done",
-          "note": "0.3.11. .boxed(), impl Widget",
-          "issues": [
-            {"number":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed"}
-          ]
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
+          ],
+          "milestone": "0.3"
         }
       ]
     },
@@ -956,7 +932,31 @@
       "subtitle": "Built once per machine",
       "open": true,
       "rows": [
-        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[]},
+        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[],"milestone":"0.3"},
+        {
+          "id": "removal-by-last-use",
+          "name": "Removal by last use",
+          "start": 45,
+          "size": 2,
+          "state": "done",
+          "note": "Stable generation leases, atomic publication and last-use pruning. #272",
+          "issues": [
+            {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "drift-loudly",
+          "name": "Drift, loudly",
+          "start": 49,
+          "size": 2,
+          "state": "done",
+          "note": "Compare toolchain outputs and validate declared inputs before reuse. #275",
+          "issues": [
+            {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
         {
           "id": "macro-crate-roots",
           "name": "Macro $crate roots",
@@ -966,10 +966,10 @@
           "note": "column! without demand",
           "issues": [
             {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open"}
-          ]
+          ],
+          "milestone": "0.4"
         },
-        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {
           "id": "key-and-publish",
           "name": "Key and publish",
@@ -983,18 +983,8 @@
             {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
             {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"}
-          ]
-        },
-        {
-          "id": "removal-by-last-use",
-          "name": "Removal by last use",
-          "start": 45,
-          "size": 2,
-          "state": "done",
-          "note": "Stable generation leases, atomic publication and last-use pruning. #272",
-          "issues": [
-            {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed"}
-          ]
+          ],
+          "milestone": "0.4"
         },
         {
           "id": "key-holes",
@@ -1007,102 +997,105 @@
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
             {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"}
-          ]
+          ],
+          "milestone": "0.4"
         },
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[]},
-        {
-          "id": "drift-loudly",
-          "name": "Drift, loudly",
-          "start": 49,
-          "size": 2,
-          "state": "done",
-          "note": "Compare toolchain outputs and validate declared inputs before reuse. #275",
-          "issues": [
-            {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed"}
-          ]
-        }
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[],"milestone":"0.4"},
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"milestone":"0.4"}
       ]
     },
     {
-      "id": "gnar",
-      "title": "The gnarly snippet",
-      "subtitle": "After shared bindings",
+      "id": "no-glue",
+      "title": "No glue",
+      "subtitle": "Every example through generated bindings",
       "open": true,
       "rows": [
+        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[],"milestone":"0.2"},
         {
-          "id": "raw-identifiers",
-          "name": "Raw identifiers",
-          "start": 51,
-          "size": 1,
-          "state": "done",
-          "note": "r#for",
-          "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
-          ]
-        },
-        {
-          "id": "equality-in-bounds",
-          "name": "Equality in bounds",
-          "start": 51,
+          "id": "pick-list-svg",
+          "name": "pick_list, svg",
+          "start": 26,
           "size": 2,
           "state": "done",
-          "note": "Iterator<Item = Self::For>",
+          "note": "No glue",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
-          ]
+            {"number":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
-          "id": "qualified-self-paths",
-          "name": "Qualified Self paths",
-          "start": 52,
-          "size": 1,
-          "state": "done",
-          "note": "<Self as T>::A",
-          "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
-          ]
-        },
-        {
-          "id": "higher-ranked-bounds",
-          "name": "Higher-ranked bounds",
-          "start": 53,
-          "size": 2,
-          "state": "done",
-          "note": "for<'a> Fn(&'a T)",
-          "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
-          ]
-        },
-        {
-          "id": "impl-for-a-reference",
-          "name": "Impl for a reference",
-          "start": 54,
+          "id": "aliases-and-names",
+          "name": "Aliases and names",
+          "start": 30,
           "size": 3,
           "state": "done",
-          "note": "impl<T> For for &T. #320",
+          "note": "Slider runs again",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
-          ]
-        }
-      ]
-    },
-    {
-      "id": "now",
-      "title": "No glue",
-      "subtitle": "Running now",
-      "open": true,
-      "rows": [
+            {"number":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed"},
+            {"number":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "script-impls-of-crate-traits",
+          "name": "Script impls of crate traits",
+          "start": 33,
+          "size": 4,
+          "state": "done",
+          "note": "impl canvas::Program",
+          "issues": [
+            {"number":310,"title":"No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "host-type-parameters",
+          "name": "Host type parameters",
+          "start": 37,
+          "size": 2,
+          "state": "done",
+          "note": "11 examples past it",
+          "issues": [
+            {"number":313,"title":"No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "subscription",
+          "name": "Subscription",
+          "start": 37,
+          "size": 3,
+          "state": "done",
+          "note": "url_handler runs",
+          "issues": [
+            {"number":309,"title":"No-glue: member lookups on crate types","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "widget-extension-trait",
+          "name": "Widget extension trait",
+          "start": 37,
+          "size": 3,
+          "state": "done",
+          "note": ".boxed(), impl Widget",
+          "issues": [
+            {"number":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
         {
           "id": "time-types",
           "name": "Time types",
           "start": 40,
           "size": 2,
           "state": "done",
-          "note": "0.3.12. 8 examples past it. #312, #338",
+          "note": "8 examples past it. #312, #338",
           "issues": [
             {"number":312,"title":"No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
             {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "boot-returning-a-task",
@@ -1113,7 +1106,8 @@
           "note": "system_information runs; text to its runner build. #300",
           "issues": [
             {"number":300,"title":"Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "boundary-conversions",
@@ -1126,7 +1120,8 @@
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
             {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "custom-widgets",
@@ -1134,12 +1129,40 @@
           "start": 43,
           "size": 4,
           "state": "done",
-          "note": "0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364",
+          "note": "Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364",
           "issues": [
             {"number":359,"title":"A crate trait's provided method on a script type","state":"closed"},
             {"number":360,"title":"Methods of a type only an alias names","state":"closed"},
             {"number":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "generic-script-impls",
+          "name": "Generic script impls",
+          "start": 43,
+          "size": 4,
+          "state": "done",
+          "note": "Generic impls and methods compile per use. #322–#324, #341",
+          "issues": [
+            {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed"},
+            {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed"},
+            {"number":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed"},
+            {"number":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "callback-return-types",
+          "name": "Callback return types",
+          "start": 47,
+          "size": 2,
+          "state": "done",
+          "note": "Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371",
+          "issues": [
+            {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "native-callback-mutation",
@@ -1150,29 +1173,8 @@
           "note": "Typed places landed. Operation audit and Miri left. #365",
           "issues": [
             {"number":365,"title":"Native mutable vectors lose script callback changes","state":"open"}
-          ]
-        }
-      ]
-    },
-    {
-      "id": "iced",
-      "title": "No glue",
-      "subtitle": "Next",
-      "open": true,
-      "rows": [
-        {
-          "id": "generic-script-impls",
-          "name": "Generic script impls",
-          "start": 43,
-          "size": 4,
-          "state": "done",
-          "note": "0.3.16. Generic impls and methods compile per use. #322–#324, #341",
-          "issues": [
-            {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed"},
-            {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed"},
-            {"number":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed"},
-            {"number":341,"title":"D629 covers generic free functions only, and only where the signature or a bound names a crate type","state":"closed"}
-          ]
+          ],
+          "milestone": "0.4"
         },
         {
           "id": "struct-literals-live-edits",
@@ -1184,7 +1186,8 @@
           "issues": [
             {"number":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open"},
             {"number":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open"}
-          ]
+          ],
+          "milestone": "0.4"
         },
         {
           "id": "projections-function-values",
@@ -1198,7 +1201,8 @@
             {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open"},
             {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
             {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open"}
-          ]
+          ],
+          "milestone": "0.4"
         },
         {
           "id": "runner-build-gaps",
@@ -1214,18 +1218,8 @@
             {"number":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open"},
             {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
-          ]
-        },
-        {
-          "id": "callback-return-types",
-          "name": "Callback return types",
-          "start": 47,
-          "size": 2,
-          "state": "done",
-          "note": "Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371",
-          "issues": [
-            {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed"}
-          ]
+          ],
+          "milestone": "0.4"
         },
         {
           "id": "per-example-gaps",
@@ -1240,7 +1234,8 @@
             {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
             {"number":334,"title":"No-glue stops after #313","state":"open"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
-          ]
+          ],
+          "milestone": "0.4"
         }
       ]
     },
@@ -1250,14 +1245,26 @@
       "subtitle": "Without rawr-iced",
       "open": true,
       "rows": [
+        {
+          "id": "deploy-gate",
+          "name": "Deploy gate",
+          "start": 36,
+          "size": 1,
+          "state": "done",
+          "note": "Waits for Cloudflare's rollout",
+          "issues": [
+            {"number":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
         {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
         {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
       ]
     },
     {
       "id": "end",
-      "title": "rawr-iced",
-      "subtitle": "Retired",
+      "title": "Retire rawr-iced",
+      "subtitle": "The last step",
       "open": true,
       "rows": [
         {

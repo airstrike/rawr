@@ -356,7 +356,7 @@ export function rest(method, path, body) {
 
 export function fetchIssues(repo) {
   const out = gh(["api", "--paginate", `repos/${repo}/issues?state=all&per_page=100`, "--jq",
-    ".[] | select(.pull_request == null) | {number, title, state, labels: [.labels[].name], node_id}"]);
+    ".[] | select(.pull_request == null) | {number, title, state, labels: [.labels[].name], node_id, milestone: .milestone.title}"]);
   const issues = new Map();
   for (const line of out.split("\n").filter(Boolean)) {
     const issue = JSON.parse(line);
@@ -366,6 +366,25 @@ export function fetchIssues(repo) {
 }
 
 const q = (s) => JSON.stringify(s);
+
+/** The milestone a version ships in: its minor series, as iced's 0.13 holds 0.13.0, 0.13.1 and so on. */
+export const milestoneOf = (version) => version.split(".").slice(0, 2).join(".");
+
+/** The repository's milestones by title, each with its number. */
+function fetchMilestones(repo) {
+  const out = gh(["api", "--paginate", `repos/${repo}/milestones?state=all&per_page=100`, "--jq", "[.[] | {title, number}]"]);
+  return new Map(JSON.parse(out.replace(/\]\s*\[/g, ",") || "[]").map((m) => [m.title, m.number]));
+}
+
+/** Puts an issue in a milestone, making the milestone first if the repository has none of that title. */
+function setMilestone(repo, milestones, number, title) {
+  let id = milestones.get(title);
+  if (!id) {
+    id = rest("POST", `repos/${repo}/milestones`, { title }).number;
+    milestones.set(title, id);
+  }
+  rest("PATCH", `repos/${repo}/issues/${number}`, { milestone: id });
+}
 
 export function fetchProjectItems(project) {
   const items = new Map();
@@ -676,6 +695,8 @@ export function drift(plan, todo, issues, projectItems) {
       if (issue.state !== item.state) say(`#${item.issue} (${item.t}) is ${issue.state} on GitHub, recorded ${item.state}`);
       const have = issue.labels.filter((l) => mine.has(l)).sort().join(", ");
       if (have !== [...item.labels].sort().join(", ")) say(`#${item.issue}: GitHub's labels are [${have}], recorded [${[...item.labels].sort().join(", ")}]`);
+      const milestone = item.release ? milestoneOf(item.release) : null;
+      if (milestone && issue.milestone !== milestone) say(`#${item.issue} (${item.t}) shipped in ${item.release} but its milestone is ${issue.milestone ?? "none"}; run milestones`);
     }
     for (const issue of issues.values()) {
       const t = /^(T\d{3,}): /.exec(issue.title)?.[1];
@@ -726,6 +747,12 @@ class Context {
   }
   comment(number, body) {
     if (!this.dry) rest("POST", `repos/${this.repo}/issues/${number}/comments`, { body });
+  }
+  milestone(number, title) {
+    if (this.dry) return;
+    this.milestones ??= fetchMilestones(this.repo);
+    setMilestone(this.repo, this.milestones, number, title);
+    this.issues.get(number).milestone = title;
   }
   close(number) {
     if (this.dry) return;
@@ -859,8 +886,9 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
   const commits = done ? doneCommits(text) : [];
   if (done && ctx.issues.get(number)?.state !== "closed") {
     const said = commits.length ? `Done in ${commits.join(" and ")}.` : "Done. The description says how it was settled.";
-    ctx.comment(number, `${said}${release ? ` Shipped in ${release}.` : ""}`);
+    ctx.comment(number, said);
     ctx.close(number);
+    if (release) ctx.milestone(number, milestoneOf(release));
   }
   const item = {
     t, issue: number, title: fullTitle, state: done ? "closed" : "open", category, labels,
@@ -921,7 +949,7 @@ const OPS = {
   row(ctx, op) {
     const { group, row } = findRow(ctx.plan, op) ?? fail(`no chart group "${op.group}"`);
     if (!row) fail(`group "${op.group}" has no row "${op.row}"`);
-    for (const key of ["name", "start", "size", "state", "note"]) if (key in op) row[key] = op[key];
+    for (const key of ["name", "start", "size", "state", "note", "milestone"]) if (key in op) row[key] = op[key];
     if ("note" in op) checkNote(ctx, op.note);
     if (op.issues) rowIssues(ctx, group, row, op.issues);
     for (const item of ctx.plan.items.items) if (item.gantt?.group === group.id && item.gantt.row === row.id) ctx.sync(item);
@@ -1059,8 +1087,7 @@ const OPS = {
     }
     for (const n of new Set(entries.flatMap((e) => e.issues))) {
       const item = byIssue(ctx.plan, n);
-      const shipped = entries.filter((e) => e.issues.includes(n)).map((e) => `- ${e.text}`).join("\n");
-      ctx.comment(n, shipped ? `Shipped in ${version}:\n\n${shipped}` : `Shipped in ${version}.`);
+      ctx.milestone(n, milestoneOf(version));
       if (item.state === "open") {
         ctx.close(n);
         const line = ctx.todo.parsed.items.get(item.t);
@@ -1069,10 +1096,6 @@ const OPS = {
       }
       item.release = version;
       ctx.sync(item);
-    }
-    for (const n of new Set(entries.flatMap((e) => e.refs ?? []))) {
-      const part = entries.filter((e) => (e.refs ?? []).includes(n)).map((e) => `- ${e.text}`).join("\n");
-      ctx.comment(n, `Part of this shipped in ${version}:\n\n${part}`);
     }
     c.releases.unshift({ version, date, ...(op.lede ? { lede: op.lede } : {}), entries });
     c.unreleased.entries = [];
@@ -1204,6 +1227,18 @@ function main([command, ...args]) {
     console.log("render: wrote site/src/lib/todo.json, CHANGELOG.md and TODO.md's issue numbers");
     return 0;
   }
+  if (command === "milestones") {
+    const issues = fetchIssues(plan.project.repo);
+    const milestones = fetchMilestones(plan.project.repo);
+    let n = 0;
+    for (const item of plan.items.items) {
+      if (!item.release || issues.get(item.issue)?.milestone === milestoneOf(item.release)) continue;
+      setMilestone(plan.project.repo, milestones, item.issue, milestoneOf(item.release));
+      n++;
+    }
+    console.log(`milestones: put ${n} shipped issues in their milestones`);
+    return 0;
+  }
   if (command === "sync") {
     syncItems(plan, plan.items.items, fetchProjectItems(plan.project));
     console.log(`sync: ${plan.items.items.length} items`);
@@ -1222,7 +1257,7 @@ function main([command, ...args]) {
     console.log(problems.length ? `check: ${problems.length} problems; ${summary}` : `check: no drift; ${summary}`);
     return problems.length ? 1 : 0;
   }
-  console.error("usage: node plan/plan.mjs check [--offline] | apply <change.json> [--dry-run] | render | sync | setup");
+  console.error("usage: node plan/plan.mjs check [--offline] | apply <change.json> [--dry-run] | render | sync | milestones | setup");
   return 2;
 }
 

@@ -27,6 +27,8 @@ export interface Row {
   size: number;
   state: State;
   note: string;
+  /** The milestone the row shipped in or aims at, as "0.3". */
+  milestone?: string;
   issues: Issue[];
 }
 

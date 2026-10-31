@@ -76,6 +76,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
     --rule: #000;
     --grid: #e8e8e8;
     --quiet: #6b6b6b;
+    --ms: 2.5rem;
     --name: 13rem;
     --note: 15rem;
     --cols: 8;
@@ -121,7 +122,9 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .bar.done, .key.done { background: var(--ink); }
   .bar.now, .key.now { background: var(--red); }
   .bar.next, .key.next { border: 1px solid var(--ink); background: transparent; }
-  .row, .axis { display: grid; grid-template-columns: var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
+  .row, .axis { display: grid; grid-template-columns: var(--ms) var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
+  .ms { align-self: start; padding-top: 1px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .ms.next { color: var(--quiet); font-weight: 600; }
   .axis {
     position: sticky; top: 0; z-index: 1; background: var(--paper);
     padding: 14px 0 8px; font-size: 11px; font-weight: 600; color: var(--quiet);
@@ -134,7 +137,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   details.group { margin-top: 22px; }
   .group > summary {
     list-style: none; cursor: pointer;
-    display: grid; grid-template-columns: var(--name) 1fr auto; column-gap: 20px; align-items: baseline;
+    display: grid; grid-template-columns: calc(var(--ms) + 20px + var(--name)) 1fr auto; column-gap: 20px; align-items: baseline;
     border-top: 2px solid var(--rule); padding: 9px 0 7px;
   }
   summary::-webkit-details-marker { display: none; }
@@ -145,6 +148,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   details.group[open] > summary .c::after { content: "−"; }
   summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  .row.turn { border-top: 1px solid var(--rule); }
   .name { font-weight: 600; }
   .note { color: var(--quiet); font-size: 13px; }
   .note a, .refs a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
@@ -270,7 +274,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .doc hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
   @media (max-width: 1100px) {
     :root { --note: 0px; }
-    .row, .axis { grid-template-columns: var(--name) 1fr; }
+    .row, .axis { grid-template-columns: var(--ms) var(--name) 1fr; }
     .note, .axis .pad-r { display: none; }
   }
   @media (max-width: 640px) {
@@ -287,8 +291,12 @@ const tally = (g: (typeof GROUPS)[number]) => {
     .figures div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
     .figures .n { font-size: 40px; }
     .legend .say { margin-left: 0; flex-basis: 100%; }
-    .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
+    .row, .axis { grid-template-columns: var(--ms) 1fr; row-gap: 4px; }
+    .row .track { grid-column: 2; }
+    .note { grid-column: 2; }
     .axis .pad-l { display: none; }
+    .axis .pad-ms { display: none; }
+    .axis { grid-template-columns: 1fr; }
     .note { display: block; font-size: 12px; }
     .group > summary { grid-template-columns: 1fr auto; }
     summary .s { grid-column: 1; grid-row: 2; }
@@ -325,6 +333,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   </div>
 
   <div class="axis" aria-hidden="true">
+    <span class="pad-ms"></span>
     <span class="pad-l"></span>
     <div class="scale" id="scale">{ticks.map((t) => <span style={`left:${pct(t - lo)}`}>{t}</span>)}</div>
     <span class="pad-r"></span>
@@ -333,8 +342,9 @@ const tally = (g: (typeof GROUPS)[number]) => {
   {GROUPS.map((g) => (
     <details class="group" open={g.open} id={g.id}>
       <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
-      {g.rows.map((r) => (
-        <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
+      {g.rows.map((r, i) => (
+        <div class={`row${i > 0 && r.milestone !== g.rows[i - 1].milestone ? " turn" : ""}`} id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
+          <span class={`ms${r.state === "done" ? "" : " next"}`} title={r.milestone && `Milestone ${r.milestone}`}>{r.milestone !== g.rows[i - 1]?.milestone && r.milestone}</span>
           <div>
             <span class="name">{r.name}</span>
             {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}

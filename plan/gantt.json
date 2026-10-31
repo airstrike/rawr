@@ -5,60 +5,49 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "groups": [
     {
-      "id": "v000",
-      "title": "0.0.0",
-      "subtitle": "Before rawr's own version numbers",
+      "id": "foundations",
+      "title": "Foundations",
+      "subtitle": "Typed Rust, hot reload and the playground",
       "open": false,
       "rows": [
-        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[]},
-        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[]},
-        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[]},
-        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[]},
-        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[]},
-        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[]},
-        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[]},
-        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[]}
+        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[],"milestone":"0.0"},
+        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"milestone":"0.0"},
+        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[],"milestone":"0.0"},
+        {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[],"milestone":"0.0"},
+        {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[],"milestone":"0.0"},
+        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[],"milestone":"0.0"},
+        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[],"milestone":"0.0"},
+        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[],"milestone":"0.0"},
+        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[],"milestone":"0.1"},
+        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[],"milestone":"0.1"},
+        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[],"milestone":"0.1"},
+        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[],"milestone":"0.2"},
+        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[],"milestone":"0.2"},
+        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"Optional callables","issues":[],"milestone":"0.2"}
       ]
     },
     {
-      "id": "v010",
-      "title": "0.1.0",
-      "subtitle": "First release under rawr's own numbers",
-      "open": false,
-      "rows": [
-        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[]},
-        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[]},
-        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[]}
-      ]
-    },
-    {
-      "id": "v020",
-      "title": "0.2.0",
-      "subtitle": "rawr checks borrows",
-      "open": false,
-      "rows": [
-        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[]},
-        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[]},
-        {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[]},
-        {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"0.2.9. Optional callables","issues":[]}
-      ]
-    },
-    {
-      "id": "shipped",
-      "title": "0.3",
-      "subtitle": "Shipped",
+      "id": "cache",
+      "title": "Shared dependency cache",
+      "subtitle": "Your own cargo, one runtime per machine",
       "open": true,
       "rows": [
-        {"id":"runner-on-your-own-cargo","name":"Runner on your own cargo","start":26,"size":3,"state":"done","note":"0.3.0–0.3.1. No added files, check build","issues":[273,277,278,279]},
-        {"id":"scripts-with-dependencies","name":"Scripts with dependencies","start":29,"size":3,"state":"done","note":"0.3.2–0.3.4","issues":[269,295,296,297,298,299]},
-        {"id":"runtime-once-per-machine","name":"Runtime once per machine","start":32,"size":4,"state":"done","note":"0.3.5–0.3.6. Second project in 13 s","issues":[280,301,302,315]},
-        {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321]},
-        {"id":"pick-list-svg","name":"pick_list, svg","start":26,"size":2,"state":"done","note":"No glue","issues":[284]},
-        {"id":"aliases-and-names","name":"Aliases and names","start":30,"size":3,"state":"done","note":"0.3.7. slider runs again","issues":[307,308]},
-        {"id":"script-impls-of-crate-traits","name":"Script impls of crate traits","start":33,"size":4,"state":"done","note":"0.3.8. impl canvas::Program","issues":[310]},
-        {"id":"host-type-parameters","name":"Host type parameters","start":37,"size":2,"state":"done","note":"0.3.9. 11 examples past it","issues":[313]},
-        {"id":"subscription","name":"Subscription","start":37,"size":3,"state":"done","note":"0.3.10. url_handler runs","issues":[309]},
-        {"id":"widget-extension-trait","name":"Widget extension trait","start":37,"size":3,"state":"done","note":"0.3.11. .boxed(), impl Widget","issues":[311]}
+        {"id":"runner-on-your-own-cargo","name":"Runner on your own cargo","start":26,"size":3,"state":"done","note":"No added files, check build","issues":[273,277,278,279],"milestone":"0.3"},
+        {"id":"scripts-with-dependencies","name":"Scripts with dependencies","start":29,"size":3,"state":"done","note":"Marked scripts name their crates","issues":[269,295,296,297,298,299],"milestone":"0.3"},
+        {"id":"runtime-once-per-machine","name":"Runtime once per machine","start":32,"size":4,"state":"done","note":"Second project in 13 s","issues":[280,301,302,315],"milestone":"0.3"}
+      ]
+    },
+    {
+      "id": "gnar",
+      "title": "The gnarly snippet",
+      "subtitle": "A ?play snippet, as rustc runs it",
+      "open": true,
+      "rows": [
+        {"id":"raw-identifiers","name":"Raw identifiers","start":51,"size":1,"state":"done","note":"r#for","issues":[320],"milestone":"0.3"},
+        {"id":"equality-in-bounds","name":"Equality in bounds","start":51,"size":2,"state":"done","note":"Iterator<Item = Self::For>","issues":[320],"milestone":"0.3"},
+        {"id":"qualified-self-paths","name":"Qualified Self paths","start":52,"size":1,"state":"done","note":"<Self as T>::A","issues":[320],"milestone":"0.3"},
+        {"id":"higher-ranked-bounds","name":"Higher-ranked bounds","start":53,"size":2,"state":"done","note":"for<'a> Fn(&'a T)","issues":[320],"milestone":"0.3"},
+        {"id":"impl-for-a-reference","name":"Impl for a reference","start":54,"size":3,"state":"done","note":"impl<T> For for &T. #320","issues":[320],"milestone":"0.3"}
       ]
     },
     {
@@ -67,55 +56,41 @@
       "subtitle": "Built once per machine",
       "open": true,
       "rows": [
-        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[]},
-        {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281]},
-        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[]},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[]},
-        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372","issues":[271,367,369,370,372]},
-        {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"done","note":"Stable generation leases, atomic publication and last-use pruning. #272","issues":[272]},
-        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252","issues":[252,254,276]},
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[]},
-        {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"done","note":"Compare toolchain outputs and validate declared inputs before reuse. #275","issues":[275]}
+        {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[],"milestone":"0.3"},
+        {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"done","note":"Stable generation leases, atomic publication and last-use pruning. #272","issues":[272],"milestone":"0.3"},
+        {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"done","note":"Compare toolchain outputs and validate declared inputs before reuse. #275","issues":[275],"milestone":"0.3"},
+        {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281],"milestone":"0.4"},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
+        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372","issues":[271,367,369,370,372],"milestone":"0.4"},
+        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252","issues":[252,254,276],"milestone":"0.4"},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[],"milestone":"0.4"},
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"milestone":"0.4"}
       ]
     },
     {
-      "id": "gnar",
-      "title": "The gnarly snippet",
-      "subtitle": "After shared bindings",
-      "open": true,
-      "rows": [
-        {"id":"raw-identifiers","name":"Raw identifiers","start":51,"size":1,"state":"done","note":"r#for","issues":[320]},
-        {"id":"equality-in-bounds","name":"Equality in bounds","start":51,"size":2,"state":"done","note":"Iterator<Item = Self::For>","issues":[320]},
-        {"id":"qualified-self-paths","name":"Qualified Self paths","start":52,"size":1,"state":"done","note":"<Self as T>::A","issues":[320]},
-        {"id":"higher-ranked-bounds","name":"Higher-ranked bounds","start":53,"size":2,"state":"done","note":"for<'a> Fn(&'a T)","issues":[320]},
-        {"id":"impl-for-a-reference","name":"Impl for a reference","start":54,"size":3,"state":"done","note":"impl<T> For for &T. #320","issues":[320]}
-      ]
-    },
-    {
-      "id": "now",
+      "id": "no-glue",
       "title": "No glue",
-      "subtitle": "Running now",
+      "subtitle": "Every example through generated bindings",
       "open": true,
       "rows": [
-        {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"0.3.12. 8 examples past it. #312, #338","issues":[312,338]},
-        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. #300","issues":[300]},
-        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs. #336, #340, part of #345","issues":[336,340,345]},
-        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"0.3.17. Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364","issues":[359,360,364]},
-        {"id":"native-callback-mutation","name":"Native callback mutations","start":47,"size":4,"state":"now","note":"Typed places landed. Operation audit and Miri left. #365","issues":[365]}
-      ]
-    },
-    {
-      "id": "iced",
-      "title": "No glue",
-      "subtitle": "Next",
-      "open": true,
-      "rows": [
-        {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"done","note":"0.3.16. Generic impls and methods compile per use. #322–#324, #341","issues":[322,323,324,341]},
-        {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326]},
-        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327]},
-        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338]},
-        {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"done","note":"Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371","issues":[371]},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345]}
+        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[],"milestone":"0.2"},
+        {"id":"pick-list-svg","name":"pick_list, svg","start":26,"size":2,"state":"done","note":"No glue","issues":[284],"milestone":"0.3"},
+        {"id":"aliases-and-names","name":"Aliases and names","start":30,"size":3,"state":"done","note":"Slider runs again","issues":[307,308],"milestone":"0.3"},
+        {"id":"script-impls-of-crate-traits","name":"Script impls of crate traits","start":33,"size":4,"state":"done","note":"impl canvas::Program","issues":[310],"milestone":"0.3"},
+        {"id":"host-type-parameters","name":"Host type parameters","start":37,"size":2,"state":"done","note":"11 examples past it","issues":[313],"milestone":"0.3"},
+        {"id":"subscription","name":"Subscription","start":37,"size":3,"state":"done","note":"url_handler runs","issues":[309],"milestone":"0.3"},
+        {"id":"widget-extension-trait","name":"Widget extension trait","start":37,"size":3,"state":"done","note":".boxed(), impl Widget","issues":[311],"milestone":"0.3"},
+        {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"8 examples past it. #312, #338","issues":[312,338],"milestone":"0.3"},
+        {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs; text to its runner build. #300","issues":[300],"milestone":"0.3"},
+        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs. #336, #340, part of #345","issues":[336,340,345],"milestone":"0.3"},
+        {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364","issues":[359,360,364],"milestone":"0.3"},
+        {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"done","note":"Generic impls and methods compile per use. #322–#324, #341","issues":[322,323,324,341],"milestone":"0.3"},
+        {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"done","note":"Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371","issues":[371],"milestone":"0.3"},
+        {"id":"native-callback-mutation","name":"Native callback mutations","start":47,"size":4,"state":"now","note":"Typed places landed. Operation audit and Miri left. #365","issues":[365],"milestone":"0.4"},
+        {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326],"milestone":"0.4"},
+        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327],"milestone":"0.4"},
+        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338],"milestone":"0.4"},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345],"milestone":"0.4"}
       ]
     },
     {
@@ -124,14 +99,15 @@
       "subtitle": "Without rawr-iced",
       "open": true,
       "rows": [
+        {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
         {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
         {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
       ]
     },
     {
       "id": "end",
-      "title": "rawr-iced",
-      "subtitle": "Retired",
+      "title": "Retire rawr-iced",
+      "subtitle": "The last step",
       "open": true,
       "rows": [
         {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"next","note":"","issues":[203]},

@@ -95,6 +95,7 @@
       "size": { "type": "number", "minimum": 0.5 },
       "state": { "$ref": "defs.schema.json#/$defs/state" },
       "note": { "type": "string" },
+      "milestone": { "$ref": "defs.schema.json#/$defs/milestone" },
       "issues": { "type": "array", "uniqueItems": true, "items": { "$ref": "defs.schema.json#/$defs/issue" } }
     },
     "row": {
@@ -113,6 +114,7 @@
         "size": { "$ref": "#/$defs/rowFields/size" },
         "state": { "$ref": "#/$defs/rowFields/state" },
         "note": { "$ref": "#/$defs/rowFields/note" },
+        "milestone": { "$ref": "#/$defs/rowFields/milestone" },
         "issues": { "$ref": "#/$defs/rowFields/issues" }
       }
     },

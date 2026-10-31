@@ -47,6 +47,7 @@
         "size": { "type": "number", "minimum": 0.5 },
         "state": { "$ref": "defs.schema.json#/$defs/state" },
         "note": { "type": "string" },
+        "milestone": { "$ref": "defs.schema.json#/$defs/milestone", "description": "The milestone the row shipped in, or the one it aims at. The chart shows it in its first column." },
         "issues": {
           "type": "array",
           "uniqueItems": true,
