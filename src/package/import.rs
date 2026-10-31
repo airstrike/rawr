@@ -2721,7 +2721,8 @@ fn ty_ok(
             arguments,
         } => {
             (declared.contains(definition)
-                || rawr_import::surface::identity::Definition::is_projected(definition.as_bytes()))
+                || rawr_import::surface::identity::Definition::is_projected(definition.as_bytes())
+                || *definition == rawr_import::surface::identity::Definition::callable())
                 && arguments.iter().all(|ty| ty_ok(ty, declared))
         }
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
@@ -2925,6 +2926,25 @@ impl Types {
                     let future =
                         crate::future::facade::definition()?.export_type("future::Future")?;
                     return Ok(host::type_ref::Type::external(future, converted)?);
+                }
+                // A script closure where a signature names its type, as
+                // iced's `Widget::map` gives `Map<Self, F, Message>`: the
+                // closure's type, as the input that takes it is (T417).
+                if *definition == rawr_import::surface::identity::Definition::callable() {
+                    let (output, inputs) = arguments.split_last().ok_or(Error::Cardinality)?;
+                    let input = match inputs {
+                        [] => host::type_ref::Type::unit(),
+                        [single] => Self::convert_charged(single, parameters)?,
+                        many => host::type_ref::Type::tuple(
+                            many.iter()
+                                .map(|ty| Self::convert_charged(ty, parameters))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )?,
+                    };
+                    return Ok(host::type_ref::Type::callable(
+                        input,
+                        Self::convert_charged(output, parameters)?,
+                    ));
                 }
                 if *definition == rawr_import::surface::identity::Definition::duration()
                     && converted.is_empty()

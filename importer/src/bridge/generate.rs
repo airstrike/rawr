@@ -11234,7 +11234,43 @@ fn render_take_callable(
         signature,
         substitutions,
     )?;
+    // An output that names the closure's type, as iced's `Widget::map`
+    // gives `Map<Self, F, Message>`: the closure boxed as the `Box<dyn
+    // Fn(..) -> ..>` the classifier wrote there (T417).
+    if let Some(boxed) = boxed_callable(signature.output()) {
+        let rust = concrete_type(&substituted(boxed, signature, substitutions)?).ok_or(
+            request::Error::Drift {
+                field: "a boxed closure's type",
+            },
+        )?;
+        return writeln!(
+            output,
+            "    let argument_{local}: {rust} = Box::new({closure});"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     writeln!(output, "    let argument_{local} = {closure};").map_err(|_| request::Error::Encoding)
+}
+
+/// The boxed closure type `ty` names, as `Map<W, Box<dyn Fn(A) -> B>, A>`
+/// does (T417).
+fn boxed_callable(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal { definition, .. }
+            if *definition == crate::surface::identity::Definition::callable() =>
+        {
+            Some(ty)
+        }
+        convert::Type::Nominal { arguments, .. }
+        | convert::Type::Tuple(arguments)
+        | convert::Type::Script { arguments, .. } => arguments.iter().find_map(boxed_callable),
+        convert::Type::Option(inner)
+        | convert::Type::Range(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Sequence { element: inner, .. } => boxed_callable(inner),
+        convert::Type::Result(ok, err) => boxed_callable(ok).or_else(|| boxed_callable(err)),
+        _ => None,
+    }
 }
 
 /// Whether `ty` is an `Option` of the callable parameter `call` fills, as
@@ -12259,6 +12295,16 @@ fn is_copied(ty: &convert::Type) -> bool {
 /// Rawr's array or tuple for the call: `&[T]` or `&(A, B)`.
 fn is_made_for_call(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Sequence { .. } | convert::Type::Tuple(_))
+        // A number, as `PartialOrd<f32>::lt` takes `&f32` (T412).
+        || matches!(ty, convert::Type::Builtin(builtin)
+            if !matches!(
+                builtin,
+                convert::Builtin::String
+                    | convert::Builtin::Str
+                    | convert::Builtin::StaticStr
+                    | convert::Builtin::Text
+                    | convert::Builtin::InclusiveRange
+            ))
 }
 
 /// `ty` with every type parameter the signature declares replaced by its
@@ -12740,6 +12786,20 @@ fn scoped_definition(definition: &crate::surface::identity::Definition) -> Optio
 /// carries lifetimes takes `'x` for each, as a scope family names it.
 fn scoped_type(ty: &convert::Type) -> Option<String> {
     match ty {
+        // A boxed script closure (T417), whose inputs and output may name
+        // scoped types.
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::callable() => {
+            let (output, inputs) = arguments.split_last()?;
+            let inputs = inputs.iter().map(scoped_type).collect::<Option<Vec<_>>>()?;
+            Some(format!(
+                "Box<dyn Fn({}) -> {}>",
+                inputs.join(", "),
+                scoped_type(output)?
+            ))
+        }
         convert::Type::Nominal {
             definition,
             arguments,
@@ -13815,6 +13875,22 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
+        // A script closure where a signature names its type, boxed (T417).
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::callable() => {
+            let (output, inputs) = arguments.split_last()?;
+            let inputs = inputs
+                .iter()
+                .map(concrete_type)
+                .collect::<Option<Vec<_>>>()?;
+            format!(
+                "Box<dyn Fn({}) -> {}>",
+                inputs.join(", "),
+                concrete_type(output)?
+            )
+        }
         ty if let Some(time) = std_time(ty) => time.to_owned(),
         convert::Type::Nominal {
             definition,

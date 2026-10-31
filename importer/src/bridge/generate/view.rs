@@ -100,6 +100,10 @@ fn view_text(ty: &convert::Type) -> Option<String> {
         convert::Type::Nominal { definition, .. } if *definition == Definition::renderer() => {
             Some("iced::Renderer".to_owned())
         }
+        // A boxed script closure (T417).
+        convert::Type::Nominal { definition, .. } if *definition == Definition::callable() => {
+            concrete_type(ty)
+        }
         convert::Type::Nominal {
             definition,
             arguments,

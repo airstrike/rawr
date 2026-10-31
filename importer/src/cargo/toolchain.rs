@@ -35,7 +35,7 @@ const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 const SUPPORTED_PLAN_SCHEMA: u32 = 8;
 // The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 // `extract/protocol.rs`'s `SCHEMA` are the same number.
-const SUPPORTED_PROBE_PROTOCOL: u32 = 34;
+const SUPPORTED_PROBE_PROTOCOL: u32 = 35;
 const SUPPORTED_UNIT_SCHEMA: u32 = 1;
 const SUPPORTED_GRAPH_SCHEMA: u32 = 1;
 

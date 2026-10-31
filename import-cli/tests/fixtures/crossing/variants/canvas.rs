@@ -6,6 +6,7 @@
 // on, as iced's `widget::Text` does. `Cache::sketch` gives the renderer's
 // associated type, as iced's `Cache::draw` does, and `Action::publish` and
 // `Action::and_capture` are named as values, as multitouch names them.
+// The alias's defaulted parameter is what a later use fixes.
 
 use events::canvas::{self, Cache, Geometry, Note};
 
@@ -52,6 +53,16 @@ fn main() {
     let grouped: canvas::Cache = canvas::Cache::new();
     grouped.draw("group");
     println!("grouped {}", grouped.drawn());
+    // The alias's parameter, which no annotation at the call names, is
+    // what the value's later use fixes, as the_matrix's
+    // `caches.resize_with(30, || canvas::Cache::with_group(group))` fills
+    // a `Vec<canvas::Cache>`.
+    let mut caches: Vec<canvas::Cache> = Vec::new();
+    caches.resize_with(2, || canvas::Cache::new());
+    let fresh = Cache::new();
+    fresh.draw("fresh");
+    caches.push(fresh);
+    println!("fresh {} {}", caches[2].drawn(), caches.len());
     // A crate's function and method named as values where `Option::map`
     // takes a closure.
     let pressed: Option<i64> = Some(7);

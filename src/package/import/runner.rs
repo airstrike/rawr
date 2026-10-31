@@ -1598,6 +1598,17 @@ fn ty(
             {
                 return Ok(host::type_ref::Type::range_inclusive_of(element.clone()));
             }
+            // A script closure a crate value holds, as iced's `Map<W, F, A>`
+            // from `Widget::map` does: the closure's type (T417).
+            if identity == rawr_import::surface::identity::Definition::callable().as_bytes() {
+                let (output, inputs) = arguments.split_last().ok_or(Error::Shape)?;
+                let input = match inputs {
+                    [] => host::type_ref::Type::unit(),
+                    [single] => single.clone(),
+                    many => host::type_ref::Type::tuple(many.to_vec())?,
+                };
+                return Ok(host::type_ref::Type::callable(input, output.clone()));
+            }
             if let Some(ty) =
                 profile.semantic_type(facade, installed, identity, arguments.clone())?
             {
