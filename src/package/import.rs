@@ -350,15 +350,39 @@ impl crate::Engine {
                     return Err(super::Error::import(Error::Surface(error)));
                 }
                 Err(crate::resolve::ImportedFailure::Lowering(failure)) => {
-                    let (evidence, error) = failure.into_parts();
+                    let (evidence, mut error) = failure.into_parts();
+                    // A miss a proof may settle is reported and demanded as
+                    // the ordinary miss, carrying the call to prove first.
+                    let mut proving = None;
                     if let crate::ParseErrorType::Resolution(
-                        crate::resolve::Error::ImportedApplicationRequired { call, .. },
+                        crate::resolve::Error::ImportedApplicationRequired { call, miss, .. },
                     ) = error.err_type()
                     {
                         let call = call.clone();
-                        return Err(super::Error::compilation(sources.clone(), evidence, error)
-                            .with_rust_application(call));
+                        match miss {
+                            None => {
+                                return Err(super::Error::compilation(
+                                    sources.clone(),
+                                    evidence,
+                                    error,
+                                )
+                                .with_rust_application(call));
+                            }
+                            Some(miss) => {
+                                let miss = crate::ParseErrorType::Resolution((**miss).clone());
+                                error = crate::ParseError(
+                                    Box::new(miss),
+                                    error.position(),
+                                    error.2.clone(),
+                                );
+                                proving = Some(call);
+                            }
+                        }
                     }
+                    let proving = |error: super::Error| match &proving {
+                        Some(call) => error.with_rust_application(call.clone()),
+                        None => error,
+                    };
                     let demand = match error.err_type() {
                         crate::ParseErrorType::Resolution(resolution) => {
                             match rust_miss(contract, resolution) {
@@ -375,20 +399,20 @@ impl crate::Engine {
                             .map_err(super::Error::diagnostic)?
                     {
                         let error = super::Error::import_diagnostic(report);
-                        return Err(match demand {
+                        return Err(proving(match demand {
                             Some((path, through_alias, member)) => {
                                 error.with_rust_demand(&path, through_alias, member)
                             }
                             None => error,
-                        });
+                        }));
                     }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
-                    return Err(match demand {
+                    return Err(proving(match demand {
                         Some((path, through_alias, member)) => {
                             error.with_rust_demand(&path, through_alias, member)
                         }
                         None => error,
-                    });
+                    }));
                 }
             };
         let application = match cycle {

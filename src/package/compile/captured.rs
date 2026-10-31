@@ -97,7 +97,20 @@ impl Output {
         .map_err(|failure| match failure {
             resolve::ImportedFailure::Surface(error) => Error::Resource(error),
             resolve::ImportedFailure::Lowering(failure) => {
-                let (evidence, error) = failure.into_parts();
+                let (evidence, mut error) = failure.into_parts();
+                // A miss a proof could settle is still the miss here: this
+                // compilation proves nothing, so the host's full preparation
+                // does.
+                #[cfg(feature = "rust-import")]
+                if let crate::ParseErrorType::Resolution(
+                    resolve::Error::ImportedApplicationRequired {
+                        miss: Some(miss), ..
+                    },
+                ) = error.err_type()
+                {
+                    let miss = crate::ParseErrorType::Resolution((**miss).clone());
+                    error = crate::ParseError(Box::new(miss), error.position(), error.2.clone());
+                }
                 let missed = match (&evidence, error.err_type()) {
                     (
                         resolve::LoweringEvidence::Original(source),

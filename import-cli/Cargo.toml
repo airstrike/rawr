@@ -13,6 +13,7 @@ rawr = { path = "..", features = ["rust-import", "sync"] }
 rawr-cli = { path = "../cli" }
 rawr-import = { path = "../importer", features = ["rustc-driver", "embedded-host"] }
 rawr-watch = { path = "../watch" }
+serde_json = "1"
 nix = { version = "0.27.1", features = ["process", "signal"] }
 
 [dev-dependencies]

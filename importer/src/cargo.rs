@@ -221,6 +221,11 @@ pub struct Closure {
     pub aliases: Vec<(Box<str>, Box<str>)>,
     /// Each crate's name, compiler unit and native input witness.
     pub units: Vec<(Box<str>, Box<str>, [u8; 32])>,
+    /// Each compiler unit's machine-wide key, for a crate whose whole
+    /// closure comes from registries and git commits (`extract::shared`).
+    pub shared: BTreeMap<Box<str>, Box<str>>,
+    /// Where machine-wide entries live, under rawr's home.
+    pub home: PathBuf,
 }
 
 /// Staged inputs that can only become a `Request` after canonical sealing.
@@ -357,6 +362,10 @@ pub struct Resolution {
     dag: Option<DagResolution>,
     #[cfg(feature = "rustc-driver")]
     capture: Option<crate::extract::plan::Capture>,
+    /// Each library unit's machine-wide key, for a closure probe: set only
+    /// for a unit whose whole closure is immutable (`extract::shared`).
+    #[cfg(feature = "rustc-driver")]
+    closure_keys: BTreeMap<Box<str>, Box<str>>,
 }
 
 /// Completed observations without consuming the request that must validate reuse.
@@ -380,10 +389,42 @@ struct CompletedHarness {
     /// The shared tables this extraction leaves to publish.
     #[cfg(feature = "rustc-driver")]
     settlement: Vec<crate::bindings::Settled>,
+    #[cfg(feature = "rustc-driver")]
+    closure_units: Option<Box<[u8]>>,
 }
 
 impl CompletedHarness {
     fn into_resolution(self, request: Request) -> Resolution {
+        #[cfg(feature = "rustc-driver")]
+        let closure_keys = match &self.closure_units {
+            Some(units) => {
+                let selected = self
+                    .build_unit
+                    .artifacts()
+                    .iter()
+                    .filter_map(|output| {
+                        Some(crate::extract::shared::Selected {
+                            unit_key: output.semantic_key(),
+                            package_id: output.package_id(),
+                            target: output.target().to_str()?,
+                            features: output.features(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                crate::extract::shared::keys(
+                    units,
+                    &self.metadata,
+                    &selected,
+                    self.toolchain.rustc_commit(),
+                    self.toolchain.host(),
+                    &request.target,
+                )
+                .into_iter()
+                .map(|(unit, shared)| (unit, shared.key))
+                .collect()
+            }
+            _ => BTreeMap::new(),
+        };
         Resolution {
             context: self.context,
             project_root: request.project_root,
@@ -414,6 +455,8 @@ impl CompletedHarness {
             dag: None,
             #[cfg(feature = "rustc-driver")]
             capture: self.capture,
+            #[cfg(feature = "rustc-driver")]
+            closure_keys,
         }
     }
 }
@@ -441,6 +484,9 @@ struct Harness {
     dag: Option<DagHarness>,
     #[cfg(feature = "rustc-driver")]
     extraction_plan: crate::extract::plan::Plan,
+    /// A closure probe's unit graph, for its crates' machine-wide keys.
+    #[cfg(feature = "rustc-driver")]
+    closure_units: Option<Box<[u8]>>,
 }
 
 /// A prepared harness whose ordinary Build and both postchecks succeeded.
@@ -1286,6 +1332,18 @@ impl Request {
         }
         closure.aliases.sort_unstable();
         closure.units.sort_unstable();
+        closure.shared = resolution
+            .closure_keys
+            .iter()
+            .filter(|(unit, _)| {
+                closure
+                    .units
+                    .iter()
+                    .any(|(_, candidate, _)| candidate == *unit)
+            })
+            .map(|(unit, key)| (unit.clone(), key.clone()))
+            .collect();
+        closure.home = crate::store::home(resolution.context.cargo_home()).join("inventories");
         Ok(closure)
     }
 
@@ -1669,6 +1727,10 @@ impl Request {
                 dag: None,
                 #[cfg(feature = "rustc-driver")]
                 extraction_plan,
+                #[cfg(feature = "rustc-driver")]
+                closure_units: self
+                    .inputs_only
+                    .then(|| initial_bytes.to_vec().into_boxed_slice()),
             })
         })
     }
@@ -2008,6 +2070,8 @@ impl Request {
             }),
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units: self.inputs_only.then(|| initial_bytes.clone()),
         })
     }
 
@@ -2280,6 +2344,8 @@ impl Request {
             dag,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         } = harness;
         let mut allocation = request_allocation.ok_or_else(|| Error::Request {
             field: "legacy workspace inputs",
@@ -2567,6 +2633,8 @@ impl Request {
             dag: None,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         };
         #[allow(unused_mut)]
         let mut resolution = self.complete_harness(
@@ -2679,6 +2747,8 @@ impl Request {
                 dag: _,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         } = harness;
         let fallback_packages = build.fallback_packages(toolchain.cargo_commit(), limits)?;
         for (package_id, package_manifest) in fallback_packages {
@@ -2825,6 +2895,8 @@ impl Request {
             capture,
             #[cfg(feature = "rustc-driver")]
             settlement,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         })
     }
 }

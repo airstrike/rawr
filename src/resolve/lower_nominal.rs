@@ -21351,7 +21351,14 @@ impl<'a> Parser<'a> {
         if self.models.host.pending_method(&path).is_some()
             && definition.identity().imported().is_some()
         {
-            return self.parse_applied_method(receiver, &definition, member, &path, member_span);
+            return self.parse_applied_method(
+                receiver,
+                &definition,
+                member,
+                &path,
+                member_span,
+                None,
+            );
         }
         #[cfg(feature = "rust-import")]
         if let Some(family) = self.models.host.pending_method(&path) {
@@ -21427,15 +21434,32 @@ impl<'a> Parser<'a> {
         let Some(items) = items else {
             let error = Error::UnknownMember {
                 owner: definition.path().into(),
-                member,
+                member: member.clone(),
                 reference: member_span,
             };
             #[cfg(feature = "rust-import")]
-            let error = self.native_miss(
-                definition.identity().imported().is_some()
-                    && self.models.host.entry(&path).is_none(),
-                error,
-            );
+            let imported_miss = definition.identity().imported().is_some()
+                && self.models.host.entry(&path).is_none();
+            #[cfg(feature = "rust-import")]
+            let error = self.native_miss(imported_miss, error);
+            // A method of an imported type the facade does not hold: the
+            // dependencies' intrinsic facts may prove which trait provides
+            // it, with no new extraction (D609.6). Unproved, it is the
+            // ordinary miss.
+            #[cfg(feature = "rust-import")]
+            if imported_miss
+                && (self.pending_arguments.is_some()
+                    || matches!(self.peek(), Token::LeftParen | Token::Unit))
+            {
+                return self.parse_applied_method(
+                    receiver,
+                    &definition,
+                    member,
+                    &path,
+                    member_span,
+                    Some(error),
+                );
+            }
             return Err(error);
         };
         let owner = self.models.item_owner(&path).cloned();
@@ -21943,11 +21967,16 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         path: &str,
         member_span: Span,
+        miss: Option<Error>,
     ) -> Result<ParsedExpr, Error> {
-        let unsupported = |reason: &str| Error::InvalidHostOperation {
-            item: path.into(),
-            reason: reason.into(),
-            operation: member_span,
+        // A call outside the closed rules is the ordinary miss, when it is
+        // one; otherwise the rule it is outside of.
+        let unsupported = |reason: &str| {
+            miss.clone().unwrap_or_else(|| Error::InvalidHostOperation {
+                item: path.into(),
+                reason: reason.into(),
+                operation: member_span,
+            })
         };
         let identity = definition
             .identity()
@@ -21973,7 +22002,10 @@ impl<'a> Parser<'a> {
                 )?,
             );
         }
-        let scope = self.lexical_scope(member_span)?;
+        let scope = match self.lexical_scope(member_span) {
+            Ok(scope) => scope,
+            Err(error) => return Err(miss.unwrap_or(error)),
+        };
         let call = rawr_import::surface::application::Call {
             receiver: rawr_import::surface::identity::Definition::authenticated(
                 *identity.as_bytes(),
@@ -21988,11 +22020,19 @@ impl<'a> Parser<'a> {
         }
         .canonical();
         let Some((item, owner)) = self.models.host.applied(&call.key()) else {
+            // Only an imported compilation can have the call proved; any
+            // other reports the miss as it is.
+            if self.imported.is_none()
+                && let Some(miss) = miss
+            {
+                return Err(miss);
+            }
             return Err(Error::ImportedApplicationRequired {
                 item: path.into(),
                 call: serde_json::to_vec(&call)
                     .map_err(|_| unsupported("the call could not be encoded"))?
                     .into_boxed_slice(),
+                miss: miss.map(Box::new),
                 operation: member_span,
             });
         };
