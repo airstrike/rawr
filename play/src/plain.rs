@@ -66,6 +66,11 @@ pub struct Output {
 }
 
 impl Output {
+    /// Add `text` written to `stream`, cut at [`MAX_OUTPUT`].
+    pub fn write(&mut self, stream: Stream, text: &str) {
+        self.push(stream, text);
+    }
+
     fn push(&mut self, stream: Stream, text: &str) {
         let used: usize = self.chunks.iter().map(|(_, text)| text.len()).sum();
         if self.truncated || text.is_empty() {

@@ -4797,20 +4797,28 @@ impl Models {
         &self.by_definition[&id]
     }
 
-    /// The path of the script type `id` with its crate's name first, as
-    /// the runner names its proxy (`counter::State`, `counter::app::State`)
-    /// (D594).
+    /// The path the runner names the script type `id`'s proxy by, its
+    /// crate's name first, as the script names it (`counter::State`,
+    /// `counter::app::State`) (D594). A universe runner names it by its
+    /// index in the program's definition order (`counter::__RawrScript1`,
+    /// `model::crossing_name`), so it serves every program whose native
+    /// calls are the same.
     #[cfg(feature = "rust-import")]
     fn script_path(&self, id: type_def::Id) -> Box<str> {
         let key = self.definition(id).definition().key();
-        let mut path = key.package().replace('-', "_");
-        path.push_str("::");
-        for module in key.modules() {
-            path.push_str(module);
-            path.push_str("::");
-        }
-        path.push_str(key.name());
-        path.into_boxed_str()
+        let below = key
+            .modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([key.name()])
+            .collect::<Vec<_>>()
+            .join("::");
+        format!(
+            "{}::{}",
+            key.package().replace('-', "_"),
+            self.runtime.crossing_path(&below)
+        )
+        .into_boxed_str()
     }
 
     /// The inherent function `name` of `owner`, or else the one trait
@@ -41611,14 +41619,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// The output of a `Task<T>`, which `.await` gives.
+    /// The output of the core's future, which `.await` gives.
     fn task_output(&self, ty: &Ty) -> Option<Ty> {
         match self.inference.resolve(ty) {
             Ty::Host { proof, arguments }
-                if matches!(
-                    proof.definition.path().as_str(),
-                    "iced::Task" | "rawr::future::Future"
-                ) && arguments.len() == 1 =>
+                if proof.definition.path().as_str() == "rawr::future::Future"
+                    && arguments.len() == 1 =>
             {
                 Some(arguments[0].clone())
             }

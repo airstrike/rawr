@@ -16,6 +16,7 @@ pub mod plain;
 pub mod server;
 #[cfg(feature = "bot")]
 pub mod stats;
+pub mod universe;
 #[cfg(feature = "bot")]
 pub mod web;
 
@@ -93,8 +94,12 @@ pub enum Outcome {
 /// its own. `include_str!`, `include_bytes!` and `std::fs` fail with this.
 const NO_FILES: &str = "?play has no files";
 
-/// Run one snippet.
+/// Run one snippet: on the universe runner when the environment names one
+/// (`universe::ROOT`, as the image does), and else on the base language.
 pub fn run(source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+    if let Some(universe) = universe::Universe::from_env() {
+        return universe.run(source, limits).map(Outcome::Text);
+    }
     rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + limits.time;
     let parsed = plain::Parsed::new(source, limits, deadline)?;

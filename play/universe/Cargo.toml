@@ -1,0 +1,18 @@
+# ?play's universe (#434, #436): the crates a snippet can use, and the
+# program whose native calls the prebuilt runner covers. `rawr-import`
+# builds its runner once, when the image is built, with
+# RAWR_UNIVERSE_RUNNER=1, and the bot runs each snippet on that runner with
+# no Cargo (play/README.md).
+[package]
+name = "play"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

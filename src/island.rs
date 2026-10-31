@@ -447,7 +447,8 @@ pub(crate) fn shared(
                     path.push_str("::");
                 }
                 path.push_str(owner.name());
-                Some((path, item.clone()))
+                // Keyed as the runner names the type (`crossing_path`).
+                Some((authority.model().crossing_path(&path), item.clone()))
             }
             type_def::Identity::Host(_) => None,
         })
@@ -467,6 +468,7 @@ pub(crate) fn shared(
                     path.push_str("::");
                 }
                 path.push_str(owner.name());
+                let mut path = authority.model().crossing_path(&path);
                 path.push_str("::");
                 path.push_str(item.key().name());
                 Some((path, item.clone()))

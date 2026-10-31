@@ -48,6 +48,7 @@ pub mod runner;
 pub mod store;
 pub mod supervisor;
 pub mod surface;
+pub mod universe;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]

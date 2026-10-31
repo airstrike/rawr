@@ -19,6 +19,32 @@ A snippet that names a crate the base language doesn't have fails to
 compile, as any program would. An `async fn main` with no runtime's
 attribute is rustc's E0752.
 
+## The universe runner
+
+The image names a universe runner (`PLAY_UNIVERSE`, `/universe`), and then
+every snippet runs on it instead of the base language
+(`play/src/universe.rs`). `rawr-import` builds it once, in the image's
+`universe` stage, from `play/universe` with `RAWR_UNIVERSE_RUNNER=1`: the
+generated bindings of iced (at the pinned rev), iced_test and tokio, and a
+runner that links them. The bot hands it a snippet on stdin with
+`RAWR_PLAY_ROOT` set; the runner compiles it beside the universe's
+`Cargo.toml` against its own native surface, with no Cargo and no nightly,
+and runs `main` once. The process's wall time is the snippet's time budget.
+
+A universe runner names a script type by its index in the program's
+definition order (`__RawrScript0`, ..), never by its name, so a snippet
+whose native calls are the universe program's runs whatever its types are
+called. A snippet that makes a native call the universe program doesn't
+make fails to compile, as a program whose native call is missing does.
+
+Locally, after `RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe`:
+
+```sh
+PLAY_UNIVERSE=$PWD/play/universe \
+PLAY_UNIVERSE_RUNNER=$PWD/play/universe/target/rawr/runner/target/debug/play \
+  cargo run -p rawr-play -- snippet.rs -o -
+```
+
 ## CLI
 
 ```sh

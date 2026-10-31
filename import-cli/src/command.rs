@@ -34,6 +34,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if let Some(code) = rawr_cli::supervise::child() {
         return code;
     }
+    // A universe runner, as `?play`'s image builds it (#434).
+    if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
+        rawr_import::universe::set();
+    }
     // What follows `--` is the program's.
     let (arguments, program_arguments) = rawr_cli::split_program_arguments(&arguments);
     let words: Vec<_> = arguments
