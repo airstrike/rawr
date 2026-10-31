@@ -8,7 +8,10 @@
 //!
 //! - A script type is a [`Proxy`] newtype named as the script names it, in
 //!   the project's own crate, so `type_name` and `TypeId` are its own and a
-//!   bound such as `Default` is its own implementation's. The proxy holds a
+//!   bound such as `Default` is its own implementation's. A universe
+//!   runner (`rawr_import::universe`), which serves many programs, names it
+//!   by its index in the program's definition order (`__RawrScript0`, ..)
+//!   instead, and finds its `Default` by that index. The proxy holds a
 //!   shared handle to the script value, so native code that lends it to
 //!   script code lends the value itself, and nothing is copied.
 //! - A script function is a [`Slot`]: a function item the runner
@@ -328,4 +331,12 @@ impl Slot {
         self.call(arguments, mutable)
             .unwrap_or_else(|error| panic!("{}", crate::future::message(&error)))
     }
+}
+
+/// Make this process a universe runner's (`rawr_import::universe`): a
+/// generated universe runner calls it before it compiles a program, so it
+/// names script types as the build that generated it did.
+#[cfg(feature = "rust-import")]
+pub fn universe() {
+    rawr_import::universe::set();
 }

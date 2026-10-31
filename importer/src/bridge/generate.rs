@@ -3762,6 +3762,64 @@ fn finish(result: std::io::Result<()>) -> ! {
     }
 }
 
+/// `?play`'s entry in a universe runner (#434, #436): the crate root's
+/// source on stdin, beside the manifest in `root`, compiled against this
+/// runner's own native surface with no parent and no Cargo, and run once
+/// as Rust runs it. The snapshot is the one the runner's build compiled:
+/// the same manifest at the same path, so a program whose native calls the
+/// build covered finds every one of them here.
+fn run_play(root: std::path::PathBuf) -> ! {
+    fn push(input: &mut Vec<u8>, bytes: &[u8]) {
+        input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        input.extend_from_slice(bytes);
+    }
+    fn text(path: &std::path::Path) -> std::io::Result<&[u8]> {
+        path.to_str().map(str::as_bytes).ok_or_else(|| std::io::Error::other("play root UTF-8"))
+    }
+    let compiled = (|| -> std::io::Result<Option<Program>> {
+        let mut source = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)?;
+        let manifest_path = root.join("Cargo.toml");
+        let manifest = std::fs::read(&manifest_path)?;
+        let entry = root.join("src").join("main.rs");
+        // No semantic is expected of a plain program, and paths go in
+        // order: `Cargo.toml` before `src/main.rs`.
+        let mut input = vec![0_u8; 32];
+        input.extend_from_slice(b"rawr.snapshot.entry/v1");
+        push(&mut input, text(&entry)?);
+        push(&mut input, text(&manifest_path)?);
+        push(&mut input, &manifest);
+        push(&mut input, text(&entry)?);
+        push(&mut input, source.as_bytes());
+        install_arena([0; 32]);
+        let mut observation = None;
+        compile_program(&input, Compilation::Initial, &mut |_| Ok(()), &mut observation)
+    })();
+    let mut program = match compiled {
+        Ok(Some(program)) => program,
+        Ok(None) => {
+            eprintln!("error: this runner compiles no program");
+            exit(1);
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            exit(1);
+        }
+    };
+    if let Err(error) = evaluate_program(&mut program) {
+        eprintln!("error: {error}");
+        exit(101);
+    }
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        __rawr_profile::run(&mut program, |_| {})
+    }));
+    match started {
+        Ok(Started::Exit(status)) => exit(status),
+        Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
+        Ok(Started::Serving) | Err(_) => exit(101),
+    }
+}
+
 /// A program whose `main` is Rawr code runs its protocol and interpreter on
 /// the process's main thread, where its `main` then runs. Otherwise they
 /// run on a thread of their own, so the main thread is free for a native
@@ -3770,6 +3828,12 @@ fn main() {
     register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
+    }
+    if UNIVERSE {
+        __rawr_internal::crossing::universe();
+        if let Some(root) = std::env::var_os("RAWR_PLAY_ROOT") {
+            run_play(root.into());
+        }
     }
     let (stream, key, first) = match open_protocol() {
         Ok(opened) => opened,
@@ -5533,7 +5597,9 @@ fn render_source(
     byte_array(&mut stamps, profile.owner_fingerprint())?;
     writeln!(
         stamps,
-        ";\npub(super) static COMPILE_SNAPSHOT: bool = {compile_snapshot};"
+        ";\npub(super) static COMPILE_SNAPSHOT: bool = {compile_snapshot};\n\
+         #[allow(dead_code)]\npub(super) static UNIVERSE: bool = {};",
+        crate::universe::enabled()
     )
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
@@ -14886,9 +14952,11 @@ mod tests {
         assert!(compile.contains(".engine.reconstruct_imported_native(GENERATED_MANIFEST)"));
         assert!(!compile.contains("Shared::new(engine)"));
         assert!(!compile.contains("admit_generated_structural("));
-        for source in [RUNNER_MAIN, PROFILE_RUNNER_MAIN] {
+        // The plain runner compiles initially once per process: under its
+        // parent's protocol, or as `?play`'s entry in a universe runner.
+        for (source, initial) in [(RUNNER_MAIN, 2), (PROFILE_RUNNER_MAIN, 1)] {
             let source = std::str::from_utf8(source).expect("runner source is UTF-8");
-            assert_eq!(source.matches("Compilation::Initial").count(), 1);
+            assert_eq!(source.matches("Compilation::Initial").count(), initial);
             assert_eq!(
                 source.matches("Compilation::Replacement(&program)").count(),
                 1
