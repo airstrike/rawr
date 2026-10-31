@@ -11075,3 +11075,397 @@ fn language_byte_string_patterns() {
     );
     assert_eq!(value, "1 2 3 0 1");
 }
+
+/// A raw identifier (`r#for`, `r#type`) names a function, method, field or
+/// binding with a keyword's name, and `r#name` is `name`, as in rustc; Rust
+/// refuses `r#self`, `r#crate`, `r#super` and `r#Self`.
+#[test]
+fn language_raw_identifiers() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r##"
+#[derive(Debug)]
+struct S {
+    r#type: i32,
+    r#match: i32,
+}
+trait For {
+    fn r#for(&self) -> i32;
+}
+impl For for S {
+    fn r#for(&self) -> i32 { self.r#type + self.r#match }
+}
+fn r#loop(r#in: i32) -> i32 { r#in * 2 }
+fn main() {
+    let r#for = S { r#type: 1, r#match: 2 };
+    let r#switch = 3;
+    let switch = r#switch + 1;
+    let r#name = 5;
+    println!("{} {} {} {}", r#for.r#for(), r#loop(switch), name, For::r#for(&r#for));
+    println!("{:?}", r#for);
+}
+main();
+"##,
+    );
+    assert_eq!(printed, "3 8 5 3\nS { type: 1, match: 2 }\n");
+    for word in ["self", "crate", "super", "Self"] {
+        let error = rejected(&format!("fn main() {{ let r#{word} = 1; }} main(); 0"));
+        assert!(error.contains(&format!("r#{word}")), "{error}");
+    }
+}
+
+/// An equality in an associated type's bound (`type Fore: Iterator<Item =
+/// Self::For>;`) holds for every impl, as in rustc: a generic function
+/// iterates `T::Fore` as `T::For`s and reads `<T::Held as Shape>::Output`
+/// as the type the bound names. An impl whose type breaks it is rustc's
+/// E0271.
+#[test]
+fn language_associated_type_bound_equalities() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+use std::ops::Range;
+trait For {
+    type For;
+    type Fore: Iterator<Item = Self::For>;
+    fn go(self) -> Self::Fore;
+}
+struct Four(usize);
+impl For for Four {
+    type For = usize;
+    type Fore = Range<usize>;
+    fn go(self) -> Self::Fore { 0..self.0 }
+}
+fn each<T: For, F: Fn(&T::For) -> usize>(t: T, f: F) -> usize {
+    let mut n = 0;
+    for x in t.go() { n += f(&x); }
+    n
+}
+trait Shape {
+    type Output;
+    fn area(&self) -> Self::Output;
+}
+trait Holder {
+    type Held: Shape<Output = i64>;
+    fn held(&self) -> Self::Held;
+}
+struct Square(i64);
+impl Shape for Square {
+    type Output = i64;
+    fn area(&self) -> i64 { self.0 * self.0 }
+}
+struct Frame;
+impl Holder for Frame {
+    type Held = Square;
+    fn held(&self) -> Square { Square(3) }
+}
+fn double<H: Holder>(h: H) -> i64 {
+    let area: i64 = h.held().area();
+    area * 2
+}
+fn main() {
+    let f: fn(&usize) -> usize = |x: &usize| *x * 4;
+    println!("{} {}", each(Four(4), f), double(Frame));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 18\n");
+    let error = rejected(
+        r#"
+        use std::ops::Range;
+        trait For {
+            type For;
+            type Fore: Iterator<Item = Self::For>;
+        }
+        struct Four;
+        impl For for Four {
+            type For = usize;
+            type Fore = Range<i64>;
+        }
+        0
+    "#,
+    );
+    assert!(
+        error.contains("usize (`<impl Iterator<Item = i64> as Iterator>::Item`)"),
+        "{error}"
+    );
+    let error = rejected(
+        r#"
+        trait Shape { type Output; }
+        trait Holder { type Held: Shape<Output = i64>; }
+        struct Square;
+        impl Shape for Square { type Output = i32; }
+        struct Frame;
+        impl Holder for Frame { type Held = Square; }
+        0
+    "#,
+    );
+    assert!(
+        error.contains("i64 (`<Square as Shape>::Output`)"),
+        "{error}"
+    );
+}
+
+/// `<Self as Trait>::Name` in an impl's signature is the impl's own
+/// associated type, or another trait's for the owner, as in rustc; `<T as
+/// Trait>::f(..)` and `<T as Trait>::Name` name `T`'s impl in a body.
+#[test]
+fn language_qualified_self_paths_in_impls() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+trait Shape {
+    type Output;
+    fn area(&self) -> Self::Output;
+    fn unit() -> Self;
+}
+trait Named {
+    type Label;
+    fn label(&self) -> Self::Label;
+}
+#[derive(Clone, Copy)]
+struct Square(i64);
+impl Named for Square {
+    type Label = &'static str;
+    fn label(&self) -> &'static str { "square" }
+}
+impl Shape for Square {
+    type Output = i64;
+    fn area(&self) -> <Self as Shape>::Output { self.0 * self.0 }
+    fn unit() -> Self { Square(1) }
+}
+impl Square {
+    fn tag(&self) -> <Self as Named>::Label { self.label() }
+}
+fn total<T: Shape<Output = i64>>(t: T) -> i64 {
+    let one: T = <T as Shape>::unit();
+    <T as Shape>::area(&t) + <T as Shape>::area(&one)
+}
+fn main() {
+    let s = Square(3);
+    let a: <Square as Shape>::Output = <Square as Shape>::area(&s);
+    println!("{} {} {}", a, total(s), s.tag());
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "9 10 square\n");
+}
+
+/// A closure bound by `let` to a function type takes the annotation's
+/// parameter types, as rustc infers them: `|x| *x` of `fn(&usize) ->
+/// usize` dereferences its `&usize`.
+#[test]
+fn language_let_annotation_types_closure_parameters() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+fn main() {
+    let f: fn(&usize) -> usize = |x| *x * 4;
+    let g: fn(&mut i64, i64) = |total, n| *total += n;
+    let mut total = 1;
+    g(&mut total, 5);
+    println!("{} {}", f(&6), total);
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 6\n");
+}
+
+/// Higher-ranked bounds and types (`for<'a> Fn(&'a T)`, `for<'a> &'a T:
+/// Sized`, `for<'a> fn(&'a usize)`) hold for every lifetime, as an elided
+/// one does, as in rustc. A `where` predicate on a type other than a
+/// parameter takes only `Sized` and the auto traits, and `str: Sized` is
+/// rustc's E0277.
+#[test]
+fn language_higher_ranked_bounds() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+fn apply<T, F: for<'a> Fn(&'a T) -> usize>(value: T, f: F) -> usize {
+    f(&value)
+}
+fn twice<T, F>(value: T, f: F) -> usize
+where
+    F: for<'a, 'b> Fn(&'a T) -> usize,
+    for<'a> &'a T: Sized + Send,
+{
+    f(&value) + f(&value)
+}
+fn call(f: impl for<'a> Fn(&'a usize) -> usize) -> usize { f(&2) }
+fn boxed(f: Box<dyn for<'a> Fn(&'a usize) -> usize>) -> usize { f(&3) }
+fn main() {
+    let f: for<'a> fn(&'a usize) -> usize = |x| *x * 4;
+    println!("{} {}", apply(6, f), twice(3, f));
+    let b: Box<dyn for<'a> Fn(&'a usize) -> usize> = Box::new(|x: &usize| *x + 1);
+    println!("{} {} {}", call(|x: &usize| *x * 4), boxed(Box::new(|x: &usize| *x * 5)), b(&1));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 24\n8 15 2\n");
+    let error =
+        rejected("fn f<T>(t: T) -> i64 where for<'a> &'a T: Clone { 1 } fn main() {} main(); 0");
+    assert!(error.contains("other than `Sized`"), "{error}");
+    let error = rejected("fn f<T>(t: T) -> i64 where str: Sized { 1 } fn main() {} main(); 0");
+    assert!(error.contains("E0277"), "{error}");
+}
+
+/// `impl<T: Shape + Copy> Shape for &T` whose every item forwards to `T`'s
+/// impl gives `&T` the trait, as in rustc: a generic function bounded by
+/// it takes a `&Square`, reads `<&Square as Shape>::Unit` as `Square`'s,
+/// and calls `S::name()` through the referent's witness. An impl for a
+/// reference that does anything else is refused, as Rawr runs a reference
+/// as its referent's value.
+#[test]
+fn language_forwarding_impls_for_references() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+trait Shape {
+    type Unit;
+    const SIDES: i64;
+    fn touch(&self);
+    fn area(&self) -> i64;
+    fn scaled(&self, by: i64) -> i64;
+    fn name() -> &'static str;
+    fn into_area(self) -> Self::Unit;
+}
+#[derive(Clone, Copy)]
+struct Square(i64);
+impl Shape for Square {
+    type Unit = i64;
+    const SIDES: i64 = 4;
+    fn touch(&self) {}
+    fn area(&self) -> i64 { self.0 * self.0 }
+    fn scaled(&self, by: i64) -> i64 { self.area() * by }
+    fn name() -> &'static str { "square" }
+    fn into_area(self) -> i64 { self.0 * 10 }
+}
+impl<'a, T: Shape + Copy> Shape for &'a T {
+    type Unit = <T as Shape>::Unit;
+    const SIDES: i64 = <T as Shape>::SIDES;
+    fn touch(&self) { T::touch(*self); }
+    fn area(&self) -> i64 { (**self).area() }
+    fn scaled(&self, by: i64) -> i64 { T::scaled(*self, by) }
+    fn name() -> &'static str { T::name() }
+    fn into_area(self) -> <Self as Shape>::Unit { <T as Shape>::into_area(*self) }
+}
+fn total<S: Shape<Unit = i64>>(s: S) -> i64 {
+    s.touch();
+    S::SIDES * 100 + s.area() + s.scaled(2) + S::name().len() as i64 + s.into_area()
+}
+fn main() {
+    let sq = Square(2);
+    let unit: <&Square as Shape>::Unit = 5;
+    println!("{} {} {}", total(&sq), total(sq), unit);
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "438 438 5\n");
+    let refused = |rest: &str| {
+        rejected(&format!(
+            "trait Shape {{ fn area(&self) -> i64; fn take(self) -> i64; }}\n{rest}\n0"
+        ))
+    };
+    // Each is what the impl does other than forward.
+    for (rest, reason) in [
+        (
+            "impl<T: Shape + Copy> Shape for &T { fn area(&self) -> i64 { 7 } \
+             fn take(self) -> i64 { T::take(*self) } }",
+            "whose `area` does not forward",
+        ),
+        (
+            "impl<T: Shape> Shape for &T { fn area(&self) -> i64 { (**self).area() } \
+             fn take(self) -> i64 { T::take(*self) } }",
+            "whose `take` does not forward",
+        ),
+        (
+            "impl<T: Shape + Copy> Shape for &T { fn area(&self) -> i64 { self.area() } \
+             fn take(self) -> i64 { T::take(*self) } }",
+            "whose `area` does not forward",
+        ),
+        (
+            "struct Square; impl Shape for &Square { fn area(&self) -> i64 { 1 } \
+             fn take(self) -> i64 { 1 } }",
+            "other than the impl's parameter",
+        ),
+        (
+            "impl<T: Copy> Shape for &T { fn area(&self) -> i64 { 1 } \
+             fn take(self) -> i64 { 1 } }",
+            "not bounded by `Shape`",
+        ),
+        // rustc's E0050: the trait's `area` takes no argument.
+        (
+            "impl<T: Shape + Copy> Shape for &T { fn area(&self, by: i64) -> i64 \
+             { T::area(*self, by) } fn take(self) -> i64 { T::take(*self) } }",
+            "its signature differs from the trait's",
+        ),
+        // `;` makes the body `()`, which is not the `i64` it returns.
+        (
+            "impl<T: Shape + Copy> Shape for &T { fn area(&self) -> i64 { T::area(*self); } \
+             fn take(self) -> i64 { T::take(*self) } }",
+            "whose `area` does not forward",
+        ),
+    ] {
+        let error = refused(rest);
+        assert!(error.contains(reason), "{reason}: {error}");
+    }
+}
+
+/// The `?play` snippet of #320, unchanged: raw identifiers, an equality in
+/// an associated type's bound, `<Self as Trait>::Name`, a forwarding impl
+/// for references and higher-ranked bounds together.
+#[test]
+fn language_gnarly_for_snippet_prints_what_rustc_prints() {
+    let printed = printed(
+        r##"
+use std::ops::Range;
+
+trait For {
+    type For;
+    type Fore: Iterator<Item = Self::For>;
+    fn r#for(self) -> Self::Fore;
+}
+
+#[derive(Clone, Copy)]
+struct Four(usize);
+
+impl For for Four {
+    type For = usize;
+    type Fore = Range<usize>;
+    fn r#for(self) -> Self::Fore { 0..self.0 }
+}
+
+impl<'four, Fore: For + Copy> For for &'four Fore {
+    type For = <Fore as For>::For;
+    type Fore = <Fore as For>::Fore;
+    fn r#for(self) -> <Self as For>::Fore { <Fore as For>::r#for(*self) }
+}
+
+fn forfor<Four, Fore>(four: Four, fore: Fore) -> usize
+where
+    Four: For,
+    Fore: for<'for_> Fn(&'for_ <Four as For>::For) -> usize,
+    for<'four> &'four Four: Sized,
+{
+    let mut r#for = 0usize;
+    for for_ in <Four as For>::r#for(four) {
+        r#for += fore(&for_);
+    }
+    r#for
+}
+
+fn main() {
+    let fore: for<'for_> fn(&'for_ usize) -> usize = |x| *x * 4;
+    let r#for = forfor(&Four(4), fore);
+    println!("{}", r#for);
+}
+main();
+"##,
+    );
+    assert_eq!(printed, "24\n");
+}

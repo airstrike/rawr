@@ -2525,6 +2525,11 @@ fn get_next_token_inner(
 
             // Rust's raw strings and byte strings: r"…", r#"…"#, b"…", br#"…"#.
             ('r', '"' | '#') | ('b', '"' | 'r') => {
+                if c == 'r'
+                    && let Some(token) = parse_raw_identifier(stream, pos)
+                {
+                    return (token, start_pos);
+                }
                 if let Some(token) = parse_rust_string(stream, pos, c) {
                     return (token, start_pos);
                 }
@@ -2555,6 +2560,79 @@ fn get_next_token_inner(
 
     (Token::EOF, *pos)
 }
+
+/// Rust's raw identifier (`r#for`, `r#name`), after its `r`. `None` when the
+/// `r` starts something else, with the stream as it was.
+///
+/// A name the lexer reads as a keyword is an identifier the lowered script
+/// never reads as one, and messages show the Rust name again
+/// (`demangle_names`): `r#switch` is `__rawr_switch`, as `switch` is
+/// (`rust_name`), and `r#for` is `__rawr_r_for`. Any other name is
+/// the identifier it spells: `r#name` is `name`, as in Rust. Rust refuses
+/// `r#crate`, `r#self`, `r#super`, `r#Self` and `r#_`.
+fn parse_raw_identifier(
+    stream: &mut (impl InputStream + ?Sized),
+    pos: &mut Position,
+) -> Option<Token> {
+    if stream.peek_next() != Some('#') {
+        return None;
+    }
+    stream.get_next();
+    match stream.peek_next() {
+        Some(next) if is_id_first_alphabetic(next) || next == '_' => {}
+        _ => {
+            stream.unget('#');
+            return None;
+        }
+    }
+    pos.advance();
+    let mut word = SmartString::new_const();
+    while let Some(next) = stream.peek_next() {
+        if !is_id_continue(next) {
+            break;
+        }
+        stream.eat_next_and_advance(pos);
+        word.push(next);
+    }
+    if matches!(word.as_str(), "crate" | "self" | "super" | "Self" | "_") {
+        return Some(Token::LexError(
+            LERR::MalformedIdentifier(format!("r#{word}")).into(),
+        ));
+    }
+    let keyword = RUST_KEYWORDS.contains(&word.as_str())
+        || Token::lookup_symbol_from_syntax(&word).is_some()
+        || is_reserved_keyword_or_symbol(&word).0;
+    if !keyword && !is_valid_identifier(&word) {
+        return Some(Token::LexError(
+            LERR::MalformedIdentifier(format!("r#{word}")).into(),
+        ));
+    }
+    Some(Token::Identifier(
+        if RUST_NAMES.contains(&word.as_str()) {
+            format!("__rawr_{word}").into()
+        } else if keyword {
+            format!("{RAW_PREFIX}{word}").into()
+        } else {
+            word
+        }
+        .into(),
+    ))
+}
+
+/// The prefix of a raw identifier whose name is a keyword: `r#for` is
+/// `__rawr_r_for`.
+const RAW_PREFIX: &str = "__rawr_r_";
+
+/// Rust's strict and reserved keywords, which a raw identifier alone can
+/// name. The parser reads some of them by their text (`type`, `where`,
+/// `dyn`), so the lexer's own keywords are not all of them.
+const RUST_KEYWORDS: [&str; 52] = [
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for",
+    "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
+    "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "typeof", "unsized", "virtual", "yield", "try", "gen",
+];
 
 /// Rust's raw strings (`r"…"`, `r#"…"#`) and byte strings (`b"…"`,
 /// `br"…"`, `br#"…"#`), after their first letter `first`. `None` when the
@@ -2789,6 +2867,15 @@ pub(crate) fn demangle_names(text: &str) -> std::borrow::Cow<'_, str> {
     let mut rest = text;
     while let Some(at) = rest.find(PREFIX) {
         output.push_str(&rest[..at]);
+        // A raw identifier's keyword: `__rawr_r_for` is `for`.
+        if let Some(raw) = rest[at..].strip_prefix(RAW_PREFIX)
+            && raw.starts_with(|c: char| is_id_first_alphabetic(c) || c == '_')
+        {
+            let end = raw.find(|c: char| !is_id_continue(c)).unwrap_or(raw.len());
+            output.push_str(&raw[..end]);
+            rest = &raw[end..];
+            continue;
+        }
         let after = &rest[at + PREFIX.len()..];
         let word = RUST_NAMES.iter().find(|word| {
             after.starts_with(**word)

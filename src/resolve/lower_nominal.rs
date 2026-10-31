@@ -4537,6 +4537,31 @@ impl Models {
                     .insert(key, (ty.clone(), parameters.clone()));
             }
         }
+        // `impl<T: For> For for &T`, forwarding to `T`'s.
+        for (_, declared) in traits.values() {
+            for forward in declared.reference_forwards.iter() {
+                associated
+                    .reference_forwards
+                    .insert((declared.name.text.clone(), forward.mutable));
+            }
+        }
+        // `type Fore: Iterator<Item = Self::For>;`.
+        for (_, declared) in traits.values() {
+            for (name, equalities) in declared
+                .associated
+                .iter()
+                .zip(declared.associated_equalities.iter())
+                .filter(|(_, equalities)| !equalities.is_empty())
+            {
+                associated.equalities.insert(
+                    (declared.name.text.clone(), name.text.clone()),
+                    equalities
+                        .iter()
+                        .map(|(bound, item, ty)| (bound.clone(), item.text.clone(), ty.clone()))
+                        .collect(),
+                );
+            }
+        }
 
         // The prelude's own `From` instances (`From<bool>` for `i64`), and
         // one `Into` instance per conversion target.
@@ -9311,7 +9336,17 @@ struct AssociatedTypes {
     /// each of the owner's type arguments names (`impl<T> Shape for
     /// Wrapper<T>`).
     impls: BTreeMap<(type_def::Id, ImmutableString, ImmutableString), AssociatedType>,
+    /// The equalities of each trait's associated types' bounds, by trait
+    /// and name, in the trait's `Self`: `(Iterator, Item, Self::For)` of
+    /// `type Fore: Iterator<Item = Self::For>;`.
+    equalities: BTreeMap<(ImmutableString, ImmutableString), Box<[AssociatedEquality]>>,
+    /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
+    /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
+    reference_forwards: BTreeSet<(ImmutableString, bool)>,
 }
+
+/// An equality of an associated type's bound, as `(trait, name, type)`.
+type AssociatedEquality = (ImmutableString, ImmutableString, type_ref::Type);
 
 /// An associated type's `T`, with the impl parameter each of the owner's
 /// type arguments names.
@@ -9601,9 +9636,66 @@ impl Inference {
                     return self.resolve(ty);
                 }
             }
+            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
+            Ty::Reference { mutable, target }
+                if self
+                    .associated
+                    .reference_forwards
+                    .contains(&(trait_name.clone(), *mutable)) =>
+            {
+                return self.project(self.resolve(target), trait_name, name);
+            }
+            // `<T::Fore as Shape>::Output` of `type Fore: Shape<Output =
+            // i64>;`: the equality.
+            Ty::Projection(owner, owner_trait, owner_name) => {
+                if let Some(ty) = self.associated_equality(
+                    owner,
+                    owner_trait,
+                    owner_name,
+                    |bound| {
+                        bound == trait_name
+                            || is_iterator_trait(bound) && is_iterator_trait(trait_name)
+                    },
+                    name,
+                ) {
+                    return ty;
+                }
+            }
             _ => {}
         }
+        // `T::Fore` of `type Fore: Iterator<Item = T::For>;` is Rawr's
+        // iterator of `T::For`, as a parameter `I: Iterator<Item = U>` is
+        // (`erase_fn_bounds`).
+        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+            && let Some(item) =
+                self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
+        {
+            return Ty::Iter(Box::new(item));
+        }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
+    }
+
+    /// The equality `item = U` that the trait `trait_name` declares on its
+    /// associated type `name`'s bound by a trait `bound` accepts, with
+    /// `Self` as `base`: `T::For` for `T`, `For`, `Fore` and `Item` of `type
+    /// Fore: Iterator<Item = Self::For>;`.
+    fn associated_equality(
+        &self,
+        base: &Ty,
+        trait_name: &str,
+        name: &str,
+        bound: impl Fn(&str) -> bool,
+        item: &str,
+    ) -> Option<Ty> {
+        let equalities = self
+            .associated
+            .equalities
+            .get(&(trait_name.into(), name.into()))?;
+        let (_, _, ty) = equalities
+            .iter()
+            .find(|(written, equal, _)| bound(written) && equal == item)?;
+        let substitution = BTreeMap::from([(ImmutableString::from("Self"), base.clone())]);
+        Some(self.resolve(&instantiate(&Ty::from_resolved(ty), &substitution)))
     }
 
     fn bind(&mut self, id: usize, ty: Ty) {
@@ -10851,6 +10943,15 @@ fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
     }
 }
 
+/// `Iterator` and the traits whose `Item` is its own, which Rawr's iterator
+/// type stands for.
+fn is_iterator_trait(name: &str) -> bool {
+    matches!(
+        name,
+        "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+    )
+}
+
 /// `T::Output = U` of each `T: Trait<Output = U>` in `generics`.
 fn generic_equalities(
     generics: &[item::Generic],
@@ -11136,6 +11237,9 @@ struct Parser<'a> {
     /// passes down to each leaf, as Rust's `Formatter` does.
     debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
+    /// The lifetimes the `for<'a>` binders around the body type being
+    /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
+    bound_lifetimes: Vec<ImmutableString>,
     /// The `macro_rules!` expansions made so far (`expand`).
     expansions: usize,
     /// The host type a host callable returns, as iced's `Element`, at each
@@ -11350,7 +11454,8 @@ struct Parser<'a> {
     pending_projections: Vec<(Ty, Ty, Span)>,
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
-    pending_witnesses: Vec<(String, Ty, Span)>,
+    /// Each also says whether a reference's witness is its referent's.
+    pending_witnesses: Vec<(String, Ty, Span, bool)>,
     /// This body's generic parameters a signature names inside a host
     /// type, in declaration order: each host operation here takes their
     /// witnesses after its operands.
@@ -11510,6 +11615,7 @@ impl<'a> Parser<'a> {
             closure_hints: Vec::new(),
             debug_spec: None,
             closure_hint: None,
+            bound_lifetimes: Vec::new(),
             expansions: 0,
             closure_outputs: Vec::new(),
             closure_output: None,
@@ -12982,21 +13088,30 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Vec<origin::Fragment> {
         let mut arguments = Vec::new();
+        // A parameter witnessed for its traits alone may take a reference,
+        // which implements them only by forwarding to its referent's impls
+        // (`resolve::forward`): the referent's witness serves.
         let names = witness_generics(generics, &self.models)
-            .map(|generic| generic.name.text.clone())
+            .map(|generic| {
+                (
+                    generic.name.text.clone(),
+                    !generic.host && !generic.bounds.contains(capability::Kind::Default),
+                )
+            })
             .collect::<Vec<_>>();
         // A call inside a closure may pass this body's own witnesses, which
         // the closure then captures.
         if !names.is_empty() {
             self.capture_witnesses();
         }
-        for name in names {
+        for (name, forwarded) in names {
             let Some(ty) = substitution.get(&name) else {
                 continue;
             };
             let placeholder = witness_placeholder(self.pending_witnesses.len());
             arguments.push(origin::Fragment::plain(placeholder.clone()));
-            self.pending_witnesses.push((placeholder, ty.clone(), span));
+            self.pending_witnesses
+                .push((placeholder, ty.clone(), span, forwarded));
         }
         arguments
     }
@@ -13135,8 +13250,11 @@ impl<'a> Parser<'a> {
         }
         self.finish_instances()?;
         self.finish_defaults()?;
-        for (placeholder, ty, span) in std::mem::take(&mut self.pending_witnesses) {
-            let ty = self.inference.resolve(&ty);
+        for (placeholder, ty, span, forwarded) in std::mem::take(&mut self.pending_witnesses) {
+            let mut ty = self.inference.resolve(&ty);
+            while forwarded && let Ty::Reference { target, .. } = &ty {
+                ty = self.inference.resolve(target);
+            }
             let witness = self.witness(&ty, span)?;
             if witness.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -13512,6 +13630,8 @@ impl<'a> Parser<'a> {
                         .any(|parent| parent == trait_name)
             }
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
+            // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
+            Ty::Iter(_) if is_iterator_trait(trait_name) => true,
             // An imported type the crate implements `Iterator` for.
             Ty::Host { proof, .. }
                 if trait_name == "Iterator"
@@ -13546,6 +13666,27 @@ impl<'a> Parser<'a> {
             }
             Ty::Reference { target, .. } if trait_name == "IntoFragment" => {
                 self.type_implements(&self.inference.resolve(target), trait_name)
+            }
+            // `impl<T: For + Copy> For for &T` forwarding to `T`'s impl
+            // (`resolve::forward`): `&T` implements it where `T` does and
+            // has its other bounds.
+            Ty::Reference { mutable, target } => {
+                let target = self.inference.resolve(target);
+                self.models
+                    .traits
+                    .get(trait_name)
+                    .into_iter()
+                    .flat_map(|(_, declared)| declared.reference_forwards.iter())
+                    .filter(|forward| forward.mutable == *mutable)
+                    .any(|forward| {
+                        self.type_implements(&target, trait_name)
+                            && bound_kinds(forward.bounds)
+                                .all(|kind| self.type_provides(&target, kind))
+                            && forward
+                                .traits
+                                .iter()
+                                .all(|bound| self.type_implements(&target, &bound.text))
+                    })
             }
             // Rust's own operator impls on numbers (`i64: Add`, `f64: Neg`),
             // `bool: Not`, and `String: Add<&str>` / `AddAssign<&str>`.
@@ -14062,6 +14203,65 @@ impl<'a> Parser<'a> {
                     .into(),
                     capability,
                     operation: name.span,
+                });
+            }
+            self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;
+        }
+        Ok(())
+    }
+
+    /// The impl's associated type `ty` for `name` has the types its trait's
+    /// bound equalities name (rustc's E0271): `type Fore = Range<usize>;`
+    /// for `type Fore: Iterator<Item = Self::For>;` needs `type For =
+    /// usize;`.
+    fn check_associated_equalities(
+        &mut self,
+        trait_name: &ImmutableString,
+        name: &crate::item::Name,
+        ty: &Ty,
+        owner: &Ty,
+    ) -> Result<(), Error> {
+        let Some(equalities) = self
+            .inference
+            .associated
+            .equalities
+            .get(&(trait_name.clone(), name.text.clone()))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let substitution = BTreeMap::from([(ImmutableString::from("Self"), owner.clone())]);
+        for (bound, item, expected) in equalities.iter() {
+            let expected = instantiate(&Ty::from_resolved(expected), &substitution);
+            let actual = if is_iterator_trait(bound) && item == "Item" {
+                // Rawr's iterator type stands for the projection
+                // (`Inference::project`), so the impl's type must be one.
+                let Ty::Iter(item) = self.inference.resolve(ty) else {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "`{}` as an associated type bounded by `{bound}<Item = ..>`: Rawr \
+                             reads such a type as one of Rust's own iterators (a `Range`, an \
+                             iterator chain)",
+                            ty.name(&self.models)
+                        )
+                        .into(),
+                        source: name.span,
+                    });
+                };
+                *item
+            } else {
+                Ty::Projection(Box::new(ty.clone()), bound.clone(), item.clone())
+            };
+            if !self.unify_type(&expected, &actual) {
+                return Err(Error::TypeMismatch {
+                    expected: format!(
+                        "{} (`<{} as {bound}>::{item}`)",
+                        self.inference.resolve(&expected).name(&self.models),
+                        ty.name(&self.models)
+                    )
+                    .into(),
+                    actual: self.inference.resolve(&actual).name(&self.models),
+                    expression: name.span,
                 });
             }
         }
@@ -17115,9 +17315,12 @@ impl<'a> Parser<'a> {
                         || self.type_provides(&inner, capability::Kind::Copy))
                     && self.type_provides(&inner, capability)
             }
-            // Rawr's iterators are `Clone` when their items are.
+            // Rawr's iterators are iterators, and `Clone` when their items
+            // are.
             Ty::Iter(item) => {
-                capability == capability::Kind::Clone && self.type_provides(&item, capability)
+                capability == capability::Kind::Iterator
+                    || capability == capability::Kind::Clone
+                        && self.type_provides(&item, capability)
             }
             // `Box<T>` derives from `T`, and is never `Copy`. `Rc<T>` and
             // `Arc<T>` are `Clone` for any `T`, and an `Rc` stays on its
@@ -23435,7 +23638,18 @@ impl<'a> Parser<'a> {
         }
         self.last_cell_borrow = None;
         let value_start = self.flow().value_start();
+        // `let f: fn(&usize) -> usize = |x| *x * 4;`: the closure's
+        // parameters have the annotation's types, as in Rust.
+        if matches!(self.peek(), Token::Pipe | Token::Or)
+            && let Some(Ty::Fn { inputs, .. }) = annotation
+                .as_ref()
+                .map(|annotation| self.inference.resolve(annotation))
+            && !inputs.iter().any(contains_inference)
+        {
+            self.closure_hint = Some(inputs);
+        }
         let value = self.parse_expr_expecting(annotation.as_ref());
+        self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
@@ -46405,6 +46619,19 @@ impl<'a> Parser<'a> {
                 self.next();
                 return self.parse_local_fn_type();
             }
+            // `for<'a> fn(&'a T)`: a function pointer for every `'a`,
+            // whose lifetimes are elided ones.
+            Token::For => {
+                let outer = self.parse_local_binder()?;
+                if !matches!(self.peek(), Token::Fn) {
+                    self.bound_lifetimes.truncate(outer);
+                    return Err(self.unsupported("a higher-ranked type other than `fn(..)`"));
+                }
+                self.next();
+                let ty = self.parse_local_fn_type();
+                self.bound_lifetimes.truncate(outer);
+                return ty;
+            }
             Token::Ampersand => {
                 self.next();
                 self.skip_lifetime();
@@ -46458,6 +46685,17 @@ impl<'a> Parser<'a> {
         };
         // `dyn Fn(A) -> B` and `dyn Trait`.
         if name.as_str() == "dyn" && !self.models.get(&name).is_some() {
+            // `dyn for<'a> Fn(&'a T)`.
+            if matches!(self.peek(), Token::For) {
+                let outer = self.parse_local_binder()?;
+                self.splice_tokens(vec![(
+                    Token::Identifier(Box::new("dyn".into())),
+                    name_span.start(),
+                )]);
+                let ty = self.parse_local_type();
+                self.bound_lifetimes.truncate(outer);
+                return ty;
+            }
             if let Token::Identifier(trait_name) | Token::Reserved(trait_name) = self.peek()
                 && matches!(trait_name.as_str(), "Fn" | "FnMut" | "FnOnce")
             {
@@ -46927,6 +47165,18 @@ impl<'a> Parser<'a> {
                     .map(|(_, trait_name, _)| trait_name.clone())
                     .collect()
             }
+            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
+            Ty::Reference { mutable, target } => self
+                .projection_trait(&target, written.clone(), member, span)
+                .ok()
+                .filter(|trait_name| {
+                    self.models
+                        .associated
+                        .reference_forwards
+                        .contains(&(trait_name.clone(), mutable))
+                })
+                .into_iter()
+                .collect(),
             _ => Vec::new(),
         };
         let owner = base.name(&self.models);
@@ -47035,14 +47285,49 @@ impl<'a> Parser<'a> {
         Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()))
     }
 
+    /// `for<'a, 'b>` before a body's type: its lifetimes join
+    /// `bound_lifetimes`, and the length to truncate it back to is returned.
+    fn parse_local_binder(&mut self) -> Result<usize, Error> {
+        let outer = self.bound_lifetimes.len();
+        self.expect(Token::For, "`for` of a higher-ranked type")?;
+        self.expect(Token::LessThan, "'<' after `for` in a higher-ranked type")?;
+        while !matches!(self.peek(), Token::GreaterThan) {
+            self.expect(Token::Apostrophe, "a lifetime in a higher-ranked type")?;
+            match self.next().0 {
+                Token::Identifier(name) => self.bound_lifetimes.push(name.as_str().into()),
+                _ => {
+                    self.bound_lifetimes.truncate(outer);
+                    return Err(self.unsupported("a lifetime name after '\''"));
+                }
+            }
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if !matches!(self.peek(), Token::GreaterThan) {
+                self.bound_lifetimes.truncate(outer);
+                return Err(self.unsupported("bound lifetimes without ','"));
+            }
+        }
+        self.next();
+        Ok(outer)
+    }
+
     fn skip_lifetime(&mut self) -> bool {
         if !matches!(self.peek(), Token::Apostrophe) {
             return false;
         }
         let at = self.next().1;
         // `let r: &'static u32 = &c;`, `f::<&'a u32>(&c)`: a lifetime a
-        // body's type names, which these facts do not read yet.
-        if !matches!(self.next().0, Token::Underscore) {
+        // body's type names, which these facts do not read yet. One a
+        // `for<'a>` binds is an elided one.
+        let elided = match self.next().0 {
+            Token::Underscore => true,
+            Token::Identifier(name) => self
+                .bound_lifetimes
+                .iter()
+                .any(|bound| bound.as_str() == name.as_str()),
+            _ => false,
+        };
+        if !elided {
             self.flow()
                 .unmodeled("a lifetime written in a body's type", point_span(at));
         }

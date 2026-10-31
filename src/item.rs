@@ -519,6 +519,10 @@ impl Use {
     }
 }
 
+/// An associated type equality of a bound, as `(trait, name, type)`:
+/// `(Shape, Output, i64)` of `Shape<Output = i64>`.
+pub type Equality = (Name, Name, type_ref::Type);
+
 /// A generic type parameter: `T`, or `T: Clone + Debug`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenericParam {
@@ -669,6 +673,10 @@ pub struct Trait {
     pub associated: Box<[Name]>,
     /// The bounds of each of `associated`: `Clone` of `type Output: Clone;`.
     pub associated_bounds: Box<[Box<[type_ref::Path]>]>,
+    /// The associated type equalities of each of `associated`'s bounds:
+    /// `(Iterator, Item, Self::For)` of `type Fore: Iterator<Item =
+    /// Self::For>;`, as `(trait, name, type)`.
+    pub associated_projections: Box<[Box<[Equality]>]>,
     /// Supertraits: `Shape + Clone` of `trait Named: Shape + Clone`.
     pub supertraits: Box<[type_ref::Path]>,
     /// Type parameters: `T` of `trait Convert<T>`.
@@ -742,6 +750,17 @@ pub(crate) enum BodyTokenKind {
     Integer(crate::INT),
     /// `!`, as after a macro's name.
     Bang,
+    /// `*`, `&`, `&&`, `<`, `>`, `as`, `self` and `mut`, which a forwarding
+    /// impl for references writes (`<T as Trait>::f(*self)`).
+    Star,
+    StarStar,
+    Ampersand,
+    AndAnd,
+    LessThan,
+    GreaterThan,
+    As,
+    SelfValue,
+    Mut,
     Other,
 }
 

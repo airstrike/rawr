@@ -7,6 +7,10 @@ use crate::{item, type_def, Span};
 /// `Convert<i64>`.
 pub type TraitArgument = (crate::ImmutableString, Box<[type_ref::Type]>);
 
+/// An associated type equality of a bound, as `(trait, name, type)`:
+/// `(Iterator, Item, Self::For)` of `Iterator<Item = Self::For>`.
+pub type Equality = (crate::ImmutableString, crate::item::Name, type_ref::Type);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Shell {
     pub id: item::Id,
@@ -134,6 +138,11 @@ pub(crate) struct Trait {
     /// `associated_bounds`, in this trait's parameters and `Self`:
     /// `String` of `type Item: Into<String>;`.
     pub associated_bound_arguments: Box<[Box<[TraitArgument]>]>,
+    /// The associated type equalities among each of `associated_bounds`,
+    /// in this trait's parameters and `Self`: `(Iterator, Item, Self::For)`
+    /// of `type Fore: Iterator<Item = Self::For>;`, as `(trait, name,
+    /// type)`.
+    pub associated_equalities: Box<[Box<[Equality]>]>,
     /// Supertraits (`trait Named: Shape + Clone`): their capabilities and
     /// user traits. Every impl of this trait needs them, and a bound by it
     /// implies them.
@@ -145,11 +154,28 @@ pub(crate) struct Trait {
     pub supertrait_arguments: Box<[TraitArgument]>,
     /// `trait Space: Sized`: `dyn Space` is not a type (E0038).
     pub sized: bool,
+    /// The impls of this trait for references (`impl<T: For + Copy> For
+    /// for &T`) whose every item forwards to the referent's impl
+    /// (`super::forward`): a reference has its referent's impl.
+    pub reference_forwards: Box<[ReferenceForward]>,
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
     /// The declaration of a facade trait (iced's `canvas::Program`), whose
     /// text its default bodies span.
     pub declaration: Option<crate::ImmutableString>,
+}
+
+/// `impl<T: Trait + ..> Trait for &T` (or `&mut T`) whose every item
+/// forwards to `T`'s impl: `&T` implements the trait when `T` does and has
+/// these bounds besides.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReferenceForward {
+    /// The impl is for `&mut T`.
+    pub mutable: bool,
+    /// `Copy` of `impl<T: For + Copy> For for &T`.
+    pub bounds: crate::capability::Set,
+    /// The referent's trait bounds other than the trait itself.
+    pub traits: Box<[crate::item::Name]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
