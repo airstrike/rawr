@@ -139,9 +139,17 @@ impl Renderer {
 
     /// Run one snippet.
     async fn spawn(&self, request: &message::Request) -> (Result<Done, String>, Outcome) {
-        let child = tokio::process::Command::new(&self.path)
+        let mut command = tokio::process::Command::new(&self.path);
+        command
             .args(message::args(self.time, self.memory_mb))
-            .env_clear()
+            .env_clear();
+        // The prebuilt runner snippets run on, which the image names.
+        for name in [rawr_play::universe::ROOT, rawr_play::universe::RUNNER] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
