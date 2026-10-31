@@ -24209,15 +24209,15 @@ impl<'a> Parser<'a> {
                 return self.consume_terminator(start).map(|_| ());
             }
             // `let r = &mut s.cells[i];`: `r` is the place, reached again
-            // from `s` at each use. When a `let` ahead shadows `s`, or the
-            // place is an element whose index Rust fixes where it is
-            // borrowed (T392), `r` holds the place's path instead, which
-            // reaches the first `s` and the element the index named then.
+            // from `s` at each use, its indexes read once, where the borrow
+            // is made (T392). When a `let` ahead shadows `s`, `r` holds the
+            // place's path instead, which reaches the first `s`.
             if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
                 }
-                if self.borrow_holds_path(&lvalue)
+                if !self.in_async_body()
+                    && self.root_shadowed_later(lvalue.binding())
                     && let Some(located) = self.place_located(&lvalue)
                 {
                     let holder = self.temporary("part");
@@ -24233,7 +24233,9 @@ impl<'a> Parser<'a> {
                     self.last_expression = None;
                     return self.consume_terminator(start).map(|_| ());
                 }
-                let rendered = self.with_field_entries(pending, origin::Fragment::default());
+                let mut indexes = origin::Fragment::default();
+                let lvalue = self.hoist_indexes(lvalue, &mut indexes);
+                let rendered = self.with_field_entries(pending, indexes);
                 if !rendered.is_empty() {
                     self.write_output(rendered, value.span);
                 }
@@ -24270,28 +24272,12 @@ impl<'a> Parser<'a> {
                 }
                 None => target,
             };
-            // `let r = &mut v[i];`: `r` holds the element's path, so the
-            // index is read once, where the borrow is made (T392).
-            if let Some(lvalue @ Lvalue::Place { .. }) = value.lvalue.clone()
-                && self.borrow_holds_path(&lvalue)
-                && let Some(located) = self.place_located(&lvalue)
-            {
-                let holder = self.temporary("part");
-                let mut rendered = origin::Fragment::plain(format!("let {holder} = "));
-                rendered.push(located);
-                rendered.push_text(";");
-                let rendered = self.with_field_entries(pending, rendered);
-                self.write_output(rendered, span(start, value.span.end()));
-                self.entry_aliases.remove(&name);
-                self.bound_value(&name, name_span, &value, value_start);
-                let ty = Ty::Reference {
-                    mutable: true,
-                    target,
-                };
-                self.borrow_located(name, name_span, ty, &holder);
-                self.last_type = Ty::Unit;
-                self.last_expression = None;
-                return self.consume_terminator(start).map(|_| ());
+            // `let r = &mut v[i];`: the index is read once, where the
+            // borrow is made, into a local the place then names (T392).
+            let mut indexes = origin::Fragment::default();
+            let place = self.hoist_chain(place, &mut indexes);
+            if !indexes.is_empty() {
+                self.write_output(indexes, value.span);
             }
             self.bound_value(&name, name_span, &value, value_start);
             self.borrow_place(name, name_span, *target, place, root.clone());
