@@ -4556,6 +4556,30 @@ impl Models {
                     .insert((declared.name.text.clone(), forward.mutable));
             }
         }
+        // `type Fore: Iterator;`, its item no equality names.
+        for (_, declared) in traits.values() {
+            for (index, name) in declared.associated.iter().enumerate() {
+                let iterator = declared
+                    .associated_bounds
+                    .get(index)
+                    .is_some_and(|(_, bounds)| {
+                        bounds.iter().any(|bound| is_iterator_trait(&bound.text))
+                    });
+                let item = declared
+                    .associated_equalities
+                    .get(index)
+                    .is_some_and(|equalities| {
+                        equalities
+                            .iter()
+                            .any(|(bound, item, _)| is_iterator_trait(bound) && item.text == "Item")
+                    });
+                if iterator && !item {
+                    associated
+                        .iterators
+                        .insert((declared.name.text.clone(), name.text.clone()));
+                }
+            }
+        }
         // `type Fore: Iterator<Item = Self::For>;`.
         for (_, declared) in traits.values() {
             for (name, equalities) in declared
@@ -9498,6 +9522,10 @@ struct AssociatedTypes {
     /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
     /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
     reference_forwards: BTreeSet<(ImmutableString, bool)>,
+    /// Each trait's associated types bounded by `Iterator` with no `Item =`,
+    /// by trait and name: `type Fore: Iterator;`, whose item is the opaque
+    /// `<T::Fore as Iterator>::Item`.
+    iterators: BTreeSet<(ImmutableString, ImmutableString)>,
 }
 
 /// An equality of an associated type's bound, as `(trait, name, type)`.
@@ -9826,6 +9854,21 @@ impl Inference {
                 self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
         {
             return Ty::Iter(Box::new(item));
+        }
+        // `T::Fore` of `type Fore: Iterator;` is an iterator of the opaque
+        // `<T::Fore as Iterator>::Item`, as rustc types its items (T379).
+        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+            && self
+                .associated
+                .iterators
+                .contains(&(trait_name.clone(), name.clone()))
+        {
+            let fore = Ty::Projection(Box::new(base), trait_name.clone(), name.clone());
+            return Ty::Iter(Box::new(Ty::Projection(
+                Box::new(fore),
+                "Iterator".into(),
+                "Item".into(),
+            )));
         }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
     }
@@ -11501,6 +11544,11 @@ struct Parser<'a> {
     pattern_trace: std::cell::RefCell<Option<borrows::PatternTrace>>,
     /// The expected type of each argument of the call being parsed.
     argument_hints: Vec<Option<Ty>>,
+    /// A generic function's parameter types for the call being parsed,
+    /// with its generic parameters fresh: each argument read fixes what it
+    /// can of them, so a closure after it has the parameter types its `Fn`
+    /// bound gives it, as rustc checks the arguments in order (T377).
+    generic_argument_hints: Vec<Ty>,
     /// Arguments already parsed for the next call, as for a builder chain.
     pending_arguments: Option<(Vec<ParsedExpr>, Position)>,
     /// The scope frames each statement being parsed opens (D558 tier 1):
@@ -11806,6 +11854,7 @@ impl<'a> Parser<'a> {
             place_root: None,
             pattern_trace: std::cell::RefCell::new(None),
             argument_hints: Vec::new(),
+            generic_argument_hints: Vec::new(),
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
@@ -13169,6 +13218,37 @@ impl<'a> Parser<'a> {
             }
         }
         substitution
+    }
+
+    /// The parameter types of the generic function `definition`, with
+    /// each generic parameter a fresh type (the turbofish's, when one is
+    /// written), whose bounds the call checks once it is read: what the
+    /// arguments are read against, so a closure after an argument that
+    /// fixes `T` has the parameter types its `Fn(&T)` bound gives.
+    fn generic_parameter_hints(&mut self, definition: &item::Function) -> Vec<Ty> {
+        let substitution: BTreeMap<ImmutableString, Ty> = definition
+            .generics
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect();
+        if let Some(arguments) = self.pending_turbofish.clone()
+            && arguments.len() == definition.generics.len()
+        {
+            for (generic, argument) in definition.generics.iter().zip(arguments) {
+                let fresh = substitution[&generic.name.text].clone();
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(&fresh, &argument) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
+        }
+        definition
+            .parameters
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect()
     }
 
     /// `::<A, B>` after a generic function's name, or fresh types.
@@ -24129,8 +24209,9 @@ impl<'a> Parser<'a> {
                 return self.consume_terminator(start).map(|_| ());
             }
             // `let r = &mut s.cells[i];`: `r` is the place, reached again
-            // from `s` at each use. When a `let` ahead shadows `s`, `r`
-            // holds the place's path instead, which reaches the first `s`.
+            // from `s` at each use, its indexes read once, where the borrow
+            // is made (T392). When a `let` ahead shadows `s`, `r` holds the
+            // place's path instead, which reaches the first `s`.
             if let Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) = value.lvalue.clone() {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
@@ -24152,7 +24233,9 @@ impl<'a> Parser<'a> {
                     self.last_expression = None;
                     return self.consume_terminator(start).map(|_| ());
                 }
-                let rendered = self.with_field_entries(pending, origin::Fragment::default());
+                let mut indexes = origin::Fragment::default();
+                let lvalue = self.hoist_indexes(lvalue, &mut indexes);
+                let rendered = self.with_field_entries(pending, indexes);
                 if !rendered.is_empty() {
                     self.write_output(rendered, value.span);
                 }
@@ -24189,6 +24272,13 @@ impl<'a> Parser<'a> {
                 }
                 None => target,
             };
+            // `let r = &mut v[i];`: the index is read once, where the
+            // borrow is made, into a local the place then names (T392).
+            let mut indexes = origin::Fragment::default();
+            let place = self.hoist_chain(place, &mut indexes);
+            if !indexes.is_empty() {
+                self.write_output(indexes, value.span);
+            }
             self.bound_value(&name, name_span, &value, value_start);
             self.borrow_place(name, name_span, *target, place, root.clone());
             self.last_type = Ty::Unit;
@@ -32892,7 +32982,16 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         argument: &mut ParsedExpr,
     ) -> Result<(), Error> {
-        if parameter.iterator_item().is_some_and(|(_, into)| into)
+        // `I: IntoIterator<Item = X>` takes what Rust's `IntoIterator`
+        // walks; `I: Iterator<Item = X>` a crate or imported type that
+        // implements `Iterator` too, whose items its `next()` gives (T380).
+        let iterator = |this: &Self, ty: &Ty| {
+            let ty = this.inference.resolve(ty);
+            matches!(ty, Ty::Script(..) | Ty::Host { .. }) && this.type_implements(&ty, "Iterator")
+        };
+        if parameter
+            .iterator_item()
+            .is_some_and(|(_, into)| into || iterator(self, &argument.ty))
             && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(_))
             && let Some(iterator) = self.iterator_of(argument)
         {
@@ -38202,8 +38301,23 @@ impl<'a> Parser<'a> {
             && !self.bindings.contains_key(name.as_str())
         {
             self.next();
-            let (member, member_span) = self.expect_member_name()?;
             let param = Ty::Param(name.clone());
+            // `T::name(&t)`: a method of a trait bounding `T`, called as
+            // `<T as Trait>::name(&t)` is (T376).
+            if let Some((Token::Identifier(member), position)) = self.input.clone().next()
+                && let Some((trait_name, function)) =
+                    self.generic_trait_function(&name, &member, point_span(position))?
+                && function.receiver.is_some()
+            {
+                return self.parse_trait_path_call(
+                    Some(param),
+                    trait_name,
+                    name_span,
+                    None,
+                    name_span.start(),
+                );
+            }
+            let (member, member_span) = self.expect_member_name()?;
             // `T::new(..)`: a function without `self` of a trait bounding
             // `T`, run for the type its witness names.
             let function = self
@@ -43468,6 +43582,13 @@ impl<'a> Parser<'a> {
             &mut self.mutable_borrow,
             (receiver.is_some() || !copied.is_empty()).then(|| self.expression_stack.len() + 1),
         );
+        // A generic function's parameter types, its parameters fresh, for
+        // what each argument read tells the ones after it.
+        if let Some(function) = &function
+            && !function.definition.generics.is_empty()
+        {
+            self.generic_argument_hints = self.generic_parameter_hints(&function.definition);
+        }
         let arguments = self.parse_call_arguments("function arguments");
         self.mutable_borrow = borrow;
         let (mut arguments, end) = arguments?;
@@ -44581,6 +44702,7 @@ impl<'a> Parser<'a> {
         context: &str,
     ) -> Result<(Vec<ParsedExpr>, Position), Error> {
         let mut expected = std::mem::take(&mut self.argument_hints).into_iter();
+        let mut generic = std::mem::take(&mut self.generic_argument_hints).into_iter();
         let deferred = self.deferred_hints.take();
         if let Some(pending) = self.pending_arguments.take() {
             return Ok(pending);
@@ -44606,17 +44728,30 @@ impl<'a> Parser<'a> {
             }
             self.closure_output = outputs.next().flatten();
             let expected = expected.next().flatten();
+            let generic = generic.next();
             // A closure where a crate function takes `impl Fn(f32) -> C`
             // has those parameter types, as in Rust.
             if self.closure_hint.is_none()
                 && let Some(Ty::Fn { inputs, .. }) = expected
                     .as_ref()
+                    .or(generic.as_ref())
                     .map(|expected| self.inference.resolve(expected))
                 && !inputs.iter().any(contains_inference)
             {
                 self.closure_hint = Some(inputs);
             }
             let argument = self.parse_expr_expecting(expected.as_ref());
+            // An argument of a generic function fixes the parameters its
+            // type gives, unless it is one a coercion takes, which the call
+            // checks once all are read.
+            if let (Ok(argument), Some(generic)) = (&argument, &generic) {
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(generic, &argument.ty) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
             self.closure_hint = None;
             self.closure_output = None;
             self.no_struct = outer;

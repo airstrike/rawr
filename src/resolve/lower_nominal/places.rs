@@ -170,6 +170,66 @@ impl Parser<'_> {
         self.alias_by_itself(&name);
     }
 
+    /// The place `lvalue` a borrow keeps, with each element's index read
+    /// once into a local of its own, whose statements `indexes` gains:
+    /// Rust evaluates an index where the borrow is made, and a borrow
+    /// that reached its place by the index's text would read it again at
+    /// each use (`let r = &mut v[i]; i = 1;`, T392). A struct's slot is
+    /// no expression and stays.
+    pub(super) fn hoist_indexes(
+        &mut self,
+        lvalue: Lvalue,
+        indexes: &mut origin::Fragment,
+    ) -> Lvalue {
+        match lvalue {
+            Lvalue::Place { binding, ty, place } => Lvalue::Place {
+                binding,
+                ty,
+                place: self.hoist_chain(place, indexes),
+            },
+            Lvalue::Nested(mut nested) => {
+                nested.base = self.hoist_chain(nested.base, indexes);
+                for step in &mut nested.steps {
+                    if let PlaceStep::Index(index) = step
+                        && !is_slot(index.as_str())
+                    {
+                        let at = self.temporary("index");
+                        indexes.push_text(format!("let {at} = "));
+                        indexes.push(std::mem::replace(index, origin::Fragment::plain(&at)));
+                        indexes.push_text("; ");
+                    }
+                }
+                Lvalue::Nested(nested)
+            }
+            lvalue => lvalue,
+        }
+    }
+
+    /// The chain `chain` (`v[i][j]`) with each index that is no slot read
+    /// into a local of its own, in order, by the statements `indexes`
+    /// gains.
+    pub(super) fn hoist_chain(
+        &mut self,
+        mut chain: origin::Fragment,
+        indexes: &mut origin::Fragment,
+    ) -> origin::Fragment {
+        let mut hoisted = Vec::new();
+        for (open, close) in chain_indexes(chain.as_str()).into_iter().rev() {
+            let tail = chain.split_off(close);
+            let index = chain.split_off(open + 1);
+            let at = self.temporary("index");
+            chain.push_text(&at);
+            chain.push(tail);
+            hoisted.push((at, index));
+        }
+        for (at, index) in hoisted.into_iter().rev() {
+            indexes.push_text(format!("let {at} = "));
+            indexes.push(index);
+            indexes.push_text("; ");
+        }
+        chain
+    }
+
     /// Whether the body being read is an async one, whose locals move
     /// between scopes at each `.await`, so where a local is doesn't last.
     pub(super) fn in_async_body(&self) -> bool {
@@ -1174,6 +1234,48 @@ impl PlacePattern {
             })
             .map_or_else(|| name.clone(), |(_, _, holder)| holder.clone())
     }
+}
+
+/// Whether an index of a place's chain is a struct's slot, which is no
+/// expression a borrow could read again.
+fn is_slot(index: &str) -> bool {
+    !index.is_empty() && index.bytes().all(|digit| digit.is_ascii_digit())
+}
+
+/// Each index of the chain `chain` (`v[i].cells[j]`) below its local that
+/// is an expression, not a struct's slot: where its `[` and its `]` are.
+/// A string or char literal in an index is passed over whole.
+fn chain_indexes(chain: &str) -> Vec<(usize, usize)> {
+    let bytes = chain.as_bytes();
+    let mut indexes = Vec::new();
+    let mut depth = 0usize;
+    let mut open = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            quote @ (b'"' | b'\'') if depth > 0 => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != quote {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'[' => {
+                if depth == 0 {
+                    open = at;
+                }
+                depth += 1;
+            }
+            b']' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 && !is_slot(&chain[open + 1..at]) {
+                    indexes.push((open, at));
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    indexes
 }
 
 /// The local a place's chain starts at, as `__rawr_locate`'s root: a local

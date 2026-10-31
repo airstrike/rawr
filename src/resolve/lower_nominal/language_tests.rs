@@ -11469,3 +11469,241 @@ main();
     );
     assert_eq!(printed, "24\n");
 }
+
+/// A borrow of an element evaluates its index once, where the borrow is
+/// made, as rustc does (T392): a later change to the index's local, or a
+/// side effect in the index, doesn't move the borrow to another element.
+#[test]
+fn language_element_borrows_fix_their_index_when_made() {
+    let printed = printed(
+        r#"
+struct S { v: Vec<String>, n: usize }
+impl S {
+    fn bump(&mut self) {
+        let mut i = self.n;
+        let e = &mut self.v[i];
+        i += 1;
+        e.push('!');
+        self.n = i;
+    }
+}
+fn side(n: &mut usize) -> usize { *n += 1; 0 }
+fn main() {
+    let mut a = vec![String::from("a"), String::from("b")];
+    let mut i = 0;
+    let x = &mut a[i];
+    i = 1;
+    x.push_str("-x");
+    println!("{:?} {}", a, i);
+
+    let mut s = vec![S { v: vec![String::from("p"), String::from("q")], n: 0 }];
+    let mut j = 0;
+    let y = &mut s[j].v[j];
+    j = 1;
+    y.push_str("-y");
+    s[0].bump();
+    s[0].bump();
+    println!("{:?} {}", s[0].v, j);
+
+    let mut m = vec![vec![1, 2], vec![3, 4]];
+    let mut k = 0;
+    let z = &mut m[k][k];
+    k = 1;
+    *z += 10;
+    println!("{:?} {}", m, k);
+
+    let mut calls = 0usize;
+    let mut b = vec![1, 2, 3];
+    let w = &mut b[side(&mut calls)];
+    *w += 5;
+    *w += 5;
+    println!("{:?} {}", b, calls);
+
+    let mut grid = vec![vec![0; 2]; 2];
+    let mut r = 0;
+    {
+        let row = &mut grid[r];
+        r = 1;
+        let mut push = || row.push(9);
+        push();
+    }
+    println!("{:?} {}", grid, r);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        printed,
+        "[\"a-x\", \"b\"] 1\n[\"p-y!\", \"q!\"] 1\n[[11, 2], [3, 4]] 1\n[11, 2, 3] 1\n\
+         [[0, 0, 9], [0, 0]] 1\n"
+    );
+}
+
+/// `T::method(&t)` names a method of a trait bounding `T`, as
+/// `<T as Trait>::method(&t)` does (T376): `&self` and `&mut self`
+/// methods, and the path as a function value.
+#[test]
+fn language_generic_parameter_paths_call_bound_methods() {
+    let printed = printed(
+        r#"
+trait Named {
+    fn name(&self) -> String;
+    fn bump(&mut self);
+    fn twice(&self, n: i64) -> i64 { n * 2 }
+}
+struct A(i64);
+impl Named for A {
+    fn name(&self) -> String { format!("A{}", self.0) }
+    fn bump(&mut self) { self.0 += 1; }
+}
+fn all<T: Named>(mut items: Vec<T>) -> Vec<String> {
+    for item in items.iter_mut() {
+        T::bump(item);
+    }
+    let mut first = items.remove(0);
+    T::bump(&mut first);
+    let mut names: Vec<String> = items.iter().map(T::name).collect();
+    names.push(T::name(&first));
+    names.push(format!("{} {}", <T as Named>::name(&first), T::twice(&first, 4)));
+    names
+}
+fn main() {
+    println!("{:?}", all(vec![A(1), A(2)]));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "[\"A3\", \"A3\", \"A3 8\"]\n");
+    let error = rejected(
+        r#"
+trait Named { fn name(&self) -> String; }
+fn show<T: Named>(t: T) -> String { T::nope(&t) }
+0
+"#,
+    );
+    assert!(error.contains("nope"), "{error}");
+}
+
+/// A closure passed straight to a generic function has the parameter
+/// types its `Fn` bound gives, with the generic parameters the arguments
+/// before it fixed, as rustc infers them (T377).
+#[test]
+fn language_closures_take_their_types_from_a_generic_bound() {
+    let printed = printed(
+        r#"
+fn each<T, F: Fn(&T) -> usize>(t: T, f: F) -> usize { f(&t) }
+fn pair<T, U, F>(t: T, u: U, f: F) -> String
+where
+    F: Fn(&T, &mut U) -> String,
+{
+    let mut u = u;
+    f(&t, &mut u)
+}
+fn main() {
+    println!("{}", each(4usize, |x| *x * 4));
+    println!("{}", each(String::from("abc"), |s| s.len()));
+    println!("{}", each(vec![1u8, 2], |v| v.len()));
+    println!("{}", pair(2usize, vec![1], |a, v| { v.push(*a); format!("{:?}", v) }));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "16\n3\n2\n[1, 2]\n");
+    rejected(
+        r#"
+fn each<T, F: Fn(&T) -> usize>(t: T, f: F) -> usize { f(&t) }
+fn run() -> usize { each(4usize, |s: &String| s.len()) }
+run()
+"#,
+    );
+}
+
+/// An associated type bounded by `Iterator` with no `Item =` walks in a
+/// `for` and its adaptors, its items the opaque `<T::Fore as
+/// Iterator>::Item`, as rustc types them (T379).
+#[test]
+fn language_associated_iterators_without_an_item_walk() {
+    let printed = printed(
+        r#"
+use std::ops::Range;
+trait For {
+    type Fore: Iterator;
+    fn fore(&self) -> Self::Fore;
+}
+struct Four(usize);
+impl For for Four {
+    type Fore = Range<usize>;
+    fn fore(&self) -> Self::Fore { 0..self.0 }
+}
+fn count<T: For>(t: &T) -> usize {
+    let mut n = 0;
+    for _ in t.fore() {
+        n += 1;
+    }
+    n + t.fore().count() * 10 + t.fore().skip(1).collect::<Vec<_>>().len() * 100
+}
+fn main() {
+    println!("{}", count(&Four(4)));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "344\n");
+    rejected(
+        r#"
+trait For {
+    type Fore: Iterator;
+    fn fore(&self) -> Self::Fore;
+}
+fn total<T: For>(t: &T) -> usize {
+    let mut n = 0usize;
+    for x in t.fore() { n += x; }
+    n
+}
+0
+"#,
+    );
+}
+
+/// A crate type implementing `Iterator` fills `I: Iterator<Item = X>`,
+/// its items what its `next()` gives (T380). One whose item isn't `X` is
+/// refused, as rustc's E0271.
+#[test]
+fn language_script_iterators_fill_iterator_parameters() {
+    let printed = printed(
+        r#"
+struct Count { n: usize, end: usize }
+impl Iterator for Count {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        if self.n < self.end { self.n += 1; Some(self.n) } else { None }
+    }
+}
+fn sum<I: Iterator<Item = usize>>(items: I) -> usize {
+    let mut total = 0;
+    for x in items { total += x; }
+    total
+}
+fn doubled(items: impl Iterator<Item = usize>) -> Vec<usize> {
+    items.map(|x| x * 2).collect()
+}
+fn main() {
+    println!("{} {} {:?}", sum(Count { n: 0, end: 4 }), sum(0..4usize), doubled(Count { n: 1, end: 3 }));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "10 6 [4, 6]\n");
+    rejected(
+        r#"
+struct Words;
+impl Iterator for Words {
+    type Item = String;
+    fn next(&mut self) -> Option<String> { None }
+}
+fn sum<I: Iterator<Item = usize>>(items: I) -> usize { items.count() }
+fn run() -> usize { sum(Words) }
+run()
+"#,
+    );
+}

@@ -371,6 +371,38 @@ fn crossing_child_loans_end_at_their_own_last_use() {
     assert_eq!(b, ["b0-y"]);
 }
 
+/// A borrow of a native element reads its index once, where it is made,
+/// as Rust does (T392): changing the index's local after the borrow, or
+/// an index with a side effect, still reaches the first element.
+#[test]
+fn native_element_borrows_fix_their_index_when_made() {
+    let mut a = vec!["a0".to_owned(), "a1".to_owned()];
+    let mut b = vec!["b0".to_owned(), "b1".to_owned()];
+    let result = run_two(
+        r#"
+        fn next(at: &mut usize) -> usize { *at += 1; *at - 1 }
+        pub fn run(a: &mut Vec<String>, b: &mut Vec<String>) {
+            let mut i = 0;
+            let x = &mut a[i];
+            i = 1;
+            x.push_str("-x");
+            x.push_str("-x");
+            a[i].push_str("-i");
+            let mut at = 0;
+            let y = &mut b[next(&mut at)];
+            y.push_str("-y");
+            y.push_str("-y");
+            b[at].push_str("-at");
+        }
+    "#,
+        &mut a,
+        &mut b,
+    );
+    assert_eq!(result.map(|_| ()), Ok(()));
+    assert_eq!(a, ["a0-x-x", "a1-i"]);
+    assert_eq!(b, ["b0-y-y", "b1-at"]);
+}
+
 #[test]
 fn native_borrowed_extension_and_string_retain_keep_owners() {
     register_strings();
