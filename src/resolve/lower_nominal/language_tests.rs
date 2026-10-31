@@ -11583,3 +11583,37 @@ fn show<T: Named>(t: T) -> String { T::nope(&t) }
     );
     assert!(error.contains("nope"), "{error}");
 }
+
+/// A closure passed straight to a generic function has the parameter
+/// types its `Fn` bound gives, with the generic parameters the arguments
+/// before it fixed, as rustc infers them (T377).
+#[test]
+fn language_closures_take_their_types_from_a_generic_bound() {
+    let printed = printed(
+        r#"
+fn each<T, F: Fn(&T) -> usize>(t: T, f: F) -> usize { f(&t) }
+fn pair<T, U, F>(t: T, u: U, f: F) -> String
+where
+    F: Fn(&T, &mut U) -> String,
+{
+    let mut u = u;
+    f(&t, &mut u)
+}
+fn main() {
+    println!("{}", each(4usize, |x| *x * 4));
+    println!("{}", each(String::from("abc"), |s| s.len()));
+    println!("{}", each(vec![1u8, 2], |v| v.len()));
+    println!("{}", pair(2usize, vec![1], |a, v| { v.push(*a); format!("{:?}", v) }));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "16\n3\n2\n[1, 2]\n");
+    rejected(
+        r#"
+fn each<T, F: Fn(&T) -> usize>(t: T, f: F) -> usize { f(&t) }
+fn run() -> usize { each(4usize, |s: &String| s.len()) }
+run()
+"#,
+    );
+}

@@ -11501,6 +11501,11 @@ struct Parser<'a> {
     pattern_trace: std::cell::RefCell<Option<borrows::PatternTrace>>,
     /// The expected type of each argument of the call being parsed.
     argument_hints: Vec<Option<Ty>>,
+    /// A generic function's parameter types for the call being parsed,
+    /// with its generic parameters fresh: each argument read fixes what it
+    /// can of them, so a closure after it has the parameter types its `Fn`
+    /// bound gives it, as rustc checks the arguments in order (T377).
+    generic_argument_hints: Vec<Ty>,
     /// Arguments already parsed for the next call, as for a builder chain.
     pending_arguments: Option<(Vec<ParsedExpr>, Position)>,
     /// The scope frames each statement being parsed opens (D558 tier 1):
@@ -11806,6 +11811,7 @@ impl<'a> Parser<'a> {
             place_root: None,
             pattern_trace: std::cell::RefCell::new(None),
             argument_hints: Vec::new(),
+            generic_argument_hints: Vec::new(),
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
@@ -13169,6 +13175,37 @@ impl<'a> Parser<'a> {
             }
         }
         substitution
+    }
+
+    /// The parameter types of the generic function `definition`, with
+    /// each generic parameter a fresh type (the turbofish's, when one is
+    /// written), whose bounds the call checks once it is read: what the
+    /// arguments are read against, so a closure after an argument that
+    /// fixes `T` has the parameter types its `Fn(&T)` bound gives.
+    fn generic_parameter_hints(&mut self, definition: &item::Function) -> Vec<Ty> {
+        let substitution: BTreeMap<ImmutableString, Ty> = definition
+            .generics
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect();
+        if let Some(arguments) = self.pending_turbofish.clone()
+            && arguments.len() == definition.generics.len()
+        {
+            for (generic, argument) in definition.generics.iter().zip(arguments) {
+                let fresh = substitution[&generic.name.text].clone();
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(&fresh, &argument) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
+        }
+        definition
+            .parameters
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect()
     }
 
     /// `::<A, B>` after a generic function's name, or fresh types.
@@ -43507,6 +43544,13 @@ impl<'a> Parser<'a> {
             &mut self.mutable_borrow,
             (receiver.is_some() || !copied.is_empty()).then(|| self.expression_stack.len() + 1),
         );
+        // A generic function's parameter types, its parameters fresh, for
+        // what each argument read tells the ones after it.
+        if let Some(function) = &function
+            && !function.definition.generics.is_empty()
+        {
+            self.generic_argument_hints = self.generic_parameter_hints(&function.definition);
+        }
         let arguments = self.parse_call_arguments("function arguments");
         self.mutable_borrow = borrow;
         let (mut arguments, end) = arguments?;
@@ -44620,6 +44664,7 @@ impl<'a> Parser<'a> {
         context: &str,
     ) -> Result<(Vec<ParsedExpr>, Position), Error> {
         let mut expected = std::mem::take(&mut self.argument_hints).into_iter();
+        let mut generic = std::mem::take(&mut self.generic_argument_hints).into_iter();
         let deferred = self.deferred_hints.take();
         if let Some(pending) = self.pending_arguments.take() {
             return Ok(pending);
@@ -44645,17 +44690,30 @@ impl<'a> Parser<'a> {
             }
             self.closure_output = outputs.next().flatten();
             let expected = expected.next().flatten();
+            let generic = generic.next();
             // A closure where a crate function takes `impl Fn(f32) -> C`
             // has those parameter types, as in Rust.
             if self.closure_hint.is_none()
                 && let Some(Ty::Fn { inputs, .. }) = expected
                     .as_ref()
+                    .or(generic.as_ref())
                     .map(|expected| self.inference.resolve(expected))
                 && !inputs.iter().any(contains_inference)
             {
                 self.closure_hint = Some(inputs);
             }
             let argument = self.parse_expr_expecting(expected.as_ref());
+            // An argument of a generic function fixes the parameters its
+            // type gives, unless it is one a coercion takes, which the call
+            // checks once all are read.
+            if let (Ok(argument), Some(generic)) = (&argument, &generic) {
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(generic, &argument.ty) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
             self.closure_hint = None;
             self.closure_output = None;
             self.no_struct = outer;
