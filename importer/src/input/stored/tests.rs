@@ -121,6 +121,8 @@ fn expected() -> Box<[proof::Entry]> {
 
 pub(super) fn baseline() -> Baseline {
     Baseline {
+        #[cfg(feature = "rustc-driver")]
+        partitions: None,
         proof: proof::Proof::fixture_stored(expected()),
         recipes: vec![
             proof::Recipe::File {
@@ -205,6 +207,8 @@ pub(super) fn baseline() -> Baseline {
 
 fn empty() -> Baseline {
     Baseline {
+        #[cfg(feature = "rustc-driver")]
+        partitions: None,
         proof: proof::Proof::fixture_stored(Box::default()),
         recipes: Box::default(),
         recipe_allocation: Usage { items: 0, bytes: 0 },
@@ -451,6 +455,8 @@ fn capture_keeps_spending_after_actual_proof_and_protected_projection() {
     assert!(final_usage.bytes > proof_usage.bytes);
     let pointer = projection.bytes().as_ptr();
     let baseline = Baseline {
+        #[cfg(feature = "rustc-driver")]
+        partitions: None,
         proof,
         recipes,
         recipe_allocation,

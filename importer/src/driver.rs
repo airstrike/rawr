@@ -54,6 +54,8 @@ const RUST_MIN_STACK_VALUE: &str = "67108864";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
+    #[serde(default)]
+    inventory: bool,
     schema: u32,
     protocol_schema: u32,
     canonical_items: usize,
@@ -216,6 +218,7 @@ fn execute() -> Result<ExitCode, String> {
             demand.push(path.clone());
         }
         invocations.push(compiler::Invocation {
+            inventory: plan.inventory,
             package: compiler::Package {
                 cargo_id: entry.package.cargo_id,
                 name: entry.package.name,

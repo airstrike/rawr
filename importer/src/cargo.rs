@@ -213,6 +213,7 @@ impl Owner {
 
 /// Staged inputs that can only become a `Request` after canonical sealing.
 pub struct Builder {
+    inventory: bool,
     limits: Limits,
     allocation: RequestAllocation,
     project_root: PathBuf,
@@ -232,6 +233,9 @@ pub(crate) type DemandPath = Box<[Box<str>]>;
 
 /// A canonical root/config/dependency/target/toolchain request proof.
 pub struct Request {
+    inventory: bool,
+    #[cfg(feature = "rustc-driver")]
+    inputs_only: bool,
     project_root: PathBuf,
     cache_root: PathBuf,
     authority: Authority,
@@ -340,7 +344,7 @@ pub struct Resolution {
     #[cfg(feature = "rustc-driver")]
     dag: Option<DagResolution>,
     #[cfg(feature = "rustc-driver")]
-    capture: crate::extract::plan::Capture,
+    capture: Option<crate::extract::plan::Capture>,
 }
 
 /// Completed observations without consuming the request that must validate reuse.
@@ -360,7 +364,7 @@ struct CompletedHarness {
     observations: Option<Retained>,
     universe: Option<universe::Proof>,
     #[cfg(feature = "rustc-driver")]
-    capture: crate::extract::plan::Capture,
+    capture: Option<crate::extract::plan::Capture>,
     /// The shared tables this extraction leaves to publish.
     #[cfg(feature = "rustc-driver")]
     settlement: Vec<crate::bindings::Settled>,
@@ -1136,6 +1140,7 @@ impl Request {
         allocation.path(project_cache_root)?;
         allocation.string(PROFILE_DEFAULT)?;
         Ok(Builder {
+            inventory: false,
             limits: *limits,
             allocation,
             project_root: project_root.to_path_buf(),
@@ -1156,6 +1161,22 @@ impl Request {
         self.resolve_with(native, limits, None)
     }
 
+    /// Capture only normal-build input authority for a consuming application.
+    /// No metadata probe is scheduled and this result cannot publish an API.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn native_inputs(mut self, native: &Native, limits: &Limits) -> Result<Resolution> {
+        if self.inventory || !self.demand.is_empty() {
+            return Err(Error::Request {
+                field: "application native inputs",
+                reason:
+                    "native input capture cannot also request intrinsic or contextual API facts"
+                        .into(),
+            });
+        }
+        self.inputs_only = true;
+        self.resolve(native, limits)
+    }
+
     /// Prepare the complete semantic owner before extraction, reusing an
     /// attested bundle when all current inputs still agree.
     #[cfg(feature = "rustc-driver")]
@@ -1174,6 +1195,12 @@ impl Request {
         limits: &Limits,
         scope: &crate::supervisor::snapshot::attempt::Scope,
     ) -> Result<Prepared> {
+        if self.inventory {
+            return Err(Error::Request {
+                field: "intrinsic inventory",
+                reason: "use independent uncached acquisition; demand replay is not a completeness proof".into(),
+            });
+        }
         resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current)
             .map(|owner| Prepared { owner })
             .map_err(|source| Error::Node {
@@ -1185,6 +1212,12 @@ impl Request {
     /// Resolve through the shared toolchain node before any tool discovery or
     /// version child is launched. Evidence-only callers retain [`Self::resolve`].
     pub fn resolve_cached(mut self, limits: &Limits) -> Result<Resolution> {
+        if self.inventory {
+            return Err(Error::Request {
+                field: "intrinsic inventory",
+                reason: "use independent uncached acquisition; demand replay is not a completeness proof".into(),
+            });
+        }
         self.require_limits(limits)?;
         if self.universe.is_some() {
             let provisional_manifest = self.charge_provisional_manifest(limits)?;
@@ -1473,7 +1506,8 @@ impl Request {
                 &self.target,
                 limits,
             )?
-            .demand(&self.demand)?;
+            .demand(&self.demand)?
+            .inventory(self.inventory);
             #[cfg(feature = "rustc-driver")]
             let command_target = extraction_plan.command_target()?;
             #[cfg(not(feature = "rustc-driver"))]
@@ -1807,7 +1841,8 @@ impl Request {
             &self.target,
             limits,
         )?
-        .demand(&self.demand)?;
+        .demand(&self.demand)?
+        .inventory(self.inventory);
         #[cfg(feature = "rustc-driver")]
         let command_target = extraction_plan.command_target()?;
         #[cfg(not(feature = "rustc-driver"))]
@@ -2532,15 +2567,25 @@ impl Request {
             build.bind_package_files(&package_id, files, limits)?;
         }
         #[cfg(feature = "rustc-driver")]
-        let mut capture = match probe_scope {
-            Some(scope) => scope
-                .run(|| extraction_plan.seal(native, &build, &build_unit, &metadata, limits))?,
-            None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
+        let mut capture = if self.inputs_only {
+            None
+        } else {
+            Some(match probe_scope {
+                Some(scope) => scope
+                    .run(|| extraction_plan.seal(native, &build, &build_unit, &metadata, limits))?,
+                None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
+            })
         };
         #[cfg(feature = "rustc-driver")]
-        let mut settlement = capture.settlement(&build);
+        let mut settlement = capture
+            .as_mut()
+            .map_or_else(Vec::new, |capture| capture.settlement(&build));
         #[cfg(feature = "rustc-driver")]
-        let probe_artifacts = capture.artifact_inputs(limits)?;
+        let probe_artifacts = capture
+            .as_mut()
+            .map(|capture| capture.artifact_inputs(limits))
+            .transpose()?
+            .unwrap_or_default();
         #[cfg(not(feature = "rustc-driver"))]
         let probe_artifacts = Vec::new();
         #[cfg(feature = "rustc-driver")]
@@ -2556,6 +2601,8 @@ impl Request {
             command_build,
             &self.target,
         )?;
+        #[cfg(feature = "rustc-driver")]
+        let partitioned = self.inventory || self.inputs_only;
         let (input, retained_build) = crate::input::Baseline::capture_retaining(
             complete,
             &self.inputs,
@@ -2571,6 +2618,8 @@ impl Request {
             &node_context,
             &build_unit,
             command_build,
+            #[cfg(feature = "rustc-driver")]
+            partitioned,
             limits,
         )?;
         #[cfg(feature = "rustc-driver")]
@@ -2645,6 +2694,13 @@ impl Request {
 }
 
 impl Builder {
+    /// Acquire complete intrinsic facts without consumer method demand.
+    /// This separate acquisition is not served by legacy demand tables.
+    #[cfg(feature = "rustc-driver")]
+    pub fn inventory(mut self) -> Self {
+        self.inventory = true;
+        self
+    }
     /// Seal the exact environment replayed for Cargo and toolchain commands.
     pub fn environment(mut self, environment: config::Environment) -> Self {
         self.environment = Some(environment);
@@ -2747,6 +2803,12 @@ impl Builder {
 
     /// Promote loose request fields into canonical path/config/authority proof.
     pub fn build(mut self) -> Result<Request> {
+        if self.inventory && !self.demand.is_empty() {
+            return Err(Error::Request {
+                field: "intrinsic inventory",
+                reason: "intrinsic acquisition cannot contain consuming-program demand".into(),
+            });
+        }
         let limits = &self.limits;
         let project_root = canonical_directory("project root", &self.project_root)?;
         let expected_cache = project_root.join("target/rawr/cache");
@@ -2875,6 +2937,9 @@ impl Builder {
             });
         }
         Ok(Request {
+            inventory: self.inventory,
+            #[cfg(feature = "rustc-driver")]
+            inputs_only: false,
             project_root,
             cache_root: expected_cache,
             authority,
@@ -2895,6 +2960,22 @@ impl Builder {
 }
 
 impl Resolution {
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn into_native_inputs(
+        self,
+        limits: &Limits,
+    ) -> Result<crate::applicability::native::Inputs> {
+        if self.capture.is_some() {
+            return Err(Error::Request {
+                field: "application native inputs",
+                reason: "API capture cannot replace a consuming native input proof".into(),
+            });
+        }
+        let (proof, partitions) = self.input.prove_partitioned(limits)?;
+        Ok(crate::applicability::native::Inputs::from_capture(
+            proof, partitions,
+        ))
+    }
     /// Reconstruct launch paths solely from this resolution's validated
     /// toolchain proof; no discovery or version process is executed.
     #[doc(hidden)]
@@ -3004,7 +3085,10 @@ impl Resolution {
             &target,
             &profile,
             universe,
-            capture,
+            capture.ok_or_else(|| Error::Request {
+                field: "API publication",
+                reason: "native inputs do not establish compiler API facts".into(),
+            })?,
             input,
             policy,
             limits,
@@ -3133,7 +3217,9 @@ impl Resolution {
             .require_exact_raw(&unit_bytes, "publication validation")?;
         self.build_unit
             .bind_reachability(&self.cargo_allocation, limits)?;
-        self.capture.revalidate(limits)?;
+        if let Some(capture) = &mut self.capture {
+            capture.revalidate(limits)?;
+        }
         Ok(())
     }
 }
@@ -3800,6 +3886,13 @@ fn versioned_request_identity(
 ) -> Digest {
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.resolution-request/v2");
+    if request.inventory {
+        identity.update(b"intrinsic-inventory/v1");
+    }
+    #[cfg(feature = "rustc-driver")]
+    if request.inputs_only {
+        identity.update(b"application-native-inputs/v1");
+    }
     identity.update(definition.identity());
     identity.update((provisional_manifest.len() as u64).to_le_bytes());
     identity.update(provisional_manifest.as_bytes());

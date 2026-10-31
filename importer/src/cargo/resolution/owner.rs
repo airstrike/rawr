@@ -1098,17 +1098,20 @@ impl Evaluation {
             stored::Stored::capture(completed.input, &self.limits, graph).into_parts();
         accounts.input.absorb(original)?;
         let stored = stored.map_err(error)?;
+        let capture = completed.capture.as_ref().ok_or(node::Error::Codec(
+            "native input capture cannot enter API replay",
+        ))?;
         let scope = super::content::Scope::from_observations(
             layout.root(),
             &stored,
             &retained.build,
-            &completed.capture,
+            capture,
             &completed.toolchain,
             &self.request.target,
             graph,
         )?;
         let mut budget = stored::Budget::borrow(&self.limits, &mut accounts.input, graph);
-        let bytes = match completed.capture.namespace() {
+        let bytes = match capture.namespace() {
             Some(namespace) => stored::Record::encode_with_namespace(
                 retained.documents.metadata.bytes(),
                 retained.documents.units.bytes(),

@@ -58,6 +58,8 @@ pub(crate) struct Baseline {
     allocation: Allocation,
     universe_build: Option<cargo::universe::BuildProjection>,
     package_replay: Option<cargo::execution::Scope>,
+    #[cfg(feature = "rustc-driver")]
+    partitions: Option<native::partitions::Partitions>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1287,6 +1289,8 @@ impl Baseline {
     pub(crate) fn fixture_universe(build: &[u8]) -> Self {
         Self {
             package_replay: None,
+            #[cfg(feature = "rustc-driver")]
+            partitions: None,
             proof: proof::Proof::fixture(),
             recipes: Box::default(),
             recipe_allocation: Usage { items: 0, bytes: 0 },
@@ -1319,6 +1323,7 @@ impl Baseline {
         context: &std::sync::Arc<crate::context::Context>,
         graph: &cargo::unit::BuildGraph,
         command_build: &Path,
+        #[cfg(feature = "rustc-driver")] partitioned: bool,
         limits: &cargo::Limits,
     ) -> Result<(Self, build::Retained)> {
         let mut build = complete.build;
@@ -1603,6 +1608,21 @@ impl Baseline {
                     field: "workspace input before-image",
                 });
             }
+            #[cfg(feature = "rustc-driver")]
+            let partitions = partitioned
+                .then(|| {
+                    native.partitions(
+                        graph,
+                        proof.stored_parts().1,
+                        &mut stored::Budget::borrow(
+                            limits,
+                            &mut allocation,
+                            context.graph_budget(),
+                        ),
+                    )
+                })
+                .transpose()
+                .map_err(native::capture_error)?;
             let native = native
                 .finish(
                     proof.stored_parts().1,
@@ -1644,8 +1664,14 @@ impl Baseline {
                 recipe_allocation,
                 universe_build,
                 package_replay,
+                #[cfg(feature = "rustc-driver")]
+                partitions,
             ))
         });
+        #[cfg(feature = "rustc-driver")]
+        let (proof, recipes, recipe_allocation, universe_build, package_replay, partitions) =
+            result?;
+        #[cfg(not(feature = "rustc-driver"))]
         let (proof, recipes, recipe_allocation, universe_build, package_replay) = result?;
         Ok((
             Self {
@@ -1655,6 +1681,8 @@ impl Baseline {
                 allocation,
                 universe_build,
                 package_replay,
+                #[cfg(feature = "rustc-driver")]
+                partitions,
             },
             build::Retained { build },
         ))
@@ -1666,6 +1694,25 @@ impl Baseline {
 
     pub(crate) const fn universe_build(&self) -> Option<&cargo::universe::BuildProjection> {
         self.universe_build.as_ref()
+    }
+
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn partition(&self, unit: &str) -> Option<[u8; 32]> {
+        self.partitions.as_ref()?.get(unit)
+    }
+
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn prove_partitioned(
+        mut self,
+        limits: &cargo::Limits,
+    ) -> Result<(proof::Proof, native::partitions::Partitions)> {
+        let partitions = self.partitions.take().ok_or_else(|| {
+            input(
+                "native-partitions",
+                "native unit input witnesses are absent",
+            )
+        })?;
+        Ok((self.prove(limits)?, partitions))
     }
 
     pub(crate) fn prove(self, limits: &cargo::Limits) -> Result<proof::Proof> {

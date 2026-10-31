@@ -84,6 +84,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 const PROTOCOL_SCHEMA: u32 = 32;
 
 pub(super) struct Invocation {
+    pub(super) inventory: bool,
     pub(super) package: Package,
     pub(super) root: Root,
     /// Paths, root alias first, that Rawr names in this unit. Empty seeds
@@ -1134,6 +1135,25 @@ fn extract<'tcx>(
         krate: stable_crate_id.to_owned(),
     };
     let Root::Selected { aliases } = &invocation.root;
+    if invocation.inventory {
+        let mut builder = Builder::new(tcx, invocation, selected, budget, diagnostic);
+        builder
+            .definitions
+            .insert(root.module, selected.as_def_id());
+        let extracted =
+            engine::Engine::new(&mut builder, root, aliases.clone(), session.to_owned())
+                .inventory()
+                .map_err(units::fault)?;
+        let body = extracted.body()?;
+        let (sysroot, external) = units::registered(
+            &invocation.compiler_commit,
+            &invocation.selected_target,
+            &extracted.crates,
+            loaded,
+            builder.budget,
+        )?;
+        return Ok((sysroot, external, body));
+    }
     let key = tables.map(|tables| tables.key_for(invocation, crate_hash));
     // A demand that grows the one the table was made from, as each round of
     // a first run's demand does, cannot replay: neither read nor merge it.
@@ -1269,6 +1289,7 @@ fn handshake(
     budget: &mut Budget,
 ) -> Result<(PathBuf, Handshake), String> {
     let Invocation {
+        inventory: _,
         package,
         root,
         demand: _,
@@ -2537,7 +2558,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         };
         self.budget.items(1)?;
         let visibility = self.tcx.visibility(def_id);
-        let nameable = visibility.is_public() || matches!(&owner, Owner::Implementation { .. });
+        // Intrinsic facts include owned private declarations as semantic support.
+        // Their visibility remains exact; ordinary facade capture still requires
+        // a nameable declaration and never gains a new public export here.
+        let nameable = self.invocation.inventory
+            || visibility.is_public()
+            || matches!(&owner, Owner::Implementation { .. });
         let shape = if nameable {
             self.local_shape(def_id)
         } else {
@@ -4042,7 +4068,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .try_reserve(1)
                     .map_err(|error| format!("Sized parameter allocation failed: {error}"))?;
                 sized_parameters.insert(*parameter_id);
-                continue;
+                if !self.invocation.inventory {
+                    continue;
+                }
             }
             let predicate = self.predicate(def_id, *clause)?;
             self.budget.items(1)?;
@@ -5751,6 +5779,7 @@ mod tests {
 
     fn invocation(aliases: &[&str]) -> Invocation {
         Invocation {
+            inventory: false,
             package: Package {
                 cargo_id: "fixture 0.1.0".to_owned(),
                 name: "fixture".to_owned(),

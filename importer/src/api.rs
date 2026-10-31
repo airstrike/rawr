@@ -539,6 +539,30 @@ struct Measured {
     overflow: Option<usize>,
 }
 
+/// Charge a full intrinsic fact copy through the model's existing recursive
+/// retention authority before cloning the ordinary candidate's facts.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn intrinsic_usage<'a>(
+    definitions: impl ExactSizeIterator<Item = &'a model::Definition>,
+    implementations: &[model::Implementation],
+) -> Option<(usize, usize)> {
+    let mut retained = Retained::new();
+    retained.bytes(
+        definitions
+            .len()
+            .checked_mul(std::mem::size_of::<model::Definition>())?,
+    )?;
+    for definition in definitions {
+        definition.retain(&mut retained)?;
+    }
+    retained.slice(implementations)?;
+    for implementation in implementations {
+        implementation.retain(&mut retained)?;
+    }
+    let usage = retained.usage();
+    Some((usage.items, usage.bytes))
+}
+
 impl<P: Phase> Graph<P> {
     /// Borrow the preselected Rawr-owned resolution universe identity, when present.
     #[doc(hidden)]

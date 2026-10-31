@@ -32,6 +32,7 @@ const CANONICAL_PATH_BYTES: usize = 1024;
 
 /// One invocation plan proven by the initial normal Build unit graph.
 pub(crate) struct Plan {
+    inventory: bool,
     protocol_directory: PathBuf,
     target_directory: PathBuf,
     artifact_directory: PathBuf,
@@ -171,6 +172,8 @@ enum Root {
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct Document<'a> {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    inventory: bool,
     schema: u32,
     protocol_schema: u32,
     canonical_items: usize,
@@ -187,6 +190,10 @@ struct Document<'a> {
 }
 
 impl Plan {
+    pub(crate) fn inventory(mut self, inventory: bool) -> Self {
+        self.inventory = inventory;
+        self
+    }
     pub(crate) fn prepare(
         harness_root: &Path,
         graph: &unit::BuildGraph,
@@ -254,6 +261,7 @@ impl Plan {
         let plan_file = join_path(&root, Path::new(PLAN_FILE), &mut allocation)?;
         let artifact_directory = allocation.clone_path(&target_directory)?;
         Ok(Self {
+            inventory: false,
             protocol_directory,
             target_directory,
             artifact_directory,
@@ -435,6 +443,7 @@ impl Plan {
         let entries = prepare_entries(units, &run_nonce, limits, &mut allocation)?;
         let plan_file = allocation.clone_path(extraction.plan())?;
         Ok(Self {
+            inventory: false,
             protocol_directory,
             target_directory,
             artifact_directory,
@@ -829,6 +838,7 @@ impl Plan {
         dependency_directories.sort_unstable();
         dependency_directories.dedup();
         let document = Document {
+            inventory: self.inventory,
             schema: PLAN_SCHEMA,
             protocol_schema: protocol::SCHEMA,
             canonical_items: limits.canonical_items,

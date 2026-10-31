@@ -97,6 +97,8 @@ impl Stored {
             mut allocation,
             universe_build,
             package_replay,
+            #[cfg(feature = "rustc-driver")]
+                partitions: _,
         } = baseline;
         // Execution ownership is not serializable source evidence.
         drop(package_replay);

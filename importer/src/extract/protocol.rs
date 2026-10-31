@@ -41,6 +41,9 @@ pub(crate) struct Population {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Fragment {
+    #[cfg(feature = "rustc-driver")]
+    #[serde(default)]
+    pub(crate) inventory: Option<super::engine::model::Inventory>,
     pub(crate) handshake: Handshake,
     pub(crate) reachable: Vec<Export>,
     pub(crate) definitions: Vec<Definition>,
@@ -1025,6 +1028,8 @@ pub(crate) fn decode_handshakes(bytes: &[u8]) -> Result<Document> {
         .fragments
         .into_iter()
         .map(|part| Fragment {
+            #[cfg(feature = "rustc-driver")]
+            inventory: None,
             handshake: part.handshake,
             reachable: Vec::new(),
             definitions: Vec::new(),

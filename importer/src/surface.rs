@@ -11,6 +11,7 @@ use crate::contract::{Classified, Contract};
 #[doc(hidden)]
 pub mod account;
 pub(crate) mod adapter;
+pub mod application;
 pub mod builder;
 pub mod callable;
 #[doc(hidden)]

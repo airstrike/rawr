@@ -106,6 +106,280 @@ impl<'tcx, 'invocation, 'budget, 'diagnostic> Builder<'tcx, 'invocation, 'budget
 }
 
 impl<'tcx> Builder<'tcx, '_, '_, '_> {
+    /// Enumerate the crate-owned coherence domain without applying an impl
+    /// to a consuming program's receiver.
+    fn inventory(&mut self, root: DefId) -> Result<(), String> {
+        let mut implementations = self.tcx.trait_impls_in_crate(root.krate).to_vec();
+        implementations.sort_unstable_by_key(|id| self.tcx.def_path_hash(*id));
+        let mut manifest = engine::model::Inventory {
+            schema: 1,
+            owner: format!("{:016x}", self.tcx.stable_crate_id(root.krate)),
+            implementations: Vec::new(),
+            associated: Vec::new(),
+            unsupported: Vec::new(),
+            inherent: Vec::new(),
+            preludes: self.inventory_preludes()?,
+            deref: self.inventory_deref()?,
+        };
+        for implementation in implementations {
+            self.edge(1)?;
+            let id = self.id(implementation, Namespace::Type)?;
+            manifest.implementations.push(id.clone());
+            match self.inventory_implementation(implementation)? {
+                Some(associated) => manifest.associated.extend(associated),
+                None => manifest.unsupported.push(id),
+            }
+        }
+        manifest.implementations.sort_unstable();
+        manifest.associated.sort_unstable();
+        manifest.unsupported.sort_unstable();
+        self.emissions.push(Emission::Inventory {
+            inventory: manifest,
+        });
+        Ok(())
+    }
+
+    fn inventory_inherent(&mut self, owner: DefId) -> Result<(), String> {
+        if owner.krate != self.selected
+            || !matches!(
+                self.tcx.def_kind(owner),
+                DefKind::Struct | DefKind::Enum | DefKind::Union
+            )
+        {
+            return Ok(());
+        }
+        let mut domain = engine::model::Inherent {
+            owner: self.id(owner, Namespace::Type)?,
+            implementations: Vec::new(),
+            associated: Vec::new(),
+        };
+        for implementation in self.tcx.inherent_impls(owner) {
+            self.edge(1)?;
+            domain
+                .implementations
+                .push(self.id(*implementation, Namespace::Type)?);
+            domain
+                .associated
+                .extend(
+                    self.inventory_implementation(*implementation)?
+                        .ok_or_else(|| {
+                            "inherent implementation unexpectedly has reservation polarity"
+                                .to_owned()
+                        })?,
+                );
+        }
+        domain.implementations.sort_unstable();
+        domain.associated.sort_unstable();
+        self.emissions
+            .push(Emission::InherentInventory { inventory: domain });
+        Ok(())
+    }
+
+    fn inventory_deref(&mut self) -> Result<Option<engine::model::Lookup>, String> {
+        let Some(trait_id) = self.tcx.lang_items().deref_trait() else {
+            return Ok(None);
+        };
+        let mut domains = Vec::new();
+        for krate in self.tcx.crates(()).iter().copied() {
+            if !self.is_sysroot_crate(krate)? {
+                continue;
+            }
+            self.register_sysroot(krate)?;
+            let mut implementations = Vec::new();
+            for implementation in self.tcx.trait_impls_in_crate(krate) {
+                self.edge(1)?;
+                let Some(trait_ref) = self.tcx.impl_opt_trait_ref(*implementation) else {
+                    continue;
+                };
+                if trait_ref.instantiate_identity().skip_norm_wip().def_id != trait_id {
+                    continue;
+                }
+                let receiver = match self
+                    .tcx
+                    .type_of(*implementation)
+                    .instantiate_identity()
+                    .skip_norm_wip()
+                    .kind()
+                {
+                    ty::Adt(definition, _) => engine::model::Receiver::Nominal(
+                        self.id(definition.did(), Namespace::Type)?,
+                    ),
+                    ty::Bool
+                    | ty::Char
+                    | ty::Int(_)
+                    | ty::Uint(_)
+                    | ty::Float(_)
+                    | ty::Str
+                    | ty::Slice(_)
+                    | ty::Array(..)
+                    | ty::RawPtr(..)
+                    | ty::Ref(..)
+                    | ty::FnDef(..)
+                    | ty::FnPtr(..)
+                    | ty::Never
+                    | ty::Tuple(_)
+                    | ty::Dynamic(..) => engine::model::Receiver::Closed,
+                    _ => engine::model::Receiver::Unresolved,
+                };
+                implementations.push(engine::model::LookupHeader {
+                    implementation: self.id(*implementation, Namespace::Type)?,
+                    receiver,
+                });
+            }
+            implementations.sort_unstable();
+            domains.push(engine::model::LookupDomain {
+                root: self.id(krate.as_def_id(), Namespace::Type)?,
+                implementations,
+            });
+        }
+        domains.sort_unstable();
+        Ok(Some(engine::model::Lookup {
+            trait_id: self.id(trait_id, Namespace::Type)?,
+            domains,
+        }))
+    }
+
+    fn inventory_preludes(&mut self) -> Result<Vec<engine::model::Prelude>, String> {
+        let mut preludes = Vec::new();
+        let edition = self.invocation.edition.clone();
+        let module_name = format!("rust_{edition}");
+        for root in ["core", "std"] {
+            let Some(krate) = self
+                .tcx
+                .crates(())
+                .iter()
+                .copied()
+                .find(|krate| self.tcx.crate_name(*krate).as_str() == root)
+            else {
+                continue;
+            };
+            let mut module = krate.as_def_id();
+            let mut found = true;
+            for segment in ["prelude", &module_name] {
+                match self
+                    .tcx
+                    .module_children(module)
+                    .iter()
+                    .find_map(|child| match child.res {
+                        Res::Def(DefKind::Mod, id) if child.ident.name.as_str() == segment => {
+                            Some(id)
+                        }
+                        _ => None,
+                    }) {
+                    Some(id) => module = id,
+                    None => {
+                        found = false;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                continue;
+            }
+            self.register_sysroot(krate)?;
+            let mut traits = Vec::new();
+            for child in self.tcx.module_children(module) {
+                let Res::Def(DefKind::Trait, id) = child.res else {
+                    continue;
+                };
+                self.edge(1)?;
+                self.register_sysroot(id.krate)?;
+                let mut methods = BTreeSet::new();
+                let mut seen = std::collections::HashSet::new();
+                let mut pending = vec![id];
+                while let Some(trait_id) = pending.pop() {
+                    if !seen.insert(trait_id) {
+                        continue;
+                    }
+                    self.edge(1)?;
+                    for item in self.tcx.associated_items(trait_id).in_definition_order() {
+                        if item.is_method() {
+                            methods.insert(self.budget.owned(item.name().as_str())?);
+                        }
+                    }
+                    for (clause, _) in self
+                        .tcx
+                        .explicit_super_predicates_of(trait_id)
+                        .skip_binder()
+                    {
+                        if let ty::ClauseKind::Trait(bound) = clause.kind().skip_binder() {
+                            pending.push(bound.def_id());
+                        }
+                    }
+                }
+                traits.push(engine::model::TraitNames {
+                    id: self.id(id, Namespace::Type)?,
+                    methods: methods.into_iter().collect(),
+                });
+            }
+            traits.sort_unstable();
+            traits.dedup();
+            preludes.push(engine::model::Prelude {
+                module: self.id(module, Namespace::Type)?,
+                edition: edition.clone(),
+                traits,
+            });
+        }
+        preludes.sort_unstable();
+        Ok(preludes)
+    }
+
+    fn inventory_implementation(
+        &mut self,
+        implementation: DefId,
+    ) -> Result<Option<Vec<engine::model::Association>>, String> {
+        self.implementation_base(implementation)?;
+        let position = self
+            .emissions
+            .iter()
+            .rposition(|emission| matches!(emission, Emission::Base { .. }))
+            .ok_or_else(|| "intrinsic implementation base was not emitted".to_owned())?;
+        if matches!(
+            self.emissions[position],
+            Emission::Base {
+                implementation: None
+            }
+        ) {
+            return Ok(None);
+        }
+        let id = self.id(implementation, Namespace::Type)?;
+        let mut associations = Vec::new();
+        let mut associated = Vec::new();
+        for item in self
+            .tcx
+            .associated_items(implementation)
+            .in_definition_order()
+        {
+            self.edge(1)?;
+            let item_id = self.id(item.def_id, namespace(item.namespace()))?;
+            let declaration = item
+                .trait_item_def_id()
+                .map(|declaration| self.id(declaration, namespace(item.namespace())))
+                .transpose()?;
+            self.ensure(item.def_id, namespace(item.namespace()))?;
+            if let Some(declaration) = item.trait_item_def_id() {
+                self.ensure(declaration, namespace(item.namespace()))?;
+            }
+            associations.push(engine::model::Association {
+                implementation: id.clone(),
+                item: item_id.clone(),
+                declaration,
+            });
+            associated.push(item_id);
+        }
+        let Emission::Base {
+            implementation: Some(record),
+        } = &mut self.emissions[position]
+        else {
+            return Err(
+                "intrinsic implementation base changed while acquiring its members".to_owned(),
+            );
+        };
+        associated.sort_unstable();
+        record.associated = associated;
+        Ok(Some(associations))
+    }
+
     /// The engine's key for a definition, remembered for later units.
     pub(super) fn key(&mut self, def_id: DefId, namespace: Namespace) -> Key {
         Key {
@@ -1062,6 +1336,16 @@ impl engine::Oracle for Builder<'_, '_, '_, '_> {
     fn unit(&mut self, unit: &Unit) -> Result<Rc<[Emission]>, Fault> {
         self.emissions.clear();
         let result = (|| match unit {
+            Unit::Inventory(hash) => {
+                let root = self.definition(hash)?;
+                self.inventory(root)
+            }
+            Unit::InventoryShape(key) => {
+                let def_id = self.definition(&key.hash)?;
+                let owner = self.compiler_definition_owner(def_id)?;
+                self.materialize_shape(def_id, key.namespace, owner)?;
+                self.inventory_inherent(def_id)
+            }
             Unit::Shape(key) => {
                 let def_id = self.definition(&key.hash)?;
                 let owner = self.compiler_definition_owner(def_id)?;
