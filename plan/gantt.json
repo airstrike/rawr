@@ -59,11 +59,11 @@
         {"id":"record-extraction-per-crate","name":"Record extraction per crate","start":37,"size":2,"state":"done","note":"Replay any demand from it","issues":[],"milestone":"0.3"},
         {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"done","note":"Stable generation leases, atomic publication and last-use pruning. #272","issues":[272],"milestone":"0.3"},
         {"id":"drift-loudly","name":"Drift, loudly","start":49,"size":2,"state":"done","note":"Compare toolchain outputs and validate declared inputs before reuse. #275","issues":[275],"milestone":"0.3"},
-        {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"now","note":"column! without demand","issues":[281],"milestone":"0.4"},
+        {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"done","note":"column! without demand","issues":[281,404],"milestone":"0.4"},
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372","issues":[271,367,369,370,372],"milestone":"0.4"},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252","issues":[252,254,276],"milestone":"0.4"},
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Path crates replay their project-kept tables; a new name in a large registry crate still runs the nightly. #398, #281","issues":[398,402,281],"milestone":"0.4"},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"Every crate read whole; path crates kept with the project. #398, #281","issues":[398,402,281],"milestone":"0.4"},
         {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"milestone":"0.4"}
       ]
     },
