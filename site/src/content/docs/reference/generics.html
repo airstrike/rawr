@@ -5,6 +5,7 @@
 <h2 id="bounds">Bounds</h2>
 <p>Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check, as in rustc. Operator traits from <code>std::ops</code>, such as <code>Add</code>, work.</p>
 <p>Higher-ranked bounds and types work, as in <code>F: for&lt;'a&gt; Fn(&amp;'a T) -&gt; usize</code> and <code>for&lt;'a&gt; fn(&amp;'a usize) -&gt; usize</code>. A <code>where</code> clause can bound a type other than a parameter by <code>Sized</code> or an auto trait, as in <code>for&lt;'a&gt; &amp;'a T: Sized</code>. Any other bound there isn&rsquo;t supported yet.</p>
+<p>Through a generic parameter, <code>T::method(&amp;t)</code> calls a method of a trait that bounds <code>T</code>, as <code>&lt;T as Trait&gt;::method(&amp;t)</code> does, and <code>T::method</code> is a function value. A closure passed to a generic function takes its parameter types from the function&rsquo;s <code>Fn</code> bound, as in <code>each(4usize, |x| *x * 4)</code>, once the arguments before it fix the parameters. A struct that implements <code>Iterator</code> can be passed where a parameter takes <code>I: Iterator&lt;Item = X&gt;</code>.</p>
 <div class="block">
   <div class="file"><b>generics.rs</b></div>
   <pre><code data-lang="rust" data-run="generics.rs" id="src-generics">use std::fmt;

@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.26 (2026-10-31)
+
 - The run after a program's first proved imported call starts warm instead of compiling again. (#400)
 - A crate extracted whole also answers macros such as `column!` that a later program calls for the first time. (#401; part of #281)
 - Crates whose dependencies run build scripts keep their trait facts per project instead of sharing them across the machine unverified. (#399)

@@ -4,18 +4,23 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"The run after a program's first proved imported call starts warm instead of compiling again.","issues":[400]},
-      {"text":"A crate extracted whole also answers macros such as `column!` that a later program calls for the first time.","issues":[401],"refs":[281]},
-      {"text":"Crates whose dependencies run build scripts keep their trait facts per project instead of sharing them across the machine unverified.","issues":[399]},
-      {"text":"A borrow of an element (`let x = &mut a[i]`) reads its index once, where the borrow is made, as Rust does. Changing `i` afterwards, or an index with a side effect, no longer moves the borrow to another element.","issues":[392]},
-      {"text":"`T::method(&t)` calls a method of a trait bounding the generic parameter `T`, as `<T as Trait>::method(&t)` does, and `T::method` is a function value.","issues":[376]},
-      {"text":"A closure passed to a generic function takes its parameter types from the function's `Fn` bound: `each(4usize, |x| *x * 4)`.","issues":[377]},
-      {"text":"A `for` loop and iterator adaptors work over an associated type bounded by `Iterator` with no `Item =`.","issues":[379]},
-      {"text":"A struct that implements `Iterator` can be passed where a generic parameter takes `I: Iterator<Item = X>` or `impl Iterator<Item = X>`.","issues":[406],"refs":[380]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.26",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"The run after a program's first proved imported call starts warm instead of compiling again.","issues":[400]},
+        {"text":"A crate extracted whole also answers macros such as `column!` that a later program calls for the first time.","issues":[401],"refs":[281]},
+        {"text":"Crates whose dependencies run build scripts keep their trait facts per project instead of sharing them across the machine unverified.","issues":[399]},
+        {"text":"A borrow of an element (`let x = &mut a[i]`) reads its index once, where the borrow is made, as Rust does. Changing `i` afterwards, or an index with a side effect, no longer moves the borrow to another element.","issues":[392]},
+        {"text":"`T::method(&t)` calls a method of a trait bounding the generic parameter `T`, as `<T as Trait>::method(&t)` does, and `T::method` is a function value.","issues":[376]},
+        {"text":"A closure passed to a generic function takes its parameter types from the function's `Fn` bound: `each(4usize, |x| *x * 4)`.","issues":[377]},
+        {"text":"A `for` loop and iterator adaptors work over an associated type bounded by `Iterator` with no `Item =`.","issues":[379]},
+        {"text":"A struct that implements `Iterator` can be passed where a generic parameter takes `I: Iterator<Item = X>` or `impl Iterator<Item = X>`.","issues":[406],"refs":[380]}
+      ]
+    },
     {
       "version": "0.3.25",
       "date": "2026-10-31",
