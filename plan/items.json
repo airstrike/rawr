@@ -444,7 +444,7 @@
     {"t":"T441","issue":441,"title":"T441: Rename facade to bindings in the core, importer, store and generated output","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D662"],"commit":null,"release":null},
     {"t":"T442","issue":442,"title":"T442: Remove the Worker's iced-only leftovers","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T443","issue":443,"title":"T443: Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T444","issue":444,"title":"T444: `?play` and the playground run every snippet through one compile path","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T445","issue":445,"title":"T445: An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"open","category":"Divergences from rustc","labels":["rustc divergence","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T444","issue":444,"title":"T444: `?play` and the playground run every snippet through one compile path","state":"closed","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.33"},
+    {"t":"T445","issue":445,"title":"T445: An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.33"}
   ]
 }

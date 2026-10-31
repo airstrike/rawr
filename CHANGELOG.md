@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.33 (2026-10-31)
+
 - `?play` and the playground run every snippet through one compile path. A snippet that names a crate they don't have gets the ordinary compile error, not a special message. (#444)
 - An `async fn main` with no runtime attribute is rustc's E0752 ("`main` function is not allowed to be `async`"), under `rawr run`, `rawr check`, `?play` and the playground. (#445)
 

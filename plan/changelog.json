@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"`?play` and the playground run every snippet through one compile path. A snippet that names a crate they don't have gets the ordinary compile error, not a special message.","issues":[444]},
-      {"text":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed to be `async`\"), under `rawr run`, `rawr check`, `?play` and the playground.","issues":[445]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.33",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"`?play` and the playground run every snippet through one compile path. A snippet that names a crate they don't have gets the ordinary compile error, not a special message.","issues":[444]},
+        {"text":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed to be `async`\"), under `rawr run`, `rawr check`, `?play` and the playground.","issues":[445]}
+      ]
+    },
     {
       "version": "0.3.32",
       "date": "2026-10-31",
