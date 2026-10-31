@@ -135,6 +135,27 @@ impl Comparison<'_, '_> {
         shape: &Shape,
     ) -> Compared<Option<std::cmp::Ordering>> {
         use std::cmp::Ordering;
+        if let Some((place, other, reversed)) = crate::place::get(lhs)
+            .map(|place| (place, rhs, false))
+            .or_else(|| crate::place::get(rhs).map(|place| (place, lhs, true)))
+        {
+            let result = place.invoke(
+                crate::place::Operation::Compare {
+                    total: self.total,
+                    reversed,
+                },
+                &mut [other.clone()],
+            )?;
+            return crate::option::read(&result)
+                .ok_or_else(|| super::invariant("a native comparison lost its Option"))?
+                .map(|order| {
+                    order
+                        .as_int()
+                        .map(|order| order.cmp(&0))
+                        .map_err(|_| super::invariant("a native comparison lost its Ordering"))
+                })
+                .transpose();
+        }
         match shape {
             Shape::Unsigned => {
                 if let (Ok(lhs), Ok(rhs)) = (lhs.as_int(), rhs.as_int()) {
@@ -305,6 +326,18 @@ impl Comparison<'_, '_> {
 
     /// Rust's `PartialEq` of `lhs` and `rhs`.
     pub(super) fn equal(&self, lhs: &Dynamic, rhs: &Dynamic) -> Compared<bool> {
+        if let Some((place, other, reversed)) = crate::place::get(lhs)
+            .map(|place| (place, rhs, false))
+            .or_else(|| crate::place::get(rhs).map(|place| (place, lhs, true)))
+        {
+            return place
+                .invoke(
+                    crate::place::Operation::Equal { reversed },
+                    &mut [other.clone()],
+                )?
+                .as_bool()
+                .map_err(|_| super::invariant("a native equality lost its bool"));
+        }
         if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
             return match (lhs, rhs) {
                 (Some(lhs), Some(rhs)) => self.equal(&lhs, &rhs),

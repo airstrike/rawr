@@ -1668,10 +1668,25 @@ pub(super) fn path_invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         .clone();
     if matches!(op, PreludeOp::PathSet) {
         let value = args[2].take();
-        at_path(args[0], &path, |leaf| *leaf = value)?;
-        return Ok(Dynamic::UNIT);
+        // A native place is stored into where it is (D651): its own
+        // handle, given back after the place was used, stores nothing.
+        return at_path(args[0], &path, |leaf| match crate::place::get(leaf) {
+            Some(place)
+                if crate::place::get(&value).is_some_and(|other| place.same_storage(&other)) =>
+            {
+                Ok(Dynamic::UNIT)
+            }
+            Some(place) => place.invoke(crate::place::Operation::Store, &mut [value]),
+            None => {
+                *leaf = value;
+                Ok(Dynamic::UNIT)
+            }
+        })?;
     }
-    at_path(args[0], &path, |leaf| leaf.clone())
+    at_path(args[0], &path, |leaf| match crate::place::get(leaf) {
+        Some(place) if place.copies() => place.invoke(crate::place::Operation::Copy, &mut []),
+        _ => Ok(leaf.clone()),
+    })?
 }
 
 fn at_path<R>(
@@ -1685,6 +1700,23 @@ fn at_path<R>(
     let index = step
         .as_int()
         .map_err(|_| invariant("a place's path step is not an integer"))?;
+    // Below a native sequence, the path names a native element's own
+    // place, which a read copies only when it is `Copy` (D651).
+    #[cfg(feature = "rust-import")]
+    if let Some(place) = crate::place::get(value) {
+        let mut element = place.project(
+            usize::try_from(index).map_err(|_| invariant("a place's path step is negative"))?,
+        )?;
+        for step in rest {
+            let at = step
+                .as_int()
+                .ok()
+                .and_then(|at| usize::try_from(at).ok())
+                .ok_or_else(|| invariant("a place's path step is not an index"))?;
+            element = element.project(at)?;
+        }
+        return Ok(visit(&mut Dynamic::from(element)));
+    }
     let slot = |len: usize| usize::try_from(index).ok().filter(|slot| *slot < len);
     if value.is_array() {
         let mut array = value

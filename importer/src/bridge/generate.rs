@@ -11,6 +11,7 @@ use crate::classify::representability::ownership::Receiver;
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
+mod place;
 mod view;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
@@ -219,6 +220,160 @@ trait WithoutClone {
 
 impl<T> WithoutClone for &DebugProbe<T> {
     fn native_clone(&self) -> Option<CloneValue> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaSequenceClone<T> {
+    fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>>;
+}
+
+impl<T: Clone> ViaSequenceClone<T> for DebugProbe<T> {
+    fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>> {
+        Some(__rawr_internal::place::sequence::cloning::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutSequenceClone<T> {
+    fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>>;
+}
+
+impl<T> WithoutSequenceClone<T> for &DebugProbe<T> {
+    fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaSequenceCopy<T> {
+    fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>>;
+}
+
+impl<T: Copy> ViaSequenceCopy<T> for DebugProbe<T> {
+    fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>> {
+        Some(__rawr_internal::place::sequence::copying::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutSequenceCopy<T> {
+    fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>>;
+}
+
+impl<T> WithoutSequenceCopy<T> for &DebugProbe<T> {
+    fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaSequenceEqual<T> {
+    fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>>;
+}
+
+impl<T: PartialEq> ViaSequenceEqual<T> for DebugProbe<T> {
+    fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>> {
+        Some(__rawr_internal::place::sequence::comparing::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutSequenceEqual<T> {
+    fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>>;
+}
+
+impl<T> WithoutSequenceEqual<T> for &DebugProbe<T> {
+    fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaPlaceDebug<T> {
+    fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>>;
+}
+
+impl<T: std::fmt::Debug> ViaPlaceDebug<T> for DebugProbe<T> {
+    fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>> {
+        Some(__rawr_internal::place::reading::debugging::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutPlaceDebug<T> {
+    fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>>;
+}
+
+impl<T> WithoutPlaceDebug<T> for &DebugProbe<T> {
+    fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaPlaceDisplay<T> {
+    fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>>;
+}
+
+impl<T: std::fmt::Display> ViaPlaceDisplay<T> for DebugProbe<T> {
+    fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>> {
+        Some(__rawr_internal::place::reading::displaying::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutPlaceDisplay<T> {
+    fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>>;
+}
+
+impl<T> WithoutPlaceDisplay<T> for &DebugProbe<T> {
+    fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaPlacePartial<T> {
+    fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>>;
+}
+
+impl<T: PartialOrd> ViaPlacePartial<T> for DebugProbe<T> {
+    fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>> {
+        Some(__rawr_internal::place::reading::partial::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutPlacePartial<T> {
+    fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>>;
+}
+
+impl<T> WithoutPlacePartial<T> for &DebugProbe<T> {
+    fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>> {
+        None
+    }
+}
+
+#[allow(dead_code)]
+trait ViaPlaceTotal<T> {
+    fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>>;
+}
+
+impl<T: Ord> ViaPlaceTotal<T> for DebugProbe<T> {
+    fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>> {
+        Some(__rawr_internal::place::reading::total::<T>())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutPlaceTotal<T> {
+    fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>>;
+}
+
+impl<T> WithoutPlaceTotal<T> for &DebugProbe<T> {
+    fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>> {
         None
     }
 }
@@ -941,6 +1096,17 @@ impl Arena {
         Ok(Held::Leased { value: Some(value), handle })
     }
 
+    /// Lend a native place synchronously on its owner thread, without
+    /// imposing the transfer bound required by an asynchronous Held value.
+    fn lease_place<T: 'static>(&mut self, handle: NativeHandle) -> Result<PlaceHeld<T>, Error> {
+        if self.homed(&handle).is_some() { return Err(Error::Leased); }
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        self.slots[index].leased = true;
+        let value = value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)?;
+        Ok(PlaceHeld { value: Some(value), handle })
+    }
+
     /// Free each slot whose last handle was dropped. Dropping a native value
     /// may drop handles it holds, which are freed in the next round.
     fn release_dropped(&mut self) {
@@ -1013,7 +1179,7 @@ impl Arena {
     }
 
     /// The value a future borrowed, back in its slot.
-    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any + Send>) {
+    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any>) {
         if handle.epoch != self.epoch { return; }
         if let Some(entry) = self.slots.get_mut(handle.slot as usize)
             && entry.generation == handle.generation
@@ -1146,6 +1312,111 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
     .unwrap_or(Err(Error::Stale))
 }
 
+/// Native place ownership uses the existing arena's owner thread and release
+/// authority, including non-Send values. Its synchronous lease is always
+/// restored before the source operation returns or unwinds.
+struct PlaceOwner<T>(std::marker::PhantomData<fn() -> T>);
+struct PlaceHeld<T: 'static> { value: Option<T>, handle: NativeHandle }
+
+impl<T: 'static> Drop for PlaceHeld<T> {
+    fn drop(&mut self) {
+        if let Some(value) = self.value.take() {
+            let _ = with_arena(|arena| { arena.restore(self.handle.clone(), Box::new(value)); Ok(()) });
+        }
+    }
+}
+
+thread_local! {
+    /// Native vectors script code owns, on the thread that made them, by
+    /// slot. Each access moves its value out for the access alone, so no
+    /// borrow of the table outlives a statement.
+    static PLACE_VALUES: RefCell<(u64, std::collections::BTreeMap<u64, Box<dyn Any>>)> =
+        RefCell::new((0, std::collections::BTreeMap::new()));
+}
+
+/// Ownership of a native value in this thread's place table (D651). The
+/// carrier is a slot number: another thread finds nothing under it.
+struct PlaceLocal;
+struct PlaceSlot(u64);
+
+impl Drop for PlaceSlot {
+    fn drop(&mut self) {
+        let value = PLACE_VALUES
+            .try_with(|values| values.try_borrow_mut().ok().and_then(|mut values| values.1.remove(&self.0)))
+            .ok()
+            .flatten();
+        drop(value);
+    }
+}
+
+/// A value out of its slot for one access, put back however the access ends.
+struct PlaceLease(u64, Option<Box<dyn Any>>);
+
+impl Drop for PlaceLease {
+    fn drop(&mut self) {
+        if let Some(value) = self.1.take() {
+            PLACE_VALUES.with_borrow_mut(|values| values.1.insert(self.0, value));
+        }
+    }
+}
+
+fn place_slot_missing() -> Box<__rawr_internal::EvalAltResult> {
+    __rawr_internal::EvalAltResult::ErrorRuntime("the owned native place is borrowed, moved or on another thread".into(), __rawr_internal::Position::NONE).into()
+}
+
+impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
+    type Stored = PlaceSlot;
+    type Vector = PlaceLocal;
+    fn store(value: T) -> Result<PlaceSlot, Box<__rawr_internal::EvalAltResult>> {
+        Ok(PLACE_VALUES.with_borrow_mut(|values| {
+            values.0 += 1;
+            let slot = values.0;
+            values.1.insert(slot, Box::new(value));
+            PlaceSlot(slot)
+        }))
+    }
+    fn access<R>(
+        stored: &PlaceSlot,
+        mutable: bool,
+        visit: impl FnOnce(__rawr_internal::place::Access<'_, T>) -> Result<R, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<R, Box<__rawr_internal::EvalAltResult>> {
+        let value = PLACE_VALUES.with_borrow_mut(|values| values.1.remove(&stored.0)).ok_or_else(place_slot_missing)?;
+        let mut lease = PlaceLease(stored.0, Some(value));
+        let value = lease.1.as_mut().and_then(|value| value.downcast_mut::<T>()).ok_or_else(place_slot_missing)?;
+        visit(if mutable { __rawr_internal::place::Access::Mutable(value) } else { __rawr_internal::place::Access::Shared(value) })
+    }
+    fn take(stored: &PlaceSlot) -> Result<T, Box<__rawr_internal::EvalAltResult>> {
+        let value = PLACE_VALUES.with_borrow_mut(|values| values.1.remove(&stored.0)).ok_or_else(place_slot_missing)?;
+        value.downcast::<T>().map(|value| *value).map_err(|_| place_slot_missing())
+    }
+}
+
+fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
+    __rawr_internal::EvalAltResult::ErrorRuntime(format!("native place: {error:?}").into(), __rawr_internal::Position::NONE).into()
+}
+
+impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
+    type Stored = NativeHandle;
+    // A native vector is owned where it is made, not in the arena, which
+    // a callback's return may already hold.
+    type Vector = PlaceLocal;
+    fn store(value: T) -> Result<NativeHandle, Box<__rawr_internal::EvalAltResult>> {
+        with_arena(|arena| arena.insert(value)).map_err(place_error)
+    }
+    fn access<R>(
+        stored: &NativeHandle,
+        mutable: bool,
+        visit: impl FnOnce(__rawr_internal::place::Access<'_, T>) -> Result<R, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<R, Box<__rawr_internal::EvalAltResult>> {
+        let mut held = with_arena(|arena| arena.lease_place::<T>(stored.clone())).map_err(place_error)?;
+        let value = held.value.as_mut().expect("native place lease retains its value until restored");
+        visit(if mutable { __rawr_internal::place::Access::Mutable(value) } else { __rawr_internal::place::Access::Shared(value) })
+    }
+    fn take(stored: &NativeHandle) -> Result<T, Box<__rawr_internal::EvalAltResult>> {
+        with_arena(|arena| arena.take(stored.clone())).map_err(place_error)
+    }
+}
+
 /// A receiver an async method borrows, held by its future (D513.6): a copy
 /// of a `Clone` value for `&self`, or the value itself, lent from its slot,
 /// which it goes back to when the future ends or is dropped.
@@ -1273,7 +1544,13 @@ fn take_range<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Re
 
 #[allow(dead_code)]
 fn take_string(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
-    take_primitive::<ImmutableString>(arguments, index).map(|value| value.to_string())
+    let value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
+    if let Some(place) = __rawr_internal::place::get(&value) {
+        __rawr_internal::place::take::<__rawr_internal::place::text::Text>(&place, place.witness())
+            .map_err(|error| Error::Value(error.to_string()))
+    } else {
+        value.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)
+    }
 }
 
 fn native_handle(
@@ -1391,14 +1668,15 @@ type LentArguments<'r> = [(usize, Option<Reached<'r>>)];
 
 /// Reaches the value `lent` names through the accessor its trampoline made
 /// for a `T`, mutably or not, and hands it to `visit`.
-type Reach = fn(__rawr_internal::scope::Lent, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
+type Reach = fn(Dynamic, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
 
 #[allow(dead_code)]
 fn reach_lent<T: 'static>(
-    lent: __rawr_internal::scope::Lent,
+    value: Dynamic,
     mutable: bool,
     visit: &mut dyn FnMut(Reached<'_>),
 ) -> Result<(), Error> {
+    let lent = value.try_cast_result::<__rawr_internal::scope::Lent>().map_err(|_| Error::TypeMismatch)?;
     let failed = |error| Error::Lent(lent.name(), error);
     let reached = if mutable {
         let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
@@ -1408,6 +1686,23 @@ fn reach_lent<T: 'static>(
         access(lent.nonce().bits(), &mut |value| visit(Reached::Shared(value)))
     };
     reached.map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))
+}
+
+/// Reach a native sequence/text place through its exact descriptor.
+#[allow(dead_code)]
+fn reach_place<P: __rawr_internal::place::Policy>(
+    value: Dynamic,
+    mutable: bool,
+    visit: &mut dyn FnMut(Reached<'_>),
+) -> Result<(), Error> {
+    let place = __rawr_internal::place::get(&value).ok_or(Error::TypeMismatch)?;
+    __rawr_internal::place::reach::<P, _>(&place, place.witness(), mutable, |value| {
+        match value {
+            __rawr_internal::place::Access::Shared(value) => visit(Reached::Shared(value)),
+            __rawr_internal::place::Access::Mutable(value) => visit(Reached::Mutable(value)),
+        }
+        Ok(())
+    }).map_err(|error| Error::Value(error.to_string()))
 }
 
 /// Run `body` with each argument at `lendable` (its index, whether the call
@@ -1423,7 +1718,11 @@ fn with_lent_arguments(
 ) -> Result<Dynamic, Error> {
     let found: Vec<_> = lendable
         .iter()
-        .filter_map(|&(index, mutable, reach)| lent_value(arguments, index).map(|lent| (index, mutable, lent, reach)))
+        .filter_map(|&(index, mutable, reach)| {
+            let value = arguments.values.get(index)?;
+            (value.is::<__rawr_internal::scope::Lent>() || __rawr_internal::place::get(value).is_some())
+                .then(|| (index, mutable, (**value).clone(), reach))
+        })
         .collect();
     nest_lent(arguments, &found, &mut Vec::new(), body)
 }
@@ -1431,23 +1730,23 @@ fn with_lent_arguments(
 #[allow(dead_code)]
 fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
-    found: &[(usize, bool, __rawr_internal::scope::Lent, Reach)],
+    found: &[(usize, bool, Dynamic, Reach)],
     reached: &mut Vec<(usize, Option<Reached<'_>>)>,
     body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
-    let Some((&(index, mutable, lent, reach), rest)) = found.split_first() else {
+    let Some(((index, mutable, value, reach), rest)) = found.split_first() else {
         return body(arguments, reached);
     };
     let mut result = None;
-    reach(lent, mutable, &mut |value| {
+    reach(value.clone(), *mutable, &mut |value| {
         let mut inner: Vec<(usize, Option<Reached<'_>>)> = reached
             .iter_mut()
             .map(|(index, value)| (*index, value.as_mut().map(Reached::reborrow)))
             .collect();
-        inner.push((index, Some(value)));
+        inner.push((*index, Some(value)));
         result = Some(nest_lent(arguments, rest, &mut inner, body));
     })?;
-    result.unwrap_or(Err(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy)))
+    result.unwrap_or_else(|| Err(Error::Value("native argument was not reached".into())))
 }
 
 /// The lent value at argument `index`, once: the call's borrow of it.
@@ -3247,6 +3546,7 @@ fn finish(result: std::io::Result<()>) -> ! {
 /// run on a thread of their own, so the main thread is free for a native
 /// `main`. winit's event loop must run there either way (D533).
 fn main() {
+    register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
@@ -3548,6 +3848,7 @@ fn run_protocol() -> std::io::Result<()> {
 }
 
 fn main() {
+    register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
@@ -4281,6 +4582,7 @@ fn run_protocol() -> std::io::Result<()> {
 }
 
 fn main() {
+    register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
@@ -5196,6 +5498,7 @@ fn render_source(
     // The impls name the proxies of their owners, so they come first.
     let mut impls = Vec::new();
     render_impls(plans, &mut impls)?;
+    place::render(&mut impls);
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
     // In path order, as the sources are framed.
@@ -6128,9 +6431,7 @@ fn render_adapter(
         // through its accessor, and the call runs inside them all.
         let reach = lent
             .iter()
-            .map(|(index, mutable, rust)| {
-                format!("({index}, {mutable}, reach_lent::<{rust}> as Reach)")
-            })
+            .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
@@ -6199,15 +6500,20 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
         let convert::Type::Borrowed { mutable, ty } = input else {
             continue;
         };
-        if is_copied(ty) {
+        let ty = substituted(ty, signature, substitutions)?;
+        if is_copied(&ty) && place::available(&ty) {
+            lent.push((
+                index,
+                *mutable,
+                format!("reach_place::<{}>", place::policy(&ty)?),
+            ));
             continue;
         }
-        let ty = substituted(ty, signature, substitutions)?;
         if !matches!(ty, convert::Type::Nominal { .. }) || carries_lifetime(&ty) || is_value(&ty) {
             continue;
         }
         if let Some(rust) = concrete_type(&ty) {
-            lent.push((index, *mutable, rust));
+            lent.push((index, *mutable, format!("reach_lent::<{rust}>")));
         }
     }
     Ok(lent)
@@ -9702,6 +10008,7 @@ fn render_slot(
     let mut pins = None;
     let mut native = false;
     let mut lends = Vec::new();
+    let mut places = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
         let name = format!("input_{position}");
         match input {
@@ -9759,6 +10066,20 @@ fn render_slot(
                 parameters.push(format!("{name}: {borrow}{rust}"));
                 values.push(lent_value(position, *borrowed_mutably, &rust));
                 lends.push((position, *borrowed_mutably, rust));
+            }
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if family.is_none() && is_copied(ty) && place::available(ty) => {
+                let rust = concrete_type(ty).ok_or(drift("a slot's native sequence input"))?;
+                let borrow = if *borrowed_mutably { "&mut " } else { "&" };
+                parameters.push(format!("{name}: {borrow}{rust}"));
+                values.push(format!("place_{position}.clone()"));
+                places.push((position, *borrowed_mutably, place::policy(ty)?));
+                if *borrowed_mutably {
+                    mutable.push(position.to_string());
+                }
+                native = true;
             }
             convert::Type::Borrowed { .. } => {
                 return Err(drift(
@@ -9909,6 +10230,13 @@ fn render_slot(
             )
         }
     };
+    let body = place::around(
+        &places,
+        &format!(
+            "WITNESSES_{local}.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()"
+        ),
+        body,
+    );
     // The witnesses of the script function's parameters, read where
     // script code passes it, which its native inputs take.
     let witnesses = if native {
@@ -10311,6 +10639,25 @@ fn render_take_input(
     {
         let mut converted = String::new();
         render_from_dynamic(element, "value", 0, &mut converted)?;
+        if LENT_ARGUMENTS.get() && place::available(element) {
+            let rust = concrete_type(element).ok_or(request::Error::Drift {
+                field: "a copied or native borrowed input's type",
+            })?;
+            return writeln!(
+                output,
+                "    let argument_{local}_place = (**arguments.values.get({index}).ok_or(Error::MissingArgument)?).clone();
+    let mut argument_{local}_copy: Option<{rust}> = None;
+    let argument_{local}: &mut {rust} = match lent_argument(lent, {index}) {{
+        Some(value) => value.mutable::<{rust}>().ok_or(Error::TypeMismatch)?,
+        None => {{
+            let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten();
+            argument_{local}_copy = Some({converted}?);
+            argument_{local}_copy.as_mut().expect(\"the script operand was materialized\")
+        }}
+    }};"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         return writeln!(
             output,
             "    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
@@ -10328,6 +10675,24 @@ fn render_take_input(
     {
         let mut converted = String::new();
         render_from_dynamic(lent, "value", 0, &mut converted)?;
+        if LENT_ARGUMENTS.get() && place::available(lent) {
+            let rust = concrete_type(lent).ok_or(request::Error::Drift {
+                field: "a shared native sequence input's type",
+            })?;
+            return writeln!(
+                output,
+                "    let argument_{local}_made: {rust};
+    let argument_{local}: &{rust} = match lent_argument(lent, {index}) {{
+        Some(value) => value.shared::<{rust}>().ok_or(Error::TypeMismatch)?,
+        None => {{
+            let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten();
+            argument_{local}_made = {converted}?;
+            &argument_{local}_made
+        }}
+    }};"
+            )
+            .map_err(|_| request::Error::Encoding);
+        }
         return writeln!(
             output,
             "    let argument_{local}_made = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    let argument_{local} = &argument_{local}_made;"
@@ -10590,11 +10955,20 @@ fn render_callable_closure(
     let native_output = !by_value(&returned) || holds_native(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
+    let mut places = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
         let rust = concrete_type(input).ok_or(request::Error::Drift {
             field: "closure input type",
         })?;
         parameters.push(format!("input_{position}: {rust}"));
+        if let convert::Type::Borrowed { mutable, ty } = input
+            && is_copied(ty)
+            && place::available(ty)
+        {
+            places.push((position, *mutable, place::policy(ty)?));
+            values.push(format!("place_{position}.clone()"));
+            continue;
+        }
         let mut converted = String::new();
         render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
         // A native value takes the closure parameter's witness, so script
@@ -10625,7 +10999,7 @@ fn render_callable_closure(
             ),
             "callable.call_checked(&mut values, &witnesses)",
         )
-    } else if native_inputs {
+    } else if native_inputs || !places.is_empty() {
         (
             format!(
                 "\n        let witnesses = closure_inputs({index}, {});",
@@ -10635,6 +11009,24 @@ fn render_callable_closure(
         )
     } else {
         (String::new(), "callable.call(&mut values)")
+    };
+    let mutable = places
+        .iter()
+        .filter(|(_, mutable, _)| *mutable)
+        .map(|(at, _, _)| at.to_string())
+        .collect::<Vec<_>>();
+    let call = if mutable.is_empty() {
+        call.to_owned()
+    } else if inputs.iter().any(is_value) {
+        format!(
+            "callable.call_places_checked(&mut values, &[{}], &witnesses)",
+            mutable.join(", ")
+        )
+    } else {
+        format!(
+            "callable.call_places(&mut values, &[{}])",
+            mutable.join(", ")
+        )
     };
     // Native values go in and out through the arena, with `arguments` as an
     // adapter has it.
@@ -10662,8 +11054,10 @@ fn render_callable_closure(
     } else {
         ""
     };
+    let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
+    let body = place::around(&places, "witnesses.clone()", body);
     Ok(format!(
-        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))\n        }}\n    }}",
+        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {body}\n        }}\n    }}",
         parameters.join(", "),
     ))
 }
@@ -10982,9 +11376,11 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| static_pins().pin(value)).map_err(|_| Error::TypeMismatch)"
         ),
-        convert::Type::Builtin(
-            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
-        ) => write!(
+        convert::Type::Builtin(convert::Builtin::String) => write!(
+            output,
+            "{{ let value = {value}; if let Some(place) = __rawr_internal::place::get(&value) {{ __rawr_internal::place::take::<__rawr_internal::place::text::Text>(&place, place.witness()).map_err(|error| Error::Value(error.to_string())) }} else {{ value.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch) }} }}"
+        ),
+        convert::Type::Builtin(convert::Builtin::Str | convert::Builtin::Text) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
@@ -11123,10 +11519,13 @@ fn render_from_dynamic(
                 ),
                 None => String::new(),
             };
-            write!(
-                output,
-                "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>()){fixed}"
-            )
+            let array = format!("value.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<_>, Error>>()){fixed}");
+            if matches!(ty, convert::Type::Sequence { owned: true, length: None, .. }) && place::available(ty) {
+                let policy = place::policy(ty)?;
+                write!(output, "{{ let value = {value}; if let Some(place) = __rawr_internal::place::get(&value) {{ __rawr_internal::place::take::<{policy}>(&place, place.witness()).map_err(|error| Error::Value(error.to_string())) }} else {{ {array} }} }}")
+            } else {
+                write!(output, "{{ let value = {value}; {array} }}")
+            }
         }
     }
     .map_err(|_| request::Error::Encoding)
@@ -11475,7 +11874,11 @@ fn render_give_with(
             0,
             &mut converted,
         )?;
-        copied.push_str(&format!(", ({converted})?"));
+        if LENT_ARGUMENTS.get() && place::available(element) {
+            copied.push_str(&format!(", match argument_{position}_copy {{ Some(argument_{position}_copy) => ({converted})?, None => argument_{position}_place }}"));
+        } else {
+            copied.push_str(&format!(", ({converted})?"));
+        }
     }
     writeln!(
         output,
@@ -12478,6 +12881,7 @@ fn render_impl_function(
     let mut mutable = Vec::new();
     let mut restores = String::new();
     let mut lends = Vec::new();
+    let mut places = Vec::new();
     match function.receiver() {
         ImplReceiver::None => {}
         ImplReceiver::Shared => {
@@ -12526,6 +12930,20 @@ fn render_impl_function(
             }
             convert::Type::Borrowed { ty, .. } if matches!(**ty, convert::Type::Unit) => {
                 values.push("Dynamic::UNIT".to_owned());
+            }
+            convert::Type::Borrowed { mutable, ty }
+                if matches!(
+                    **ty,
+                    convert::Type::Sequence {
+                        owned: true,
+                        length: None,
+                        ..
+                    }
+                ) =>
+            {
+                let policy = place::policy(ty)?;
+                values.push(format!("place_{position}.clone()"));
+                places.push((position, *mutable, policy));
             }
             // A `&str`: Rawr's string of its text, as a script function
             // takes a string.
@@ -12645,6 +13063,11 @@ fn render_impl_function(
     // Each borrowed native value is lent around the call, innermost last.
     let (items, wrapped) = lent_around(&lends, call);
     call = wrapped;
+    call = place::around(
+        &places,
+        &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+        call,
+    );
     Ok(format!(
         "    fn {}{lifetime}({}) -> {rust} {{
 {items}        {call}
@@ -12783,6 +13206,7 @@ impl TypePaths {
     /// runner with the neutral profile makes none, and an imported type
     /// that renders is an ordinary scoped type (D594).
     fn install(facade: Option<&crate::surface::facade::Plan>, views: bool) -> Self {
+        place::clear();
         view::install(facade.filter(|_| views));
         TYPE_PATHS.with_borrow_mut(|paths| {
             FACADE_VALUES.with_borrow_mut(|values| {
@@ -12968,6 +13392,7 @@ impl TypePaths {
 
 impl Drop for TypePaths {
     fn drop(&mut self) {
+        place::clear();
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);

@@ -714,6 +714,13 @@ impl Model {
             };
         }
         if let Some(element) = expected.vec_element() {
+            // A native vector a script made (D651): its elements are native
+            // values its exact witness proved where the vector was made.
+            if crate::place::get(value)
+                .is_some_and(|place| place.witness().sequence_element().is_some())
+            {
+                return Ok(());
+            }
             let Ok(array) = value.as_array_ref() else {
                 return Err(construction::Error::ValueType {
                     expected: type_name(expected),

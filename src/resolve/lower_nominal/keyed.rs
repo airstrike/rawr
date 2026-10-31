@@ -328,6 +328,22 @@ impl Parser<'_> {
         helper: &str,
         arguments: Vec<origin::Fragment>,
     ) -> Result<origin::Fragment, Error> {
+        let array = match self.inference.resolve(&value.ty) {
+            Ty::Array { .. } => true,
+            Ty::Reference { target, .. } => matches!(*target, Ty::Array { .. }),
+            _ => false,
+        };
+        let mut arguments = arguments;
+        let checked;
+        let helper =
+            if array && matches!(helper, "push" | "clear" | "truncate" | "reverse" | "append") {
+                arguments.insert(0, super::vec_method_code(helper).to_string().into());
+                arguments.resize(4, "()".into());
+                checked = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                checked.as_str()
+            } else {
+                helper
+            };
         // `v[a..b]`: its copy changed, then stored back over the range.
         if let Some(Lvalue::Slice(slice)) = &value.lvalue {
             let slice = (**slice).clone();
