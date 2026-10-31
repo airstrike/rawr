@@ -85,7 +85,9 @@ it, and says how to install it when it is missing.
 
 - **rawr-import** runs programs with dependencies in `Cargo.toml`, or with
   native modules (files without the marker). Cargo compiles them, and the
-  marked code calls them.
+  marked code calls them. A save that edits a function body reaches the
+  running program in about 80 ms, in the same process with its state kept
+  ([measurements](benches/README.md#release-hot-reload-measurements)).
 - **rawr-iced** runs [iced](https://github.com/iced-rs/iced) apps and reloads
   them when you save a marked file.
 

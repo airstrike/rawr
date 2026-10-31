@@ -44,6 +44,7 @@ all four releases. Each timed edit window began after other builds stopped.
 | [0.3.19](reload-results/0.3.19.json) | 1102.031 ms | 1169.356 ms | 1262.574 ms | 145.785 s |
 | [0.3.20](reload-results/0.3.20.json) | 1081.242 ms | 1174.988 ms | 1191.296 ms | 148.713 s |
 | [0.3.21](reload-results/0.3.21.json) | 1130.528 ms | 1259.909 ms | 1312.979 ms | 144.876 s |
+| [0.3.25](reload-results/0.3.25.json) | 60.058 ms | 77.401 ms | 82.156 ms | 138.997 s |
 
 From 0.3.17 to 0.3.18, the later-edit median increased **25.998 ms (2.35%)**,
 and its maximum increased **112.767 ms (9.94%)**.
@@ -70,6 +71,29 @@ bot's deployment checks. The difference is therefore run-to-run variance on
 this machine, not a code change. All six edits retained native PID 21568 and
 its increasing state counter. The five later samples are 1259.909, 1263.858,
 1226.140, 1230.497 and 1312.979 ms.
+
+From 0.3.21 to 0.3.25, the later-edit median fell **1182.508 ms (93.86%)**,
+from 1259.909 ms to 77.401 ms, about 16 times faster. The first edit fell
+**1070.470 ms (94.69%)**, and the later maximum fell **1230.823 ms (93.74%)**.
+All six edits retained native PID 47107 and its increasing state counter. The
+five later samples are 77.401, 79.352, 82.156, 76.100 and 54.796 ms.
+
+This is resident compilation of body edits in the plain runner (#373, D656),
+which shipped in 0.3.25. Before it, every save ran full preparation in the
+parent: resolving the project again, replaying and validating the cached
+native surface and checking the runner plan. That took 93–98% of each reload,
+while compiling the edit itself took about 2 ms. Now the running runner
+compiles the new source against the native surface it was built with and
+installs it in the same process, with its state kept. Anything that surface
+can't vouch for, such as a new native call or a manifest change, still takes
+full preparation. Most of the remaining time is the watcher's 30 ms debounce
+and the wait for the fixture's next 20 ms tick, when the change becomes
+observable.
+
+0.3.22, 0.3.23 and 0.3.24 weren't measured to this standard, because parallel
+builds kept the machine busy. A provisional run of the installed 0.3.24
+against the branch build, both on a busy machine, recorded a 993.8 ms later
+median before and 48.6 ms after.
 
 An [earlier 0.3.21 run](reload-results/0.3.21-python3.12.9.json) used
 Python 3.12.9 and recorded a 1323.171 ms later-edit median with one

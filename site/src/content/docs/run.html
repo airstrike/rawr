@@ -91,6 +91,7 @@ fn main() {
   <li>A save of several files arrives whole.</li>
   <li>A save that doesn&rsquo;t compile prints its error, and the program keeps running.</li>
 </ul>
+<p>A body edit compiles inside the running program, against the native code it was built with, and nothing else is prepared again. On rawr&rsquo;s reload benchmark, a save reaches the next callback in about 80 ms with 0.3.25, against about 1.3 s before. The same process keeps running, with its state. Most of the 80 ms is the watcher waiting for the save to settle and the program&rsquo;s own next tick. A new native call or a changed <code>Cargo.toml</code> still prepares the whole project, as the list below says.</p>
 <p>A closure that native code holds runs its new body when the function that writes it has the same closures as before, with the same captures. Otherwise it runs its old body until the framework asks for it again. A function passed by name always runs its new body when its signature is the same.</p>
 <p>Some saves restart the program with one line that says why:</p>
 <ul>
