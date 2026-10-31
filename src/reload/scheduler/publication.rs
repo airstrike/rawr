@@ -33,7 +33,7 @@ impl fmt::Display for IncompleteObservation {
 
 impl std::error::Error for IncompleteObservation {}
 
-/// Candidate source evidence registered for relevance but not yet revalidated.
+/// Candidate source evidence registered for relevance.
 ///
 /// ```compile_fail
 /// # use rawr::reload::scheduler::publication::Staged;
@@ -41,27 +41,8 @@ impl std::error::Error for IncompleteObservation {}
 ///     let _other = stage.clone();
 /// }
 /// ```
-#[must_use = "a staged input graph must be revalidated or retired"]
-pub struct Staged(Option<Proof>);
-
-/// Candidate source evidence revalidated for structural final admission.
-///
-/// ```compile_fail
-/// # use rawr::reload::scheduler::publication::Validated;
-/// fn duplicate(validated: Validated) {
-///     let _other = validated.clone();
-/// }
-/// ```
-#[must_use = "validated inputs must pass through structural admission"]
-pub struct Validated(Option<Proof>);
-
-/// The previous exact input publication retained until the gate has exited.
-#[must_use = "retired input publication must reconcile native watches"]
-pub struct Retired {
-    previous: Arc<source::Inputs>,
-    _stage: Proof,
-    _stamp: Stamp,
-}
+#[must_use = "a staged input graph must be retired"]
+pub struct Staged(Option<Observation>);
 
 struct State {
     current: Arc<source::Inputs>,
@@ -71,11 +52,6 @@ struct State {
 struct Entry {
     stamp: Stamp,
     inputs: Arc<source::Inputs>,
-}
-
-struct Proof {
-    observation: Observation,
-    snapshot: source::Snapshot,
 }
 
 struct Observation {
@@ -138,7 +114,7 @@ impl Slot {
         // The exact same input Arc already proves coverage; ordinary Rawr
         // staging neither clones path storage nor needs a second coverage scan.
         self.register_shared(Arc::clone(snapshot.shared_inputs()))
-            .bind_exact(snapshot)
+            .bind_exact()
     }
 
     /// Borrow current and every still-live staged exact input set.
@@ -343,7 +319,7 @@ impl Observed {
         {
             return Err(IncompleteObservation);
         }
-        Ok(self.bind_exact(snapshot))
+        Ok(self.bind_exact())
     }
 
     fn observation(&self) -> &Observation {
@@ -353,61 +329,23 @@ impl Observed {
         }
     }
 
-    fn bind_exact(mut self, snapshot: source::Snapshot) -> Staged {
+    fn bind_exact(mut self) -> Staged {
         let observation = match self.0.take() {
             Some(observation) => observation,
             None => unreachable!("registered observation is consumed once"),
         };
-        Staged(Some(Proof {
-            observation,
-            snapshot,
-        }))
+        Staged(Some(observation))
     }
 }
 
 impl Staged {
-    /// Re-read every exact source and manifest before final admission.
-    pub fn revalidate(mut self) -> Result<Validated, source::Error> {
-        let Some(proof) = self.0.as_ref() else {
-            unreachable!("live staged proofs retain their payload")
-        };
-        proof.snapshot.revalidate()?;
-        Ok(Validated(self.0.take()))
-    }
-
-    /// Borrow complete candidate observation coverage; only retained Rawr
-    /// snapshot bytes are validated by this publication stage.
+    /// Borrow complete candidate observation coverage.
     #[must_use]
     pub fn inputs(&self) -> &source::Inputs {
-        let Some(proof) = self.0.as_ref() else {
-            unreachable!("live staged proofs retain their payload")
+        let Some(observation) = self.0.as_ref() else {
+            unreachable!("live staged observations retain their payload")
         };
-        &proof.observation.inputs
-    }
-}
-
-impl Validated {
-    /// Borrow complete observation coverage associated with revalidated Rawr
-    /// bytes. Imported content freshness remains the native owner's proof.
-    #[must_use]
-    pub fn inputs(&self) -> &source::Inputs {
-        let Some(proof) = self.0.as_ref() else {
-            unreachable!("live validated proofs retain their payload")
-        };
-        &proof.observation.inputs
-    }
-}
-
-impl Retired {
-    /// Borrow the replaced input set while reconciling native watches.
-    #[must_use]
-    pub fn previous(&self) -> &source::Inputs {
-        &self.previous
-    }
-
-    /// Release the retired publication after reconciliation and gate exit.
-    pub fn release(self) {
-        drop(self);
+        &observation.inputs
     }
 }
 
@@ -419,13 +357,7 @@ impl Drop for Observed {
 
 impl Drop for Staged {
     fn drop(&mut self) {
-        retire(self.0.take().map(|proof| proof.observation));
-    }
-}
-
-impl Drop for Validated {
-    fn drop(&mut self) {
-        retire(self.0.take().map(|proof| proof.observation));
+        retire(self.0.take());
     }
 }
 
@@ -477,18 +409,6 @@ impl fmt::Debug for Read<'_> {
 impl fmt::Debug for Staged {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Staged(<private>)")
-    }
-}
-
-impl fmt::Debug for Validated {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Validated(<private>)")
-    }
-}
-
-impl fmt::Debug for Retired {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Retired(<private>)")
     }
 }
 
