@@ -574,7 +574,6 @@ fn evaluate(
     });
     // A shared resolution whose request, toolchain, files and entries are
     // as they were: no Cargo and no tables (`memo`).
-    let bindings = crate::bindings::directory(state.cached.context.cargo_home());
     let attestation = state.cached.attestation.content().digest().as_bytes();
     let current = input::bindings::Current::capture(
         &state.request.project_root,
@@ -584,7 +583,6 @@ fn evaluate(
     if let Some(remembered) = current.as_ref().and_then(|current| {
         memo::recall(
             state.cached.context.rawr(),
-            &bindings,
             state.identity.as_bytes(),
             &attestation,
             current,
@@ -613,7 +611,6 @@ fn evaluate(
                 Some(parts) => {
                     memo::remember(
                         state.cached.context.rawr(),
-                        &bindings,
                         &memo::Resolution {
                             request: state.identity.as_bytes(),
                             attestation: &attestation,

@@ -67,6 +67,21 @@ pub(crate) struct SharedDocument {
 pub(crate) struct Sharing {
     pub(crate) keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
     pub(crate) bindings: Option<PathBuf>,
+    /// The project's own bindings, for crates whose closure reaches a path
+    /// package (#398). They never enter rawr's home.
+    pub(crate) local: Option<PathBuf>,
+}
+
+impl Sharing {
+    /// Where `shared`'s table lives: the project's bindings for a path
+    /// closure, rawr's home for an immutable one.
+    fn directory(&self, shared: &crate::extract::shared::Shared) -> Option<&PathBuf> {
+        if shared.local {
+            self.local.as_ref()
+        } else {
+            self.bindings.as_ref()
+        }
+    }
 }
 
 /// One exact artifact-bound probe and its expected control bytes.
@@ -491,7 +506,9 @@ impl Plan {
         mut self,
         keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
         bindings: PathBuf,
+        local: PathBuf,
     ) -> Self {
+        self.sharing.local = Some(local);
         for entry in self.entries.iter() {
             if let Some(shared) = keys.get(&entry.unit_key) {
                 self.sharing
@@ -519,7 +536,7 @@ impl Plan {
         if self.entries.is_empty() || self.sharing.keys.len() != self.entries.len() {
             return None;
         }
-        let bindings = self.sharing.bindings.as_ref()?;
+        self.sharing.bindings.as_ref()?;
         let session = engine::session_key(self.entries.iter().map(|entry| entry.unit_key.as_ref()));
         let mut fragments = Vec::new();
         let mut external = BTreeMap::new();
@@ -530,6 +547,9 @@ impl Plan {
         let mut leases = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             let shared = self.sharing.keys.get(&entry.unit_correlation)?;
+            let bindings = self.sharing.directory(shared)?;
+            // Inputs are checked before any replay: a path crate's files,
+            // as a git crate's declared ones (#398).
             let read = crate::bindings::read(bindings, &shared.key)?;
             let inputs = read.meta.inputs.as_ref()?.validate(current)?;
             let table = serde_json::from_slice::<engine::Table>(&read.table).ok()?;
@@ -703,6 +723,7 @@ impl Plan {
             identity.update(Sha256::digest(&body));
             fragments.push(fragment);
             settled.push(crate::bindings::Settled::Read {
+                directory: bindings.clone(),
                 key: shared.key.to_string(),
                 crate_name: meta.crate_name.clone(),
                 scripts: meta.scripts.clone(),
@@ -1747,7 +1768,7 @@ impl Capture {
         &self,
         build: &crate::input::build::Build,
     ) -> Vec<crate::bindings::Settled> {
-        let (Some(reuse), Some(bindings)) = (&self.reuse, &self.sharing.bindings) else {
+        let (Some(reuse), Some(_)) = (&self.reuse, &self.sharing.bindings) else {
             return Vec::new();
         };
         let handshakes = self.handshakes();
@@ -1755,6 +1776,9 @@ impl Capture {
         let nightly = build.binding_scripts();
         let mut settled = Vec::new();
         for (correlation, shared) in &self.sharing.keys {
+            let Some(bindings) = self.sharing.directory(shared) else {
+                continue;
+            };
             let table = reuse.join(shared.key.as_ref());
             let Some(handshake) = handshakes
                 .iter()

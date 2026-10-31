@@ -255,6 +255,9 @@ pub(crate) enum Settled {
     /// A table read from the home, with the results its publisher's build
     /// gave.
     Read {
+        /// The bindings directory the table was read from: rawr's home,
+        /// or the project's for a path closure.
+        directory: PathBuf,
         key: String,
         crate_name: String,
         scripts: BTreeMap<String, Vec<Script>>,
@@ -404,6 +407,7 @@ impl Settlement {
                     publish_entry(&key, &publish);
                 }
                 Settled::Read {
+                    directory,
                     key,
                     crate_name,
                     scripts,
@@ -415,9 +419,7 @@ impl Settlement {
                     let Some((package, _)) = differs else {
                         continue;
                     };
-                    if let Some(bindings) = &self.bindings {
-                        home::evict(bindings, &key);
-                    }
+                    home::evict(&directory, &key);
                     refused.get_or_insert_with(|| {
                         format!(
                             "the shared bindings of `{crate_name}` were extracted with different \
@@ -766,6 +768,7 @@ mod tests {
         assert_eq!(recorded[&package], [script("first")]);
         drop(entry);
         let read = || Settled::Read {
+            directory: bindings.clone(),
             key: "demo".to_owned(),
             crate_name: "demo".to_owned(),
             scripts: recorded.clone(),
@@ -920,6 +923,7 @@ mod tests {
             .unwrap();
             let error = Settlement {
                 entries: vec![Settled::Read {
+                    directory: bindings.clone(),
                     key: "key".to_owned(),
                     crate_name: "fixture".to_owned(),
                     scripts: scripts.clone(),
