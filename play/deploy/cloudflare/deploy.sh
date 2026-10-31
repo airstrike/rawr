@@ -124,15 +124,13 @@ node --input-type=module -e '
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);
-    // A block sends its ?play options (data-play) with its code, as run.ts does.
     // A block whose shown output is an error (class="err") is expected to
     // fail to compile, so its 422 is its right answer.
     for (const match of found) {
-      const [whole, attributes, html] = match;
-      const play = /\bdata-play="([^"]*)"/.exec(attributes);
+      const [whole, , html] = match;
       const after = page.slice(match.index + whole.length);
       const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
-      const body = JSON.stringify(play ? { code: text(html), play: text(play[1]) } : { code: text(html) });
+      const body = JSON.stringify({ code: text(html) });
       if (strip.includes("class=\"err\"")) failing.add(body);
       sources.add(body);
     }

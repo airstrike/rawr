@@ -5,77 +5,26 @@
 export const MAX_CODE = 16 * 1024;
 /** Largest stored share, in bytes of canonical JSON. */
 export const MAX_SHARE = 64 * 1024;
-export const MAX_MESSAGES = 32;
 export const ID_LENGTH = 10;
 export const ID_PATTERN = /^[0-9A-Za-z]{10}$/;
 
-/** What a share keeps: the code and the run options, nothing about who. */
+/** What a share keeps: the code, nothing about who. */
 export interface Snippet {
   code: string;
-  theme: "dark" | "light";
-  size: string;
-  messages: string[];
 }
 
-/** The options a `?play` line sets. Each is absent when the line doesn't name it. */
-export interface PlayLine {
-  theme?: "dark" | "light";
-  size?: string;
-  messages: string[];
-}
-
-/**
- * The options after `?play` on a line, read as the bot reads them. A token is
- * `size=WxH` or a bare `WxH`, `theme=dark|light` or a bare `dark` or `light`,
- * or `msg=EXPR`, which may repeat. An error names the token.
- */
-export function playLine(line: string): PlayLine | string {
-  const options: PlayLine = { messages: [] };
-  for (const token of line.split(/\s+/).filter((t) => t !== "")) {
-    const at = token.indexOf("=");
-    const key = at < 0 ? "" : token.slice(0, at);
-    const value = at < 0 ? token : token.slice(at + 1);
-    if (key === "msg" || key === "message") options.messages.push(value);
-    else if (key === "size" || (key === "" && /^\d/.test(value) && /x/i.test(value))) options.size = value;
-    else if ((key === "theme" || key === "") && (value === "dark" || value === "light")) options.theme = value;
-    else return `unknown ?play option \`${token}\`; expected size=WxH, theme=dark|light or msg=EXPR`;
-  }
-  return options;
-}
-
-/**
- * The snippet in a request body, normalized, or an error. The body names its
- * options as `theme`, `size` and `messages`, or as `play`, the text of a
- * `?play` line after the marker. The line's options apply after the fields.
- */
+/** The snippet in a request body, or an error. Other fields are ignored. */
 export function parseSnippet(body: unknown): Snippet | string {
   if (typeof body !== "object" || body === null) return "bad request";
   const b = body as Record<string, unknown>;
   if (typeof b.code !== "string" || b.code.trim() === "") return "write some code first";
   if (new TextEncoder().encode(b.code).length > MAX_CODE) return `the code is over ${MAX_CODE / 1024} KiB`;
-  let theme: Snippet["theme"] = b.theme === "light" ? "light" : "dark";
-  let size = typeof b.size === "string" ? b.size.trim() : "";
-  const raw = b.messages ?? [];
-  if (!Array.isArray(raw) || !raw.every((m) => typeof m === "string")) return "messages are text";
-  let messages = (raw as string[]).map((m) => m.trim()).filter((m) => m !== "");
-  if (b.play !== undefined) {
-    if (typeof b.play !== "string") return "play options are text";
-    const line = playLine(b.play);
-    if (typeof line === "string") return line;
-    theme = line.theme ?? theme;
-    size = line.size ?? size;
-    messages = [...messages, ...line.messages];
-  }
-  if (size !== "" && !/^\d{1,4}x\d{1,4}$/i.test(size)) return "size is WxH, like 400x300";
-  if (messages.length > MAX_MESSAGES) return `at most ${MAX_MESSAGES} messages`;
-  if (messages.some((m) => m.length > 256)) return "a message is over 256 characters";
-  return { code: b.code, theme, size: size.toLowerCase(), messages };
+  return { code: b.code };
 }
 
-/** The stored form: fixed key order, so equal snippets are equal bytes. */
+/** The stored form: equal snippets are equal bytes. */
 export function canonical(snippet: Snippet): string {
-  const { code, theme, size, messages } = snippet;
-  return JSON.stringify({ code, theme, size, messages });
+  return JSON.stringify({ code: snippet.code });
 }
 
 const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -130,17 +79,11 @@ export async function checkPass(key: string, value: string | null, nowMs: number
   return same(match[2], await hmac(key, `pass ${expires}`));
 }
 
-/** The header that names a render's caller to the bot, for its animation allowance. */
-export const USER_HEADER = "x-play-user";
-
-/**
- * The bot's render request for `body`, naming its caller `user` (a hash of
- * the IP). The bot counts an animation's longer time against it.
- */
-export function renderRequest(body: string, user: string): Request {
+/** The bot's render request for `body`. */
+export function renderRequest(body: string): Request {
   return new Request("http://container/render", {
     method: "POST",
-    headers: { "content-type": "application/json", [USER_HEADER]: user },
+    headers: { "content-type": "application/json" },
     body,
   });
 }
@@ -220,43 +163,17 @@ export const SHARE_LIMITS: Window[] = [
   { max: 100, ms: 3_600_000 },
 ];
 
-/** Previews: 10 uncached renders a minute and 60 an hour per IP. */
-export const PREVIEW_LIMITS: Window[] = [
-  { max: 10, ms: 60_000 },
-  { max: 60, ms: 3_600_000 },
-];
-/** Largest preview PNG kept, in bytes. */
+/** Largest preview (a program's output) kept, in bytes. */
 export const MAX_PREVIEW = 1024 * 1024;
 /** How long a preview that failed for a passing reason (busy, unreachable) is not retried. */
 export const RETRY_MS = 10 * 60_000;
 /** Shares not visited for longer than this many days are purged. */
 export const KEEP_DAYS = 30;
 
-/** The width and height in a PNG's header, or null if it is not a PNG. */
-export function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
-  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.length < 24 || signature.some((b, i) => bytes[i] !== b)) return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return { width: view.getUint32(16), height: view.getUint32(20) };
-}
-
-/** A share's render request asking for a still image: the last frame as a PNG, never a GIF. */
-export function stillBody(share: string): string {
-  return JSON.stringify({ ...JSON.parse(share), still: true });
-}
-
 /** The first non-blank line of the code, trimmed, at most 150 characters. */
 export function firstLine(code: string): string {
   const line = code.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
   return line.length > 150 ? line.slice(0, 149) + "…" : line;
-}
-
-/** Headers of a preview image: forever when it can never change, else briefly. */
-export function previewHeaders(permanent: boolean): Record<string, string> {
-  return {
-    "content-type": "image/png",
-    "cache-control": permanent ? "public, max-age=31536000, immutable" : "public, max-age=300",
-  };
 }
 
 /** The UTC day number of `now` (ms). */
@@ -343,40 +260,24 @@ export interface RunBlock {
   code: string;
   /** The element's inner HTML, to catch markup inside it. */
   html: string;
-  /** Its `data-play` attribute, the `?play` options its Run button sends, or null. */
-  play: string | null;
-  /**
-   * The options of the `?play` file header right above its `<pre>`, as the
-   * page shows them, or null when no such header is there.
-   */
-  header: string | null;
 }
 
 /**
  * The `<code data-run>` elements in a page's HTML. Their text is what the
- * page's Run buttons send (`textContent`), with the `data-play` options, so
- * these are the only snippets /play/run accepts without Turnstile.
+ * page's Run buttons send (`textContent`), so these are the only snippets
+ * /play/run accepts without Turnstile.
  */
 export function runBlocks(html: string): RunBlock[] {
   const blocks: RunBlock[] = [];
-  for (const match of html.matchAll(/<code\b([^>]*)\bdata-run\b(?:="([^"]*)")?([^>]*)>([\s\S]*?)<\/code>/g)) {
-    const play = /\bdata-play="([^"]*)"/.exec(match[1] + match[3]);
-    const above = /<div class="file"><b>([^<]*)<\/b>(?:<span>[^<]*<\/span>)?<\/div>\s*<pre>\s*$/.exec(html.slice(0, match.index));
-    const title = above ? decodeHtml(above[1]).trim() : "";
-    blocks.push({
-      name: match[2] ?? "",
-      code: decodeHtml(match[4]),
-      html: match[4],
-      play: play ? decodeHtml(play[1]) : null,
-      header: title === "?play" || title.startsWith("?play ") ? title.slice("?play".length).trim() : null,
-    });
+  for (const match of html.matchAll(/<code\b[^>]*\bdata-run\b(?:="([^"]*)")?[^>]*>([\s\S]*?)<\/code>/g)) {
+    blocks.push({ name: match[1] ?? "", code: decodeHtml(match[2]), html: match[2] });
   }
   return blocks;
 }
 
 /** The snippet a run block's Run button sends to /play/run, or an error. */
-export function runSnippet(block: { code: string; play: string | null }): Snippet | string {
-  return parseSnippet(block.play === null ? { code: block.code } : { code: block.code, play: block.play });
+export function runSnippet(block: { code: string }): Snippet | string {
+  return parseSnippet({ code: block.code });
 }
 
 /** The sources a page runs: the text of each `<code data-run>` element. */
@@ -424,29 +325,25 @@ export function firstOutputLine(result: TextResult): string {
 }
 
 /**
- * rawr-web's files under /web (web/build.sh): each kind's content type, and
- * its caching. The module and its glue revalidate by ETag, so a release shows
- * at once; the fonts are pinned, so a browser keeps them a week. A CJK
- * collection (.ttc) is served as font/ttf, a type the edge compresses.
+ * rawr-web's files under /web (web/build.sh): each kind's content type. The
+ * module and its glue revalidate by ETag, so a release shows
+ * at once.
  */
 export function webHeaders(path: string, from: Headers): Headers | null {
   const types: Record<string, string> = {
     ".wasm": "application/wasm",
     ".js": "text/javascript; charset=utf-8",
-    ".ttf": "font/ttf",
-    ".ttc": "font/ttf",
   };
   const type = types[path.slice(path.lastIndexOf("."))];
   if (!type) return null;
   const headers = new Headers(from);
   headers.set("content-type", type);
-  if (path.startsWith("/web/fonts/")) headers.set("cache-control", "public, max-age=604800");
   return headers;
 }
 
 /**
  * Serve a file under /web. web/build.sh writes a brotli copy (.br, at
- * quality 11) of the module and the fonts: a browser that takes brotli gets
+ * quality 11) of the module: a browser that takes brotli gets
  * it as is, about a quarter smaller than the edge's own compression makes
  * it. Anything else goes out as stored, which the edge compresses by its
  * content type.

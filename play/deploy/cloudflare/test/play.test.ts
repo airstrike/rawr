@@ -18,13 +18,9 @@ import {
   PASS_COOKIE,
   PASS_SECONDS,
   passCookie,
-  pngSize,
-  stillBody,
-  previewHeaders,
   purgeSelection,
   parseSnippet,
   renderRequest,
-  USER_HEADER,
   same,
   shareId,
   webAsset,
@@ -36,19 +32,16 @@ import { DATA, TURNSTILE_JS, inject, slug } from "../src/playpage.ts";
 
 const OG = {
   title: "Rawr Playground",
-  description: "use iced::widget::{button, column};",
+  description: "fn main() {}",
   url: "https://rawr.airstrike.fyi/play/abcDEF1234",
-  image: "https://rawr.airstrike.fyi/play/abcDEF1234.png",
-  alt: "The last frame",
-  width: 328,
-  height: 382,
+  image: "https://rawr.airstrike.fyi/og/card.png",
+  alt: "The card",
+  width: 1200,
+  height: 630,
 };
 
 const snippet = (over: Partial<Snippet> = {}): Snippet => ({
   code: "text(\"hi\")",
-  theme: "dark",
-  size: "",
-  messages: [],
   ...over,
 });
 
@@ -56,28 +49,18 @@ test("share ids are content-addressed and URL-safe", async () => {
   const a = await shareId(canonical(snippet()));
   assert.match(a, ID_PATTERN);
   assert.equal(await shareId(canonical(snippet())), a, "the same snippet, the same id");
-  assert.notEqual(await shareId(canonical(snippet({ theme: "light" }))), a, "options are part of it");
   assert.notEqual(await shareId(canonical(snippet({ code: "text(\"ho\")" }))), a);
-  // Key order in the request does not matter: the stored form is canonical.
-  const parsed = parseSnippet({ messages: [], size: "", theme: "dark", code: "text(\"hi\")" });
+  // Other fields in the request do not matter: the stored form is canonical.
+  const parsed = parseSnippet({ theme: "light", code: "text(\"hi\")" });
   assert.equal(canonical(parsed as Snippet), canonical(snippet()));
 });
 
-test("snippets are validated and normalized", () => {
-  assert.deepEqual(parseSnippet({ code: "x", theme: "light", size: " 400X300 ", messages: ["A", " ", " B "] }), {
-    code: "x",
-    theme: "light",
-    size: "400x300",
-    messages: ["A", "B"],
-  });
-  assert.equal((parseSnippet({ code: "x", theme: "pink" }) as Snippet).theme, "dark");
+test("snippets are validated", () => {
+  assert.deepEqual(parseSnippet({ code: "x" }), { code: "x" });
   assert.equal(typeof parseSnippet(null), "string");
   assert.equal(typeof parseSnippet({ code: "   " }), "string");
   assert.equal(typeof parseSnippet({ code: "x".repeat(MAX_CODE + 1) }), "string");
   assert.equal(typeof parseSnippet({ code: "é".repeat(MAX_CODE / 2 + 1) }), "string", "the cap is in bytes");
-  assert.equal(typeof parseSnippet({ code: "x", size: "big" }), "string");
-  assert.equal(typeof parseSnippet({ code: "x", messages: "A" }), "string");
-  assert.equal(typeof parseSnippet({ code: "x", messages: Array(33).fill("A") }), "string");
 });
 
 test("the limiter allows 6 a minute and 60 an hour per key", () => {
@@ -159,7 +142,7 @@ test("the Worker writes each request's data into the site's playground page", as
   const page = await built("play.html");
   assert.ok(page.includes(DATA), "the static page holds the island's placeholder");
   const html = inject(page, {
-    snippet: snippet({ code: "</script><script>alert(1)</script>", messages: ["Message::A"], theme: "light" }),
+    snippet: snippet({ code: "</script><script>alert(1)</script>" }),
     examples: [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust" }],
     sitekey: "0xKEY",
     shared: "abcDEF1234",
@@ -168,20 +151,15 @@ test("the Worker writes each request's data into the site's playground page", as
   assert.ok(!html.includes("</script><script>alert(1)") && !html.includes("</script><script>x()"), "code cannot close the script");
   const data = playData(html);
   assert.equal(data.snippet.code, "</script><script>alert(1)</script>");
-  assert.deepEqual(data.snippet.messages, ["Message::A"]);
   assert.equal(data.shared, "abcDEF1234");
   assert.equal(data.sitekey, "0xKEY");
   assert.equal(data.pass, false);
   assert.deepEqual(data.examples, [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust", slug: "async-tasks" }]);
-  // A share opens in its own theme, pinned before the page's theme script reads it.
-  assert.ok(html.includes('<html lang="en" data-theme-pin="light">'));
-  assert.ok(html.indexOf("data-theme-pin") < html.indexOf("localStorage"));
   // Turnstile's script comes up front without a pass, and not with one.
   assert.ok(html.includes(`<script src="${TURNSTILE_JS}" async defer></script>`));
   const passed = inject(page, { snippet: snippet(), examples: [], sitekey: "0xKEY", pass: true, shared: null, og: OG });
   assert.ok(!passed.includes("challenges.cloudflare.com/turnstile/v0/api.js\" async"));
   assert.equal(playData(passed).pass, true);
-  assert.ok(!passed.includes("data-theme-pin"), "only a share pins the theme");
   assert.throws(() => inject("<html></html>", { snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG }), /no #play-data/);
 });
 
@@ -189,8 +167,8 @@ test("the playground's link preview is the request's, once", async () => {
   const html = inject(await built("play.html"), { snippet: snippet(), examples: [], sitekey: null, shared: "abcDEF1234", og: OG });
   assert.equal(html.match(/property="og:title"/g)?.length, 1);
   assert.equal(html.match(/name="description"/g)?.length, 1);
-  assert.ok(html.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/play/abcDEF1234.png">'));
-  assert.ok(html.includes('<meta property="og:image:height" content="382">'));
+  assert.ok(html.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">'));
+  assert.ok(html.includes('<meta property="og:image:height" content="630">'));
   assert.ok(html.includes('<meta name="twitter:card" content="summary_large_image">'));
 });
 
@@ -214,30 +192,20 @@ test("every page has the site's header, with Docs or Playground current", async 
 
 test("link preview tags", () => {
   const tags = ogTags({ ...OG, description: 'say "hi" <b>' }, escape);
-  assert.ok(tags.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/play/abcDEF1234.png">'));
-  assert.ok(tags.includes('<meta property="og:image:width" content="328">'));
-  assert.ok(tags.includes('<meta property="og:image:height" content="382">'));
+  assert.ok(tags.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">'));
+  assert.ok(tags.includes('<meta property="og:image:width" content="1200">'));
+  assert.ok(tags.includes('<meta property="og:image:height" content="630">'));
   assert.ok(tags.includes('<meta name="twitter:card" content="summary_large_image">'));
-  assert.ok(tags.includes('<meta property="og:image:alt" content="The last frame">'));
+  assert.ok(tags.includes('<meta property="og:image:alt" content="The card">'));
   assert.ok(tags.includes("&#34;hi&#34; &#60;b&#62;"));
   const unsized = ogTags({ ...OG, width: undefined, height: undefined }, escape);
-  assert.ok(!unsized.includes("og:image:width"), "no size until the preview is rendered");
+  assert.ok(!unsized.includes("og:image:width"), "no size without one");
 });
 
-test("first line, headers, PNG size", () => {
-  assert.equal(firstLine("\n\n   use iced::Element;  \nfn main() {}"), "use iced::Element;");
+test("first line", () => {
+  assert.equal(firstLine("\n\n   use std::fmt;  \nfn main() {}"), "use std::fmt;");
   assert.equal(firstLine("x".repeat(200)).length, 150);
   assert.equal(firstLine("  \n "), "");
-  assert.equal(previewHeaders(true)["cache-control"], "public, max-age=31536000, immutable");
-  assert.equal(previewHeaders(true)["content-type"], "image/png");
-  assert.equal(previewHeaders(false)["cache-control"], "public, max-age=300");
-  const header = new Uint8Array(24);
-  header.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  new DataView(header.buffer).setUint32(16, 328);
-  new DataView(header.buffer).setUint32(20, 382);
-  assert.deepEqual(pngSize(header), { width: 328, height: 382 });
-  assert.equal(pngSize(new Uint8Array(24)), null);
-  assert.equal(pngSize(header.slice(0, 20)), null);
 });
 
 test("days and the purge selection", () => {
@@ -415,37 +383,6 @@ test("the allow-list build fails on empty, marked-up or disagreeing blocks", asy
   const ok = await allowList(new Map([["a.html", '<code data-run="x.rs">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rs">1 &lt; 2</code>']]));
   assert.equal(ok.hashes.length, 1);
   assert.equal(ok.blocks[0].code, "1 < 2");
-  // A block's data-play and the ?play header the page shows above it agree.
-  const app = (header: string, play: string | null) =>
-    `<div class="file"><b>${header}</b></div>\n  <pre><code data-run="app.rs"${play === null ? "" : ` data-play="${play}"`}>x</code></pre>`;
-  await fails({ "a.html": app("?play light", null) }, /shows \?play light but has no data-play/);
-  await fails({ "a.html": app("app.rs", "light") }, /has data-play but no \?play header above it/);
-  await fails({ "a.html": app("?play light msg=A", "light msg=B") }, /has data-play="light msg=B" but its header shows \?play light msg=A/);
-  await fails({ "a.html": app("?play pink", "pink") }, /unknown \?play option `pink`/);
-  await fails({ "a.html": app("?play", "") + app("?play light", "light") }, /differs from the block of the same name/);
-  const agreed = await allowList(new Map([["a.html", app("?play light msg=A", "light  msg=A")]]));
-  assert.deepEqual(agreed.blocks[0].snippet, { code: "x", theme: "light", size: "", messages: ["A"] });
-});
-
-test("a ?play line's options read as the bot reads them", async () => {
-  const { playLine } = await import("../src/play.ts");
-  assert.deepEqual(playLine("320x200 light msg=Message::Increment msg=Message::Increment"), {
-    size: "320x200",
-    theme: "light",
-    messages: ["Message::Increment", "Message::Increment"],
-  });
-  assert.deepEqual(playLine("size=40X30 theme=dark message=Go"), { size: "40X30", theme: "dark", messages: ["Go"] });
-  assert.deepEqual(playLine(""), { messages: [] });
-  assert.equal(typeof playLine("mine"), "string");
-  assert.equal(typeof playLine("theme=pink"), "string");
-  assert.deepEqual(parseSnippet({ code: "x", play: "light 40X30 msg=A", messages: ["B"] }), {
-    code: "x",
-    theme: "light",
-    size: "40x30",
-    messages: ["B", "A"],
-  });
-  assert.equal(typeof parseSnippet({ code: "x", play: "size=big" }), "string");
-  assert.equal(typeof parseSnippet({ code: "x", play: 3 }), "string");
 });
 
 /**
@@ -453,7 +390,7 @@ test("a ?play line's options read as the bot reads them", async () => {
  * its Run button, and return the request it sends. With `edit`, the code is
  * edited first, so the request goes to /play/render.
  */
-async function runJs(block: { name: string; code: string; play: string | null }, edit = ""): Promise<{ url: string; body: any }> {
+async function runJs(block: { name: string; code: string }, edit = ""): Promise<{ url: string; body: any }> {
   const { setup } = await import("../../../../site/src/scripts/run.ts");
   const element = (props: Record<string, unknown> = {}): any => {
     const listeners: Record<string, ((event: unknown) => void)[]> = {};
@@ -483,7 +420,7 @@ async function runJs(block: { name: string; code: string; play: string | null },
   const strip = element();
   const out = element({ closest: () => strip });
   const source = element({ textContent: block.code, innerHTML: block.code, innerText: block.code });
-  source.dataset = { run: block.name, ...(block.play === null ? {} : { play: block.play }) };
+  source.dataset = { run: block.name };
   const button = element();
   button.dataset = { source: "src", out: "out" };
   const document = {
@@ -552,16 +489,10 @@ test("landing runs are limited lightly per IP", async () => {
   assert.equal(limiter.take("other", 2_000), 0);
 });
 
-test("a share preview asks for a still image", () => {
-  const body = JSON.parse(stillBody(JSON.stringify({ code: "x", messages: ["Message::A"] })));
-  assert.deepEqual(body, { code: "x", messages: ["Message::A"], still: true });
-});
-
-test("a render request names its caller for the animation allowance", async () => {
-  const request = renderRequest('{"code":"x"}', "abc123");
+test("a render request posts the snippet to the bot", async () => {
+  const request = renderRequest('{"code":"x"}');
   assert.equal(request.method, "POST");
   assert.equal(request.url, "http://container/render");
-  assert.equal(request.headers.get(USER_HEADER), "abc123");
   assert.equal(request.headers.get("content-type"), "application/json");
   assert.equal(await request.text(), '{"code":"x"}');
 });
@@ -585,8 +516,6 @@ test("rawr-web's files are served with types the edge compresses", () => {
   assert.equal(headers("/web/rawr_web_bg.wasm")?.get("etag"), "\"x\"");
   assert.equal(headers("/web/rawr_web_bg.wasm")?.get("cache-control"), null, "the module revalidates");
   assert.equal(headers("/web/rawr_web.js")?.get("content-type"), "text/javascript; charset=utf-8");
-  assert.equal(headers("/web/fonts/NotoSansCJK-Regular.ttc")?.get("content-type"), "font/ttf");
-  assert.equal(headers("/web/fonts/FiraMono-Regular.ttf")?.get("cache-control"), "public, max-age=604800");
   assert.equal(headers("/web/index.html"), null);
 });
 

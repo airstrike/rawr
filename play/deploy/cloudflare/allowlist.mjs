@@ -1,16 +1,13 @@
 // The snippets POST /play/run accepts: the text of every `<code data-run>`
-// element in the site's HTML pages (site/dist), with the `?play` options in
-// its `data-play` attribute. build.mjs writes the SHA-256 of each snippet's
-// canonical form (code, theme, size and messages) to src/runnable.gen.ts,
-// which the Worker imports. So the allow-list and the Worker's cache key
-// cover each exact pair of source and options.
+// element in the site's HTML pages (site/dist). build.mjs writes the SHA-256
+// of each snippet's canonical form to src/runnable.gen.ts, which the Worker
+// imports. So the allow-list and the Worker's cache key cover each exact
+// source.
 //
 // The text is decoded as a browser's `textContent` reads it, since that is
 // what the pages' Run buttons send. A block that is empty or holds markup
 // fails the build. So do two blocks with the same `data-run` name and
-// different text, on one page or on two. A block's `data-play` must match
-// the `?play` file header the page shows above it, and a `?play` header needs
-// a `data-play`, so the options shown and the options sent can't drift.
+// different text, on one page or on two.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { canonical, runBlocks, runSnippet, sha256 } from "./src/play.ts";
@@ -29,8 +26,8 @@ export function sitePages(dir) {
 /**
  * The allow-list for `pages` (path to HTML): the sorted, distinct SHA-256
  * hashes of their run blocks' snippets, and the blocks themselves. Throws on
- * an empty block, a block with markup, two blocks with one name and different
- * text, and options that don't parse or don't match the block's header.
+ * an empty block, a block with markup, and two blocks with one name and
+ * different text.
  */
 export async function allowList(pages) {
   const blocks = [];
@@ -41,12 +38,6 @@ export async function allowList(pages) {
       const where = `${page} (data-run${block.name ? `="${block.name}"` : ""})`;
       if (block.code.trim() === "") errors.push(`${where} is empty`);
       if (/<[A-Za-z\/!]/.test(block.html)) errors.push(`${where} holds markup; a run block must be plain text`);
-      const shown = (text) => (text ?? "").split(/\s+/).filter(Boolean).join(" ");
-      if (block.header !== null && block.play === null) errors.push(`${where} shows ?play ${block.header} but has no data-play`);
-      if (block.play !== null && block.header === null) errors.push(`${where} has data-play but no ?play header above it`);
-      if (block.play !== null && block.header !== null && shown(block.play) !== shown(block.header)) {
-        errors.push(`${where} has data-play="${block.play}" but its header shows ?play ${block.header}`);
-      }
       const snippet = runSnippet(block);
       if (typeof snippet === "string") {
         if (block.code.trim() !== "") errors.push(`${where}: ${snippet}`);

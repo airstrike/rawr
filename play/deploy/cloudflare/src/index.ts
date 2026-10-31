@@ -32,7 +32,7 @@
 //
 // POST /play/run runs the site's own snippets without Turnstile: only
 // snippets whose SHA-256 is one of the `<code data-run>` texts in the site's
-// pages, with the `?play` options of its `data-play`, in canonical form.
+// pages, in canonical form.
 // build.mjs collects those hashes into src/runnable.gen.ts, so the
 // list is the deployed pages'. Results are cached per image version. A
 // snippet edited on the site is the visitor's own code: run.ts sends it to
@@ -49,15 +49,11 @@ import {
   Limiter,
   MAX_PREVIEW,
   MAX_SHARE,
-  PREVIEW_LIMITS,
   RETRY_MS,
   day,
   firstLine,
   firstOutputLine,
   parseTextResult,
-  pngSize,
-  stillBody,
-  previewHeaders,
   purgeSelection,
   RENDER_LIMITS,
   SHARE_LIMITS,
@@ -141,15 +137,13 @@ export const DOCS_MOVED: Record<string, string> = {
 };
 
 /**
- * A share's preview: its PNG, a plain program's output (JSON), or a failure
- * (kept forever for a code error or a limit).
+ * A share's preview: a plain program's output (JSON), or a failure (kept
+ * forever for a code error or a limit).
  */
 export type Preview =
-  | { kind: "png"; png: Uint8Array; rendered?: boolean }
   | { kind: "text"; output: string }
   | { kind: "failed"; permanent: boolean }
-  | { kind: "missing" }
-  | { kind: "limited"; wait: number };
+  | { kind: "missing" };
 
 export interface Purge {
   day: number;
@@ -192,7 +186,6 @@ export class PlayBot extends Container<Env> {
   defaultPort = HTTP_PORT;
   private renders = new Limiter(RENDER_LIMITS);
   private shares = new Limiter(SHARE_LIMITS);
-  private previews = new Limiter(PREVIEW_LIMITS);
   private landing = new Limiter(LANDING_LIMITS);
   private unlocks = new Limiter(UNLOCK_LIMITS);
   private unlocksTotal = new Limiter(UNLOCK_TOTAL_LIMITS, 1);
@@ -289,7 +282,7 @@ export class PlayBot extends Container<Env> {
 
   private tableReady = false;
 
-  /** The previews: a PNG, or `output` (a plain program's JSON), or neither for a failure. */
+  /** The previews: `output` (a plain program's JSON), or none for a failure. */
   private previewTable(): SqlStorage {
     const sql = this.ctx.storage.sql;
     if (this.tableReady) return sql;
@@ -302,33 +295,26 @@ export class PlayBot extends Container<Env> {
     return sql;
   }
 
-  /** What the stored preview is, without rendering: an image's size, or a program's output. */
-  async previewInfo(id: string): Promise<{ width: number; height: number } | { output: string } | null> {
-    const rows = this.previewTable().exec("SELECT png, output FROM play_previews WHERE id = ?", id).toArray();
-    const { png, output } = rows[0] ?? {};
-    if (typeof output === "string") return { output };
-    return png instanceof ArrayBuffer ? pngSize(new Uint8Array(png)) : null;
+  /** The stored preview's output, without rendering, or null. */
+  async previewOutput(id: string): Promise<string | null> {
+    const rows = this.previewTable().exec("SELECT output FROM play_previews WHERE id = ?", id).toArray();
+    const output = rows[0]?.output;
+    return typeof output === "string" ? output : null;
   }
 
   /**
    * A share's preview: stored, else rendered once (concurrent callers share
-   * the render) and stored. `ip` (a hash) limits uncached renders; null for
-   * the warm-up after a share.
+   * the render) and stored. Run as a warm-up after a share.
    */
-  async preview(id: string, ip: string | null): Promise<Preview> {
+  async preview(id: string): Promise<Preview> {
     const sql = this.previewTable();
-    const row = sql.exec("SELECT png, output, permanent, retry_at FROM play_previews WHERE id = ?", id).toArray()[0];
+    const row = sql.exec("SELECT output, permanent, retry_at FROM play_previews WHERE id = ?", id).toArray()[0];
     if (row) {
-      if (row.png instanceof ArrayBuffer) return { kind: "png", png: new Uint8Array(row.png) };
       if (typeof row.output === "string") return { kind: "text", output: row.output };
       if (row.permanent || Date.now() < Number(row.retry_at)) return { kind: "failed", permanent: Boolean(row.permanent) };
     }
     const pending = this.rendering.get(id);
     if (pending) return pending;
-    if (ip !== null) {
-      const wait = this.previews.take(ip, Date.now());
-      if (wait > 0) return { kind: "limited", wait };
-    }
     const render = this.renderPreview(id).finally(() => this.rendering.delete(id));
     this.rendering.set(id, render);
     return render;
@@ -339,11 +325,7 @@ export class PlayBot extends Container<Env> {
     if (text === null) return { kind: "missing" };
     let response: Response;
     try {
-      response = await this.containerFetch(
-        // A preview is the last frame as a PNG, never an animation.
-        new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: stillBody(text) }),
-        HTTP_PORT,
-      );
+      response = await this.containerFetch(renderRequest(text), HTTP_PORT);
     } catch {
       return this.failed(id, false);
     }
@@ -351,21 +333,11 @@ export class PlayBot extends Container<Env> {
       const output = await response.text();
       if (output.length > MAX_PREVIEW || !parseTextResult(output)) return this.failed(id, true);
       this.previewTable().exec(
-        "INSERT OR REPLACE INTO play_previews (id, png, output, permanent, retry_at) VALUES (?, NULL, ?, 1, 0)",
+        "INSERT OR REPLACE INTO play_previews (id, output, permanent, retry_at) VALUES (?, ?, 1, 0)",
         id,
         output,
       );
       return { kind: "text", output };
-    }
-    if (response.ok) {
-      const png = new Uint8Array(await response.arrayBuffer());
-      if (png.length > MAX_PREVIEW || !pngSize(png)) return this.failed(id, true);
-      this.previewTable().exec(
-        "INSERT OR REPLACE INTO play_previews (id, png, permanent, retry_at) VALUES (?, ?, 1, 0)",
-        id,
-        png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
-      );
-      return { kind: "png", png, rendered: true };
     }
     await response.body?.cancel();
     // A code error or a bad request never changes for the same snippet; busy or
@@ -375,7 +347,7 @@ export class PlayBot extends Container<Env> {
 
   private failed(id: string, permanent: boolean): Preview {
     this.previewTable().exec(
-      "INSERT OR REPLACE INTO play_previews (id, png, permanent, retry_at) VALUES (?, NULL, ?, ?)",
+      "INSERT OR REPLACE INTO play_previews (id, permanent, retry_at) VALUES (?, ?, ?)",
       id,
       permanent ? 1 : 0,
       Date.now() + RETRY_MS,
@@ -386,7 +358,7 @@ export class PlayBot extends Container<Env> {
   /**
    * Once a day (from the cron): delete shares unvisited for KEEP_DAYS, with
    * their previews; stamp shares that have no visit day yet. Returns the ids
-   * removed (for the cache) or null when today's pass already ran.
+   * removed, or null when today's pass already ran.
    */
   async purge(): Promise<string[] | null> {
     const today = day(Date.now());
@@ -622,12 +594,7 @@ function validConfig(json: string): boolean {
   );
 }
 
-const EMPTY: Snippet = {
-  code: FIRST.code,
-  theme: "dark",
-  size: "",
-  messages: FIRST.messages ?? [],
-};
+const EMPTY: Snippet = { code: FIRST.code };
 
 const html = (body: string, status = 200) =>
   new Response(body, {
@@ -705,50 +672,12 @@ async function readJson(request: Request, max: number): Promise<unknown> {
   }
 }
 
-/** GET /play/<id>.png: the share's last frame, rendered once and kept. */
-async function previewImage(request: Request, env: Env, ctx: ExecutionContext, id: string): Promise<Response> {
-  const bot = getContainer(env.PLAY_BOT);
-  ctx.waitUntil(bot.visit(id));
-  const cache = caches.default;
-  const key = new Request(`${SITE}/play/${id}.png`);
-  const hit = await cache.match(key);
-  if (hit) {
-    const response = new Response(hit.body, hit);
-    response.headers.set("x-preview", "cache");
-    return response;
-  }
-  const preview = await bot.preview(id, await ipHash(request, env));
-  switch (preview.kind) {
-    case "missing":
-      return plain("no such share", 404);
-    case "limited":
-      return plain(`too many previews; try again in ${preview.wait} s`, 429, { "retry-after": String(preview.wait) });
-    case "png": {
-      const response = new Response(preview.png.slice().buffer, { headers: previewHeaders(true) });
-      ctx.waitUntil(cache.put(key, response.clone()));
-      // Where it came from: "rendered" now, or "stored" in the Durable Object.
-      response.headers.set("x-preview", preview.rendered ? "rendered" : "stored");
-      return response;
-    }
-    case "text":
-    case "failed": {
-      // A plain program's share shows the site's card; its output is in
-      // the description. A failure shows the error card.
-      const text = preview.kind === "text";
-      const card = await env.ASSETS.fetch(new Request(`${SITE}/og/${text ? "card" : "play-error"}.png`));
-      const response = new Response(card.body, { headers: previewHeaders(text || preview.permanent) });
-      ctx.waitUntil(cache.put(key, response.clone()));
-      return response;
-    }
-  }
-}
-
-/** The SHA-256 of each snippet, code and options, the site's Run buttons send. */
+/** The SHA-256 of each snippet the site's Run buttons send. */
 const SITE_SOURCES: ReadonlySet<string> = new Set(RUNNABLE);
 
 /**
- * POST /play/run: one of the site's own snippets, by its exact source and
- * `?play` options, without Turnstile. Any other pair is refused. Each result
+ * POST /play/run: one of the site's own snippets, by its exact source,
+ * without Turnstile. Any other source is refused. Each result
  * is cached for the deployed image. Uncached runs are limited per IP, except
  * the release's smoke test's and an admin's.
  */
@@ -772,28 +701,21 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
   if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
   let response: Response;
   try {
-    response = await bot.fetch(renderRequest(canonical(snippet), await ipHash(request, env)));
+    response = await bot.fetch(renderRequest(canonical(snippet)));
   } catch (error) {
     return plain(`the runner is not reachable right now (${String(error).slice(0, 200)})`, 503);
   }
   const bytes = await response.arrayBuffer();
   const type = response.headers.get("content-type") ?? "text/plain";
   if (!response.ok) return new Response(bytes, { status: response.status, headers: { "content-type": type, "cache-control": "no-store" } });
-  // A render the clock cut short (the bot was busy, or the IP's animation
-  // time was used up) is not kept: the next run may get the full time.
-  const cut = (response.headers.get("x-play-note") ?? "").includes("Rendering stopped");
-  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": cut ? "no-store" : "public, max-age=86400" } });
-  if (!cut) ctx.waitUntil(cache.put(key, result.clone()));
+  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": "public, max-age=86400" } });
+  ctx.waitUntil(cache.put(key, result.clone()));
   result.headers.set("x-run", "ran");
   return result;
 }
 
 async function play(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
   const bot = getContainer(env.PLAY_BOT);
-  const image = /^\/play\/([0-9A-Za-z]{10})\.png$/.exec(path);
-  if (image && (request.method === "GET" || request.method === "HEAD")) {
-    return previewImage(request, env, ctx, image[1]);
-  }
   if (path === "/play/render" && request.method === "POST") {
     const body = (await readJson(request, 48 * 1024)) as Record<string, unknown> | null;
     const snippet = parseSnippet(body);
@@ -810,14 +732,9 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     }
     const wait = await bot.allow("render", await ipHash(request, env));
     if (wait > 0) return withPass(plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) }), pass);
-    // The bot counts an animation's longer time against the IP's hash.
-    const forward = renderRequest(canonical(snippet), await ipHash(request, env));
     try {
-      const response = await bot.fetch(forward);
+      const response = await bot.fetch(renderRequest(canonical(snippet)));
       const headers: Record<string, string> = { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" };
-      // A note on an animation, such as why it was cut.
-      const note = response.headers.get("x-play-note");
-      if (note) headers["x-play-note"] = note;
       return withPass(
         new Response(response.body, { status: response.status, headers }),
         pass,
@@ -848,7 +765,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     const id = await shareId(text);
     await bot.saveShare(id, text);
     // Warm the link preview, so an unfurl finds it ready.
-    ctx.waitUntil(bot.preview(id, null));
+    ctx.waitUntil(bot.preview(id));
     return Response.json({ id });
   }
   if (request.method !== "GET" && request.method !== "HEAD") return plain("method not allowed", 405);
@@ -872,26 +789,17 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     snippet = parsed;
     shared = id;
     ctx.waitUntil(bot.visit(id));
-    const info = await bot.previewInfo(id);
-    const output = info && "output" in info ? parseTextResult(info.output) : null;
-    og = output
-      ? {
-          title: "rawr playground",
-          description: firstOutputLine(output) || firstLine(snippet.code) || "A Rust program and its output",
-          url: `${SITE}/play/${id}`,
-          image: `${SITE}/play/${id}.png`,
-          alt: "rawr is rust augmented with rust: a Rust interpreter for your dev builds",
-          width: 1200,
-          height: 630,
-        }
-      : {
-          title: "rawr playground",
-          description: firstLine(snippet.code) || "An iced snippet rendered by rawr",
-          url: `${SITE}/play/${id}`,
-          image: `${SITE}/play/${id}.png`,
-          alt: "The last frame of this snippet, rendered by rawr",
-          ...(info && "width" in info ? info : {}),
-        };
+    const stored = await bot.previewOutput(id);
+    const output = stored === null ? null : parseTextResult(stored);
+    og = {
+      title: "rawr playground",
+      description: (output && firstOutputLine(output)) || firstLine(snippet.code) || "A Rust program and its output",
+      url: `${SITE}/play/${id}`,
+      image: `${SITE}/og/card.png`,
+      alt: "rawr is rust augmented with rust: a Rust interpreter for your dev builds",
+      width: 1200,
+      height: 630,
+    };
   }
   // The site's static page (dist/play.html), with this request's preview and data.
   const asset = await env.ASSETS.fetch(new Request(`${SITE}/play`));
@@ -940,12 +848,6 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     const bot = getContainer(env.PLAY_BOT);
     ctx.waitUntil(bot.ensure());
-    ctx.waitUntil(
-      bot.purge().then(async (removed) => {
-        for (const id of removed ?? []) {
-          await caches.default.delete(new Request(`${SITE}/play/${id}.png`)).catch(() => false);
-        }
-      }),
-    );
+    ctx.waitUntil(bot.purge());
   },
 } satisfies ExportedHandler<Env>;
