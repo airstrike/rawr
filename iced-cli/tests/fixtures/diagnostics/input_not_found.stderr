@@ -1,2 +1,0 @@
-error[RAWR-ENVIRONMENT-INPUT-NOT-FOUND]: cannot discover a Rawr target from `$INPUT`: the path does not exist
-  = help: check the path, or create a starter with `rawr new <path>`

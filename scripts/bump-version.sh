@@ -4,9 +4,9 @@
 # Usage: scripts/bump-version.sh [patch | <x.y.z>]
 #
 # With no argument or `patch`, the patch number of the root crate's version
-# goes up by one. Every rawr crate's own version, the two pins between rawr
-# and rawr_codegen, and the rawr crates in the iced profile's seed lock move
-# to the new version, and `cargo update -w` refreshes Cargo.lock. Vendored
+# goes up by one. Every rawr crate's own version and the two pins between
+# rawr and rawr_codegen move to the new version, and `cargo update -w`
+# refreshes Cargo.lock. Vendored
 # forks (rawr-notify, rawr-toml-edit) keep their own versions, and fixture
 # and example crates keep theirs.
 set -euo pipefail
@@ -18,8 +18,8 @@ python3 -I - "${1:-patch}" <<'PY'
 import re
 import sys
 
-CRATES = [".", "codegen", "canonical", "cli", "importer", "iced-cli", "directory",
-          "toml", "import-cli", "macros", "location", "play", "iced", "watch", "web"]
+CRATES = [".", "codegen", "canonical", "cli", "importer", "directory",
+          "toml", "import-cli", "macros", "location", "play", "watch", "web"]
 
 def package_version(text):
     package = text[text.index("[package]"):]
@@ -52,10 +52,6 @@ for crate in CRATES:
                         f'rawr = {{ path = "..", version = "{new}"')
     open(path, "w").write(text)
 
-lock = "iced/src/profile/resolution/current-v2.lock"
-text = open(lock).read()
-text = re.sub(rf'(name = "rawr[-_a-z]*"\nversion = )"{re.escape(old)}"', rf'\1"{new}"', text)
-open(lock, "w").write(text)
 print(f"{old} -> {new}")
 PY
 

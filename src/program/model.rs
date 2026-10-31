@@ -461,7 +461,7 @@ impl Model {
     /// The derived `Default` of the script type at `path` (`State`,
     /// `app::State`), by its modules and name. `None` when no type is
     /// there (D594).
-    #[cfg(feature = "sync")]
+    #[cfg(all(feature = "sync", feature = "rust-import"))]
     pub(crate) fn default_by_path(
         &self,
         path: &str,

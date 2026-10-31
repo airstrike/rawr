@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod marked;
 mod mcp;
 mod program;
+mod vocabulary;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -226,29 +227,34 @@ fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     assert!(text.contains(&format!("{}:2:", source.display())), "{text}");
 }
 
+/// An iced program is a program with Rust dependencies like any other: it
+/// goes to rawr-import and its generated bindings (D662).
 #[test]
-fn a_program_using_iced_without_rawr_iced_says_how_to_install_it() {
+fn a_program_using_iced_goes_to_rawr_import() {
     let sandbox = Sandbox::new("missing-iced");
+    let root = sandbox.work().join("app");
+    fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
-        sandbox.work().join("app.rs"),
-        "use iced::widget::text;\npub fn main() -> iced::Result { Ok(()) }\n",
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\niced = \"0.13\"\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse iced::widget::text;\npub fn main() -> iced::Result { Ok(()) }\n",
     )
     .unwrap();
 
     for command in ["run", "check"] {
-        let output = sandbox.rawr(&[command, "app.rs"]);
+        let output = sandbox.rawr(&[command, "app"]);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
         assert!(
-            text.contains(
-                "this program uses `iced`, which rawr-iced serves, and it is not installed"
-            ),
+            text.contains("this program uses Rust dependencies in Cargo.toml, which rawr-import serves, and it is not installed"),
             "{text}"
         );
-        assert!(
-            text.contains("cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli"),
-            "{text}"
-        );
+        assert!(text.contains(" rawr-import-cli"), "{text}");
+        assert!(!text.contains("rawr-iced"), "{text}");
         assert!(!text.contains("layer"), "{text}");
     }
 }
@@ -305,18 +311,11 @@ fn a_template_is_written_by_the_binary_offering_it() {
     );
 
     let handed = sandbox.rawr(&["new", "app", "--template", "shapes"]);
-    let missing = sandbox.rawr(&["new", "app", "--template", "iced"]);
     let unknown = sandbox.rawr(&["new", "app", "--template", "nothing"]);
     let help = sandbox.rawr(&["new", "--help"]);
 
     assert_eq!(handed.status.code(), Some(3));
     assert_eq!(stdout(&handed), "shapes: new app --template shapes\n");
-    assert_eq!(missing.status.code(), Some(1));
-    assert!(
-        stderr(&missing).starts_with("error: the `iced` template comes with rawr-iced, which is not installed. Install it with:\n"),
-        "{}",
-        stderr(&missing)
-    );
     assert_eq!(unknown.status.code(), Some(2));
     assert!(stderr(&unknown).contains("no installed binary offers a template named `nothing`"));
     assert_success(&help);
@@ -355,18 +354,11 @@ fn a_program_with_rust_dependencies_without_rawr_import_says_how_to_install_it()
 }
 
 #[test]
-fn a_command_from_rawr_iced_says_how_to_install_it() {
+fn a_command_no_binary_adds_is_unknown() {
     let sandbox = Sandbox::new("missing-preview");
 
-    let preview = sandbox.rawr(&["preview"]);
     let unknown = sandbox.rawr(&["bogus"]);
 
-    assert_eq!(preview.status.code(), Some(1));
-    assert!(
-        stderr(&preview).starts_with("error: `rawr preview` comes with rawr-iced, which is not installed. Install it with:\n  rustup toolchain install nightly-2026-07-11"),
-        "{}",
-        stderr(&preview)
-    );
     assert_eq!(unknown.status.code(), Some(2));
     assert!(stderr(&unknown).contains("unknown command `bogus`"));
 }
@@ -458,8 +450,9 @@ fn help_lists_what_installed_binaries_add() {
 
     assert_success(&alone);
     assert!(stdout(&alone).contains(
-        "rawr-iced is not installed. It serves programs that use `iced`. Install it with:"
+        "rawr-import is not installed. It serves programs that use Rust dependencies in Cargo.toml or a script's frontmatter. Install it with:"
     ));
+    assert!(!stdout(&alone).contains("rawr-iced"));
     assert!(stdout(&alone).contains("rawr new <path>"));
     assert!(
         stdout(&with).contains("From rawr-fake"),

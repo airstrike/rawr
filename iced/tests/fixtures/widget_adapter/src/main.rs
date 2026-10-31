@@ -1,8 +1,0 @@
-// rawr
-pub mod dial;
-
-use crate::dial::App;
-
-pub fn main() -> iced::Result {
-    iced::run(App::update, App::view)
-}

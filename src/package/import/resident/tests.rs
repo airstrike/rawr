@@ -3,12 +3,12 @@ use crate::host::ImportAllocation as _;
 use crate::package::compile::captured::tests::{
     compiler, native_snapshot, preview_runtime, snapshot, source,
 };
-use crate::{host, Engine, Shared};
+use crate::{Engine, Shared};
 
-fn retained() -> (Shared<Engine>, host::facade::ProfileCycle) {
-    let (engine, cycle) = compiler();
+fn retained() -> Shared<Engine> {
+    let engine = compiler();
     let native = account::Native::transform(account::tests::carrier()).unwrap();
-    (engine.retain_imported_native(native).unwrap(), cycle)
+    engine.retain_imported_native(native).unwrap()
 }
 
 fn usage(engine: &Engine) -> (usize, usize) {
@@ -17,25 +17,25 @@ fn usage(engine: &Engine) -> (usize, usize) {
 
 #[test]
 fn resident_compilation_requires_the_engines_retained_native_context() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     assert!(matches!(
-        engine.compile_package_snapshot_resident(&snapshot(&source("Foo")), &cycle),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo"))),
         Err(Error::Unowned)
     ));
 }
 
 #[test]
 fn native_miss_and_source_error_release_attempts_without_retry_classification() {
-    let (engine, cycle) = retained();
+    let engine = retained();
     let before = usage(&engine);
     assert!(matches!(
-        engine.compile_package_snapshot_resident(&snapshot(&source("Foo")), &cycle),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo"))),
         Ok(Outcome::NeedsPreparation)
     ));
     assert_eq!(usage(&engine), before);
     let invalid = source("Foo").replace("native::echo(7)", "true");
     assert!(matches!(
-        engine.compile_package_snapshot_resident(&snapshot(&invalid), &cycle),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&invalid)),
         Err(Error::Source(_))
     ));
     assert_eq!(usage(&engine), before);
@@ -43,7 +43,7 @@ fn native_miss_and_source_error_release_attempts_without_retry_classification() 
 
 #[test]
 fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
-    let (engine, cycle) = retained();
+    let engine = retained();
     let before = usage(&engine);
     for source in [
         "use native::new_function; pub fn sample() -> i64 { new_function() }",
@@ -51,16 +51,15 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
         "pub fn sample(value: native::NewType) {}",
     ] {
         assert!(matches!(
-            engine.compile_package_snapshot_resident(&native_snapshot(source), &cycle),
+            engine.compile_package_snapshot_resident_plain(&native_snapshot(source)),
             Ok(Outcome::NeedsPreparation)
         ));
         assert_eq!(usage(&engine), before);
     }
     assert!(matches!(
-        engine.compile_package_snapshot_resident(
-            &native_snapshot("pub fn sample() -> i64 { misspelled() }"),
-            &cycle
-        ),
+        engine.compile_package_snapshot_resident_plain(&native_snapshot(
+            "pub fn sample() -> i64 { misspelled() }"
+        )),
         Err(Error::Source(_))
     ));
     assert_eq!(usage(&engine), before);
@@ -68,12 +67,12 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
 
 #[test]
 fn resident_receipt_follows_executable_authority_after_generation_metadata_retires() {
-    let (engine, cycle) = retained();
+    let engine = retained();
     let before = usage(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let Outcome::Compiled(compiled) = engine
-        .compile_package_snapshot_resident(&pure, &cycle)
+        .compile_package_snapshot_resident_plain(&pure)
         .unwrap()
     else {
         panic!("no native requirement needs preparation");
@@ -106,18 +105,16 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
 
 #[test]
 fn initial_and_ordinary_generations_share_the_resident_account() {
-    let (engine, cycle) = retained();
+    let engine = retained();
     let baseline = usage(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let (initial, ast) = engine
-        .compile_package_snapshot_generation_with_top_level_checked(&pure, &cycle, &[0; 32])
+        .compile_package_snapshot_generation_with_top_level(&pure)
         .unwrap();
     let live = usage(&engine);
     assert!(live.0 > baseline.0 && live.1 > baseline.1);
-    let ordinary = engine
-        .compile_package_snapshot_generation_checked(&pure, &cycle, &[0; 32])
-        .unwrap();
+    let ordinary = engine.compile_package_snapshot_generation(&pure).unwrap();
     let overlapping = usage(&engine);
     assert!(overlapping.0 > live.0 && overlapping.1 > live.1);
     drop(ordinary);
@@ -143,7 +140,7 @@ mod top_level {
 
     #[test]
     fn neutral_snapshot_retains_support_until_its_last_ast_copy_retires() {
-        let (engine, _) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let ast = engine
             .compile_package_snapshot(&snapshot(
@@ -173,7 +170,7 @@ mod top_level {
 
     #[test]
     fn neutral_reconstruction_keeps_prior_support_in_the_original_account() {
-        let (engine, _) = retained();
+        let engine = retained();
         let original = engine.imported_native_snapshot().unwrap();
         let source = snapshot(
             "struct State { value: i64 }\n\
@@ -199,7 +196,7 @@ mod top_level {
         let (native, observation) =
             engine.reconstruct_imported_native(&account::tests::carrier_bytes(&[]));
         let native = native.unwrap();
-        let (replacement, _) = compiler();
+        let replacement = compiler();
         let replacement = replacement.retain_imported_native(native).unwrap();
         drop(program);
         drop(engine);
@@ -259,7 +256,7 @@ mod top_level {
 
     #[test]
     fn generated_top_level_retires_initial_support_with_its_last_executable() {
-        let (engine, cycle) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -267,11 +264,7 @@ mod top_level {
                 panic!(\"not invoked\");\n\
             }";
         let (initial, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(source),
-                &cycle,
-                &[0; 32],
-            )
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
         assert!(!ast.shared_support().is_empty());
         let support = Shared::downgrade(ast.shared_support());
@@ -292,7 +285,7 @@ mod top_level {
         assert_eq!(usage(&engine), initial_usage);
 
         let Outcome::Compiled(resident) = engine
-            .compile_package_snapshot_resident(&snapshot(&source.replace("7", "8")), &cycle)
+            .compile_package_snapshot_resident_plain(&snapshot(&source.replace("7", "8")))
             .unwrap()
         else {
             panic!("the resident edit has no new native requirement");
@@ -358,7 +351,7 @@ mod top_level {
 
     #[test]
     fn escaped_callback_keeps_support_charged_and_observes_later_constants() {
-        let (engine, cycle) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -371,11 +364,7 @@ mod top_level {
             const LATER: i64 = 42;\n\
             callback";
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(source),
-                &cycle,
-                &[0; 32],
-            )
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
         assert!(!ast.shared_support().is_empty());
         let support = Shared::downgrade(ast.shared_support());
@@ -396,7 +385,7 @@ mod top_level {
 
     #[test]
     fn copied_support_functions_keep_one_receipt_after_ast_and_module_merges() {
-        let (engine, cycle) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -404,11 +393,7 @@ mod top_level {
                 panic!(\"not invoked\");\n\
             }";
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(source),
-                &cycle,
-                &[0; 32],
-            )
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
         assert!(!ast.shared_support().is_empty());
         let original = Shared::downgrade(ast.shared_support());
@@ -447,7 +432,7 @@ mod top_level {
     fn resolver_cached_module_retains_support_until_its_last_resolved_copy_retires() {
         use crate::ModuleResolver as _;
 
-        let (engine, cycle) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -456,11 +441,7 @@ mod top_level {
             }\n\
             fn answer() -> i64 { 42 }";
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(source),
-                &cycle,
-                &[0; 32],
-            )
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
         assert!(!ast.shared_support().is_empty());
         let support = Shared::downgrade(ast.shared_support());
@@ -485,16 +466,12 @@ mod top_level {
 
     #[test]
     fn empty_support_receipt_retires_with_the_executable() {
-        let (engine, cycle) = retained();
+        let engine = retained();
         let baseline = usage(&engine);
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level_checked(
-                &snapshot(
-                    "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
-                ),
-                &cycle,
-                &[0; 32],
-            )
+            .compile_package_snapshot_generation_with_top_level(&snapshot(
+                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
+            ))
             .unwrap();
         assert!(ast.shared_support().is_empty());
         assert!(usage(&engine).1 > baseline.1);
@@ -510,7 +487,7 @@ mod top_level {
 /// exactly its own contribution.
 #[test]
 fn resident_target_exceedance_keeps_existing_owners_and_their_account() {
-    let (engine, cycle) = retained();
+    let engine = retained();
     let native = engine.imported_native.as_ref().unwrap();
     let before = native.usage();
     let identity = native.snapshot().account;
@@ -519,12 +496,9 @@ fn resident_target_exceedance_keeps_existing_owners_and_their_account() {
     pressure.retain_checked(Some(0), Some(remaining)).unwrap();
     let full = native.usage();
     let outcome = engine
-        .compile_package_snapshot_resident(
-            &snapshot(
-                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
-            ),
-            &cycle,
-        )
+        .compile_package_snapshot_resident_plain(&snapshot(
+            "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
+        ))
         .unwrap();
     let snapshot = native.snapshot();
     assert_eq!(snapshot.account, identity);
@@ -631,14 +605,14 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     .unwrap();
     let mut native = account::Native::transform(carrier).unwrap();
     let plan = facade::Plan::encode(&contract, &limits).unwrap();
-    let (mut engine, unused_cycle) = compiler();
+    let mut engine = compiler();
     let _definitions = runner::install_retained(&mut engine, &plan, &mut native).unwrap();
     let engine = engine.retain_imported_native(native).unwrap();
     let before = usage(&engine);
     let mut candidates = Vec::new();
     for text in [original.to_owned(), original.replace("(7)", "(8)")] {
         let Outcome::Compiled(compiled) = engine
-            .compile_package_snapshot_resident(&snapshot(&text), &unused_cycle)
+            .compile_package_snapshot_resident_plain(&snapshot(&text))
             .unwrap()
         else {
             panic!("the checked I32 native instance covers both actual snapshots");
@@ -663,7 +637,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     assert!(retained.0 > before.0 && retained.1 > before.1);
     let changed = original.replace("(7)", "(true)");
     assert!(matches!(
-        engine.compile_package_snapshot_resident(&snapshot(&changed), &unused_cycle),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&changed)),
         Ok(Outcome::NeedsPreparation)
     ));
     assert_eq!(usage(&engine), retained);
@@ -673,7 +647,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
 
 #[test]
 fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
-    let (engine, _) = retained();
+    let engine = retained();
     let before = usage(&engine);
     let Outcome::Compiled(compiled) = engine
         .compile_package_snapshot_resident_plain(&snapshot("fn main() { let value = 1 + 2; }"))

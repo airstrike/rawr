@@ -1,7 +1,5 @@
 //! Canonical fingerprints for resolved callable signatures.
 
-#[cfg(feature = "rust-import")]
-use crate::host;
 use crate::resolve::{item, type_ref};
 use crate::{receiver, type_def, ImmutableString};
 use std::cmp::Ordering;
@@ -149,26 +147,6 @@ impl Ord for Fingerprint {
 }
 
 impl Fingerprint {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        let parts = crate::Shared::make_mut(&mut self.0);
-        parts.authority.iter_mut().zip(parts.atoms.iter()).fold(
-            0_usize,
-            |completed, (part, atom)| {
-                let (Part::Identity(type_def::Identity::Host(identity)), Atom::Host(path)) =
-                    (part, atom)
-                else {
-                    return completed;
-                };
-                completed
-                    .saturating_add(usize::from(profile.normalize_identity_text(path, identity)))
-            },
-        )
-    }
-
     pub(crate) fn function(
         associated: bool,
         receiver: Option<receiver::Mode>,

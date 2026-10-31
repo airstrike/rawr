@@ -27,7 +27,7 @@ impl Contract {
         clippy::too_many_arguments,
         reason = "the endpoint proof bundle is intentionally indivisible"
     )]
-    #[cfg(feature = "rust-import")]
+    #[cfg(test)]
     pub(crate) fn new(
         path: host::path::Path,
         target: host::path::Path,
@@ -95,14 +95,6 @@ impl Contract {
 
     pub(crate) fn invoke(&self, input: ImmutableString) -> Dynamic {
         (self.invoke)(input)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        usize::from(profile.normalize_identity(&self.target, &mut self.representation))
     }
 
     #[cfg(feature = "rust-import")]

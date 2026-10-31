@@ -16,11 +16,6 @@ pub enum Error {
     InvalidFacadeRoot(ImmutableString),
     /// Facade ABI versions start at one.
     InvalidFacadeAbi(u32),
-    /// A profile self-cycle proof does not match its exact finished facade.
-    InvalidFacadeProfileCycle {
-        /// Canonical facade root.
-        root: ImmutableString,
-    },
     /// Structural tuple metadata requires at least two members.
     InvalidTupleArity {
         /// Number of supplied tuple members.
@@ -206,15 +201,12 @@ impl fmt::Display for Error {
             Self::InvalidTypePath(path) => {
                 write!(formatter, "invalid host type path `{path}`")
             }
-            Self::InvalidFacadePath(path) => write!(formatter, "invalid host facade path `{path}`"),
+            Self::InvalidFacadePath(path) => write!(formatter, "invalid path `{path}`"),
             Self::InvalidFacadeRoot(path) => {
-                write!(formatter, "host facade root must be one identifier, got `{path}`")
+                write!(formatter, "an export root must be one identifier, got `{path}`")
             }
             Self::InvalidFacadeAbi(version) => {
-                write!(formatter, "host facade ABI version must be non-zero, got {version}")
-            }
-            Self::InvalidFacadeProfileCycle { root } => {
-                write!(formatter, "invalid profile self-cycle proof for host facade `{root}`")
+                write!(formatter, "an export ABI version must be non-zero, got {version}")
             }
             Self::InvalidTupleArity { actual } => write!(
                 formatter,
@@ -244,7 +236,7 @@ impl fmt::Display for Error {
                 "unknown type parameter `{parameter}` in host item `{item}`"
             ),
             Self::UnknownFacadeType { item, ty } => {
-                write!(formatter, "unknown facade type `{ty}` in host item `{item}`")
+                write!(formatter, "unknown type `{ty}` in host item `{item}`")
             }
             Self::UnknownImportedType { item, identity } => {
                 write!(formatter, "unknown imported type `")?;
@@ -288,7 +280,7 @@ impl fmt::Display for Error {
                 incoming,
             } => write!(
                 formatter,
-                "duplicate host facade path `{path}`: {incoming} conflicts with {existing}"
+                "`{path}` is declared twice: {incoming} conflicts with {existing}"
             ),
             Self::IncompatibleFacadeOverload {
                 item,
@@ -298,18 +290,18 @@ impl fmt::Display for Error {
                 incoming_receiver,
             } => write!(
                 formatter,
-                "incompatible host facade overload `{item}`: {incoming_kind:?}/{incoming_receiver:?} conflicts with {existing_kind:?}/{existing_receiver:?}"
+                "incompatible overloads of `{item}`: {incoming_kind:?}/{incoming_receiver:?} conflicts with {existing_kind:?}/{existing_receiver:?}"
             ),
             Self::DuplicateFacadeOverloadInputs { item } => write!(
                 formatter,
-                "host facade overload `{item}` repeats an exact input signature; return-only overloads are not allowed"
+                "an overload of `{item}` repeats an exact input signature; return-only overloads are not allowed"
             ),
             Self::ConflictingHostIdentity { existing, incoming } => write!(
                 formatter,
                 "host type `{incoming}` conflicts with the compiler contract for `{existing}`"
             ),
             Self::UnknownProjectionSource { source } => {
-                write!(formatter, "unknown facade projection source type `{source}`")
+                write!(formatter, "unknown projection source type `{source}`")
             }
             Self::InvalidProjectionParameter {
                 source,
@@ -321,18 +313,18 @@ impl fmt::Display for Error {
             ),
             Self::DuplicateProjection { source, target } => write!(
                 formatter,
-                "duplicate direct facade projection from `{source}` to `{target}`"
+                "duplicate direct projection from `{source}` to `{target}`"
             ),
             Self::ProjectionCycle { ty } => {
-                write!(formatter, "facade projection cycle includes `{ty}`")
+                write!(formatter, "projection cycle includes `{ty}`")
             }
-            Self::MissingFacadeDependency { source, facade } => write!(
+            Self::MissingFacadeDependency { source, facade: root } => write!(
                 formatter,
-                "facade declaration `{source}` requires installed facade `{facade}`"
+                "`{source}` requires `{root}`, which is not installed"
             ),
             Self::FacadeDependencyMismatch { source, target } => write!(
                 formatter,
-                "facade declaration `{source}` requires the exact exported contract for `{target}`"
+                "`{source}` requires the exact exported contract for `{target}`"
             ),
             Self::RegistryConflict {
                 path,
@@ -340,7 +332,7 @@ impl fmt::Display for Error {
                 incoming,
             } => write!(
                 formatter,
-                "cannot install host {incoming} `{path}` over registered {existing}"
+                "cannot install {incoming} `{path}` over registered {existing}"
             ),
         }
     }

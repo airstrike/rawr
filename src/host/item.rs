@@ -159,20 +159,6 @@ pub struct Fingerprint {
 
 impl Definition {
     #[cfg(feature = "rust-import")]
-    pub(crate) fn same_contract_except_imported(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.kind == other.kind
-            && self.receiver == other.receiver
-            && self.signature == other.signature
-            && self.outcome == other.outcome
-            && self.evaluation == other.evaluation
-            && self.stream_identity == other.stream_identity
-            && self.guard == other.guard
-            && self.opens == other.opens
-            && self.rules == other.rules
-    }
-
-    #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let path = self
             .path
@@ -820,14 +806,6 @@ impl Definition {
 }
 
 impl Fingerprint {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        self.signature.normalize_profile(profile)
-    }
-
     #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let signature = self

@@ -1,5 +1,0 @@
-error[RAWR-RESOLVE-UNKNOWN-TYPE]: unknown type `Missing`
- --> $SOURCE:3:12-3:19
- 3 |     value: Missing,
-   |            ^^^^^^^
-  = help: declare `Missing`, or import it with `use`

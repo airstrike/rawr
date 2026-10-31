@@ -4,8 +4,8 @@
 # Usage: scripts/iced-examples.sh [example ...]
 #
 # Each example goes to target/scratch/iced-examples/<name>. Every crate root
-# .rs file gets `// rawr` as its first line. iced comes from the git rev that
-# rawr-iced uses, with the example's own features. Other workspace
+# .rs file gets `// rawr` as its first line. iced comes from the git rev in
+# ICED_REV (default below), with the example's own features. Other workspace
 # dependencies are resolved from iced's workspace table. Each Cargo.toml gets
 # an empty `[workspace]` table. All crates share one target directory,
 # target/scratch/iced-examples/_target, through CARGO_TARGET_DIR. A
@@ -18,14 +18,10 @@ set -euo pipefail
 
 repo="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 out="$repo/target/scratch/iced-examples"
-rev="$(sed -n 's/^iced = { git = "https:\/\/github.com\/iced-rs\/iced", rev = "\([0-9a-f]*\)".*/\1/p' "$repo/iced/Cargo.toml" | head -n 1)"
-if [ -z "$rev" ]; then
-    echo "could not read iced's git rev from iced/Cargo.toml" >&2
-    exit 1
-fi
+rev="${ICED_REV:-be88873d38544455e26c7a104eb757da2cbbac6b}"
 iced_src="${ICED_SRC:-$HOME/.cargo/git/checkouts/iced-3e930cb38a75fe30/${rev:0:7}}"
 if [ ! -d "$iced_src/examples" ]; then
-    echo "no iced checkout at $iced_src; run cargo fetch in $repo/iced first" >&2
+    echo "no iced checkout at $iced_src; set ICED_SRC, or cargo fetch a crate that depends on iced at $rev" >&2
     exit 1
 fi
 

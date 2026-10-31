@@ -145,15 +145,9 @@ fn normalize(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::Change;
-    use notify::event::{
-        AccessKind, CreateKind, DataChange, Flag, ModifyKind, RemoveKind, RenameMode,
-    };
+    use notify::event::{AccessKind, CreateKind, DataChange, Flag, ModifyKind, RemoveKind};
     use notify::{Event, EventKind};
-    use rawr::reload::compatibility::{Owner, Owners};
-    use rawr::reload::scheduler::Admission;
     use std::fs;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
 
     #[test]
     fn access_is_irrelevant_and_backend_rescan_is_conservative() {
@@ -226,98 +220,6 @@ mod tests {
         assert!(created.relevant_inputs(&inputs));
         assert!(!unrelated.relevant_inputs(&inputs));
     }
-
-    #[test]
-    fn admitted_module_rollover_revokes_new_inputs_and_ignores_removed_inputs() {
-        let project = Project::new();
-        project.write("Cargo.toml", "[package]\nname = \"rollover\"\n");
-        project.write("src/main.rs", application("old"));
-        project.write("src/old/mod.rs", "// rawr\npub fn value() -> i64 { 1 }\n");
-        project.write("src/new/mod.rs", "// rawr\npub fn value() -> i64 { 2 }\n");
-
-        let mut engine = rawr::Engine::new();
-        rawr_iced::install(&mut engine).unwrap();
-        let engine = rawr::Shared::new(engine);
-        let target = rawr::project::Target::discover(&project.root).unwrap();
-        let first = engine.compile_package_generation(&target).unwrap();
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            rawr::reload::source::Inputs::from_graph(first.source()),
-        ));
-        let bootstrap = first.bind(&engine, registry()).unwrap();
-        let mut slot = bootstrap.install(());
-
-        project.write("src/main.rs", application("new"));
-        let target = rawr::project::Target::discover(&project.root).unwrap();
-        let candidate = engine.compile_package_generation(&target).unwrap();
-        let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
-        let gate = rawr::reload::scheduler::Gate::new(Duration::ZERO);
-        let now = Instant::now();
-        gate.observe(now).unwrap();
-        let candidate = gate
-            .start(now)
-            .unwrap()
-            .complete((candidate, snapshot))
-            .stage_inputs(&publication)
-            .try_map(|(candidate, staged)| {
-                let plan = rawr::reload::compatibility::Plan::compare(
-                    slot.generation(),
-                    candidate,
-                    Owners::one(Owner::Application),
-                );
-                let replacement = plan.bind(&engine, registry()).map_err(|_| ())?;
-                let preparing = replacement.prepare(&slot).map_err(|_| ())?;
-                Ok::<_, ()>((preparing.seal(()), staged))
-            })
-            .unwrap()
-            .try_map(|(prepared, staged)| {
-                staged.revalidate().map(|validated| (prepared, validated))
-            })
-            .unwrap();
-        let Admission::Current(Ok((_evidence, retired, inputs))) =
-            gate.admit_slot_and_publish(candidate, &mut slot, &publication)
-        else {
-            panic!("fresh candidate and exact publication must admit together");
-        };
-        let () = retired.release();
-        inputs.release();
-
-        let old = fs::canonicalize(project.root.join("src/old/mod.rs")).unwrap();
-        let new = fs::canonicalize(project.root.join("src/new/mod.rs")).unwrap();
-        let old = Change::from_event(&Event::new(EventKind::Modify(ModifyKind::Any)).add_path(old));
-        let new = Change::from_event(&Event::new(EventKind::Modify(ModifyKind::Any)).add_path(new));
-        let renamed_directory = Change::from_event(
-            &Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
-                .add_path(project.root.join("src/new")),
-        );
-        assert!(!old.relevant(&publication.read()));
-        assert!(new.relevant(&publication.read()));
-        assert!(renamed_directory.relevant(&publication.read()));
-    }
-
-    fn registry() -> rawr::host::runtime::Registry {
-        let mut registry = rawr::host::runtime::Registry::new();
-        for facade in rawr_iced::runtime_facades().unwrap() {
-            registry.install(facade).unwrap();
-        }
-        registry
-    }
-
-    fn application(module: &str) -> String {
-        format!("// rawr\nmod {module};\n{}", APPLICATION)
-    }
-
-    const APPLICATION: &str = r#"
-use iced::Element;
-use iced::widget::text;
-
-#[derive(Default)] struct State;
-#[derive(Debug, Clone, Copy)] enum Message { Tick }
-impl State {
-    fn update(&mut self, message: Message) {}
-    fn view(&self) -> Element<Message> { text("rollover") }
-}
-pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#;
 
     struct Project {
         root: std::path::PathBuf,

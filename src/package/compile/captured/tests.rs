@@ -3,9 +3,6 @@ use crate::{capability, host, package, Engine};
 use rawr_import::classify::representability::convert::{Builtin, Type};
 use rawr_import::surface::identity::{Definition, Selector};
 
-const EXACT: [u8; 32] = [31; 32];
-const SEMANTIC: [u8; 32] = [32; 32];
-
 #[derive(Clone)]
 struct ResultValue;
 #[derive(Clone)]
@@ -18,7 +15,6 @@ struct Theme;
 fn iced_facade() -> host::facade::Definition {
     let mut builder =
         host::facade::Builder::new("iced", host::facade::Abi::new(1).unwrap()).unwrap();
-    builder.compatibility_seal(EXACT).unwrap();
     builder.type_::<ResultValue>("Result", &[], &[]).unwrap();
     builder.type_::<Task>("Task", &["Message"], &[]).unwrap();
     builder.type_::<Theme>("Theme", &[], &[]).unwrap();
@@ -60,9 +56,8 @@ pub(crate) fn preview_runtime() -> host::runtime::Registry {
     runtime
 }
 
-pub(crate) fn compiler() -> (Engine, host::facade::ProfileCycle) {
+pub(crate) fn compiler() -> Engine {
     let facade = iced_facade();
-    let cycle = host::facade::ProfileCycle::transform(&facade, EXACT, SEMANTIC).unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade).unwrap();
 
@@ -84,7 +79,7 @@ pub(crate) fn compiler() -> (Engine, host::facade::ProfileCycle) {
     engine
         .register_host_facade(native.finish().unwrap())
         .unwrap();
-    (engine, cycle)
+    engine
 }
 
 pub(crate) fn source(label: &str) -> String {
@@ -124,12 +119,12 @@ pub(crate) fn native_snapshot(source: &str) -> package::snapshot::Snapshot {
 }
 
 #[test]
-fn snapshot_pass_retains_candidate_native_uses_and_derived_semantic_together() {
-    let (engine, cycle) = compiler();
+fn snapshot_pass_retains_candidate_and_native_uses_together() {
+    let engine = compiler();
     let text = source("Foo");
     let snapshot = snapshot(&text);
     let mut allocation = host::TestImportAllocation::default();
-    let output = Output::transform(&engine, &snapshot, &cycle, &mut allocation).unwrap();
+    let output = Output::transform_plain(&engine, &snapshot, &mut allocation).unwrap();
     assert_eq!(output.candidate.source().entry_source().text(), text);
     assert!(output.candidate.has_application());
     assert_eq!(output.imported.uses.len(), 1);
@@ -137,12 +132,6 @@ fn snapshot_pass_retains_candidate_native_uses_and_derived_semantic_together() {
     assert_eq!(use_.path, "native::echo");
     assert_eq!(&*use_.types, &[Type::Builtin(Builtin::I64)]);
     assert!(allocation.usage().0 > 0 && allocation.usage().1 > 0);
-    let semantic = output.semantic.as_ref().unwrap();
-    super::super::snapshot_generation_checked(&engine, &snapshot, &cycle, semantic.as_bytes())
-        .unwrap();
-    assert!(
-        super::super::snapshot_generation_checked(&engine, &snapshot, &cycle, &[0; 32]).is_err()
-    );
 
     let generation = output.candidate.id();
     let (candidate, _ast) = output.candidate.with_top_level();
@@ -151,23 +140,20 @@ fn snapshot_pass_retains_candidate_native_uses_and_derived_semantic_together() {
 
 #[test]
 fn body_edit_keeps_native_requirements_but_retains_fresh_source() {
-    let (engine, cycle) = compiler();
-    let first = Output::transform(
+    let engine = compiler();
+    let first = Output::transform_plain(
         &engine,
         &snapshot(&source("Foo")),
-        &cycle,
         &mut host::TestImportAllocation::default(),
     )
     .unwrap();
     let edited = source("Bar");
-    let next = Output::transform(
+    let next = Output::transform_plain(
         &engine,
         &snapshot(&edited),
-        &cycle,
         &mut host::TestImportAllocation::default(),
     )
     .unwrap();
-    assert_eq!(first.semantic, next.semantic);
     assert_eq!(first.imported.uses, next.imported.uses);
     assert_ne!(first.candidate.id(), next.candidate.id());
     assert_eq!(next.candidate.source().entry_source().text(), edited);
@@ -175,11 +161,10 @@ fn body_edit_keeps_native_requirements_but_retains_fresh_source() {
 
 #[test]
 fn resource_refusal_is_not_a_source_or_native_preparation_miss() {
-    let (engine, cycle) = compiler();
-    let error = match Output::transform(
+    let engine = compiler();
+    let error = match Output::transform_plain(
         &engine,
         &snapshot(&source("Foo")),
-        &cycle,
         &mut host::TestImportAllocation::new(0, 0),
     ) {
         Ok(_) => panic!("zero retained budget must refuse imported-use capture"),
@@ -190,12 +175,11 @@ fn resource_refusal_is_not_a_source_or_native_preparation_miss() {
 
 #[test]
 fn type_error_keeps_the_actual_snapshot_diagnostic() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     let text = source("Foo").replace("native::echo(7)", "native::echo(true)");
-    let error = match Output::transform(
+    let error = match Output::transform_plain(
         &engine,
         &snapshot(&text),
-        &cycle,
         &mut host::TestImportAllocation::default(),
     ) {
         Ok(_) => panic!("bool cannot replace an i64 field"),
@@ -207,24 +191,4 @@ fn type_error_keeps_the_actual_snapshot_diagnostic() {
     let report = error.report().unwrap();
     assert!(report.sources().iter().any(|source| source.text() == text));
     assert!(report.message().contains("type"));
-}
-
-#[test]
-fn foreign_profile_cycle_cannot_supply_candidate_semantics() {
-    let (engine, _cycle) = compiler();
-    let mut builder =
-        host::facade::Builder::new("foreign", host::facade::Abi::new(1).unwrap()).unwrap();
-    builder.compatibility_seal(EXACT).unwrap();
-    let foreign = builder.finish().unwrap();
-    let cycle = host::facade::ProfileCycle::transform(&foreign, EXACT, SEMANTIC).unwrap();
-    let error = match Output::transform(
-        &engine,
-        &snapshot(&source("Foo")),
-        &cycle,
-        &mut host::TestImportAllocation::default(),
-    ) {
-        Ok(_) => panic!("foreign profile must not normalize this application"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, Error::Source(_)));
 }

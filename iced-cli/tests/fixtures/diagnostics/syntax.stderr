@@ -1,4 +1,0 @@
-error[RAWR-PARSE-MISSING-TOKEN]: Expecting 'identifier' as a function parameter
- --> $SOURCE:2:14
- 2 | pub fn main( {
-   |              ^

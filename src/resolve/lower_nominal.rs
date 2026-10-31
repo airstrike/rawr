@@ -312,7 +312,6 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let impls = native_impls(program, &models)?.into_boxed_slice();
     Ok(ImportedOutput {
         uses: uses.into_boxed_slice(),
-        dependencies: dependencies.into_iter().collect(),
         impls,
     })
 }
@@ -1401,7 +1400,6 @@ fn instance_round<A: crate::host::ImportAllocation>(
 #[cfg(feature = "rust-import")]
 pub(crate) struct ImportedOutput {
     pub(crate) uses: Box<[ImportedUse]>,
-    pub(crate) dependencies: Box<[crate::host::facade::Dependency]>,
     /// The script's impls of dependencies' traits, by the script path of
     /// the type each is for (D594).
     pub(crate) impls: Box<[(Box<str>, rawr_import::surface::instance::ScriptImpl)]>,
@@ -2464,7 +2462,6 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         lowered,
         ImportedOutput {
             uses: uses.into_boxed_slice(),
-            dependencies: dependencies.into_iter().collect(),
             impls,
         },
     ))
@@ -17846,9 +17843,9 @@ impl<'a> Parser<'a> {
                                 .ok_or_else(|| Error::InvalidHostOperation {
                                     item: operation.into(),
                                     reason: format!(
-                                    "symbolic imported type `{}` has no originating facade proof",
-                                    definition.path()
-                                )
+                                        "symbolic imported type `{}` has no originating proof",
+                                        definition.path()
+                                    )
                                     .into(),
                                     operation: span,
                                 })?;
@@ -19379,7 +19376,7 @@ impl<'a> Parser<'a> {
             } => {
                 let selected_owner = owner.ok_or_else(|| Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: "imported type has no originating facade proof".into(),
+                    reason: "imported type has no originating proof".into(),
                     operation: Span::NONE,
                 })?;
                 let imported = self
@@ -19464,7 +19461,7 @@ impl<'a> Parser<'a> {
                     crate::host::type_ref::SupportTarget::Local(local) => {
                         let owner = owner.cloned().ok_or_else(|| Error::InvalidHostOperation {
                             item: operation.into(),
-                            reason: "local signature support has no exact facade owner".into(),
+                            reason: "local signature support has no exact owner".into(),
                             operation: Span::NONE,
                         })?;
                         (local.contract(), owner)
@@ -19625,7 +19622,7 @@ impl<'a> Parser<'a> {
     ) -> Result<String, Error> {
         let owner = owner.ok_or_else(|| Error::InvalidHostOperation {
             item: item.path().into(),
-            reason: "item is not owned by an installed validated facade".into(),
+            reason: "item is not owned by installed validated bindings".into(),
             operation: call,
         })?;
         let facade = owner.fingerprint().clone();
@@ -19888,7 +19885,7 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: SUBSCRIPTION_RUN_STREAM.into(),
-                    reason: "the facade lacks this item".into(),
+                    reason: "the bindings lack this item".into(),
                     operation: name_span,
                 })?;
             let owner = self.models.item_owner(SUBSCRIPTION_RUN_STREAM).cloned();
@@ -19992,7 +19989,7 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: path.into(),
-                    reason: "the facade lacks this item".into(),
+                    reason: "the bindings lack this item".into(),
                     operation: call,
                 })?;
             let owner = this.models.item_owner(path).cloned();
@@ -20217,7 +20214,7 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: TAG_OF.into(),
-                    reason: "the facade lacks the logical tag".into(),
+                    reason: "the bindings lack the logical tag".into(),
                     operation: call,
                 })?;
             let owner = self.models.item_owner(TAG_OF_LOGICAL).cloned();
@@ -20292,11 +20289,7 @@ impl<'a> Parser<'a> {
             }
         }
         let output = self.inference.resolve(&signature.output);
-        self.reject_invocation(
-            &output,
-            call,
-            "constructed or returned by a facade function",
-        )?;
+        self.reject_invocation(&output, call, "constructed or returned by a host function")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
@@ -20742,7 +20735,7 @@ impl<'a> Parser<'a> {
         }
         let selected_owner = owner.ok_or_else(|| Error::InvalidHostOperation {
             item: selected_item.path().into(),
-            reason: "stream operation is not owned by an installed validated facade".into(),
+            reason: "stream operation is not owned by installed validated bindings".into(),
             operation: call,
         })?;
         let plan_types = self
@@ -20755,7 +20748,7 @@ impl<'a> Parser<'a> {
             return Err(Error::InvalidHostOperation {
                 item: selected_item.path().into(),
                 reason: format!(
-                    "stream lowering requires one exact facade-authenticated stream plan type, found {}",
+                    "stream lowering requires one exact authenticated stream plan type, found {}",
                     plan_types.len()
                 )
                 .into(),
@@ -20875,12 +20868,12 @@ impl<'a> Parser<'a> {
 
         let owner = owner.ok_or_else(|| Error::InvalidHostOperation {
             item: item.path().into(),
-            reason: "task producer is not owned by an installed validated facade".into(),
+            reason: "task producer is not owned by installed validated bindings".into(),
             operation: call,
         })?;
         let selected_owner = selected_owner.ok_or_else(|| Error::InvalidHostOperation {
             item: selected_item.path().into(),
-            reason: "operation is not owned by an installed validated facade".into(),
+            reason: "operation is not owned by installed validated bindings".into(),
             operation: selector,
         })?;
         let output = self.inference.resolve(&signature.output);
@@ -21083,7 +21076,7 @@ impl<'a> Parser<'a> {
             .map(<[_]>::to_vec)
             .ok_or_else(|| Error::InvalidHostOperation {
                 item: TASK_FUTURE.into(),
-                reason: "the facade lacks this item".into(),
+                reason: "the bindings lack this item".into(),
                 operation: call,
             })?;
         let owner = self.models.item_owner(TASK_FUTURE).cloned();
@@ -21195,12 +21188,12 @@ impl<'a> Parser<'a> {
         self.reject_invocation(
             &signature.output,
             name_span,
-            "constructed or loaded as a facade value",
+            "constructed or loaded as a host value",
         )?;
         self.reject_signature_support(
             &signature.output,
             name_span,
-            "constructed or loaded as a facade value",
+            "constructed or loaded as a host value",
         )?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
@@ -25512,10 +25505,7 @@ impl<'a> Parser<'a> {
             {
                 let ty = self.inference.resolve(ty);
                 if !drops::pattern_names(syntax).is_empty() {
-                    self.trace_unmodeled(
-                        "a pattern binding a part of a facade value",
-                        syntax.span(),
-                    );
+                    self.trace_unmodeled("a pattern binding a part of a host value", syntax.span());
                 }
                 let traced = self.begin_trace();
                 let mut out = HostPattern::default();
@@ -26637,7 +26627,7 @@ impl<'a> Parser<'a> {
             // the borrow facts.
             self.trace_test(FactAccess::Read, None);
             if !drops::pattern_names(syntax).is_empty() {
-                self.trace_unmodeled("a pattern binding a part of a facade value", syntax.span());
+                self.trace_unmodeled("a pattern binding a part of a host value", syntax.span());
             }
             let mut checks = self.host_checks.borrow_mut();
             let name: ImmutableString = format!("__rawr_host_{}", checks.len()).into();
@@ -30147,7 +30137,7 @@ impl<'a> Parser<'a> {
         out: &mut HostPattern,
     ) -> Result<(), Error> {
         let Ty::Host { proof, .. } = ty else {
-            unreachable!("facade variant patterns match facade values");
+            unreachable!("host variant patterns match host values");
         };
         let owner_path = proof.definition.path();
         let written = self.host_pattern_owner(&pattern.owner);
@@ -30515,7 +30505,7 @@ impl<'a> Parser<'a> {
         match_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let Ty::Host { proof, .. } = &subject_ty else {
-            unreachable!("host matches are selected for facade types");
+            unreachable!("host matches are selected for host types");
         };
         let owner_path = proof.definition.path();
         // A match through `&T` binds references, as rustc's default binding
@@ -45068,7 +45058,7 @@ impl<'a> Parser<'a> {
         let Some(definition) = target.invocation() else {
             return Err(Error::InvalidHostOperation {
                 item: target.name(&self.models),
-                reason: "mutable receiver is not facade-authenticated invocation authority".into(),
+                reason: "mutable receiver is not authenticated invocation authority".into(),
                 operation,
             });
         };
@@ -55297,9 +55287,6 @@ mod tests {
     struct ExternalValue;
 
     #[cfg(feature = "rust-import")]
-    struct SignatureOnlyValue;
-
-    #[cfg(feature = "rust-import")]
     fn symbolic_imported(
         engine: &Engine,
         program: &resolve::Program,
@@ -55322,7 +55309,7 @@ mod tests {
             std::mem::size_of::<super::Op>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::Op>(), 632);
+        assert_eq!(std::mem::size_of::<super::Op>(), 568);
         #[cfg(not(feature = "rust-import"))]
         assert!(
             std::mem::size_of::<super::ExecutableOp>() < 1_112,
@@ -55330,7 +55317,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1048);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 952);
         assert_eq!(
             std::mem::size_of::<Box<crate::host::operation::Proof>>(),
             std::mem::size_of::<usize>()
@@ -56043,111 +56030,6 @@ pub fn view() -> Value<Message> { make() }
             .collect::<Vec<_>>();
 
         assert_eq!(roots, ["base", "extension"]);
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn signature_support_facades() -> (facade::Definition, facade::Definition) {
-        let mut linked = facade::Builder::new("proof", facade::Abi::new(1).unwrap()).unwrap();
-        linked
-            .type_::<SignatureOnlyValue>("Opaque", &[], &[])
-            .unwrap();
-        let linked = linked.finish().unwrap();
-        let definition = linked
-            .types()
-            .find(|definition| definition.path() == "proof::Opaque")
-            .expect("the linked fixture retains its native definition");
-
-        let mut proof = facade::Builder::new("proof", facade::Abi::new(2).unwrap()).unwrap();
-        let support = proof
-            .fixture_profile_support_type(definition, "opaque", [1; 32], [2; 32], [3; 32])
-            .unwrap();
-        let mut produce = signature::Builder::new();
-        produce.output(type_ref::Type::support(support.clone()));
-        proof
-            .item(item::Definition::function("produce", produce.finish()).unwrap())
-            .unwrap();
-        let mut consume = signature::Builder::new();
-        consume.parameter(type_ref::Type::support(support));
-        proof
-            .item(item::Definition::function("consume", consume.finish()).unwrap())
-            .unwrap();
-        let proof = proof.finish().unwrap();
-
-        let exported = proof.support_type("Opaque").unwrap();
-        let mut consume = signature::Builder::new();
-        consume.parameter(type_ref::Type::support_external(exported));
-        let mut extension =
-            facade::Builder::new("extension", facade::Abi::new(1).unwrap()).unwrap();
-        extension
-            .item(item::Definition::function("consume", consume.finish()).unwrap())
-            .unwrap();
-        (proof, extension.finish().unwrap())
-    }
-
-    #[cfg(feature = "rust-import")]
-    #[test]
-    fn signature_support_is_distinct_and_flows_only_between_nested_host_calls() {
-        let (proof, extension) = signature_support_facades();
-        assert_eq!(proof.types().count(), 0);
-        assert!(proof.export_type("Opaque").is_err());
-        assert_eq!(proof.items().count(), 2);
-
-        let support = proof.support_type("Opaque").unwrap();
-        let mut invalid_signature = signature::Builder::new();
-        invalid_signature.parameter(
-            type_ref::Type::tuple([
-                type_ref::Type::support_external(support),
-                type_ref::Type::unit(),
-            ])
-            .unwrap(),
-        );
-        let mut invalid = facade::Builder::new("invalid", facade::Abi::new(1).unwrap()).unwrap();
-        invalid
-            .item(item::Definition::function("store", invalid_signature.finish()).unwrap())
-            .unwrap();
-        assert!(matches!(
-            invalid.finish(),
-            Err(host::Error::InvalidSignatureSupport { ty: "tuple", .. })
-        ));
-
-        let mut engine = Engine::new();
-        engine.register_host_facade(proof).unwrap();
-        engine.register_host_facade(extension).unwrap();
-        let executable = engine
-            .compile_executable(
-                r#"
-use proof::produce;
-use extension::consume;
-pub fn run() { consume(produce()); }
-"#,
-            )
-            .unwrap();
-        let roots = executable
-            .host_dependencies()
-            .iter()
-            .map(host::facade::Dependency::root)
-            .collect::<Vec<_>>();
-        assert_eq!(roots, ["extension", "proof"]);
-
-        for source in [
-            "use proof::produce; pub fn run() { let leaked = produce(); }",
-            "use proof::produce; pub fn run() { produce() }",
-            "use proof::produce; pub fn run() { produce() == produce() }",
-            "use proof::produce; fn sink<T>(value: T) {} pub fn run() { sink(produce()); }",
-            "use proof::produce; use extension::consume; pub fn run() { consume(if true { produce() } else { produce() }); }",
-            "use proof::produce; pub fn run() { produce().clone(); }",
-        ] {
-            let error = engine
-                .compile(source)
-                .expect_err("signature support must reject every ordinary sink");
-            assert!(matches!(
-                error.err_type(),
-                ParseErrorType::Resolution(resolve::Error::InvalidHostOperation {
-                    reason,
-                    ..
-                }) if reason.contains("signature-only support")
-            ), "{source}: {error:?}");
-        }
     }
 
     #[test]
