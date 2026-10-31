@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": []
+    "entries": [
+      {"text":"A crate type compares with a number through the crate's `PartialOrd<f32>` or `PartialEq<f32>`, as clock's `rotation < 180.0` does with iced's `Degrees`. When the type also compares with itself, the right-hand side picks the impl, as in rustc.","issues":[412]},
+      {"text":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's `Widget::map` does: the runner holds the closure as a `Box<dyn Fn(A) -> B>`. game_of_life gets past its `.map(..)`.","issues":[422],"refs":[417]}
+    ]
   },
   "releases": [
     {

@@ -6,6 +6,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+- A crate type compares with a number through the crate's `PartialOrd<f32>` or `PartialEq<f32>`, as clock's `rotation < 180.0` does with iced's `Degrees`. When the type also compares with itself, the right-hand side picks the impl, as in rustc. (#412)
+- `rawr check` accepts a crate method whose output names the closure it takes, as iced's `Widget::map` does: the runner holds the closure as a `Box<dyn Fn(A) -> B>`. game_of_life gets past its `.map(..)`. (#422; part of #417)
 
 ## 0.3.29 (2026-10-31)
 
