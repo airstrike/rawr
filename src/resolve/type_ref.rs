@@ -1050,19 +1050,15 @@ fn resolve_impl(
 ) -> Result<Path, Error> {
     let span = parsed.span;
     if let Some(output) = future_output(&parsed) {
-        // A future is iced's `Task` of its output, which runs it, and else
-        // the core's future (D511.3).
-        let task = if host.type_(TASK).is_some() {
-            TASK
-        } else {
-            CORE_FUTURE
-        };
-        let definition = host
-            .type_(task)
-            .ok_or_else(|| Error::UnsupportedNominalSyntax {
-                construct: "a future in a program without iced, whose `Task` runs it".into(),
-                source: span,
-            })?;
+        // A future is the core's future of its output (D511.3), which a
+        // runner installs and runs as a std future. No crate's type stands
+        // for it: iced's `Task` is a Rust type of its own.
+        let definition =
+            host.type_(CORE_FUTURE)
+                .ok_or_else(|| Error::UnsupportedNominalSyntax {
+                    construct: "a future outside a runner, which runs it".into(),
+                    source: span,
+                })?;
         let output = match output {
             Some(output) => resolve(
                 output.clone(),
@@ -1076,9 +1072,9 @@ fn resolve_impl(
         return Ok(Path {
             target: Target::Host {
                 definition: definition.clone(),
-                owner: host.type_owner(task).cloned(),
+                owner: host.type_owner(CORE_FUTURE).cloned(),
             },
-            name: task.into(),
+            name: CORE_FUTURE.into(),
             arguments: Box::new([Argument::Type(output)]),
             span,
         });
@@ -1207,9 +1203,7 @@ fn resolve_impl(
     })
 }
 
-/// The type that runs a future: iced's `Task`.
-const TASK: &str = "iced::Task";
-/// The core's future, where no host's type runs futures.
+/// The core's future, which a runner installs.
 const CORE_FUTURE: &str = "rawr::future::Future";
 
 /// `impl Future<Output = T>` (or `std::future::Future`): `Some(Some(T))`,
