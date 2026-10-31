@@ -670,3 +670,35 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     drop(candidates);
     assert_eq!(usage(&engine), before);
 }
+
+#[test]
+fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
+    let (engine, _) = retained();
+    let before = usage(&engine);
+    let Outcome::Compiled(compiled) = engine
+        .compile_package_snapshot_resident_plain(&snapshot("fn main() { let value = 1 + 2; }"))
+        .unwrap()
+    else {
+        panic!("a program with no native requirement needs no preparation");
+    };
+    let (compiled, top_level) = compiled.with_top_level();
+    let (candidate, semantic, ..) = compiled.into_parts();
+    assert!(semantic.is_none());
+    drop((candidate, top_level));
+    assert_eq!(usage(&engine), before);
+    // The same boundaries as a profile's: a native miss needs preparation,
+    // and a source error is no miss.
+    assert!(matches!(
+        engine.compile_package_snapshot_resident_plain(&native_snapshot(
+            "pub fn sample() -> i64 { native::new_function() }"
+        )),
+        Ok(Outcome::NeedsPreparation)
+    ));
+    assert!(matches!(
+        engine.compile_package_snapshot_resident_plain(&native_snapshot(
+            "pub fn sample() -> i64 { misspelled() }"
+        )),
+        Err(Error::Source(_))
+    ));
+    assert_eq!(usage(&engine), before);
+}

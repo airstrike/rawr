@@ -88,6 +88,8 @@ pub(super) type NativeInputs = (Box<[rawr_import::input::proof::Watch]>, source:
 
 pub(super) enum Attempt {
     Settled,
+    /// The runner committed the new generation compiled against it.
+    Swapped,
     Prepare(Option<rawr_watch::StagedInputs>),
 }
 
@@ -189,7 +191,6 @@ pub(super) fn attempt(
             if let Err(error) = lane.commit_resident(prepared) {
                 return failed(error, adapter, watch_request, diagnostic);
             }
-            rawr_cli::events::swapped();
             for warning in adapter
                 .commit_inputs(staged)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?
@@ -198,7 +199,7 @@ pub(super) fn attempt(
                     "Rawr imported-owner watcher warning: {warning}"
                 ));
             }
-            Ok(Attempt::Settled)
+            Ok(Attempt::Swapped)
         }
         resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
             Ok(Attempt::Prepare(Some(staged)))
