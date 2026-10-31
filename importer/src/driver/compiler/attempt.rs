@@ -275,13 +275,13 @@ mod tests {
 
     #[test]
     fn admission_uses_the_remaining_original_account() {
-        let mut exact = Budget::with_limits(1031, 0);
+        let mut exact = Budget::with_limits(1031);
         exact.bytes(7).unwrap();
         exact.items(3).unwrap();
         State::admit(&mut exact, 1024, 4).unwrap();
         assert_eq!(exact.usage(), (1031, 9, 0));
 
-        let mut short_bytes = Budget::with_limits(1030, 0);
+        let mut short_bytes = Budget::with_limits(1030);
         short_bytes.bytes(7).unwrap();
         short_bytes.items(3).unwrap();
         assert!(State::admit(&mut short_bytes, 1024, 4).is_err());

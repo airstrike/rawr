@@ -268,12 +268,12 @@ fn effective_associated_item<I: Copy>(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Budget {
     bytes: usize,
     items: usize,
     edges: usize,
     byte_limit: usize,
-    edge_limit: usize,
 }
 
 struct Diagnostic {
@@ -870,13 +870,13 @@ fn extract_all(
     invocations: Vec<Invocation>,
     reuse: Option<&Path>,
     arguments_digest: &str,
-    mut budget: Budget,
+    budget: Budget,
     diagnostic_measurement: bool,
     diagnostic: &mut Option<Diagnostic>,
 ) -> Result<Budget, String> {
     // The diagnostic traversal owns its wider evidence envelope. Protocol
     // rendering and publication retain a fresh production budget, while the
-    // ordinary probe keeps its original aggregate production budget.
+    // ordinary probe gives each crate the budget it started with.
     let mut publication_budget = diagnostic_measurement.then(Budget::standard);
     // A diagnostic traversal always extracts, and records nothing.
     let tables = match reuse {
@@ -889,7 +889,14 @@ fn extract_all(
             .iter()
             .map(|invocation| invocation.unit_key.as_str()),
     );
+    // Each crate is extracted and published before the next, so each owns
+    // its bytes alone: an intrinsic inventory reads every crate of a
+    // closure as large as iced's in one run. The counts add up for the
+    // report.
+    let start = budget;
+    let mut total = budget;
     for invocation in invocations {
+        let mut budget = start;
         let selected = selected_crate(tcx, &invocation.artifact.path, &mut budget)?;
         if let Some(diagnostic) = diagnostic {
             diagnostic.milestone(
@@ -941,11 +948,14 @@ fn extract_all(
             &body,
             publication_budget.as_mut().unwrap_or(&mut budget),
         )?;
+        total.items = total.items.saturating_add(budget.items - start.items);
+        total.edges = total.edges.saturating_add(budget.edges - start.edges);
+        total.bytes = total.bytes.max(budget.bytes);
     }
     if let Some(tables) = &tables {
         tables.prune(&used);
     }
-    Ok(budget)
+    Ok(total)
 }
 
 fn selected_crate(
@@ -1547,18 +1557,16 @@ impl Budget {
             items: 0,
             edges: 0,
             byte_limit: MAX_BYTES,
-            edge_limit: MAX_EDGES,
         }
     }
 
     #[cfg(test)]
-    pub(super) fn with_limits(bytes: usize, edges: usize) -> Self {
+    pub(super) fn with_limits(bytes: usize) -> Self {
         Self {
             bytes: 0,
             items: 0,
             edges: 0,
             byte_limit: bytes,
-            edge_limit: edges,
         }
     }
 
@@ -1574,13 +1582,13 @@ impl Budget {
         Ok(())
     }
 
+    /// Counts API edges for the diagnostic probe's report. As with items,
+    /// the count never refuses: an intrinsic inventory reads a whole
+    /// closure (iced's is past a million edges), and limits never decide
+    /// whether Rawr runs.
     fn edge(&mut self, amount: usize) -> Result<(), String> {
         self.edges = self.edges.saturating_add(amount);
-        if self.edges > self.edge_limit {
-            Err("compiler API edge limit exceeded".to_owned())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub(super) fn string(&mut self, value: &str) -> Result<(), String> {
@@ -5534,11 +5542,11 @@ mod tests {
         super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut measured)
             .unwrap();
         let (bytes, _, _) = measured.usage();
-        let mut exact = Budget::with_limits(bytes + 7, 0);
+        let mut exact = Budget::with_limits(bytes + 7);
         exact.bytes(7).unwrap();
         exact.items(2).unwrap();
         super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut exact).unwrap();
-        let mut short = Budget::with_limits(bytes + 6, 0);
+        let mut short = Budget::with_limits(bytes + 6);
         short.bytes(7).unwrap();
         short.items(2).unwrap();
         assert!(
@@ -5869,35 +5877,22 @@ mod tests {
 
     #[test]
     fn allocation_budget_rejects_before_owned_string_growth() {
-        let mut budget = Budget::with_limits(3, 8);
+        let mut budget = Budget::with_limits(3);
         assert_eq!(budget.owned("abc").expect("the exact byte boundary"), "abc");
         assert!(budget.owned("d").is_err());
     }
 
     #[test]
-    fn edge_budget_rejects_at_the_aggregate_boundary() {
-        let mut budget = Budget::with_limits(8, 2);
-        budget.edge(2).expect("the exact edge boundary");
-        assert!(budget.edge(1).is_err());
-    }
-
-    #[test]
-    fn production_edge_budget_accepts_one_million_and_rejects_the_next_edge() {
+    fn edges_past_a_million_are_counted_and_never_refused() {
         let mut budget = Budget::standard();
-        budget
-            .edge(MAX_EDGES)
-            .expect("the production edge boundary remains accepted");
-        assert_eq!(budget.usage().2, 1_000_000);
-        assert_eq!(
-            budget.edge(1),
-            Err("compiler API edge limit exceeded".to_owned())
-        );
+        budget.edge(MAX_EDGES).expect("a million edges");
+        budget.edge(1).expect("the next edge");
         assert_eq!(budget.usage().2, 1_000_001);
     }
 
     #[test]
     fn anonymous_associated_support_segments_are_structured_stable_and_bounded() {
-        let mut budget = Budget::with_limits(usize::MAX, usize::MAX);
+        let mut budget = Budget::with_limits(usize::MAX);
         let first = anonymous_associated_segment("new", 0, &mut budget)
             .expect("the first RPITIT support segment is exact");
         let repeated = anonymous_associated_segment("new", 0, &mut budget)

@@ -670,14 +670,14 @@ mod tests {
     #[test]
     fn plan_decode_budget_has_an_exact_byte_boundary() {
         let bytes = plan_bytes(&["root"]);
-        let mut measured = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut measured = compiler::Budget::with_limits(usize::MAX);
         decode_plan(&bytes, &mut measured).expect("the fixture plan is measurable");
         let (bytes, _, _) = measured.usage();
 
-        let mut exact = compiler::Budget::with_limits(bytes, usize::MAX);
+        let mut exact = compiler::Budget::with_limits(bytes);
         decode_plan(&plan_bytes(&["root"]), &mut exact)
             .expect("the exact allocation boundary accepts");
-        let mut short_bytes = compiler::Budget::with_limits(bytes - 1, usize::MAX);
+        let mut short_bytes = compiler::Budget::with_limits(bytes - 1);
         assert!(decode_plan(&plan_bytes(&["root"]), &mut short_bytes).is_err());
     }
 
@@ -685,7 +685,7 @@ mod tests {
     fn prior_plan_and_protocol_authority_reject_before_filesystem_validation() {
         assert_eq!(CANONICAL_ITEMS, 19_000_000);
         assert_eq!(CANONICAL_BYTES, 1_207_959_552);
-        let mut budget = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut budget = compiler::Budget::with_limits(usize::MAX);
         let mut old_plan = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_plan.schema = PLAN_SCHEMA - 1;
@@ -694,7 +694,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut budget = compiler::Budget::with_limits(usize::MAX);
         let mut old_protocol = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_protocol.protocol_schema = PROTOCOL_SCHEMA - 1;
@@ -703,7 +703,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut budget = compiler::Budget::with_limits(usize::MAX);
         let mut old_canonical = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_canonical.canonical_items = CANONICAL_ITEMS - 1;
@@ -712,7 +712,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut budget = compiler::Budget::with_limits(usize::MAX);
         let mut old_canonical_bytes = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_canonical_bytes.canonical_bytes = CANONICAL_BYTES - 1;
@@ -724,22 +724,22 @@ mod tests {
 
     #[test]
     fn argument_path_and_validation_nodes_are_prospectively_bounded() {
-        let mut measured = compiler::Budget::with_limits(usize::MAX, usize::MAX);
+        let mut measured = compiler::Budget::with_limits(usize::MAX);
         let mut arguments = Vec::new();
         capture_argument(&mut arguments, "argument".to_owned(), &mut measured)
             .expect("the argument is measurable");
         let (argument_bytes, _, _) = measured.usage();
-        let mut exact = compiler::Budget::with_limits(argument_bytes, usize::MAX);
+        let mut exact = compiler::Budget::with_limits(argument_bytes);
         capture_argument(&mut Vec::new(), "argument".to_owned(), &mut exact)
             .expect("the exact argument boundary accepts");
-        let mut short = compiler::Budget::with_limits(argument_bytes - 1, usize::MAX);
+        let mut short = compiler::Budget::with_limits(argument_bytes - 1);
         assert!(capture_argument(&mut Vec::new(), "argument".to_owned(), &mut short).is_err());
 
         let executable = std::env::current_exe().expect("the test executable has a path");
-        let mut exact_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES, usize::MAX);
+        let mut exact_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES);
         canonical_file(&executable, "test executable", &mut exact_path)
             .expect("the exact prospective path boundary accepts");
-        let mut short_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES - 1, usize::MAX);
+        let mut short_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES - 1);
         assert!(canonical_file(&executable, "test executable", &mut short_path).is_err());
     }
 
@@ -749,11 +749,11 @@ mod tests {
             std::env::temp_dir().join(format!("rawr-import-driver-read-{}", std::process::id()));
         std::fs::write(&path, b"four").expect("the bounded-read fixture is written");
 
-        let mut exact = compiler::Budget::with_limits(4, usize::MAX);
+        let mut exact = compiler::Budget::with_limits(4);
         let bytes = read_bounded_file_with_limit(&path, "test plan", 4, &mut exact)
             .expect("the exact file-read allocation accepts");
         assert_eq!(bytes, b"four");
-        let mut byte_short = compiler::Budget::with_limits(3, usize::MAX);
+        let mut byte_short = compiler::Budget::with_limits(3);
         assert!(read_bounded_file_with_limit(&path, "test plan", 4, &mut byte_short).is_err());
 
         std::fs::remove_file(&path).expect("the bounded-read fixture is retired");

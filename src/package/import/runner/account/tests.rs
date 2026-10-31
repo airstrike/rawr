@@ -763,7 +763,7 @@ fn plan() -> Vec<u8> {
     let source = [11; 32];
     let target = [12; 32];
     serde_json::to_vec(&serde_json::json!({
-        "schema": 24, "aliases": [], "sources": [], "abis": [], "operations": [],
+        "schema": 25, "aliases": [], "sources": [], "abis": [], "operations": [],
         "facades": [
             {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false, "debug": false, "clone": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": constructor, "fields": [], "constructible": true}}}],

@@ -215,7 +215,8 @@ impl Owner {
 #[cfg(feature = "rustc-driver")]
 #[derive(Default)]
 pub struct Closure {
-    /// Every library crate, declared by its crate name.
+    /// Every library crate, declared by its crate name, and by name and
+    /// version where two versions of one crate share the name.
     pub dependencies: Vec<config::Dependency>,
     /// Each alias the program declares, with the crate name it names.
     pub aliases: Vec<(Box<str>, Box<str>)>,
@@ -1276,21 +1277,30 @@ impl Request {
         let root = metadata.root_package_id();
         let mut seen = std::collections::BTreeSet::new();
         let mut closure = Closure::default();
-        for output in resolution.build_unit.artifacts() {
-            let library = output
-                .target_kinds()
-                .iter()
-                .any(|kind| matches!(kind.as_ref(), "lib" | "rlib"));
-            let proc_macro = output
-                .target_kinds()
-                .iter()
-                .any(|kind| kind.as_ref() == "proc-macro");
+        // Each library built for the program's target. A library only a
+        // build script or proc macro links is built for the host, and
+        // declaring it would build it a second time with the same key.
+        let libraries = resolution.build_unit.artifacts().iter().filter(|output| {
+            let kinds = output.target_kinds();
+            output.platform().is_some()
+                && kinds
+                    .iter()
+                    .any(|kind| matches!(kind.as_ref(), "lib" | "rlib"))
+                && !kinds.iter().any(|kind| kind.as_ref() == "proc-macro")
+                && Some(output.package_id()) != root
+        });
+        // Two versions of one crate (rustc-hash 1 and 2 under iced) share
+        // a crate name, so each of them is declared by name and version.
+        let mut packages = BTreeMap::<&str, std::collections::BTreeSet<&str>>::new();
+        for output in libraries.clone() {
+            packages
+                .entry(output.crate_name())
+                .or_default()
+                .insert(output.package_id());
+        }
+        for output in libraries {
             let package_id = output.package_id();
-            if !library
-                || proc_macro
-                || Some(package_id) == root
-                || !seen.insert(package_id.to_owned())
-            {
+            if !seen.insert(package_id.to_owned()) {
                 continue;
             }
             let package = metadata.package(package_id).ok_or_else(|| Error::Request {
@@ -1298,9 +1308,14 @@ impl Request {
                 reason: format!("`{package_id}` has no resolved package").into_boxed_str(),
             })?;
             let name = output.crate_name();
+            let alias = if packages.get(name).is_some_and(|ids| ids.len() > 1) {
+                format!("{name}_{}", package.version().replace(['.', '-', '+'], "_"))
+            } else {
+                name.to_owned()
+            };
             let dependency = match package.source() {
                 unit::PackageSource::Path { .. } => {
-                    config::Dependency::path(name, package.root(), limits)?
+                    config::Dependency::path(&alias, package.root(), limits)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. }
                     if cargo_id.starts_with(
@@ -1308,7 +1323,7 @@ impl Request {
                     ) || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
                     config::Dependency::registry(
-                        name,
+                        &alias,
                         &format!("={}", package.version()),
                         limits,
                     )?
@@ -1321,7 +1336,7 @@ impl Request {
                             field: "inventory closure",
                             reason: format!("`{package_id}` has no git URL").into_boxed_str(),
                         })?;
-                    config::Dependency::git(name, url, oid, limits)?
+                    config::Dependency::git(&alias, url, oid, limits)?
                 }
                 unit::PackageSource::Registry { .. } => {
                     return Err(Error::Request {
