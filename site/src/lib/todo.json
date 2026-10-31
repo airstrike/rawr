@@ -5,7 +5,15 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"`rawr run` applies a body edit in a plain or marked program by compiling it in the running runner, with no full preparation. On the reload benchmark a save shows at the next callback in about 49 ms, down from about 1 s, in the same process with its state kept. New native needs, manifest or declaration changes, and edits a running `main` can't take still go through full preparation.","issues":[373]},
+        {"text":"A new method call on a type a program already uses is proved from the crates' own facts, so a save that adds one needs no nightly extraction.","issues":[387]},
+        {"text":"A program with proved imported calls starts warm in about half a second, down from about two: a warm run no longer runs a Cargo probe.","issues":[390]},
+        {"text":"Trait facts of crates from registries and git commits are shared by every project on a machine.","issues":[386]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.24",
@@ -755,7 +763,7 @@
     {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed","category":"No glue (D593)","release":"0.3.20"},
     {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
-    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"},
+    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"closed","category":"No glue (D593)"},
     {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
     {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"},
     {"issue":376,"title":"`T::method(&t)` for a `&self` trait method through a generic parameter fails","state":"open","category":"Divergences from rustc"},
@@ -768,17 +776,21 @@
     {"issue":383,"title":"`where` bounds on non-parameter types accept only Sized and auto traits","state":"open","category":"Divergences from rustc"},
     {"issue":384,"title":"An imported trait method whose meaning depends on which traits a block imports now runs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.23"},
     {"issue":385,"title":"Each dependency crate's trait facts are kept under their own key, so a later run reuses them and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.23"},
-    {"issue":386,"title":"Share trait-fact inventory entries per machine by crate key","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":387,"title":"Route imported method misses through proved applications before demand","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":386,"title":"Share trait-fact inventory entries per machine by crate key","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":387,"title":"Route imported method misses through proved applications before demand","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":388,"title":"Acquire facts for the standard library's traits for proved calls","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":389,"title":"Widen proved applications: text types, literal arguments, generic receivers","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":390,"title":"Drop the cargo probe from warm runs with proved applications","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":390,"title":"Drop the cargo probe from warm runs with proved applications","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":391,"title":"A native `&mut Vec<String>` or `&mut String` lent to a script callback, slot or closure is now…","state":"closed","category":"Divergences from rustc","release":"0.3.24"},
     {"issue":392,"title":"A `&mut` element reference re-reads its index expression at each use","state":"open","category":"Divergences from rustc"},
     {"issue":393,"title":"Moving a Clone library value into native storage clones it and drops the original","state":"open","category":"Divergences from rustc"},
     {"issue":394,"title":"A single non-'static Fn callable parameter is not bound","state":"open","category":"Divergences from rustc"},
     {"issue":395,"title":"Script-written vectors of library values don't keep native allocation history","state":"open","category":"Divergences from rustc"},
-    {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"}
+    {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"},
+    {"issue":397,"title":"Show the full package report for a resident source error","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":398,"title":"A new import path of a bound crate re-extracts the API","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":399,"title":"Compare build-script outputs before sharing intrinsic entries","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":400,"title":"A program's first proved call compiles it twice","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {

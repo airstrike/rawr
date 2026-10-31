@@ -4,7 +4,12 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": []
+    "entries": [
+      {"text":"`rawr run` applies a body edit in a plain or marked program by compiling it in the running runner, with no full preparation. On the reload benchmark a save shows at the next callback in about 49 ms, down from about 1 s, in the same process with its state kept. New native needs, manifest or declaration changes, and edits a running `main` can't take still go through full preparation.","issues":[373]},
+      {"text":"A new method call on a type a program already uses is proved from the crates' own facts, so a save that adds one needs no nightly extraction.","issues":[387]},
+      {"text":"A program with proved imported calls starts warm in about half a second, down from about two: a warm run no longer runs a Cargo probe.","issues":[390]},
+      {"text":"Trait facts of crates from registries and git commits are shared by every project on a machine.","issues":[386]}
+    ]
   },
   "releases": [
     {
