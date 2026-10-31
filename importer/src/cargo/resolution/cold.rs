@@ -362,9 +362,10 @@ impl Request {
         require_configs(layout)?;
         let provisional = layout.provisional();
         let paths = layout.final_form();
-        // Cargo's outputs for this request when only sources changed.
+        // Cargo's outputs for this request when only sources or the demand
+        // changed.
         let remembered_base = super::remembered::base(&[
-            placement.request.as_bytes(),
+            cargo::cargo_identity(self, definition, &provisional_manifest).as_bytes(),
             context.digest().as_bytes(),
             toolchain.rustc_commit().as_bytes(),
             toolchain.cargo_commit().as_bytes(),
@@ -372,7 +373,9 @@ impl Request {
             self.profile.as_bytes(),
         ]);
         let reuse = matches!(placement.state, cargo::PlacementState::Fresh)
-            .then(|| super::remembered::lookup(&remembered_base, layout.root()))
+            .then(|| {
+                super::remembered::lookup(&remembered_base, layout.root(), cached.context.rawr())
+            })
             .flatten();
         let mut produced = (None, None);
         let (metadata_transport, candidate_lock, internal) = match placement.state {
@@ -529,6 +532,7 @@ impl Request {
                     lock: candidate_lock.bytes().into(),
                     units: bytes.clone(),
                 },
+                cached.context.rawr(),
             );
         }
         let bytes = cargo_allocation.retain_transport(bytes)?;
