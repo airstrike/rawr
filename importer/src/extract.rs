@@ -941,6 +941,252 @@ impl CanonicalizationEvidence {
 
 #[cfg(feature = "rustc-driver")]
 impl Publication {
+    pub(crate) fn inventory(
+        self,
+        limits: &cargo::Limits,
+    ) -> Result<crate::applicability::inventory::Acquired> {
+        use crate::applicability::inventory;
+
+        let DirectPublication {
+            context,
+            document,
+            invocations,
+            input,
+            policy,
+        } = self.into_direct()?;
+        let Invocations {
+            authority,
+            mut allocation,
+        } = invocations;
+        allocation.retain(policy.usage)?;
+        validate_resolution_context(&document.fragments, &context, &mut allocation)?;
+        let catalog =
+            Catalog::from_fragments(&document.fragments, &authority, limits, &mut allocation)?;
+        let mut partitions = Vec::new();
+        allocation.reserve(&mut partitions, document.fragments.len())?;
+        for fragment in &document.fragments {
+            let manifest = fragment.inventory.as_ref().ok_or_else(|| {
+                extraction(
+                    "intrinsic-inventory",
+                    "a demand-selected fragment is not a complete inventory",
+                )
+            })?;
+            if manifest.schema != 1 || manifest.owner != fragment.handshake.artifact.stable_crate_id
+            {
+                return Err(extraction(
+                    "intrinsic-inventory",
+                    "completion manifest differs from its authenticated fragment",
+                ));
+            }
+            let key = CompilerKey {
+                crate_name: fragment.handshake.crate_name.as_str().into(),
+                stable_crate_id: manifest.owner.as_str().into(),
+            };
+            let unit = catalog.units.get(&key).ok_or_else(|| {
+                extraction(
+                    "intrinsic-inventory",
+                    "selected exact compiler unit is absent",
+                )
+            })?;
+            allocation.unit(unit)?;
+            let mut inherent = Vec::new();
+            allocation.reserve(&mut inherent, manifest.inherent.len())?;
+            for domain in &manifest.inherent {
+                inherent.push(inventory::Inherent {
+                    owner: inventory_id(&domain.owner, &catalog, limits, &mut allocation)?,
+                    implementations: inventory_ids(
+                        &domain.implementations,
+                        &catalog,
+                        limits,
+                        &mut allocation,
+                    )?,
+                    associated: inventory_associations(
+                        &domain.associated,
+                        &catalog,
+                        limits,
+                        &mut allocation,
+                    )?,
+                });
+            }
+            let mut dependencies = Vec::new();
+            let mut missing_dependencies = Vec::new();
+            allocation.reserve(&mut dependencies, fragment.handshake.dependencies.len())?;
+            allocation.reserve(
+                &mut missing_dependencies,
+                fragment.handshake.dependencies.len(),
+            )?;
+            for key in &fragment.handshake.dependencies {
+                match document
+                    .fragments
+                    .iter()
+                    .find(|fragment| &fragment.handshake.unit_key == key)
+                {
+                    Some(fragment) => {
+                        let key = CompilerKey {
+                            crate_name: fragment.handshake.crate_name.as_str().into(),
+                            stable_crate_id: fragment
+                                .handshake
+                                .artifact
+                                .stable_crate_id
+                                .as_str()
+                                .into(),
+                        };
+                        let dependency = catalog.units.get(&key).ok_or_else(|| {
+                            extraction(
+                                "intrinsic-inventory",
+                                "dependency's canonical unit is absent",
+                            )
+                        })?;
+                        allocation.unit(dependency)?;
+                        dependencies.push(dependency.clone());
+                    }
+                    None => missing_dependencies.push(allocation.owned(key)?),
+                }
+            }
+            dependencies.sort_unstable();
+            missing_dependencies.sort_unstable();
+            let mut preludes = Vec::new();
+            allocation.reserve(&mut preludes, manifest.preludes.len())?;
+            for prelude in &manifest.preludes {
+                let mut traits = Vec::new();
+                allocation.reserve(&mut traits, prelude.traits.len())?;
+                for trait_ in &prelude.traits {
+                    let mut methods = Vec::new();
+                    allocation.reserve(&mut methods, trait_.methods.len())?;
+                    for method in &trait_.methods {
+                        methods.push(allocation.owned(method)?);
+                    }
+                    traits.push(inventory::TraitNames {
+                        id: inventory_id(&trait_.id, &catalog, limits, &mut allocation)?,
+                        methods: methods.into_boxed_slice(),
+                    });
+                }
+                preludes.push(inventory::Prelude {
+                    module: inventory_id(&prelude.module, &catalog, limits, &mut allocation)?,
+                    edition: allocation.owned(&prelude.edition)?,
+                    traits: traits.into_boxed_slice(),
+                });
+            }
+            preludes.sort_unstable();
+            let deref = manifest
+                .deref
+                .as_ref()
+                .map(|lookup| {
+                    let mut domains = Vec::new();
+                    allocation.reserve(&mut domains, lookup.domains.len())?;
+                    for domain in &lookup.domains {
+                        let mut implementations = Vec::new();
+                        allocation.reserve(&mut implementations, domain.implementations.len())?;
+                        for header in &domain.implementations {
+                            implementations.push(inventory::LookupHeader {
+                                implementation: inventory_id(
+                                    &header.implementation,
+                                    &catalog,
+                                    limits,
+                                    &mut allocation,
+                                )?,
+                                receiver: match &header.receiver {
+                                    engine::model::Receiver::Nominal(id) => {
+                                        inventory::Receiver::Nominal(inventory_id(
+                                            id,
+                                            &catalog,
+                                            limits,
+                                            &mut allocation,
+                                        )?)
+                                    }
+                                    engine::model::Receiver::Closed => inventory::Receiver::Closed,
+                                    engine::model::Receiver::Unresolved => {
+                                        inventory::Receiver::Unresolved
+                                    }
+                                },
+                            });
+                        }
+                        domains.push(inventory::LookupDomain {
+                            root: inventory_id(&domain.root, &catalog, limits, &mut allocation)?,
+                            implementations: implementations.into_boxed_slice(),
+                        });
+                    }
+                    Ok::<_, crate::Error>(inventory::Lookup {
+                        trait_id: inventory_id(
+                            &lookup.trait_id,
+                            &catalog,
+                            limits,
+                            &mut allocation,
+                        )?,
+                        domains: domains.into_boxed_slice(),
+                    })
+                })
+                .transpose()?;
+            partitions.push(inventory::Partition {
+                unit: unit.clone(),
+                native_unit: allocation.owned(&fragment.handshake.unit_key)?,
+                native_inputs: input
+                    .partition(&fragment.handshake.unit_key)
+                    .ok_or_else(|| {
+                        extraction(
+                            "intrinsic-inventory",
+                            "complete native input witness is absent",
+                        )
+                    })?,
+                compiler: allocation.owned(&fragment.handshake.compiler_commit)?,
+                target: allocation.owned(&fragment.handshake.selected_target)?,
+                crate_hash: allocation.owned(&fragment.handshake.artifact.crate_hash)?,
+                preludes: preludes.into_boxed_slice(),
+                deref,
+                dependencies: dependencies.into_boxed_slice(),
+                missing_dependencies: missing_dependencies.into_boxed_slice(),
+                implementations: inventory_ids(
+                    &manifest.implementations,
+                    &catalog,
+                    limits,
+                    &mut allocation,
+                )?,
+                associated: inventory_associations(
+                    &manifest.associated,
+                    &catalog,
+                    limits,
+                    &mut allocation,
+                )?,
+                unsupported: inventory_ids(
+                    &manifest.unsupported,
+                    &catalog,
+                    limits,
+                    &mut allocation,
+                )?,
+                inherent: inherent.into_boxed_slice(),
+            });
+        }
+        partitions.sort_unstable_by(|left, right| left.unit.cmp(&right.unit));
+        let candidate =
+            Candidate::from_fragments(document.fragments, &catalog, limits, &mut allocation)?;
+        let (items, bytes) =
+            api::intrinsic_usage(candidate.definitions.values(), &candidate.implementations)
+                .ok_or_else(|| {
+                    extraction(
+                        "intrinsic-inventory",
+                        "full intrinsic fact retention overflow",
+                    )
+                })?;
+        allocation.items(items)?;
+        allocation.bytes(bytes)?;
+        let mut definitions = Vec::new();
+        allocation.reserve(&mut definitions, candidate.definitions.len())?;
+        definitions.extend(candidate.definitions.values().cloned());
+        let mut implementations = Vec::new();
+        allocation.reserve(&mut implementations, candidate.implementations.len())?;
+        implementations.extend(candidate.implementations.iter().cloned());
+        implementations.sort_unstable_by(|left, right| left.id().cmp(right.id()));
+        let facts = inventory::Facts {
+            definitions: definitions.into_boxed_slice(),
+            implementations: implementations.into_boxed_slice(),
+            partitions: partitions.into_boxed_slice(),
+        };
+        let graph =
+            candidate.finish(&policy, &context, limits, &mut allocation, SealMode::Direct)?;
+        let graph = graph.publish(input.prove(limits)?)?;
+        inventory::Acquired::authenticate(graph, facts)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "publication transforms every retained resolution authority as one proof bundle"
@@ -2842,6 +3088,71 @@ fn materialize_document(
     allocation.sort_keys(current.len());
     current.sort_unstable();
     stored.replay(context, current, limits, &mut allocation)
+}
+
+#[cfg(feature = "rustc-driver")]
+fn inventory_id(
+    raw: &engine::model::Id,
+    catalog: &Catalog,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<identity::Definition> {
+    let engine::model::Authority::Compiler {
+        crate_name,
+        stable_crate_id,
+    } = &raw.authority;
+    let raw = protocol::Id {
+        authority: protocol::Authority::Compiler {
+            crate_name: crate_name.clone(),
+            stable_crate_id: stable_crate_id.clone(),
+        },
+        def_path_hash: raw.def_path_hash.clone(),
+        namespace: match raw.namespace {
+            engine::model::Namespace::Type => protocol::Namespace::Type,
+            engine::model::Namespace::Value => protocol::Namespace::Value,
+            engine::model::Namespace::Macro => protocol::Namespace::Macro,
+        },
+    };
+    allocation.protocol_id(&raw)?;
+    catalog.id_bounded(raw, limits, allocation)
+}
+
+#[cfg(feature = "rustc-driver")]
+fn inventory_ids(
+    raw: &[engine::model::Id],
+    catalog: &Catalog,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<Box<[identity::Definition]>> {
+    let mut ids = Vec::new();
+    allocation.reserve(&mut ids, raw.len())?;
+    for raw in raw {
+        ids.push(inventory_id(raw, catalog, limits, allocation)?);
+    }
+    Ok(ids.into_boxed_slice())
+}
+
+#[cfg(feature = "rustc-driver")]
+fn inventory_associations(
+    raw: &[engine::model::Association],
+    catalog: &Catalog,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<Box<[crate::applicability::inventory::Association]>> {
+    let mut links = Vec::new();
+    allocation.reserve(&mut links, raw.len())?;
+    for raw in raw {
+        links.push(crate::applicability::inventory::Association {
+            implementation: inventory_id(&raw.implementation, catalog, limits, allocation)?,
+            item: inventory_id(&raw.item, catalog, limits, allocation)?,
+            declaration: raw
+                .declaration
+                .as_ref()
+                .map(|id| inventory_id(id, catalog, limits, allocation))
+                .transpose()?,
+        });
+    }
+    Ok(links.into_boxed_slice())
 }
 
 fn canonicalize_document(

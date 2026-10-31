@@ -860,6 +860,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::InvalidHostOperation { item, reason, .. } => {
             format!("cannot use `{item}` here: {reason}")
         }
+        resolve::Error::ImportedApplicationRequired { item, .. } => {
+            format!("`{item}` needs a proof of which imported method applies in its scope")
+        }
         resolve::Error::UnusedValue { value, .. } => {
             format!("unused `{value}` must be returned, bound, or explicitly consumed")
         }

@@ -64,6 +64,37 @@ impl Graph {
         .map(Some)
     }
 
+    /// The request that acquires intrinsic facts (D650), with no demand and
+    /// no runner universe. With no `closure` it declares the program's
+    /// dependencies, as the probe that finds their library closure; with
+    /// one it declares exactly that closure.
+    #[doc(hidden)]
+    pub fn rust_inventory_plain(
+        &self,
+        environment: Environment,
+        closure: &[Dependency],
+        limits: &Limits,
+    ) -> rawr_import::Result<Option<Request>> {
+        let entry = self.entry_package();
+        let Some(config) = entry.rust.as_ref() else {
+            return Ok(None);
+        };
+        script_project(entry)?;
+        let app = app_crate(self, &environment, limits)?;
+        request_inventory(entry, config, environment, app, closure, limits).map(Some)
+    }
+
+    /// The Rust edition of the entry crate's source, `2015` when its Cargo
+    /// manifest names none, as Cargo reads it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_edition(&self) -> String {
+        self.entry_package()
+            .cargo()
+            .and_then(|cargo| cargo.edition.clone())
+            .unwrap_or_else(|| "2015".to_owned())
+    }
+
     /// Transform the Rust imports with one host-selected exact framework-profile package.
     /// `demand` holds Rust paths Rawr names below wholesale crate re-exports
     /// (see [`super::Error::rust_demand`]). `framework` is the crate the
@@ -816,15 +847,12 @@ fn request(
     )
 }
 
-fn request_with_profile(
+fn request_inventory(
     entry: &super::graph::Package,
     config: &Config,
     environment: Environment,
-    profile: Option<Dependency>,
-    universe: Option<rawr_import::cargo::universe::Catalog>,
-    framework: Option<(&str, Dependency)>,
     app: Option<Dependency>,
-    demand: &[Box<str>],
+    closure: &[Dependency],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
     let mut builder = Request::builder(
@@ -835,6 +863,28 @@ fn request_with_profile(
     .environment(environment)
     .profile(&config.profile)?;
     builder = builder.cargo_authority(&config.cargo_authority)?;
+    // The probe declares what the program does; the inventory declares
+    // its whole library closure, each crate by its own name.
+    if closure.is_empty() {
+        for dependency in dependencies(config, limits)? {
+            builder = builder.dependency(dependency)?;
+        }
+        if let Some(app) = app {
+            builder = builder.dependency(app)?;
+        }
+    } else {
+        for dependency in closure {
+            builder = builder.dependency(dependency.clone())?;
+        }
+    }
+    builder
+        .inventory()
+        .policy(Policy::manifest(limits).seal())?
+        .build()
+}
+
+fn dependencies(config: &Config, limits: &Limits) -> rawr_import::Result<Vec<Dependency>> {
+    let mut dependencies = Vec::new();
     for configured in &config.dependencies {
         let mut dependency = match &configured.source {
             Source::Path(path) => Dependency::path(&configured.alias, path, limits)?,
@@ -857,6 +907,31 @@ fn request_with_profile(
             dependency = dependency.package(package)?;
         }
         dependency = dependency.features(&configured.features, configured.default_features)?;
+        dependencies.push(dependency);
+    }
+    Ok(dependencies)
+}
+
+fn request_with_profile(
+    entry: &super::graph::Package,
+    config: &Config,
+    environment: Environment,
+    profile: Option<Dependency>,
+    universe: Option<rawr_import::cargo::universe::Catalog>,
+    framework: Option<(&str, Dependency)>,
+    app: Option<Dependency>,
+    demand: &[Box<str>],
+    limits: &Limits,
+) -> rawr_import::Result<Request> {
+    let mut builder = Request::builder(
+        entry.root(),
+        &entry.root().join("target/rawr/cache"),
+        limits,
+    )?
+    .environment(environment)
+    .profile(&config.profile)?;
+    builder = builder.cargo_authority(&config.cargo_authority)?;
+    for dependency in dependencies(config, limits)? {
         builder = builder.dependency(dependency)?;
     }
     if let Some(app) = app {

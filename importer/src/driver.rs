@@ -40,7 +40,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 8;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 32;
+const PROTOCOL_SCHEMA: u32 = 33;
 const COMPILER_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ITEMS: usize = 2_500_000;
@@ -54,6 +54,8 @@ const RUST_MIN_STACK_VALUE: &str = "67108864";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
+    #[serde(default)]
+    inventory: bool,
     schema: u32,
     protocol_schema: u32,
     canonical_items: usize,
@@ -216,6 +218,7 @@ fn execute() -> Result<ExitCode, String> {
             demand.push(path.clone());
         }
         invocations.push(compiler::Invocation {
+            inventory: plan.inventory,
             package: compiler::Package {
                 cargo_id: entry.package.cargo_id,
                 name: entry.package.name,

@@ -13,6 +13,9 @@ use super::stored::observe::slots::Slots;
 use super::stored::{Budget, Error, Result};
 use crate::cargo::unit;
 
+#[cfg(feature = "rustc-driver")]
+pub(crate) mod partitions;
+
 const DOMAIN: &str = "rawr.input.native/v1";
 
 /// A semantic digest derived from complete, associated normal-build evidence.

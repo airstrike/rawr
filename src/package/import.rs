@@ -168,6 +168,21 @@ impl crate::Engine {
             .map(|compiled| compiled.demand)
     }
 
+    /// Compile against a contract with the proof-backed applications its
+    /// program's imported calls need (D650). Each was proved locally from
+    /// intrinsic facts; a call none answers fails with the call to prove.
+    #[doc(hidden)]
+    pub fn compile_imported_with_applications(
+        &self,
+        contract: &rawr_import::Contract<rawr_import::Classified>,
+        snapshot: crate::reload::source::Snapshot,
+        applications: &[rawr_import::surface::application::Application],
+    ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
+        let limits = rawr_import::cargo::Limits::standard();
+        self.compile_imported_applied(contract, snapshot, &limits, false, None, None, applications)
+            .map(|compiled| compiled.demand)
+    }
+
     /// Compile one imported contract against profile facades already installed in this engine.
     ///
     /// The caller must have reconstructed those facades from the exact encoded contract. This
@@ -221,6 +236,28 @@ impl crate::Engine {
         cycle: Option<&host::facade::ProfileCycle>,
         event_projection: Option<rawr_import::profile::contract::EventProjectionRules>,
     ) -> Result<CompiledImported, super::Error> {
+        self.compile_imported_applied(
+            contract,
+            snapshot,
+            limits,
+            installed_profile,
+            cycle,
+            event_projection,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_imported_applied(
+        &self,
+        contract: &rawr_import::Contract<rawr_import::Classified>,
+        snapshot: crate::reload::source::Snapshot,
+        limits: &rawr_import::cargo::Limits,
+        installed_profile: bool,
+        cycle: Option<&host::facade::ProfileCycle>,
+        event_projection: Option<rawr_import::profile::contract::EventProjectionRules>,
+        applications: &[rawr_import::surface::application::Application],
+    ) -> Result<CompiledImported, super::Error> {
         snapshot
             .revalidate()
             .map_err(Error::from)
@@ -261,9 +298,17 @@ impl crate::Engine {
         if !installed_profile {
             install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
         }
+        admit_applications(&mut registry, applications).map_err(super::Error::import)?;
         let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
             Err(failure) => {
+                if let crate::resolve::Error::ImportedApplicationRequired { call, .. } =
+                    &failure.error
+                {
+                    let call = call.clone();
+                    return Err(super::Error::resolution(sources.clone(), failure)
+                        .with_rust_application(call));
+                }
                 if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
                     .map_err(super::Error::diagnostic)?
                 {
@@ -306,6 +351,14 @@ impl crate::Engine {
                 }
                 Err(crate::resolve::ImportedFailure::Lowering(failure)) => {
                     let (evidence, error) = failure.into_parts();
+                    if let crate::ParseErrorType::Resolution(
+                        crate::resolve::Error::ImportedApplicationRequired { call, .. },
+                    ) = error.err_type()
+                    {
+                        let call = call.clone();
+                        return Err(super::Error::compilation(sources.clone(), evidence, error)
+                            .with_rust_application(call));
+                    }
                     let demand = match error.err_type() {
                         crate::ParseErrorType::Resolution(resolution) => {
                             match rust_miss(contract, resolution) {
@@ -389,6 +442,29 @@ impl crate::Engine {
                     source_identity: "<foreign source table>".into(),
                 })
                 .map_err(super::Error::import)?;
+            if let Some(identity) = used.application {
+                let application = applications
+                    .iter()
+                    .find(|application| *application.identity() == identity)
+                    .ok_or_else(|| {
+                        super::Error::import(Error::UnmappedImportedUse {
+                            path: used.path.as_str().into(),
+                            selector: used.selector.clone(),
+                        })
+                    })?;
+                let (start, end) =
+                    crate::resolve::lower_nominal::imported_range(source.text(), used.span)
+                        .ok_or_else(|| Error::SourceEvidence {
+                            path: used.path.as_str().into(),
+                            source_identity: source.identity().into(),
+                        })
+                        .map_err(super::Error::import)?;
+                compiler
+                    .require_application(application, source.identity(), start, end)
+                    .map_err(Error::from)
+                    .map_err(super::Error::import)?;
+                continue;
+            }
             if let Some(site) = used.endpoint {
                 let exact = installed_profile
                     && registry
@@ -644,6 +720,36 @@ impl crate::Engine {
             named: named.into_boxed_slice(),
         })
     }
+}
+
+/// Admit each proof-backed application's method into `registry`, by the key
+/// of the source call it answers, owned by its receiver's facade. The host
+/// and a generated runner admit the same applications the same way.
+pub(crate) fn admit_applications(
+    registry: &mut host::Registry,
+    applications: &[rawr_import::surface::application::Application],
+) -> Result<(), Error> {
+    for application in applications {
+        let signature = application.signature();
+        let mut builder = host::signature::Builder::new();
+        for input in signature.inputs() {
+            builder.try_parameter(Types::convert_charged(input, &[])?)?;
+        }
+        builder.output(Types::convert_charged(signature.output(), &[])?);
+        let path = format!("{}::{}", application.receiver_path(), application.name());
+        let item = host::item::Definition::method(
+            path,
+            receiver(application.ownership()),
+            builder.finish(),
+        )?
+        .imported(rawr_import::surface::identity::Selector::Method {
+            item: application.declaration(),
+            receiver: application.ownership(),
+        })
+        .applied(*application.identity());
+        registry.admit_applied(application.call().key(), application.root(), item)?;
+    }
+    Ok(())
 }
 
 /// The impls in `impls` for the script types `types` name at any depth,
@@ -992,7 +1098,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::InvalidConstruction { owner, .. }
         | R::MissingCapability { owner, .. }
         | R::InvalidMatch { owner, .. } => Some((owner.to_string(), ImportedNamespace::Type)),
-        R::InvalidHostOperation { item, .. } => Some((item.to_string(), ImportedNamespace::Either)),
+        R::InvalidHostOperation { item, .. } | R::ImportedApplicationRequired { item, .. } => {
+            Some((item.to_string(), ImportedNamespace::Either))
+        }
         // A module's path called as a function, as iced's `combo_box`: the
         // function beside it says why rawr can't call it.
         R::UnknownImport { path, .. } => Some((path.to_string(), ImportedNamespace::Either)),

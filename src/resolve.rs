@@ -91,6 +91,10 @@ pub struct Program {
     native: Option<std::sync::Arc<native::Capture>>,
     /// The generic functions compiled once per instantiation (D629).
     instances: Instances,
+    /// Each source's original imports with their lexical scopes (D652),
+    /// before hoisting: the scope a proof-backed imported call reads.
+    #[cfg(feature = "rust-import")]
+    lexical: BTreeMap<program::source::Id, Box<[crate::item::Use]>>,
 }
 
 /// An instance of a template: the name of the type each generic parameter
@@ -434,6 +438,11 @@ fn resolve_with_evidence_and_namespace(
     allocation_order: AllocationOrder,
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
+    #[cfg(feature = "rust-import")]
+    let lexical = BTreeMap::from([(
+        program::source::Id::ROOT,
+        unit.imports().to_vec().into_boxed_slice(),
+    )]);
     let (source, parsed_items, _, statement_source) = unit.into_parts();
     if let Some(module) = parsed_items.iter().find_map(|item| match item {
         crate::item::Parsed::Module(module) => Some(module),
@@ -502,6 +511,8 @@ fn resolve_with_evidence_and_namespace(
         }]
         .into_boxed_slice(),
         instances: Instances::default(),
+        #[cfg(feature = "rust-import")]
+        lexical,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
     program.widgets = crate::widget::resolve(&program, host).map_err(LocatedError::into_error)?;

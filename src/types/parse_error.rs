@@ -401,6 +401,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::InvalidHostOperation { item, reason, .. } => {
                     write!(f, "Invalid host operation '{item}': {reason}")
                 }
+                crate::resolve::Error::ImportedApplicationRequired { item, .. } => {
+                    write!(f, "'{item}' needs a proof of which imported method applies")
+                }
                 crate::resolve::Error::UnusedValue { value, .. } => {
                     write!(f, "Unused required value '{value}'")
                 }

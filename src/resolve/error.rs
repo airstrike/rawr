@@ -325,6 +325,17 @@ pub enum Error {
         /// Exact source operation span.
         operation: Span,
     },
+    /// An imported method call that needs a proof-backed application its
+    /// compilation does not hold yet. `call` is the encoded
+    /// `rawr_import::surface::application::Call`.
+    ImportedApplicationRequired {
+        /// Qualified imported member name.
+        item: ImmutableString,
+        /// The encoded source call.
+        call: Box<[u8]>,
+        /// Exact source operation span.
+        operation: Span,
+    },
     /// A value marked as required was discarded by a terminated expression.
     UnusedValue {
         /// Required value type.
@@ -452,7 +463,9 @@ impl Error {
             Self::InvalidImplOwner { .. } => Category::InvalidImplOwner,
             Self::DuplicateMethod { .. } => Category::DuplicateMethod,
             Self::InvalidMethodCall { .. } => Category::InvalidMethodCall,
-            Self::InvalidHostOperation { .. } => Category::InvalidHostOperation,
+            Self::InvalidHostOperation { .. } | Self::ImportedApplicationRequired { .. } => {
+                Category::InvalidHostOperation
+            }
             Self::UnusedValue { .. } => Category::UnusedValue,
             Self::SelfOutsideImpl { .. } => Category::SelfOutsideImpl,
             Self::ImmutableReceiver { .. } => Category::ImmutableReceiver,
@@ -496,7 +509,8 @@ impl Error {
             | Self::InvalidMethodCall { owner, .. }
             | Self::ImmutableReceiver { owner, .. }
             | Self::InvalidMethodSignature { owner, .. } => owner.as_str(),
-            Self::InvalidHostOperation { item, .. } => item.as_str(),
+            Self::InvalidHostOperation { item, .. }
+            | Self::ImportedApplicationRequired { item, .. } => item.as_str(),
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
@@ -533,7 +547,8 @@ impl Error {
             Self::InvalidImplOwner { reference, .. } => *reference,
             Self::DuplicateMethod { declaration, .. } => *declaration,
             Self::InvalidMethodCall { call, .. } => *call,
-            Self::InvalidHostOperation { operation, .. } => *operation,
+            Self::InvalidHostOperation { operation, .. }
+            | Self::ImportedApplicationRequired { operation, .. } => *operation,
             Self::UnusedValue { expression, .. } => *expression,
             Self::SelfOutsideImpl { reference } => *reference,
             Self::ImmutableReceiver { mutation, .. } => *mutation,
@@ -595,6 +610,7 @@ impl Error {
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
             | Self::InvalidHostOperation { .. }
+            | Self::ImportedApplicationRequired { .. }
             | Self::UnusedValue { .. }
             | Self::SelfOutsideImpl { .. }
             | Self::InvalidMethodSignature { .. } => None,
@@ -771,6 +787,12 @@ impl fmt::Display for Written<'_> {
             } => write!(
                 formatter,
                 "invalid host operation `{item}` at {operation}: {reason}"
+            ),
+            Error::ImportedApplicationRequired {
+                item, operation, ..
+            } => write!(
+                formatter,
+                "`{item}` at {operation} needs a proof of which imported method applies in its scope"
             ),
             Error::UnusedValue { value, expression } => write!(
                 formatter,

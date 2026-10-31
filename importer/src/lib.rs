@@ -11,6 +11,8 @@ extern crate alloc;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod api;
 #[cfg(feature = "rustc-driver")]
+pub mod applicability;
+#[cfg(feature = "rustc-driver")]
 pub mod bindings;
 pub mod bridge;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]

@@ -24,6 +24,8 @@ mod p4;
 mod p5;
 
 #[cfg(feature = "rustc-driver")]
+mod applicability;
+#[cfg(feature = "rustc-driver")]
 mod artifact;
 #[cfg(feature = "rustc-driver")]
 mod build_script;

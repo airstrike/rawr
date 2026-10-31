@@ -415,6 +415,8 @@ mod tests {
         let mut allocation = Allocation::for_replay(&current.limits);
         let proof = proof::evaluate(&recipes, false, &current.limits, &mut allocation).unwrap();
         let baseline = Baseline {
+            #[cfg(feature = "rustc-driver")]
+            partitions: None,
             proof,
             recipes,
             recipe_allocation: super::super::Usage { items: 0, bytes: 0 },

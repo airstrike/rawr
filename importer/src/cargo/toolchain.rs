@@ -19,6 +19,11 @@ pub use cached::{cached, Attestation};
 /// The pinned nightly the importer's driver runs on.
 pub const CHANNEL: &str = "nightly-2026-07-11";
 const RUST_RELEASE: &str = "1.99.0-nightly";
+/// The commit of the pinned nightly that extracts facts.
+pub(crate) const fn pinned_commit() -> &'static str {
+    RUST_COMMIT
+}
+
 const RUST_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const CARGO_RELEASE: &str = "1.99.0-nightly";
 const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
@@ -30,7 +35,7 @@ const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 const SUPPORTED_PLAN_SCHEMA: u32 = 8;
 // The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 // `extract/protocol.rs`'s `SCHEMA` are the same number.
-const SUPPORTED_PROBE_PROTOCOL: u32 = 32;
+const SUPPORTED_PROBE_PROTOCOL: u32 = 33;
 const SUPPORTED_UNIT_SCHEMA: u32 = 1;
 const SUPPORTED_GRAPH_SCHEMA: u32 = 1;
 

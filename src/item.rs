@@ -412,6 +412,8 @@ pub struct Module {
 /// A compile-time import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Use {
+    /// Enclosing lexical block, or `None` for a module-level import.
+    pub scope: Option<Span>,
     /// Import header metadata.
     pub header: Header,
     /// Imported path or path group.

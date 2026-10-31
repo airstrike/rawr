@@ -90,6 +90,12 @@ pub(crate) struct AliasTarget {
 /// What one unit of work produced.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) enum Emission {
+    Inventory {
+        inventory: model::Inventory,
+    },
+    InherentInventory {
+        inventory: model::Inherent,
+    },
     /// Schedule a definition. A struct or enum with an alias that passes its
     /// parameters on asks for the alias's shape first, when the alias is not
     /// scheduled yet.
@@ -98,7 +104,10 @@ pub(crate) enum Emission {
         alias: Option<Request>,
     },
     /// A trait obligation, selected when the walk is at a selected root.
-    Obligation { key: String, class: Class },
+    Obligation {
+        key: String,
+        class: Class,
+    },
     /// An implementation, relevant to `owner`, with an associated member
     /// obligation.
     Implementation {
@@ -128,18 +137,26 @@ pub(crate) enum Emission {
         implementation: Option<Box<Implementation>>,
     },
     /// Definitions an implementation is relevant to.
-    Relevance { ids: Vec<Id> },
+    Relevance {
+        ids: Vec<Id>,
+    },
     /// An implementation's selected associated definitions.
-    Associated { ids: Vec<Id> },
+    Associated {
+        ids: Vec<Id>,
+    },
     /// A blanket implementation applied to one concrete type.
-    Application { implementation: Box<Implementation> },
+    Application {
+        implementation: Box<Implementation>,
+    },
     /// A scalar predicate's outcome.
     Scalar {
         key: String,
         proof: ScalarPredicateProof,
     },
     /// The names a struct or enum's inherent impls give.
-    Inherent { names: Vec<String> },
+    Inherent {
+        names: Vec<String>,
+    },
 }
 
 /// What a trait obligation's self type is, which decides whether being
@@ -159,6 +176,9 @@ pub(crate) enum Class {
 /// One unit of work: everything it emits depends on the crate and the unit.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) enum Unit {
+    /// All trait implementations owned by this crate, with full members.
+    Inventory(#[serde(with = "hex16")] Hash),
+    InventoryShape(Key),
     /// A definition's shape.
     Shape(Key),
     /// A selected definition's impl tables.
@@ -167,7 +187,9 @@ pub(crate) enum Unit {
     Surface(#[serde(with = "hex16")] Hash),
     /// A trait obligation's candidate implementations: those of a concrete
     /// self type, or a selected parameter's relations.
-    Obligation { key: String },
+    Obligation {
+        key: String,
+    },
     /// An implementation's own fields and their requests.
     Base(#[serde(with = "hex16")] Hash),
     /// An implementation's relevance to a requesting definition.
@@ -559,6 +581,7 @@ pub(crate) struct Extracted {
     index: Rc<[Box<RawValue>]>,
     /// The crates it reached, sysroot and external, in order.
     pub(crate) crates: BTreeSet<Crate>,
+    inventory: Option<model::Inventory>,
 }
 
 impl Extracted {
@@ -574,6 +597,7 @@ impl Extracted {
             implementations: self.implementations.iter().collect(),
             scalar_predicate_proofs: self.scalar_predicate_proofs.iter().collect(),
             index: &self.index,
+            inventory: self.inventory.as_ref(),
         })
         .map_err(|error| format!("failed to encode compiler sidecar: {error}"))
     }
@@ -585,6 +609,7 @@ pub(crate) struct Engine<'o, O: Oracle> {
     root: Root,
     aliases: Vec<String>,
     session: String,
+    inventory: Option<model::Inventory>,
     scheduler: BTreeMap<Key, Scheduled>,
     ready: BTreeSet<Key>,
     definitions: BTreeMap<Key, Defined>,
@@ -625,6 +650,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
             root,
             aliases,
             session,
+            inventory: None,
             scheduler: BTreeMap::new(),
             ready: BTreeSet::new(),
             definitions: BTreeMap::new(),
@@ -715,6 +741,9 @@ impl<'o, O: Oracle> Engine<'o, O> {
         scalar_predicate_proofs.sort_unstable();
         let mut reachable = std::mem::take(&mut self.reachable);
         reachable.sort_unstable();
+        if let Some(inventory) = &mut self.inventory {
+            inventory.inherent.sort_unstable();
+        }
         Ok(Extracted {
             reachable,
             definitions,
@@ -722,7 +751,29 @@ impl<'o, O: Oracle> Engine<'o, O> {
             scalar_predicate_proofs,
             index,
             crates: std::mem::take(&mut self.crates),
+            inventory: self.inventory,
         })
+    }
+
+    /// A complete intrinsic domain never executes contextual method,
+    /// obligation, or surface units. Raw shapes retain their full predicates.
+    pub(crate) fn inventory(mut self) -> Result<Extracted, Fault> {
+        let emissions = self.oracle.unit(&Unit::Inventory(self.root.module))?;
+        let mut manifest = None;
+        for emission in emissions.iter() {
+            if let Emission::Inventory { inventory } = emission
+                && manifest.replace(inventory.clone()).is_some()
+            {
+                return Err(Fault::Error(
+                    "duplicate intrinsic completion manifest".into(),
+                ));
+            }
+        }
+        self.inventory = Some(
+            manifest.ok_or_else(|| Fault::Error("missing intrinsic completion manifest".into()))?,
+        );
+        self.apply_emissions(&emissions)?;
+        self.run(&[])
     }
 
     fn apply(&mut self, unit: &Unit) -> Result<Vec<Id>, Fault> {
@@ -737,7 +788,19 @@ impl<'o, O: Oracle> Engine<'o, O> {
         for emission in emissions.iter() {
             match emission {
                 Emission::Request { request, alias } => self.request(request, alias.as_ref())?,
-                Emission::Obligation { key, class } => self.obligation(key, *class)?,
+                Emission::Obligation { key, class } if self.inventory.is_none() => {
+                    self.obligation(key, *class)?
+                }
+                Emission::Obligation { .. } | Emission::Inventory { .. } => {}
+                Emission::InherentInventory { inventory } => {
+                    self.inventory
+                        .as_mut()
+                        .ok_or_else(|| {
+                            Fault::Error("intrinsic domain outside inventory acquisition".into())
+                        })?
+                        .inherent
+                        .push(inventory.clone());
+                }
                 Emission::Implementation {
                     implementation,
                     owner,
@@ -788,7 +851,20 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 Emission::Relevance { ids: values } | Emission::Associated { ids: values } => {
                     ids.extend(values.iter().cloned());
                 }
-                Emission::Base { .. } => {}
+                Emission::Base { implementation } => {
+                    if self.inventory.is_some()
+                        && let Some(implementation) = implementation
+                        && self
+                            .implementations
+                            .insert(
+                                parse_hash(&implementation.id.def_path_hash)?,
+                                (**implementation).clone(),
+                            )
+                            .is_some()
+                    {
+                        return Err(Fault::Error("duplicate intrinsic implementation".into()));
+                    }
+                }
                 Emission::Inherent { names } => {
                     if let Some(hash) = self.current {
                         self.inherent.insert(hash, names.clone());
@@ -848,6 +924,11 @@ impl<'o, O: Oracle> Engine<'o, O> {
     }
 
     fn request_one(&mut self, request: &Request) -> Result<(), Fault> {
+        let level = if self.inventory.is_some() {
+            Level::Shape
+        } else {
+            request.level
+        };
         match self.scheduler.get_mut(&request.key) {
             Some(entry) => {
                 if entry.owner.get() != request.owner.get() {
@@ -855,7 +936,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
                         "stable definition owner traversal identity collision".to_owned(),
                     ));
                 }
-                entry.level = entry.level.max(request.level);
+                entry.level = entry.level.max(level);
                 if let State::Complete(completed) = entry.state
                     && entry.level > completed
                 {
@@ -873,7 +954,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     request.key,
                     Scheduled {
                         owner: request.owner.clone(),
-                        level: request.level,
+                        level,
                         state: State::Queued,
                     },
                 );
@@ -955,7 +1036,11 @@ impl<'o, O: Oracle> Engine<'o, O> {
 
     fn process(&mut self, key: Key, level: Level) -> Result<(), Fault> {
         if !self.definitions.contains_key(&key) {
-            self.apply(&Unit::Shape(key))?;
+            self.apply(&if self.inventory.is_some() {
+                Unit::InventoryShape(key)
+            } else {
+                Unit::Shape(key)
+            })?;
         }
         if level == Level::Selected {
             if self.implemented.insert(key.hash) {
@@ -1354,6 +1439,18 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         text.push(char::from(DIGITS[usize::from(byte & 15)]));
     }
     text
+}
+
+fn parse_hash(text: &str) -> Result<Hash, Fault> {
+    let mut bytes = [0; 16];
+    if text.len() != 32 || !text.is_ascii() {
+        return Err(Fault::Error("a hash is 32 hexadecimal digits".into()));
+    }
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
+            .map_err(|error| Fault::Error(error.to_string()))?;
+    }
+    Ok(bytes)
 }
 
 mod hex16 {

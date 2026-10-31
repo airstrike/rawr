@@ -1787,6 +1787,8 @@ pub(crate) struct ImportedUse {
     /// The script functions that fill its callable parameters as slots
     /// (D594).
     pub(crate) slots: Box<[rawr_import::surface::instance::Slot]>,
+    /// The proof-backed application this use calls, when it is one.
+    pub(crate) application: Option<[u8; 32]>,
     pub(crate) span: Span,
 }
 
@@ -1829,6 +1831,10 @@ pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
     // its call, before a token the caller passed in: it is the use's start.
     Some((start, end.max(start)))
 }
+
+/// Rust import paths in one call's lexical scope, each by its segments.
+#[cfg(feature = "rust-import")]
+type ScopePaths = Box<[Box<[Box<str>]>]>;
 
 #[cfg(feature = "rust-import")]
 fn imported_surface_type(
@@ -4046,6 +4052,9 @@ struct Tables {
     runtime: crate::program::model::Model,
     host: crate::host::Registry,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
+    /// Each source's original imports and their lexical scopes (D652).
+    #[cfg(feature = "rust-import")]
+    lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
     /// The enum variants each source imports by name (`use Shape::*;`), with
     /// the name of their enum in that source.
@@ -4632,6 +4641,8 @@ impl Models {
             runtime,
             host,
             imports,
+            #[cfg(feature = "rust-import")]
+            lexical: program.lexical.clone(),
             by_name,
             variants,
             host_variants,
@@ -19273,6 +19284,10 @@ impl<'a> Parser<'a> {
         requirements: &[(ImmutableString, Ty, capability::Set)],
         slots: &[rawr_import::surface::instance::Slot],
     ) -> Option<[u8; 32]> {
+        // A proof-backed application's call reaches its own adapter.
+        if let Some(identity) = item.application() {
+            return Some(*identity);
+        }
         if item.imported_identity().is_none() || (requirements.is_empty() && slots.is_empty()) {
             return None;
         }
@@ -21174,6 +21189,15 @@ impl<'a> Parser<'a> {
         };
         let path = format!("{}::{member}", definition.path());
         let (member, path) = self.exported_member(&definition, member, path, member_span)?;
+        // Distinct imported candidates at one path: which one Rust selects
+        // depends on this call's receiver and lexical scope, which a
+        // proof-backed application settles (D650).
+        #[cfg(feature = "rust-import")]
+        if self.models.host.pending_method(&path).is_some()
+            && definition.identity().imported().is_some()
+        {
+            return self.parse_applied_method(receiver, &definition, member, &path, member_span);
+        }
         #[cfg(feature = "rust-import")]
         if let Some(family) = self.models.host.pending_method(&path) {
             return Err(Error::InvalidHostOperation {
@@ -21750,6 +21774,123 @@ impl<'a> Parser<'a> {
             evaluation: first.evaluation,
         }
         .retain_origin())
+    }
+
+    /// `value.method(..)` of an imported type that only a proof-backed
+    /// application settles: the call's receiver, arguments and lexical
+    /// scope name the application, which the registry holds once it is
+    /// proved, on the host and in a generated runner alike.
+    #[cfg(feature = "rust-import")]
+    fn parse_applied_method(
+        &mut self,
+        receiver: ParsedExpr,
+        definition: &crate::host::type_def::Definition,
+        member: ImmutableString,
+        path: &str,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let unsupported = |reason: &str| Error::InvalidHostOperation {
+            item: path.into(),
+            reason: reason.into(),
+            operation: member_span,
+        };
+        let identity = definition
+            .identity()
+            .imported()
+            .ok_or_else(|| unsupported("the receiver is not an imported type"))?;
+        if !definition.parameters().is_empty() {
+            return Err(unsupported(
+                "a proved imported call on a generic receiver type is not supported yet",
+            ));
+        }
+        if self.pending_arguments.is_none()
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            return Err(unsupported("method requires an argument list"));
+        }
+        let (arguments, end) = self.parse_call_arguments("host method arguments")?;
+        let call_span = span(receiver.span.start(), end);
+        let mut types = Vec::with_capacity(arguments.len());
+        for argument in &arguments {
+            types.push(
+                instance_surface_type(&self.inference, &self.models, &argument.ty).ok_or_else(
+                    || unsupported("an argument's type does not cross to Rust code as written"),
+                )?,
+            );
+        }
+        let scope = self.lexical_scope(member_span)?;
+        let call = rawr_import::surface::application::Call {
+            receiver: rawr_import::surface::identity::Definition::authenticated(
+                *identity.as_bytes(),
+            ),
+            receiver_arguments: Box::new([]),
+            name: member.as_str().into(),
+            // Rust selects a `&mut self` method of any receiver and checks
+            // its mutability afterwards, as `finish_host_method` does.
+            mutable: true,
+            arguments: types.into_boxed_slice(),
+            scope,
+        }
+        .canonical();
+        let Some((item, owner)) = self.models.host.applied(&call.key()) else {
+            return Err(Error::ImportedApplicationRequired {
+                item: path.into(),
+                call: serde_json::to_vec(&call)
+                    .map_err(|_| unsupported("the call could not be encoded"))?
+                    .into_boxed_slice(),
+                operation: member_span,
+            });
+        };
+        let (item, owner) = (item.clone(), owner.clone());
+        self.finish_host_method(
+            receiver,
+            definition,
+            &[item],
+            Some(owner),
+            false,
+            member_span,
+            arguments,
+            call_span,
+        )
+    }
+
+    /// The Rust import paths in lexical scope at `at` in this source:
+    /// module-level imports and those of every block that contains it.
+    /// A glob is kept as its module path and `*`.
+    #[cfg(feature = "rust-import")]
+    fn lexical_scope(&self, at: Span) -> Result<ScopePaths, Error> {
+        let mut paths = Vec::new();
+        let Some(imports) = self.models.lexical.get(&self.models.context) else {
+            return Ok(Box::new([]));
+        };
+        for used in imports.iter() {
+            if let Some(scope) = used.scope
+                && !(scope.start() <= at.start() && at.end() <= scope.end())
+            {
+                continue;
+            }
+            // A glob is its module path and `*`: the proof enumerates the
+            // module's traits from the crate's complete exports.
+            if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
+                paths.push(
+                    prefix
+                        .segments
+                        .iter()
+                        .map(|segment| Box::<str>::from(segment.name.text.as_str()))
+                        .chain(std::iter::once(Box::<str>::from("*")))
+                        .collect(),
+                );
+                continue;
+            }
+            for (_, path) in used.bindings() {
+                let path = path
+                    .iter()
+                    .map(|segment| Box::<str>::from(segment.as_str()))
+                    .collect::<Box<[_]>>();
+                paths.push(path);
+            }
+        }
+        Ok(paths.into_boxed_slice())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -49682,6 +49823,7 @@ impl<'a> Parser<'a> {
             mappers: Box::default(),
             callable: false,
             slots: Box::default(),
+            application: None,
             span,
         });
         Ok(format!("{SENTINEL}{index}"))
@@ -50050,6 +50192,7 @@ impl<'a> Parser<'a> {
             mappers: mappers.into_boxed_slice(),
             callable: item.signature().takes_callable(),
             slots,
+            application: item.application().copied(),
             span,
         });
         Ok(())
@@ -50122,6 +50265,7 @@ impl<'a> Parser<'a> {
             mappers: Box::default(),
             callable: false,
             slots: Box::default(),
+            application: None,
             span,
         });
         Ok(format!("{SENTINEL}{index}"))

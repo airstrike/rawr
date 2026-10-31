@@ -114,7 +114,16 @@ struct PreparedOutput {
 
 struct PreparedGraph {
     outputs: Vec<PreparedOutput>,
-    scripts: Vec<(String, Option<String>, usize)>,
+    scripts: Vec<Run>,
+}
+
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct Run {
+    unit: usize,
+    package_id: String,
+    platform: Option<String>,
+    compiler: usize,
+    dependencies: Vec<usize>,
 }
 
 struct UnitMasks {
@@ -212,6 +221,8 @@ pub(crate) struct BuildScript {
     package_id: Box<str>,
     platform: Option<Box<str>>,
     compiler: Arc<str>,
+    semantic_key: Arc<str>,
+    dependencies: Box<[Arc<str>]>,
 }
 
 /// Plan-ready identity retained from one selected normal Build unit.
@@ -359,6 +370,20 @@ impl Metadata {
 
     fn root_id(&self) -> Result<&str> {
         self.package_id(self.root)
+    }
+
+    /// Each alias this resolution declares, with its package id.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn declared_packages(&self) -> BTreeMap<&str, &str> {
+        self.declared
+            .iter()
+            .filter_map(|(alias, index)| Some((alias.as_ref(), self.package_id(*index).ok()?)))
+            .collect()
+    }
+
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn root_package_id(&self) -> Option<&str> {
+        self.root_id().ok()
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -2171,6 +2196,16 @@ impl BuildGraph {
 }
 
 impl BuildScript {
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn semantic_key(&self) -> &str {
+        &self.semantic_key
+    }
+
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn dependency_keys(&self) -> &[Arc<str>] {
+        &self.dependencies
+    }
+
     pub(crate) fn compiler(&self) -> &str {
         &self.compiler
     }
@@ -2189,6 +2224,8 @@ impl BuildScript {
             package_id: output.package_id().into(),
             platform: platform.map(Into::into),
             compiler: output.semantic_key.clone(),
+            semantic_key: Arc::from(format!("fixture-script:{}", output.semantic_key())),
+            dependencies: Box::from([output.semantic_key.clone()]),
         }
     }
 
@@ -2198,6 +2235,8 @@ impl BuildScript {
             package_id: package_id.into(),
             platform: Some(context.into()),
             compiler: Arc::from("fixture-unbound"),
+            semantic_key: Arc::from("fixture-script-unbound"),
+            dependencies: Box::default(),
         }
     }
 }
@@ -2367,11 +2406,17 @@ fn prepare_owned_graph(
             scripts.len().saturating_add(1),
         );
         let unit = &mut units[index];
-        scripts.push((
-            std::mem::take(&mut unit.pkg_id),
-            unit.platform.take(),
+        scripts.push(Run {
+            unit: index,
+            package_id: std::mem::take(&mut unit.pkg_id),
+            platform: unit.platform.take(),
             compiler,
-        ));
+            dependencies: unit
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.index)
+                .collect(),
+        });
     }
     // A library's own build-script run is an ordering edge, not an extern crate.
     let script_runs = units
@@ -2532,7 +2577,7 @@ fn prepared_graph_ownership(
             prepared
                 .scripts
                 .len()
-                .checked_mul(std::mem::size_of::<Arc<str>>())
+                .checked_mul(2 * std::mem::size_of::<Arc<str>>())
                 .ok_or_else(|| schema("Cargo unit graph", "script compiler storage overflow"))?,
         ),
     )?;
@@ -2554,10 +2599,23 @@ fn prepared_graph_ownership(
     for output in &prepared.outputs {
         prepared_output_ownership(output, &mut ownership, limits, account)?;
     }
-    for (package_id, platform, _) in &prepared.scripts {
+    for script in &prepared.scripts {
         add_ownership(&mut ownership, JsonOwnership::nodes(1))?;
-        own_string(&mut ownership, package_id)?;
-        if let Some(platform) = platform {
+        own_string(&mut ownership, &script.package_id)?;
+        own_slice(&mut ownership, script.dependencies.len())?;
+        add_ownership(
+            &mut ownership,
+            JsonOwnership::buffer(
+                script
+                    .dependencies
+                    .len()
+                    .checked_mul(std::mem::size_of::<Arc<str>>())
+                    .ok_or_else(|| {
+                        schema("Cargo unit graph", "script dependency storage overflow")
+                    })?,
+            ),
+        )?;
+        if let Some(platform) = &script.platform {
             own_string(&mut ownership, platform)?;
         }
     }
@@ -2899,12 +2957,35 @@ fn finish_prepared_graph(
         let mut scripts = prepared
             .scripts
             .into_iter()
-            .map(|(package_id, platform, compiler)| {
+            .map(|script| {
                 Ok(BuildScript {
-                    package_id: package_id.into_boxed_str(),
-                    platform: platform.map(String::into_boxed_str),
+                    package_id: script.package_id.into_boxed_str(),
+                    platform: script.platform.map(String::into_boxed_str),
+                    semantic_key: keys
+                        .get(script.unit)
+                        .and_then(Option::as_ref)
+                        .ok_or_else(|| {
+                            schema("Cargo unit graph", "script run semantic key is absent")
+                        })?
+                        .clone(),
+                    dependencies: script
+                        .dependencies
+                        .into_iter()
+                        .map(|index| {
+                            keys.get(index)
+                                .and_then(Option::as_ref)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    schema(
+                                        "Cargo unit graph",
+                                        "script dependency semantic key is absent",
+                                    )
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into_boxed_slice(),
                     compiler: keys
-                        .get(compiler)
+                        .get(script.compiler)
                         .and_then(Option::as_ref)
                         .ok_or_else(|| {
                             schema("Cargo unit graph", "script compiler semantic key is absent")

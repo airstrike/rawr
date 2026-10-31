@@ -172,4 +172,86 @@ pub(crate) struct Body<'body> {
     pub(crate) implementations: Vec<&'body Implementation>,
     pub(crate) scalar_predicate_proofs: Vec<&'body ScalarPredicateProof>,
     pub(crate) index: &'body [Box<RawValue>],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) inventory: Option<&'body Inventory>,
+}
+
+/// A completed intrinsic traversal, separate from demand-selected tables.
+/// The complete owned trait-impl domain and exact associated-item links are
+/// recorded by the compiler before any contextual applicability query.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Inventory {
+    pub(crate) schema: u32,
+    pub(crate) owner: String,
+    pub(crate) implementations: Vec<Id>,
+    pub(crate) associated: Vec<Association>,
+    pub(crate) unsupported: Vec<Id>,
+    pub(crate) inherent: Vec<Inherent>,
+    pub(crate) preludes: Vec<Prelude>,
+    pub(crate) deref: Option<Lookup>,
+}
+
+/// Complete trait names made available by one compiler-shipped prelude.
+/// Matching names still need complete semantic facts before applicability.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Prelude {
+    pub(crate) module: Id,
+    pub(crate) edition: String,
+    pub(crate) traits: Vec<TraitNames>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TraitNames {
+    pub(crate) id: Id,
+    pub(crate) methods: Vec<String>,
+}
+
+/// Complete inherent-impl list for one exact nominal definition.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Inherent {
+    pub(crate) owner: Id,
+    pub(crate) implementations: Vec<Id>,
+    pub(crate) associated: Vec<Association>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Association {
+    pub(crate) implementation: Id,
+    pub(crate) item: Id,
+    pub(crate) declaration: Option<Id>,
+}
+
+/// Complete upstream Deref headers used only for structural exclusion of an
+/// unrelated owned nominal receiver. Relevant/unknown heads need full proofs.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Lookup {
+    pub(crate) trait_id: Id,
+    pub(crate) domains: Vec<LookupDomain>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LookupDomain {
+    pub(crate) root: Id,
+    pub(crate) implementations: Vec<LookupHeader>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LookupHeader {
+    pub(crate) implementation: Id,
+    pub(crate) receiver: Receiver,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) enum Receiver {
+    Nominal(Id),
+    Closed,
+    Unresolved,
 }

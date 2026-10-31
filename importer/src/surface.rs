@@ -11,6 +11,7 @@ use crate::contract::{Classified, Contract};
 #[doc(hidden)]
 pub mod account;
 pub(crate) mod adapter;
+pub mod application;
 pub mod builder;
 pub mod callable;
 #[doc(hidden)]
@@ -139,6 +140,24 @@ pub struct Origin {
     byte_end: u32,
 }
 
+/// One proof-backed local application and the use site that required it.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) struct Applied {
+    invocation: application::Invocation,
+    origin: Origin,
+}
+
+/// The distinct applications a runner is built from, without use sites.
+fn unique_applications(applied: &[Applied]) -> Vec<&application::Invocation> {
+    let mut unique = applied
+        .iter()
+        .map(|applied| &applied.invocation)
+        .collect::<Vec<_>>();
+    unique.sort_unstable();
+    unique.dedup();
+    unique
+}
+
 /// A phase-indexed immutable symbolic bridge demand.
 ///
 /// Sealed demands are inspection evidence only. They deliberately expose no
@@ -214,6 +233,7 @@ pub struct Compiler<'contract, B> {
     snapshot: Snapshot,
     entries: Vec<Entry>,
     builders: Vec<builder::Plan>,
+    applications: Vec<Applied>,
     allocation: crate::contract::Allocation,
     event_projection: Option<crate::profile::contract::EventProjectionRules>,
     item_limit: usize,
@@ -229,6 +249,8 @@ struct Canonical<'a> {
     snapshot: Snapshot,
     entries: &'a [Entry],
     builders: &'a [builder::Plan],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    applications: &'a [Applied],
 }
 
 #[derive(Deserialize, Serialize)]
@@ -239,6 +261,8 @@ struct StoredCanonical {
     snapshot: [u8; 32],
     entries: Box<[Entry]>,
     builders: Box<[builder::Plan]>,
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    applications: Box<[Applied]>,
 }
 
 #[derive(Serialize)]
@@ -247,6 +271,8 @@ struct SurfaceCanonical<'a> {
     contract: &'a [u8; 32],
     entries: UniqueIdentities<'a>,
     builders: &'a [builder::Plan],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    applications: Vec<&'a application::Invocation>,
 }
 
 /// A demand's native items, each once, without the use sites that named
@@ -535,6 +561,7 @@ impl Contract<Classified> {
             snapshot,
             entries: Vec::new(),
             builders: Vec::new(),
+            applications: Vec::new(),
             allocation,
             event_projection: None,
             item_limit: limits.items,
@@ -621,6 +648,44 @@ impl<B> Compiler<'_, B> {
         self.allocation.retain_checked(Some(1), bytes)?;
         self.entries.try_reserve(1).map_err(|_| Error::Allocation)?;
         self.entries.push(Entry { identity, origin });
+        Ok(())
+    }
+
+    /// Retain one proof-backed local application at its Rawr use site. It
+    /// is not a classified selector: its plan comes from the application.
+    #[doc(hidden)]
+    pub fn require_application(
+        &mut self,
+        application: &application::Application,
+        source: &str,
+        byte_start: u32,
+        byte_end: u32,
+    ) -> Result<(), Error> {
+        let actual = self.applications.len().checked_add(1).ok_or(Error::Limit {
+            resource: "symbolic applications",
+            limit: self.item_limit,
+            actual: usize::MAX,
+        })?;
+        self.account
+            .exceeded("symbolic applications", self.item_limit, actual);
+        Origin::validate(
+            source,
+            byte_start,
+            byte_end,
+            self.string_limit,
+            &mut self.account,
+        )?;
+        let invocation = application.invocation.clone();
+        let bytes = serde_json::to_vec(&invocation)
+            .map_err(|_| Error::Encoding)?
+            .len()
+            .checked_add(source.len());
+        self.allocation.retain_checked(Some(1), bytes)?;
+        self.applications
+            .try_reserve(1)
+            .map_err(|_| Error::Allocation)?;
+        let origin = Origin::retain(source, byte_start, byte_end)?;
+        self.applications.push(Applied { invocation, origin });
         Ok(())
     }
 
@@ -739,6 +804,8 @@ impl<B> Compiler<'_, B> {
         self.entries.dedup();
         self.builders.sort_unstable();
         self.builders.dedup();
+        self.applications.sort_unstable();
+        self.applications.dedup();
         let contract = self.contract.fingerprint();
         let canonical_value = Canonical {
             schema: SURFACE_SCHEMA,
@@ -746,6 +813,7 @@ impl<B> Compiler<'_, B> {
             snapshot: self.snapshot,
             entries: &self.entries,
             builders: &self.builders,
+            applications: &self.applications,
         };
         let mut measured = Measured {
             bytes: 0,
@@ -776,6 +844,7 @@ impl<B> Compiler<'_, B> {
         }
         let unique = unique_identity_count(&self.entries)
             .checked_add(self.builders.len())
+            .and_then(|count| count.checked_add(unique_applications(&self.applications).len()))
             .ok_or(Error::Limit {
                 resource: "adapter plan count",
                 limit: self.item_limit,
@@ -830,6 +899,9 @@ impl<B> Compiler<'_, B> {
         for builder in &self.builders {
             plans.push(adapter::Plan::try_builder(self.contract, builder)?);
         }
+        for invocation in unique_applications(&self.applications) {
+            plans.push(adapter::Plan::application(invocation));
+        }
         plans.sort_unstable_by_key(adapter::Plan::identity);
         if plans
             .windows(2)
@@ -849,6 +921,7 @@ impl<B> Compiler<'_, B> {
                 contract: contract.as_bytes(),
                 entries: UniqueIdentities(&self.entries),
                 builders: &self.builders,
+                applications: unique_applications(&self.applications),
             },
         );
         if surface.overflow {
@@ -1458,6 +1531,24 @@ fn model_type_matches(
 }
 
 impl<B> Demand<Sealed, B> {
+    /// The intrinsic fact unions this demand's proof-backed applications
+    /// were proved from. A replay is current only while they are.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn application_catalogs(&self) -> Vec<[u8; 32]> {
+        let mut catalogs = self
+            .plans
+            .iter()
+            .filter_map(|plan| {
+                plan.application_invocation()
+                    .map(|invocation| invocation.catalog)
+            })
+            .collect::<Vec<_>>();
+        catalogs.sort_unstable();
+        catalogs.dedup();
+        catalogs
+    }
+
     /// Reconstruct one current sealed demand from its exact canonical checked-node output.
     #[doc(hidden)]
     pub fn replay_cached(
@@ -1508,6 +1599,9 @@ impl<B> Demand<Sealed, B> {
                 }
                 for builder in &stored.builders {
                     plans.push(adapter::Plan::try_builder(contract, builder)?);
+                }
+                for invocation in unique_applications(&stored.applications) {
+                    plans.push(adapter::Plan::application(invocation));
                 }
                 Ok(())
             },
@@ -1584,6 +1678,10 @@ impl<B> Demand<Sealed, B> {
             || stored.snapshot != *snapshot.as_bytes()
             || stored.entries.windows(2).any(|pair| pair[0] >= pair[1])
             || stored.builders.windows(2).any(|pair| pair[0] >= pair[1])
+            || stored
+                .applications
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
         {
             return Err(Error::Canonical);
         }
@@ -1601,8 +1699,18 @@ impl<B> Demand<Sealed, B> {
                 account,
             )?;
         }
+        for applied in stored.applications.iter() {
+            Origin::validate(
+                applied.origin.source(),
+                applied.origin.byte_start,
+                applied.origin.byte_end,
+                limits.string_bytes,
+                account,
+            )?;
+        }
         let unique = unique_identity_count(&stored.entries)
             .checked_add(stored.builders.len())
+            .and_then(|count| count.checked_add(unique_applications(&stored.applications).len()))
             .ok_or(Error::Canonical)?;
         account.exceeded("cached adapter plan count", limits.items, unique);
         let mut plans = Vec::new();
@@ -1630,6 +1738,7 @@ impl<B> Demand<Sealed, B> {
                 contract: fingerprint.as_bytes(),
                 entries: UniqueIdentities(&stored.entries),
                 builders: &stored.builders,
+                applications: unique_applications(&stored.applications),
             },
         );
         if surface.overflow {
