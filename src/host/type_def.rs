@@ -795,11 +795,6 @@ impl Argument {
 }
 
 impl Identity {
-    #[cfg(all(test, feature = "rust-import"))]
-    pub(crate) const fn linked(identity: TypeId) -> Self {
-        Self::Linked(native::Identity::from_type_id(identity))
-    }
-
     /// Borrow symbolic imported identity when this type is not linked.
     #[must_use]
     pub const fn imported(&self) -> Option<&import::Identity> {

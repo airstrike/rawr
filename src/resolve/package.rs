@@ -53,10 +53,6 @@ enum Target {
         definitions: Box<[host::item::Definition]>,
         owner: Option<host::facade::Dependency>,
     },
-    HostEndpoint {
-        contract: host::endpoint::Contract,
-        owner: host::facade::Dependency,
-    },
 }
 
 #[derive(Default)]
@@ -402,7 +398,6 @@ impl<'a> Resolver<'a> {
                             | Target::HostModuleItem { .. }
                             | Target::Item(_) => {}
                             Target::HostItem { .. }
-                            | Target::HostEndpoint { .. }
                             | Target::Type(
                                 type_ref::Target::Builtin
                                 | type_ref::Target::Host { .. }
@@ -461,7 +456,6 @@ impl<'a> Resolver<'a> {
                         | Target::HostModuleItem { .. }
                         | Target::Item(_)
                         | Target::HostItem { .. }
-                        | Target::HostEndpoint { .. }
                         | Target::Type(
                             type_ref::Target::Builtin
                             | type_ref::Target::Host { .. }
@@ -1109,15 +1103,11 @@ impl<'a> Resolver<'a> {
                     Target::HostItem { definitions, owner } => {
                         item::Import::Item { definitions, owner }
                     }
-                    Target::HostEndpoint { contract, owner } => {
-                        item::Import::Endpoint { contract, owner }
-                    }
                 };
                 let value = matches!(
                     import,
                     item::Import::ScriptItem { .. }
                         | item::Import::Item { .. }
-                        | item::Import::Endpoint { .. }
                         | item::Import::Variant { .. }
                         | item::Import::OrderingVariant
                         | item::Import::HostVariant { .. }
@@ -1199,7 +1189,6 @@ impl<'a> Resolver<'a> {
                 | Target::HostModuleItem { .. }
                 | Target::Item(_)
                 | Target::HostItem { .. } => {}
-                Target::HostEndpoint { .. } => {}
             }
         }
         Ok(())
@@ -1824,18 +1813,6 @@ fn host_target(
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),
         }),
-        Some(host::Entry::Endpoint(contract)) => {
-            let (_, owner) =
-                host.operation_endpoint(&qualified)
-                    .ok_or_else(|| Error::UnknownImport {
-                        path: qualified.clone(),
-                        reference,
-                    })?;
-            Ok(Target::HostEndpoint {
-                contract: contract.clone(),
-                owner: owner.clone(),
-            })
-        }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
         None if super::std_fmt_import(&qualified)
             || super::tokio_macro(&qualified, host).is_some()

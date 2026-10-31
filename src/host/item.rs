@@ -555,7 +555,6 @@ impl Definition {
         root: &host::path::Path,
         modules: &[host::path::Path],
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
     ) -> Result<Self, host::Error> {
         let path = host::path::Path::qualify(root, &self.path);
@@ -618,9 +617,7 @@ impl Definition {
         }
 
         Ok(Self {
-            signature: self
-                .signature
-                .resolve(root, types, supports, imported, &path)?,
+            signature: self.signature.resolve(root, types, imported, &path)?,
             path,
             kind: self.kind,
             receiver: self.receiver,
@@ -649,7 +646,6 @@ impl Definition {
         modules: &[host::path::Path],
         types: &[host::type_def::Definition],
         aliases: &[host::path::Path],
-        supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
         allocation: &mut A,
     ) -> Result<Self, host::Error> {
@@ -719,7 +715,7 @@ impl Definition {
 
         self.signature = self
             .signature
-            .resolve_imported(root, types, supports, imported, &path, allocation)?;
+            .resolve_imported(root, types, imported, &path, allocation)?;
         self.path = path;
         Ok(self)
     }

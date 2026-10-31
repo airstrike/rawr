@@ -349,12 +349,6 @@ impl crate::Engine {
                     .map_err(super::Error::import)?;
                 continue;
             }
-            if used.endpoint.is_some() {
-                return Err(super::Error::import(Error::UnmappedImportedUse {
-                    path: used.path.as_str().into(),
-                    selector: used.selector,
-                }));
-            }
             let mut identity = None;
             for outcome in paths.outcomes(used.path.as_str()) {
                 if !contract.accepts(outcome.identity(), &used.selector) {

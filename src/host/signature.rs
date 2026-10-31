@@ -472,7 +472,6 @@ impl Definition {
         &self,
         root: &host::path::Path,
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
         item: &host::path::Path,
     ) -> Result<Self, host::Error> {
@@ -481,19 +480,11 @@ impl Definition {
             .try_reserve_exact(self.parameters.len())
             .map_err(|_| host::Error::Allocation)?;
         for ty in &self.parameters {
-            parameters.push(ty.resolve(
-                root,
-                types,
-                supports,
-                &self.type_parameters,
-                imported,
-                item,
-            )?);
+            parameters.push(ty.resolve(root, types, &self.type_parameters, imported, item)?);
         }
-        let output =
-            self.output
-                .resolve(root, types, supports, &self.type_parameters, imported, item)?;
-        validate_signature_support(item, &parameters, &output)?;
+        let output = self
+            .output
+            .resolve(root, types, &self.type_parameters, imported, item)?;
         #[cfg(feature = "rust-import")]
         let type_parameters = {
             let mut parameters = Vec::new();
@@ -514,7 +505,7 @@ impl Definition {
             .instance
             .as_ref()
             .map(|ty| {
-                ty.resolve(root, types, supports, &self.type_parameters, imported, item)
+                ty.resolve(root, types, &self.type_parameters, imported, item)
                     .map(Box::new)
             })
             .transpose()?;
@@ -534,7 +525,6 @@ impl Definition {
         mut self,
         root: &host::path::Path,
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
         item: &host::path::Path,
         allocation: &mut A,
@@ -543,7 +533,6 @@ impl Definition {
             ty.resolve_imported(
                 root,
                 types,
-                supports,
                 &self.type_parameters,
                 imported,
                 item,
@@ -553,7 +542,6 @@ impl Definition {
         self.output.resolve_imported(
             root,
             types,
-            supports,
             &self.type_parameters,
             imported,
             item,
@@ -563,14 +551,12 @@ impl Definition {
             instance.resolve_imported(
                 root,
                 types,
-                supports,
                 &self.type_parameters,
                 imported,
                 item,
                 allocation,
             )?;
         }
-        validate_signature_support(item, &self.parameters, &self.output)?;
         Ok(self)
     }
 
@@ -591,34 +577,6 @@ impl Definition {
         }
         exports
     }
-
-    pub(crate) fn support_exports(&self) -> Vec<&host::support::SupportExport> {
-        let mut exports = Vec::new();
-        for parameter in &self.parameters {
-            parameter.collect_support_exports(&mut exports);
-        }
-        self.output.collect_support_exports(&mut exports);
-        if let Some(instance) = &self.instance {
-            instance.collect_support_exports(&mut exports);
-        }
-        exports
-    }
-}
-
-fn validate_signature_support(
-    item: &host::path::Path,
-    parameters: &[host::type_ref::Type],
-    output: &host::type_ref::Type,
-) -> Result<(), host::Error> {
-    for ty in parameters.iter().chain([output]) {
-        if let Some(ty) = ty.nested_signature_support() {
-            return Err(host::Error::InvalidSignatureSupport {
-                item: item.to_string().into(),
-                ty,
-            });
-        }
-    }
-    Ok(())
 }
 
 fn same_input_type(
@@ -816,7 +774,6 @@ fn same_input_type(
                     mappings,
                 )?
         }
-        (Shape::Support(left), Shape::Support(right)) => left == right,
         (Shape::Parameter(left), Shape::Parameter(right)) => {
             let left_index = left_parameters
                 .binary_search_by(|(candidate, _)| candidate.cmp(left))

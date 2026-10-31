@@ -114,8 +114,8 @@ impl Output {
     }
 
     /// Consume the actual compiled output only after every captured native use
-    /// matches the same carrier. Runtime projections and endpoint contracts
-    /// remain in its candidate for the normal off-live binding gate.
+    /// matches the same carrier. Runtime projections remain in its candidate
+    /// for the normal off-live binding gate.
     pub(crate) fn cover(self, carrier: &manifest::Carrier) -> Coverage {
         let mut digest = Sha256::new();
         digest.update(b"rawr.resident.compiled-uses/v1");
@@ -126,7 +126,7 @@ impl Output {
                 coverage::Use {
                     path: &used.path,
                     selector: &used.selector,
-                    endpoint: used.endpoint.as_ref(),
+                    endpoint: None,
                     types: &used.types,
                 },
                 used.functions.iter().map(|function| coverage::Function {

@@ -150,14 +150,7 @@ pub(crate) enum Shape {
         export: Box<host::type_def::Export>,
         arguments: Box<[Type]>,
     },
-    Support(SupportTarget),
     Parameter(host::path::Path),
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum SupportTarget {
-    Local(host::support::Local),
-    External(Box<host::support::SupportExport>),
 }
 
 #[cfg(feature = "rust-import")]
@@ -167,95 +160,6 @@ pub(crate) struct ImportedTypes(Box<[(host::type_def::import::Identity, usize)]>
 pub(crate) struct ImportedTypes;
 
 impl Type {
-    pub(crate) const fn signature_support(&self) -> bool {
-        matches!(self.0, Shape::Support(_))
-    }
-
-    pub(crate) fn nested_signature_support(&self) -> Option<&'static str> {
-        fn contains(ty: &Type) -> bool {
-            match ty.shape() {
-                Shape::Support(_) => true,
-                Shape::Tuple(types)
-                | Shape::Registered {
-                    arguments: types, ..
-                }
-                | Shape::External {
-                    arguments: types, ..
-                } => types.iter().any(contains),
-                #[cfg(feature = "rust-import")]
-                Shape::Imported {
-                    arguments: types, ..
-                } => types.iter().any(contains),
-                Shape::Array { element, .. }
-                | Shape::Option(element)
-                | Shape::Reference {
-                    target: element, ..
-                }
-                | Shape::Iter(element)
-                | Shape::Range(element)
-                | Shape::RangeInclusive(element) => contains(element),
-                Shape::Result(ok, err) => contains(ok) || contains(err),
-                Shape::Callable { input, output } => contains(input) || contains(output),
-                #[cfg(feature = "rust-import")]
-                Shape::ImportedFunctionItem { input, output } => {
-                    contains(input) || contains(output)
-                }
-                Shape::Unit | Shape::Builtin(_) | Shape::Parameter(_) => false,
-            }
-        }
-
-        if self.signature_support() {
-            return None;
-        }
-        match self.shape() {
-            Shape::Tuple(types) if types.iter().any(contains) => Some("tuple"),
-            Shape::Array { element, .. } if contains(element) => Some("array"),
-            Shape::Iter(element) if contains(element) => Some("iterator"),
-            Shape::Range(element) | Shape::RangeInclusive(element) if contains(element) => {
-                Some("range")
-            }
-            Shape::Option(element) if contains(element) => Some("option"),
-            Shape::Reference { target, .. } if contains(target) => Some("reference"),
-            Shape::Result(ok, err) if contains(ok) || contains(err) => Some("result"),
-            Shape::Callable { input, output } if contains(input) || contains(output) => {
-                Some("callable")
-            }
-            #[cfg(feature = "rust-import")]
-            Shape::ImportedFunctionItem { input, output }
-                if contains(input) || contains(output) =>
-            {
-                Some("imported function item")
-            }
-            Shape::Registered { arguments, .. } if arguments.iter().any(contains) => {
-                Some("registered type application")
-            }
-            #[cfg(feature = "rust-import")]
-            Shape::Imported { arguments, .. } if arguments.iter().any(contains) => {
-                Some("imported type application")
-            }
-            Shape::External { arguments, .. } if arguments.iter().any(contains) => {
-                Some("external type application")
-            }
-            Shape::Unit
-            | Shape::Tuple(_)
-            | Shape::Array { .. }
-            | Shape::Reference { .. }
-            | Shape::Option(_)
-            | Shape::Iter(_)
-            | Shape::Range(_)
-            | Shape::RangeInclusive(_)
-            | Shape::Result(..)
-            | Shape::Callable { .. }
-            | Shape::Builtin(_)
-            | Shape::Registered { .. }
-            | Shape::External { .. }
-            | Shape::Support(_)
-            | Shape::Parameter(_) => None,
-            #[cfg(feature = "rust-import")]
-            Shape::Imported { .. } | Shape::ImportedFunctionItem { .. } => None,
-        }
-    }
-
     #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         std::mem::size_of::<Self>().checked_add(self.dynamic_bytes()?)
@@ -298,10 +202,6 @@ impl Type {
             Shape::External { export, arguments } => export
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_add(slice(arguments)?)),
-            Shape::Support(target) => match target {
-                SupportTarget::Local(local) => local.contract().retained_bytes(),
-                SupportTarget::External(export) => export.retained_bytes(),
-            },
             Shape::Parameter(path) => path
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<host::path::Path>())),
@@ -363,12 +263,6 @@ impl Type {
                 export: Box::new(export.try_clone()?),
                 arguments: slice(arguments)?,
             },
-            Shape::Support(target) => Shape::Support(match target {
-                SupportTarget::Local(local) => SupportTarget::Local(local.try_clone()?),
-                SupportTarget::External(export) => {
-                    SupportTarget::External(Box::new(export.try_clone()?))
-                }
-            }),
             Shape::Parameter(path) => Shape::Parameter(path.try_clone()?),
         }))
     }
@@ -561,20 +455,6 @@ impl Type {
         }))
     }
 
-    /// Construct one same-facade signature-only support reference.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn support(local: host::support::Local) -> Self {
-        Self(Shape::Support(SupportTarget::Local(local)))
-    }
-
-    /// Construct one cross-facade signature-only support reference.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn support_external(export: host::support::SupportExport) -> Self {
-        Self(Shape::Support(SupportTarget::External(Box::new(export))))
-    }
-
     /// Construct a reference to a signature type parameter.
     pub fn parameter(name: impl Into<crate::ImmutableString>) -> Result<Self, host::Error> {
         let path = host::path::Path::parse(name)?;
@@ -588,7 +468,6 @@ impl Type {
         &self,
         root: &host::path::Path,
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         parameters: &[(host::path::Path, crate::capability::Set)],
         _imported: &ImportedTypes,
         item: &host::path::Path,
@@ -596,49 +475,41 @@ impl Type {
         match &self.0 {
             Shape::Unit => Ok(Self::unit()),
             Shape::Tuple(members) => Ok(Self(Shape::Tuple(resolve_types(
-                members, root, types, supports, parameters, _imported, item,
+                members, root, types, parameters, _imported, item,
             )?))),
             Shape::Array { element, length } => Ok(Self(Shape::Array {
-                element: Box::new(
-                    element.resolve(root, types, supports, parameters, _imported, item)?,
-                ),
+                element: Box::new(element.resolve(root, types, parameters, _imported, item)?),
                 length: *length,
             })),
             Shape::Reference { mutable, target } => Ok(Self::reference(
                 *mutable,
-                target.resolve(root, types, supports, parameters, _imported, item)?,
+                target.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::Option(element) => Ok(Self::option(
-                element.resolve(root, types, supports, parameters, _imported, item)?,
+                element.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::Iter(element) => Ok(Self::iterator(
-                element.resolve(root, types, supports, parameters, _imported, item)?,
+                element.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::Range(element) => Ok(Self::range(
-                element.resolve(root, types, supports, parameters, _imported, item)?,
+                element.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::RangeInclusive(element) => Ok(Self::range_inclusive(
-                element.resolve(root, types, supports, parameters, _imported, item)?,
+                element.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::Result(ok, err) => Ok(Self::result(
-                ok.resolve(root, types, supports, parameters, _imported, item)?,
-                err.resolve(root, types, supports, parameters, _imported, item)?,
+                ok.resolve(root, types, parameters, _imported, item)?,
+                err.resolve(root, types, parameters, _imported, item)?,
             )),
             Shape::Callable { input, output } => Ok(Self(Shape::Callable {
-                input: Box::new(input.resolve(root, types, supports, parameters, _imported, item)?),
-                output: Box::new(
-                    output.resolve(root, types, supports, parameters, _imported, item)?,
-                ),
+                input: Box::new(input.resolve(root, types, parameters, _imported, item)?),
+                output: Box::new(output.resolve(root, types, parameters, _imported, item)?),
             })),
             #[cfg(feature = "rust-import")]
             Shape::ImportedFunctionItem { input, output } => {
                 Ok(Self(Shape::ImportedFunctionItem {
-                    input: Box::new(
-                        input.resolve(root, types, supports, parameters, _imported, item)?,
-                    ),
-                    output: Box::new(
-                        output.resolve(root, types, supports, parameters, _imported, item)?,
-                    ),
+                    input: Box::new(input.resolve(root, types, parameters, _imported, item)?),
+                    output: Box::new(output.resolve(root, types, parameters, _imported, item)?),
                 }))
             }
             Shape::Builtin(builtin) => Ok(Self::builtin(*builtin)),
@@ -674,9 +545,7 @@ impl Type {
                         actual: arguments.len(),
                     });
                 }
-                let arguments = resolve_types(
-                    arguments, root, types, supports, parameters, _imported, item,
-                )?;
+                let arguments = resolve_types(arguments, root, types, parameters, _imported, item)?;
                 Ok(Self(Shape::Registered {
                     path: qualified,
                     arguments,
@@ -703,9 +572,7 @@ impl Type {
                 }
                 Ok(Self(Shape::Imported {
                     identity: *identity,
-                    arguments: resolve_types(
-                        arguments, root, types, supports, parameters, _imported, item,
-                    )?,
+                    arguments: resolve_types(arguments, root, types, parameters, _imported, item)?,
                 }))
             }
             Shape::External { export, arguments } => {
@@ -722,26 +589,8 @@ impl Type {
                     export: Box::new(export.try_clone().map_err(|_| host::Error::Allocation)?),
                     #[cfg(not(feature = "rust-import"))]
                     export: export.clone(),
-                    arguments: resolve_types(
-                        arguments, root, types, supports, parameters, _imported, item,
-                    )?,
+                    arguments: resolve_types(arguments, root, types, parameters, _imported, item)?,
                 }))
-            }
-            Shape::Support(target) => {
-                if let SupportTarget::Local(local) = target {
-                    let contract = local.contract();
-                    let exact = supports
-                        .binary_search_by(|candidate| candidate.path_ref().cmp(contract.path_ref()))
-                        .ok()
-                        .map(|index| &supports[index]);
-                    if exact != Some(contract) {
-                        return Err(host::Error::UnknownFacadeType {
-                            item: item.to_string().into(),
-                            ty: contract.path().into(),
-                        });
-                    }
-                }
-                Ok(Self(Shape::Support(target.clone())))
             }
         }
     }
@@ -751,7 +600,6 @@ impl Type {
         &mut self,
         root: &host::path::Path,
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         parameters: &[(host::path::Path, crate::capability::Set)],
         imported: &ImportedTypes,
         item: &host::path::Path,
@@ -761,9 +609,7 @@ impl Type {
             Shape::Unit | Shape::Builtin(_) => {}
             Shape::Tuple(members) => {
                 for member in members {
-                    member.resolve_imported(
-                        root, types, supports, parameters, imported, item, allocation,
-                    )?;
+                    member.resolve_imported(root, types, parameters, imported, item, allocation)?;
                 }
             }
             Shape::Array { element, .. }
@@ -774,33 +620,19 @@ impl Type {
             | Shape::Iter(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
-                element.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
+                element.resolve_imported(root, types, parameters, imported, item, allocation)?;
             }
             Shape::Result(ok, err) => {
-                ok.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
-                err.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
+                ok.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                err.resolve_imported(root, types, parameters, imported, item, allocation)?;
             }
             Shape::Callable { input, output } => {
-                input.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
-                output.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
+                input.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                output.resolve_imported(root, types, parameters, imported, item, allocation)?;
             }
             Shape::ImportedFunctionItem { input, output } => {
-                input.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
-                output.resolve_imported(
-                    root, types, supports, parameters, imported, item, allocation,
-                )?;
+                input.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                output.resolve_imported(root, types, parameters, imported, item, allocation)?;
             }
             Shape::Parameter(name) => {
                 if parameters
@@ -836,9 +668,8 @@ impl Type {
                 }
                 *path = qualified;
                 for argument in arguments {
-                    argument.resolve_imported(
-                        root, types, supports, parameters, imported, item, allocation,
-                    )?;
+                    argument
+                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
                 }
             }
             Shape::Imported {
@@ -860,9 +691,8 @@ impl Type {
                     });
                 }
                 for argument in arguments {
-                    argument.resolve_imported(
-                        root, types, supports, parameters, imported, item, allocation,
-                    )?;
+                    argument
+                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
                 }
             }
             Shape::External { export, arguments } => {
@@ -875,25 +705,10 @@ impl Type {
                     });
                 }
                 for argument in arguments {
-                    argument.resolve_imported(
-                        root, types, supports, parameters, imported, item, allocation,
-                    )?;
+                    argument
+                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
                 }
             }
-            Shape::Support(SupportTarget::Local(local)) => {
-                let contract = local.contract();
-                let exact = supports
-                    .binary_search_by(|candidate| candidate.path_ref().cmp(contract.path_ref()))
-                    .ok()
-                    .map(|index| &supports[index]);
-                if exact != Some(contract) {
-                    return Err(host::Error::UnknownFacadeType {
-                        item: item.to_string().into(),
-                        ty: contract.path().into(),
-                    });
-                }
-            }
-            Shape::Support(SupportTarget::External(_)) => {}
         }
         Ok(())
     }
@@ -949,59 +764,7 @@ impl Type {
                     argument.collect_exports(exports);
                 }
             }
-            Shape::Support(_) | Shape::Unit | Shape::Builtin(_) | Shape::Parameter(_) => {}
-        }
-    }
-
-    pub(crate) fn collect_support_exports<'a>(
-        &'a self,
-        exports: &mut Vec<&'a host::support::SupportExport>,
-    ) {
-        match &self.0 {
-            Shape::Tuple(members) => {
-                for member in members {
-                    member.collect_support_exports(exports);
-                }
-            }
-            Shape::Array { element, .. }
-            | Shape::Option(element)
-            | Shape::Reference {
-                target: element, ..
-            }
-            | Shape::Iter(element)
-            | Shape::Range(element)
-            | Shape::RangeInclusive(element) => {
-                element.collect_support_exports(exports);
-            }
-            Shape::Result(ok, err) => {
-                ok.collect_support_exports(exports);
-                err.collect_support_exports(exports);
-            }
-            Shape::Callable { input, output } => {
-                input.collect_support_exports(exports);
-                output.collect_support_exports(exports);
-            }
-            #[cfg(feature = "rust-import")]
-            Shape::ImportedFunctionItem { input, output } => {
-                input.collect_support_exports(exports);
-                output.collect_support_exports(exports);
-            }
-            Shape::Registered { arguments, .. } | Shape::External { arguments, .. } => {
-                for argument in arguments {
-                    argument.collect_support_exports(exports);
-                }
-            }
-            #[cfg(feature = "rust-import")]
-            Shape::Imported { arguments, .. } => {
-                for argument in arguments {
-                    argument.collect_support_exports(exports);
-                }
-            }
-            Shape::Support(SupportTarget::External(export)) => exports.push(export),
-            Shape::Support(SupportTarget::Local(_))
-            | Shape::Unit
-            | Shape::Builtin(_)
-            | Shape::Parameter(_) => {}
+            Shape::Unit | Shape::Builtin(_) | Shape::Parameter(_) => {}
         }
     }
 }
@@ -1021,7 +784,6 @@ fn resolve_types(
     unresolved: &[Type],
     root: &host::path::Path,
     types: &[host::type_def::Definition],
-    supports: &[host::support::SignatureContract],
     parameters: &[(host::path::Path, crate::capability::Set)],
     imported: &ImportedTypes,
     item: &host::path::Path,
@@ -1031,7 +793,7 @@ fn resolve_types(
         .try_reserve_exact(unresolved.len())
         .map_err(|_| host::Error::Allocation)?;
     for ty in unresolved {
-        resolved.push(ty.resolve(root, types, supports, parameters, imported, item)?);
+        resolved.push(ty.resolve(root, types, parameters, imported, item)?);
     }
     Ok(resolved.into_boxed_slice())
 }
@@ -1137,21 +899,6 @@ impl crate::digest::Write for Type {
                 writer.tag(0x2342);
                 write_slice(writer, arguments)?;
             }
-            Shape::Support(target) => {
-                writer.tag(0x2309);
-                match target {
-                    SupportTarget::Local(local) => {
-                        writer.tag(0x2361);
-                        local.contract().write(writer)?;
-                    }
-                    SupportTarget::External(export) => {
-                        writer.tag(0x2362);
-                        export.contract().write(writer)?;
-                        writer.tag(0x2363);
-                        export.dependency().write(writer)?;
-                    }
-                }
-            }
             Shape::Parameter(path) => {
                 writer.tag(0x2306);
                 writer.text(&path.to_string());
@@ -1249,7 +996,7 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let resolved = subscription_function()
-            .resolve_imported(&root, &[], &types, &[], &[], &imported, &mut allocation)
+            .resolve_imported(&root, &[], &types, &[], &imported, &mut allocation)
             .expect("registered output resolves inside the imported facade");
 
         assert_eq!(resolved.path(), "iced::listen");
@@ -1269,7 +1016,7 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let error = subscription_function()
-            .resolve_imported(&root, &[], &[], &[], &[], &imported, &mut allocation)
+            .resolve_imported(&root, &[], &[], &[], &imported, &mut allocation)
             .expect_err("missing registered type must be rejected");
 
         assert_eq!(

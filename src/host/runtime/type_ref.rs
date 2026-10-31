@@ -61,12 +61,6 @@ pub(crate) enum Type {
         arguments: Box<[Type]>,
         owner: host::facade::Dependency,
     },
-    Support {
-        path: ImmutableString,
-        identity: TypeId,
-        owner: host::facade::Dependency,
-        contract: host::support::SignatureContract,
-    },
 }
 
 /// One exact local runtime witness with an optional private semantic marker.
@@ -211,9 +205,7 @@ impl Type {
                 arguments: each(own),
                 owner: owner.clone(),
             },
-            Self::Unit | Self::Object(_) | Self::Script { .. } | Self::Support { .. } => {
-                self.clone()
-            }
+            Self::Unit | Self::Object(_) | Self::Script { .. } => self.clone(),
         }
     }
 
@@ -310,20 +302,6 @@ impl Type {
         }
     }
 
-    pub(crate) fn support(
-        path: ImmutableString,
-        identity: TypeId,
-        owner: host::facade::Dependency,
-        contract: host::support::SignatureContract,
-    ) -> Self {
-        Self::Support {
-            path,
-            identity,
-            owner,
-            contract,
-        }
-    }
-
     pub(crate) fn runtime(&self) -> TypeId {
         match self {
             Self::Unit => TypeId::of::<()>(),
@@ -334,9 +312,6 @@ impl Type {
             Self::Callable { .. } => TypeId::of::<crate::item::Value>(),
             Self::Builtin { runtime, .. } | Self::Script { runtime, .. } => runtime.runtime(),
             Self::Host {
-                identity: runtime, ..
-            }
-            | Self::Support {
                 identity: runtime, ..
             } => *runtime,
             #[cfg(feature = "rust-import")]
@@ -357,8 +332,7 @@ impl Type {
             | Self::Tuple(_)
             | Self::Callable { .. }
             | Self::Builtin { .. }
-            | Self::Object(_)
-            | Self::Support { .. } => &[],
+            | Self::Object(_) => &[],
         }
     }
 
@@ -387,8 +361,7 @@ impl Type {
             | Self::Callable { .. }
             | Self::Builtin { .. }
             | Self::Object(_)
-            | Self::Script { .. }
-            | Self::Support { .. } => None,
+            | Self::Script { .. } => None,
         }
     }
 
@@ -544,16 +517,6 @@ impl Type {
             }
             #[cfg(feature = "rust-import")]
             Self::Imported { path, owner, .. } => registry.attest(owner, path, value, self, model),
-            Self::Support { path, identity, .. } => {
-                if value.type_id() == *identity {
-                    Ok(())
-                } else {
-                    Err(Error::Representation {
-                        expected: path.clone(),
-                        actual: value.type_name().into(),
-                    })
-                }
-            }
             Self::Unit | Self::Builtin { .. } => {
                 if value.type_id() == self.runtime() {
                     Ok(())
@@ -594,9 +557,6 @@ impl Type {
                 for argument in arguments {
                     argument.collect_dependencies(dependencies);
                 }
-            }
-            Self::Support { owner, .. } => {
-                dependencies.insert(owner.clone());
             }
             Self::Array { element, .. } | Self::Option(element) => {
                 element.collect_dependencies(dependencies);
@@ -890,20 +850,6 @@ impl crate::digest::Write for Type {
                 writer.tag(0x2154);
                 owner.write(writer)?;
             }
-            Self::Support {
-                path,
-                owner,
-                contract,
-                identity: _,
-            } => {
-                writer.tag(0x2106);
-                writer.tag(0x2141);
-                writer.text(path);
-                writer.tag(0x2142);
-                owner.write(writer)?;
-                writer.tag(0x2143);
-                contract.write(writer)?;
-            }
         }
         Ok(())
     }
@@ -970,7 +916,6 @@ impl fmt::Display for Type {
             Self::Imported {
                 path, arguments, ..
             } if arguments.is_empty() => formatter.write_str(path),
-            Self::Support { path, .. } => formatter.write_str(path),
             Self::Host {
                 path, arguments, ..
             } => write!(

@@ -1767,7 +1767,6 @@ pub(crate) struct ImportedUse {
     pub(crate) source: crate::program::source::Id,
     pub(crate) path: ImmutableString,
     pub(crate) selector: rawr_import::surface::identity::Selector,
-    pub(crate) endpoint: Option<[u8; 32]>,
     pub(crate) types: Box<[rawr_import::classify::representability::convert::Type]>,
     pub(crate) functions: Box<[ImportedFunctionUse]>,
     pub(crate) mappers: Box<[ImportedMapperUse]>,
@@ -4361,7 +4360,6 @@ impl Models {
                     }
                     item::Import::Module
                     | item::Import::ModuleItem { .. }
-                    | item::Import::Endpoint { .. }
                     | item::Import::Type { .. }
                     | item::Import::Item { .. }
                     | item::Import::Alias => {}
@@ -4980,16 +4978,6 @@ impl Models {
         self.host.item_owner(path)
     }
 
-    fn operation_endpoint(
-        &self,
-        path: &str,
-    ) -> Option<(
-        &crate::host::endpoint::Contract,
-        &crate::host::facade::Dependency,
-    )> {
-        self.host.operation_endpoint(path)
-    }
-
     fn support_id(&self) -> u64 {
         let proof: Vec<_> = self
             .by_identity
@@ -5088,10 +5076,6 @@ enum Op {
     },
     Intrinsic {
         operation: Box<IntrinsicOperation>,
-    },
-    Endpoint {
-        contract: crate::host::endpoint::Contract,
-        owner: crate::host::facade::Dependency,
     },
     #[cfg(feature = "rust-import")]
     Event {
@@ -6797,10 +6781,6 @@ enum ExecutableOp {
     Intrinsic {
         proof: intrinsic::Proof,
     },
-    Endpoint {
-        contract: crate::host::endpoint::Contract,
-        owner: crate::host::facade::Dependency,
-    },
     #[cfg(feature = "rust-import")]
     Event {
         proof: Box<crate::host::runtime::event::Site>,
@@ -7057,7 +7037,6 @@ impl ExecutableOp {
             Self::Imported { proof } => proof.dependencies(),
             Self::Symbolic { .. } => BTreeSet::new(),
             Self::Intrinsic { proof } => proof.dependencies(),
-            Self::Endpoint { owner, .. } => BTreeSet::from([owner.clone()]),
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => proof.dependencies(),
             Self::Projection { proof } => proof.dependencies(),
@@ -7083,7 +7062,6 @@ impl ExecutableOp {
             Self::Imported { .. } | Self::Event { .. } | Self::Sequence(_) => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
-            | Self::Endpoint { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
             | Self::Clone { .. }
@@ -7109,7 +7087,6 @@ impl ExecutableOp {
             Self::Sequence(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Symbolic { .. }
-            | Self::Endpoint { .. }
             | Self::Projection { .. }
             | Self::Struct { .. }
             | Self::Enum { .. }
@@ -7163,19 +7140,6 @@ impl ExecutableOp {
                     "\0rawr.intrinsic.{}.{:016x}",
                     proof.path(),
                     proof.symbol_id()
-                );
-            }
-            Self::Endpoint { contract, .. } => {
-                return format!(
-                    "\0rawr.endpoint.{}.{:016x}",
-                    contract.path(),
-                    crate::program::schema::symbol_id(&(
-                        contract.site(),
-                        contract.profile(),
-                        contract.source(),
-                        contract.projection(),
-                        contract.linked(),
-                    ))
                 );
             }
             #[cfg(feature = "rust-import")]
@@ -7250,7 +7214,6 @@ impl ExecutableOp {
                 .iter()
                 .map(|operand| place_operand(operand.ty().runtime()))
                 .collect(),
-            Self::Endpoint { .. } => vec![TypeId::of::<ImmutableString>()],
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => vec![proof.source().runtime()],
             Self::Projection { proof } => vec![proof.source().runtime()],
@@ -7366,16 +7329,6 @@ impl ExecutableOp {
                     &models.runtime,
                     Some(&equal),
                 )
-            }
-            Self::Endpoint { contract, .. } => {
-                let [input] = args else {
-                    return Err(invariant("operation endpoint requires one owned String"));
-                };
-                let input = input
-                    .take()
-                    .into_immutable_string()
-                    .map_err(|_| invariant("operation endpoint input changed after checking"))?;
-                Ok(contract.invoke(input))
             }
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => {
@@ -7718,18 +7671,6 @@ struct HostTyProof {
     definition: crate::host::type_def::Definition,
     alias: Option<crate::host::type_def::Definition>,
     owner: Option<crate::host::facade::Dependency>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SupportTyProof {
-    contract: crate::host::support::SignatureContract,
-    owner: crate::host::facade::Dependency,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct EndpointTyProof {
-    contract: crate::host::endpoint::Contract,
-    owner: crate::host::facade::Dependency,
 }
 
 #[cfg(all(test, feature = "rust-import"))]
@@ -8180,8 +8121,6 @@ enum Ty {
         proof: Rc<HostTyProof>,
         arguments: Box<[Ty]>,
     },
-    Support(Rc<SupportTyProof>),
-    Endpoint(Rc<EndpointTyProof>),
     /// A script struct or enum, with its type arguments when generic.
     Script(type_def::Id, Box<[Ty]>),
     /// `Box<T>`, `Rc<T>` or `Arc<T>`: the value itself at runtime, as
@@ -8290,12 +8229,6 @@ impl Ty {
                 for argument in arguments {
                     argument.collect_dependencies(dependencies);
                 }
-            }
-            Self::Support(proof) => {
-                dependencies.insert(proof.owner.clone());
-            }
-            Self::Endpoint(proof) => {
-                dependencies.insert(proof.owner.clone());
             }
             Self::Never
             | Self::Unit
@@ -8590,8 +8523,6 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Support(proof) => proof.contract.path().into(),
-            Self::Endpoint(proof) => proof.contract.path().into(),
             Self::Script(id, arguments) if arguments.is_empty() => {
                 models.definition(*id).name().into()
             }
@@ -8659,8 +8590,6 @@ impl Ty {
                 target.native_type_id(models)
             }
             Self::Host { proof, .. } => proof.definition.native_identity(),
-            Self::Support(proof) => Some(proof.contract.representation()),
-            Self::Endpoint(_) => None,
             Self::Script(id, ..) => Some(match models.definition(*id) {
                 Nominal::Struct { .. } => TypeId::of::<nominal::Struct>(),
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
@@ -8757,8 +8686,6 @@ impl Ty {
     fn usage(&self) -> crate::host::usage::Policy {
         match self {
             Self::Host { proof, .. } => proof.definition.usage(),
-            Self::Support(_) => crate::host::usage::Policy::Required,
-            Self::Endpoint(_) => crate::host::usage::Policy::Required,
             #[cfg(feature = "rust-import")]
             Self::ImportedFunctionItem { .. } => crate::host::usage::Policy::Ordinary,
             #[cfg(feature = "rust-import")]
@@ -8799,20 +8726,6 @@ impl Ty {
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
-        }
-    }
-
-    fn signature_support(&self) -> Option<&SupportTyProof> {
-        match self {
-            Self::Support(proof) => Some(proof),
-            _ => None,
-        }
-    }
-
-    fn operation_endpoint(&self) -> Option<&EndpointTyProof> {
-        match self {
-            Self::Endpoint(proof) => Some(proof),
-            _ => None,
         }
     }
 
@@ -10905,7 +10818,6 @@ struct Parser<'a> {
     /// body's tail and `return`s are checked against in its place.
     #[cfg(feature = "rust-import")]
     revealing: Option<Ty>,
-    allow_endpoint_projection: bool,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
@@ -11307,7 +11219,6 @@ impl<'a> Parser<'a> {
             symbolic_only: false,
             #[cfg(feature = "rust-import")]
             revealing: None,
-            allow_endpoint_projection: false,
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
@@ -16442,7 +16353,6 @@ impl<'a> Parser<'a> {
                 ExecutableOp::Imported { proof }
             }
             Op::Symbolic { value, captures } => ExecutableOp::Symbolic { value, captures },
-            Op::Endpoint { contract, owner } => ExecutableOp::Endpoint { contract, owner },
             Op::Intrinsic { operation } => {
                 let IntrinsicOperation {
                     facade,
@@ -16753,8 +16663,6 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Debug && self.std_error(&dynamic, false)
             }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
-            Ty::Support(_) => false,
-            Ty::Endpoint(_) => false,
             // A derive on a generic type holds when its arguments provide
             // the capability too, as derive's bounds require.
             Ty::Script(id, arguments) => {
@@ -16997,12 +16905,6 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            Ty::Support(proof) => intrinsic::Type::support(
-                proof.contract.path().into(),
-                proof.contract.representation(),
-                proof.owner.clone(),
-                proof.contract.clone(),
-            ),
             Ty::Param(name)
                 if let Some(index) = self
                     .template_params
@@ -17012,8 +16914,7 @@ impl<'a> Parser<'a> {
             {
                 intrinsic::Type::witness_parameter(index)
             }
-            Ty::Endpoint(_)
-            | Ty::Never
+            Ty::Never
             | Ty::Param(_)
             | Ty::Projection(..)
             | Ty::Boxed(..)
@@ -18587,43 +18488,6 @@ impl<'a> Parser<'a> {
                         .into_boxed_slice(),
                 }
             }
-            Shape::Support(target) => {
-                let (contract, expected_owner) = match target {
-                    crate::host::type_ref::SupportTarget::Local(local) => {
-                        let owner = owner.cloned().ok_or_else(|| Error::InvalidHostOperation {
-                            item: operation.into(),
-                            reason: "local signature support has no exact owner".into(),
-                            operation: Span::NONE,
-                        })?;
-                        (local.contract(), owner)
-                    }
-                    crate::host::type_ref::SupportTarget::External(export) => {
-                        (export.contract(), export.dependency())
-                    }
-                };
-                let path = contract.path();
-                let (installed, installed_owner) = self
-                    .models
-                    .host
-                    .support_type(&path)
-                    .ok_or_else(|| Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!("signature support `{path}` is no longer installed").into(),
-                        operation: Span::NONE,
-                    })?;
-                if installed != contract || installed_owner != &expected_owner {
-                    return Err(Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!("signature support `{path}` no longer has its exact proof")
-                            .into(),
-                        operation: Span::NONE,
-                    });
-                }
-                Ty::Support(Rc::new(SupportTyProof {
-                    contract: contract.clone(),
-                    owner: expected_owner,
-                }))
-            }
             Shape::Option(element) => Ty::Option(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -19832,11 +19696,6 @@ impl<'a> Parser<'a> {
             name_span,
             "constructed or loaded as a host value",
         )?;
-        self.reject_signature_support(
-            &signature.output,
-            name_span,
-            "constructed or loaded as a host value",
-        )?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let helper = self.push_intrinsic(
@@ -19856,56 +19715,6 @@ impl<'a> Parser<'a> {
             lvalue: None,
             outcome,
             evaluation,
-        }
-        .retain_origin())
-    }
-
-    fn parse_operation_endpoint(
-        &mut self,
-        contract: crate::host::endpoint::Contract,
-        owner: crate::host::facade::Dependency,
-        name_span: Span,
-    ) -> Result<ParsedExpr, Error> {
-        let (mut arguments, end) = self.parse_call_arguments("operation endpoint arguments")?;
-        let call = span(name_span.start(), end);
-        let [argument] = arguments.as_mut_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: contract.path().into(),
-                reason: "operation endpoint requires exactly one owned String argument".into(),
-                operation: call,
-            });
-        };
-        self.coerce_expr(&Ty::String, argument)?;
-        #[cfg(feature = "rust-import")]
-        let imported_helper = self
-            .imported
-            .is_some()
-            .then(|| self.push_imported_endpoint(&contract, &owner, call))
-            .transpose()?;
-        let helper = if self.symbolic_only {
-            #[cfg(feature = "rust-import")]
-            {
-                imported_helper.expect("symbolic lowering retains an imported context")
-            }
-            #[cfg(not(feature = "rust-import"))]
-            {
-                return Err(self.unsupported("operation endpoint without import support"));
-            }
-        } else {
-            self.push_op(Op::Endpoint {
-                contract: contract.clone(),
-                owner: owner.clone(),
-            })
-        };
-        let (prelude, source) = self.private_call(&helper, arguments);
-        Ok(ParsedExpr {
-            prelude,
-            source,
-            ty: Ty::Endpoint(Rc::new(EndpointTyProof { contract, owner })),
-            span: call,
-            lvalue: None,
-            outcome: crate::host::usage::Outcome::Conservative,
-            evaluation: crate::host::usage::Evaluation::Required,
         }
         .retain_origin())
     }
@@ -20059,16 +19868,10 @@ impl<'a> Parser<'a> {
             });
         };
         for argument in &mut arguments {
-            self.reject_signature_support(
-                &argument.ty,
-                argument.span,
-                "stored in an intrinsic aggregate",
-            )?;
             self.coerce_expr(expected, argument)?;
         }
         let output = self.inference.resolve(&signature.output);
         self.reject_invocation(&output, call, "returned by an intrinsic macro")?;
-        self.reject_signature_support(&output, call, "returned by an intrinsic macro")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let helper = self.push_intrinsic(
@@ -22226,8 +22029,6 @@ impl<'a> Parser<'a> {
                 | Ty::Dyn(..)
                 | Ty::Iter(_)
                 | Ty::Callable { .. }
-                | Ty::Support(_)
-                | Ty::Endpoint(_)
                 | Ty::Param(_)
                 | Ty::Projection(..)
         ) && !self.type_provides(&resolved, capability::Kind::Copy)
@@ -23012,7 +22813,6 @@ impl<'a> Parser<'a> {
         }
 
         self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
-        self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
 
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
@@ -23754,7 +23554,6 @@ impl<'a> Parser<'a> {
             return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
         self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
-        self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
@@ -24377,18 +24176,6 @@ impl<'a> Parser<'a> {
         }
 
         self.reject_invocation(&value.ty, value.span, "used outside a direct receiver call")?;
-        let endpoint_tail = self
-            .inference
-            .resolve(&value.ty)
-            .operation_endpoint()
-            .is_some();
-        if !endpoint_tail {
-            self.reject_signature_support(
-                &value.ty,
-                value.span,
-                "used outside an exact nested host-call argument",
-            )?;
-        }
 
         if assignment_token(&self.peek()) {
             let (rendered, end) = self.parse_assignment(value)?;
@@ -24417,13 +24204,6 @@ impl<'a> Parser<'a> {
                 self.returned_place(value, block_like)?
             };
             if terminated {
-                if endpoint_tail {
-                    self.reject_signature_support(
-                        &value.ty,
-                        value.span,
-                        "used outside an exact nested host-call argument",
-                    )?;
-                }
                 if value.ty.usage() == crate::host::usage::Policy::Required
                     && value.outcome != crate::host::usage::Outcome::Discardable
                 {
@@ -24563,11 +24343,6 @@ impl<'a> Parser<'a> {
             };
             replacement = self.compound_assignment(operator, target, replacement)?;
         }
-        self.reject_signature_support(
-            &replacement.ty,
-            replacement.span,
-            "stored through an assignment",
-        )?;
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
@@ -27557,11 +27332,6 @@ impl<'a> Parser<'a> {
             let value = self.parse_expr_expecting(Some(&output))?;
             let mut value = self.returned_place(value, block_like)?;
             end = value.span;
-            self.reject_signature_support(
-                &value.ty,
-                value.span,
-                "returned from a script function or method",
-            )?;
             self.coerce_expr(&output, &mut value)?;
             self.returned(value.span, &value.ty);
             self.consume_imported_value(&value, "returned value", value.span)?;
@@ -30087,8 +29857,6 @@ impl<'a> Parser<'a> {
         rhs: &mut ParsedExpr,
         allowed: &[Ty],
     ) -> Result<Ty, Error> {
-        self.reject_signature_support(&lhs.ty, lhs.span, "used by an operator")?;
-        self.reject_signature_support(&rhs.ty, rhs.span, "used by an operator")?;
         let mut ty = self.inference.resolve(&lhs.ty);
         // An operand not yet inferred (a closure parameter) takes the other's type.
         if let Ty::Infer(id) = ty {
@@ -30141,10 +29909,6 @@ impl<'a> Parser<'a> {
         } else {
             Some(self.parse_binary(0)?)
         };
-        self.reject_signature_support(&lhs.ty, lhs.span, "stored in a range")?;
-        if let Some(rhs) = &rhs {
-            self.reject_signature_support(&rhs.ty, rhs.span, "stored in a range")?;
-        }
         // `0.0..=1.0`: Rust's `RangeInclusive<f64>`, a value of two bounds.
         if inclusive
             && let Some(rhs) = &rhs
@@ -30322,10 +30086,7 @@ impl<'a> Parser<'a> {
         // fn(&Theme, _) -> _`) stays the host value, which Rawr passes on
         // as it is.
         if let Ty::Fn { .. } = &target {
-            if matches!(
-                source,
-                Ty::Host { .. } | Ty::Callable { .. } | Ty::Support(_)
-            ) {
+            if matches!(source, Ty::Host { .. } | Ty::Callable { .. }) {
                 value.span = span(value.span.start(), written.end());
                 value.lvalue = None;
                 return Ok(value);
@@ -30688,7 +30449,6 @@ impl<'a> Parser<'a> {
 
     /// The integer type of an operand, an unknown one taking `{integer}`.
     fn integer_operand(&mut self, operand: &ParsedExpr) -> Result<Ty, Error> {
-        self.reject_signature_support(&operand.ty, operand.span, "used by an operator")?;
         if let Ty::Infer(id) = self.inference.resolve(&operand.ty) {
             let kind = Ty::Int(Int::Var(self.inference.fresh_id()));
             self.inference.bind(id, kind);
@@ -31580,8 +31340,6 @@ impl<'a> Parser<'a> {
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
         let negate = matches!(operator, Token::NotEqualsTo);
-        self.reject_signature_support(&lhs.ty, lhs.span, "used by an operator")?;
-        self.reject_signature_support(&rhs.ty, rhs.span, "used by an operator")?;
         // `degrees == 90.0` through iced's `impl PartialEq<f32> for Degrees`.
         if let Some(mut value) = self.host_comparison("eq", &lhs, &mut rhs)? {
             if negate {
@@ -33823,7 +33581,6 @@ impl<'a> Parser<'a> {
         };
         let start = self.next().1;
         let operand = self.parse_operand()?;
-        self.reject_signature_support(&operand.ty, operand.span, "used by an operator")?;
         let symbol = if operator == "-" { "neg" } else { "!" };
         if let Some(mut value) = self.operator_impl(symbol, &operand, None)? {
             value.span = span(start, operand.span.end());
@@ -34028,11 +33785,6 @@ impl<'a> Parser<'a> {
                 Token::Period => {}
                 _ => break,
             }
-            self.reject_signature_support(
-                &value.ty,
-                value.span,
-                "used as a receiver or field owner",
-            )?;
             let (member, member_span) = match pending {
                 Some(member) => member,
                 None => {
@@ -37226,21 +36978,6 @@ impl<'a> Parser<'a> {
                 return self.parse_std_trait_call("cmp", member, name_span.start());
             }
             if let Some(binding) = self.models.import(&name).cloned() {
-                if let item::Import::Endpoint { contract, owner } = binding.target {
-                    return self.parse_operation_endpoint(contract, owner, name_span);
-                }
-                if matches!(
-                    &binding.target,
-                    item::Import::Module | item::Import::ModuleItem { .. }
-                ) {
-                    let endpoint = self
-                        .models
-                        .operation_endpoint(&binding.qualified)
-                        .map(|(contract, owner)| (contract.clone(), owner.clone()));
-                    if let Some((contract, owner)) = endpoint {
-                        return self.parse_operation_endpoint(contract, owner, name_span);
-                    }
-                }
                 if let item::Import::Item {
                     definitions: items,
                     owner,
@@ -38832,7 +38569,6 @@ impl<'a> Parser<'a> {
             Prelude::Ok | Prelude::Err => "stored in a `Result`",
         };
         self.reject_invocation(&value.ty, value.span, stored)?;
-        self.reject_signature_support(&value.ty, value.span, stored)?;
         // The payload is the turbofish's type, or the value's own.
         let expected = match variant {
             Prelude::Err => err.clone(),
@@ -42273,11 +42009,6 @@ impl<'a> Parser<'a> {
                 argument.span,
                 "passed to an ordinary or unresolved function",
             )?;
-            self.reject_signature_support(
-                &argument.ty,
-                argument.span,
-                "passed to an ordinary or unresolved function",
-            )?;
         }
         let mut witnesses = Vec::new();
         let output = if let Some(function) = function {
@@ -43634,36 +43365,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn reject_signature_support(
-        &self,
-        ty: &Ty,
-        operation: Span,
-        action: &str,
-    ) -> Result<(), Error> {
-        let ty = self.inference.resolve(ty);
-        if let Some(proof) = ty.signature_support() {
-            return Err(Error::InvalidHostOperation {
-                item: proof.contract.path().into(),
-                reason: format!(
-                    "signature-only support cannot be {action}; it may flow only from one sealed host-call result into an exact nested host-call argument"
-                )
-                .into(),
-                operation,
-            });
-        }
-        if let Some(proof) = ty.operation_endpoint() {
-            return Err(Error::InvalidHostOperation {
-                item: proof.contract.path().into(),
-                reason: format!(
-                    "operation endpoint replay cannot be {action}; it may flow only into its exact immediate projection"
-                )
-                .into(),
-                operation,
-            });
-        }
-        Ok(())
-    }
-
     /// `Type::member(..)` for a builtin type: `String::new()`, the
     /// prelude's and the crate's `From` conversions (`String::from(x)`,
     /// `i64::from(true)`), and crate trait functions without `self`.
@@ -44823,13 +44524,6 @@ impl<'a> Parser<'a> {
                 );
             }
             let path = format!("{}::{member}", binding.qualified);
-            if let Some((contract, owner)) = self.models.operation_endpoint(&path) {
-                return self.parse_operation_endpoint(
-                    contract.clone(),
-                    owner.clone(),
-                    span(owner_span.start(), member_span.end()),
-                );
-            }
             // `Trait::method(receiver, ..)` through a crate's trait a `use`
             // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
             // which Rawr names as a module: the method called on its
@@ -45062,13 +44756,6 @@ impl<'a> Parser<'a> {
                 );
             }
             let path = format!("{owner}::{member}");
-            if let Some((contract, endpoint_owner)) = self.models.operation_endpoint(&path) {
-                return self.parse_operation_endpoint(
-                    contract.clone(),
-                    endpoint_owner.clone(),
-                    span(owner_span.start(), member_span.end()),
-                );
-            }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 let error = Error::UnknownMember {
                     owner,
@@ -47077,44 +46764,6 @@ impl<'a> Parser<'a> {
             source = unboxed;
             value.ty = source.clone();
         }
-        if let Ty::Endpoint(endpoint) = &source {
-            if !self.allow_endpoint_projection {
-                return Err(Error::InvalidHostOperation {
-                    item: endpoint.contract.path().into(),
-                    reason: "operation endpoint may be projected only as the direct checked callable result"
-                        .into(),
-                    operation: value.span,
-                });
-            }
-            let Ty::Host {
-                proof: target_proof,
-                arguments,
-            } = &target
-            else {
-                return Err(Error::TypeMismatch {
-                    expected: target.name(&self.models),
-                    actual: source.name(&self.models),
-                    expression: value.span,
-                });
-            };
-            let exact_owner = target_proof.owner.as_ref() == Some(&endpoint.owner);
-            if !exact_owner
-                || target_proof.definition.path_ref() != endpoint.contract.target()
-                || arguments.len() != 1
-            {
-                return Err(Error::InvalidHostOperation {
-                    item: endpoint.contract.path().into(),
-                    reason:
-                        "operation endpoint target is not its exact sealed immediate projection"
-                            .into(),
-                    operation: value.span,
-                });
-            }
-            value.ty = target;
-            value.lvalue = None;
-            value.source.cover(value.span);
-            return Ok(None);
-        }
         // iced's `impl Widget for &str`: a string where a widget erases is
         // its `text`.
         if source.is_text()
@@ -47522,9 +47171,6 @@ impl<'a> Parser<'a> {
     }
 
     fn coerce_branches(&mut self, branches: &mut [&mut ParsedExpr]) -> Result<Ty, Error> {
-        for branch in branches.iter() {
-            self.reject_signature_support(&branch.ty, branch.span, "retained across control flow")?;
-        }
         let sources = branches
             .iter()
             .map(|branch| self.inference.resolve(&branch.ty))
@@ -47996,18 +47642,6 @@ impl<'a> Parser<'a> {
     }
 
     fn coerce_tail(&mut self, expected: &Ty, body: Span) -> Result<(), Error> {
-        if self
-            .inference
-            .resolve(&self.last_type)
-            .operation_endpoint()
-            .is_none()
-        {
-            self.reject_signature_support(
-                &self.last_type.clone(),
-                body,
-                "returned from a script function or method",
-            )?;
-        }
         let Some((start, span)) = self.last_expression else {
             return self.require_type(expected, &self.last_type.clone(), body);
         };
@@ -48039,9 +47673,7 @@ impl<'a> Parser<'a> {
             self.move_local(&mut value)?;
         }
         value.lvalue = None;
-        self.allow_endpoint_projection = true;
         let result = self.coerce_expr(expected, &mut value);
-        self.allow_endpoint_projection = false;
         result?;
         self.returned(value.span, &value.ty);
         self.write_output(value.rendered_source(), value.span);
@@ -48844,7 +48476,6 @@ impl<'a> Parser<'a> {
             source: context.source,
             path: path.into(),
             selector,
-            endpoint: None,
             types: Box::default(),
             functions: Box::default(),
             mappers: Box::default(),
@@ -49213,7 +48844,6 @@ impl<'a> Parser<'a> {
             source: context.source,
             path: item.path().into(),
             selector,
-            endpoint: None,
             types,
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
@@ -49261,41 +48891,6 @@ impl<'a> Parser<'a> {
                 })
             })
             .collect()
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn push_imported_endpoint(
-        &mut self,
-        endpoint: &crate::host::endpoint::Contract,
-        owner: &crate::host::facade::Dependency,
-        span: Span,
-    ) -> Result<String, Error> {
-        self.imported
-            .as_mut()
-            .expect("imported lowering retains its dependency ledger")
-            .dependencies
-            .insert(owner.clone());
-        let selector = rawr_import::surface::identity::Selector::Unavailable;
-        let path = endpoint.path();
-        let index = self.reserve_imported_use(path.len(), &selector)?;
-        let context = self
-            .imported
-            .as_mut()
-            .expect("imported lowering retains its allocation context");
-        context.uses.push(ImportedUse {
-            source: context.source,
-            path: path.into(),
-            selector,
-            endpoint: Some(*endpoint.site()),
-            types: Box::default(),
-            functions: Box::default(),
-            mappers: Box::default(),
-            callable: false,
-            slots: Box::default(),
-            application: None,
-            span,
-        });
-        Ok(format!("{SENTINEL}{index}"))
     }
 
     fn push_op(&mut self, op: Op) -> String {

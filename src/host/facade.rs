@@ -33,8 +33,6 @@ pub struct Definition {
     abi: Abi,
     modules: Box<[host::path::Path]>,
     types: Box<[host::type_def::Definition]>,
-    supports: Box<[host::support::SignatureContract]>,
-    endpoints: Box<[host::endpoint::Contract]>,
     items: Box<[host::item::Definition]>,
     aliases: Box<[(host::path::Path, host::path::Path)]>,
     type_aliases: Box<[TypeAlias]>,
@@ -99,7 +97,6 @@ impl TypeAlias {
         &self,
         root: &host::path::Path,
         types: &[host::type_def::Definition],
-        supports: &[host::support::SignatureContract],
         imported: &host::type_ref::ImportedTypes,
     ) -> Result<Self, host::Error> {
         let mut parameters = self
@@ -113,9 +110,8 @@ impl TypeAlias {
             })
             .collect::<Result<Vec<_>, host::Error>>()?;
         parameters.sort_by(|(left, _), (right, _)| left.cmp(right));
-        let resolve = |ty: &host::type_ref::Type| {
-            ty.resolve(root, types, supports, &parameters, imported, &self.path)
-        };
+        let resolve =
+            |ty: &host::type_ref::Type| ty.resolve(root, types, &parameters, imported, &self.path);
         Ok(Self {
             path: self.path.clone(),
             parameters: self.parameters.clone(),
@@ -230,17 +226,13 @@ fn resolve_header_types(
     types: &[host::type_ref::Type],
     root: &host::path::Path,
     declared: &[host::type_def::Definition],
-    supports: &[host::support::SignatureContract],
     parameters: &[(host::path::Path, crate::capability::Set)],
     imported: &host::type_ref::ImportedTypes,
     item: &host::path::Path,
 ) -> Option<Box<[host::type_ref::Type]>> {
     types
         .iter()
-        .map(|ty| {
-            ty.resolve(root, declared, supports, parameters, imported, item)
-                .ok()
-        })
+        .map(|ty| ty.resolve(root, declared, parameters, imported, item).ok())
         .collect()
 }
 
@@ -279,8 +271,6 @@ pub(crate) struct RegistryParts {
     pub(crate) root: host::path::Path,
     pub(crate) modules: Box<[host::path::Path]>,
     pub(crate) types: Box<[host::type_def::Definition]>,
-    pub(crate) supports: Box<[host::support::SignatureContract]>,
-    pub(crate) endpoints: Box<[host::endpoint::Contract]>,
     pub(crate) items: Box<[host::item::Definition]>,
     pub(crate) aliases: Box<[(host::path::Path, host::path::Path)]>,
     pub(crate) type_aliases: Box<[TypeAlias]>,
@@ -296,8 +286,6 @@ pub struct Fingerprint {
     abi: Abi,
     modules: Shared<[ImmutableString]>,
     types: Shared<[TypeProof]>,
-    supports: Shared<[host::support::SignatureContract]>,
-    endpoints: Shared<[host::endpoint::Contract]>,
     items: Shared<[host::item::Fingerprint]>,
     /// SHA-256 of the contract slices, computed whenever they are set, so
     /// hashing a proof that names this facade does not rewalk it.
@@ -340,8 +328,6 @@ pub struct Builder {
     abi: Abi,
     modules: Vec<host::path::Path>,
     types: Vec<host::type_def::Definition>,
-    supports: Vec<host::support::SignatureContract>,
-    endpoints: Vec<host::endpoint::Contract>,
     items: Vec<(host::path::Path, Vec<host::item::Definition>)>,
     projections: Vec<ProjectionDeclaration>,
     aliases: Vec<(host::path::Path, host::path::Path)>,
@@ -380,8 +366,6 @@ impl Builder {
             abi,
             modules: Vec::new(),
             types: Vec::new(),
-            supports: Vec::new(),
-            endpoints: Vec::new(),
             items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
@@ -408,8 +392,6 @@ impl Builder {
             abi,
             modules: Vec::new(),
             types: Vec::new(),
-            supports: Vec::new(),
-            endpoints: Vec::new(),
             items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
@@ -433,8 +415,6 @@ impl Builder {
             Some("module")
         } else if self.type_index(&path).is_ok() {
             Some("type")
-        } else if self.support_index(&path).is_ok() {
-            Some("signature support")
         } else if self.aliases.iter().any(|(alias, _)| *alias == path) {
             // A re-export such as iced's `widget::Component` names its
             // type; the trait of that name stays the facade's.
@@ -1108,13 +1088,7 @@ impl Builder {
                 .try_reserve_exact(declarations.len())
                 .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                resolved.push(item.resolve(
-                    &self.root,
-                    &self.modules,
-                    &self.types,
-                    &self.supports,
-                    &imported,
-                )?);
+                resolved.push(item.resolve(&self.root, &self.modules, &self.types, &imported)?);
             }
             resolved.sort_by_key(host::item::Definition::fingerprint);
             for (index, item) in resolved.iter().enumerate() {
@@ -1164,28 +1138,18 @@ impl Builder {
         let mut type_aliases = self
             .type_aliases
             .iter()
-            .map(|alias| alias.resolve(&self.root, &self.types, &self.supports, &imported))
+            .map(|alias| alias.resolve(&self.root, &self.types, &imported))
             .collect::<Result<Vec<_>, _>>()?;
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         for alias in &type_aliases {
             modules.push(alias.proof_path()?);
         }
-        let fingerprint = fingerprint(
-            &self.root,
-            self.abi,
-            &modules,
-            &self.types,
-            &self.supports,
-            &self.endpoints,
-            &items,
-        )?;
+        let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
         Ok(Definition {
             root: self.root,
             abi: self.abi,
             modules: self.modules.into_boxed_slice(),
             types: self.types.into_boxed_slice(),
-            supports: self.supports.into_boxed_slice(),
-            endpoints: self.endpoints.into_boxed_slice(),
             items,
             aliases: self.aliases.into_boxed_slice(),
             type_aliases: type_aliases.into_boxed_slice(),
@@ -1255,7 +1219,6 @@ impl Builder {
                     &self.modules,
                     &self.types,
                     &alias_paths,
-                    &self.supports,
                     &imported,
                     allocation,
                 )?);
@@ -1274,14 +1237,8 @@ impl Builder {
 
         sort_items(&mut items)?;
 
-        let (fingerprint_items, fingerprint_bytes) = fingerprint_usage(
-            &self.root,
-            &self.modules,
-            &self.types,
-            &self.supports,
-            &self.endpoints,
-            &items,
-        )?;
+        let (fingerprint_items, fingerprint_bytes) =
+            fingerprint_usage(&self.root, &self.modules, &self.types, &items)?;
         allocation
             .retain_checked(Some(fingerprint_items), Some(fingerprint_bytes))
             .map_err(|_| host::Error::Allocation)?;
@@ -1313,7 +1270,7 @@ impl Builder {
             .try_reserve_exact(self.type_aliases.len())
             .map_err(|_| host::Error::Allocation)?;
         for alias in &self.type_aliases {
-            type_aliases.push(alias.resolve(&self.root, &self.types, &self.supports, &imported)?);
+            type_aliases.push(alias.resolve(&self.root, &self.types, &imported)?);
         }
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         let mut modules = Vec::new();
@@ -1343,7 +1300,6 @@ impl Builder {
                         .resolve(
                             &self.root,
                             &self.types,
-                            &self.supports,
                             &parameters,
                             &imported,
                             &header.path,
@@ -1385,7 +1341,6 @@ impl Builder {
                     types,
                     &self.root,
                     &self.types,
-                    &self.supports,
                     &parameters,
                     &imported,
                     &self.root,
@@ -1428,23 +1383,13 @@ impl Builder {
                 .map_err(|_| host::Error::Allocation)?;
             impl_headers.push(header);
         }
-        let fingerprint = fingerprint(
-            &self.root,
-            self.abi,
-            &modules,
-            &self.types,
-            &self.supports,
-            &self.endpoints,
-            &items,
-        )?;
+        let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
         Ok((
             Definition {
                 root: self.root,
                 abi: self.abi,
                 modules: self.modules.into_boxed_slice(),
                 types: self.types.into_boxed_slice(),
-                supports: self.supports.into_boxed_slice(),
-                endpoints: self.endpoints.into_boxed_slice(),
                 items,
                 aliases: self.aliases.into_boxed_slice(),
                 type_aliases: type_aliases.into_boxed_slice(),
@@ -1465,8 +1410,6 @@ impl Builder {
             Some("module")
         } else if self.type_index(path).is_ok() {
             Some("type")
-        } else if self.support_index(path).is_ok() {
-            Some("signature support")
         } else if self.item_index(path).is_ok() {
             Some("item")
         } else {
@@ -1485,11 +1428,6 @@ impl Builder {
     fn type_index(&self, path: &host::path::Path) -> Result<usize, usize> {
         self.types
             .binary_search_by(|definition| definition.path_ref().cmp(path))
-    }
-
-    fn support_index(&self, path: &host::path::Path) -> Result<usize, usize> {
-        self.supports
-            .binary_search_by(|contract| contract.path_ref().cmp(path))
     }
 
     fn item_index(&self, path: &host::path::Path) -> Result<usize, usize> {
@@ -1641,30 +1579,6 @@ impl Definition {
         ))
     }
 
-    /// Export one signature-only type already sealed by this finished facade.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn support_type(
-        &self,
-        path: impl Into<ImmutableString>,
-    ) -> Result<host::support::SupportExport, host::Error> {
-        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
-        let contract = self
-            .supports
-            .binary_search_by(|contract| contract.path_ref().cmp(&path))
-            .ok()
-            .map(|index| self.supports[index].clone())
-            .ok_or_else(|| host::Error::UnknownFacadeType {
-                item: "<support export>".into(),
-                ty: path.to_string().into(),
-            })?;
-        Ok(host::support::SupportExport::new(
-            self.root.clone(),
-            self.fingerprint.clone(),
-            contract,
-        ))
-    }
-
     pub(crate) const fn root_path(&self) -> &host::path::Path {
         &self.root
     }
@@ -1674,8 +1588,6 @@ impl Definition {
             root: self.root,
             modules: self.modules,
             types: self.types,
-            supports: self.supports,
-            endpoints: self.endpoints,
             items: self.items,
             aliases: self.aliases,
             type_aliases: self.type_aliases,
@@ -1709,8 +1621,6 @@ impl Definition {
         let items = Some(2_usize)
             .and_then(|items| items.checked_add(self.modules.len()))
             .and_then(|items| items.checked_add(self.types.len()))
-            .and_then(|items| items.checked_add(self.supports.len()))
-            .and_then(|items| items.checked_add(self.endpoints.len()))
             .and_then(|items| items.checked_add(item_count));
         let items = items
             .and_then(|items| items.checked_add(imported_aliases))
@@ -1724,16 +1634,6 @@ impl Definition {
                         .len()
                         .checked_mul(std::mem::size_of::<host::type_def::Definition>())?,
                 )
-            })
-            .and_then(|bytes| {
-                self.supports.iter().try_fold(bytes, |bytes, support| {
-                    bytes.checked_add(support.retained_bytes()?)
-                })
-            })
-            .and_then(|bytes| {
-                self.endpoints.iter().try_fold(bytes, |bytes, endpoint| {
-                    bytes.checked_add(endpoint.retained_bytes()?)
-                })
             })
             .and_then(|bytes| {
                 bytes.checked_add(
@@ -1759,14 +1659,6 @@ impl Definition {
 
     pub(crate) const fn type_map(&self) -> &[host::type_def::Definition] {
         &self.types
-    }
-
-    pub(crate) const fn support_map(&self) -> &[host::support::SignatureContract] {
-        &self.supports
-    }
-
-    pub(crate) const fn endpoint_map(&self) -> &[host::endpoint::Contract] {
-        &self.endpoints
     }
 
     pub(crate) fn item_sets(
@@ -1805,12 +1697,6 @@ impl Definition {
                     .external_types()
                     .into_iter()
                     .map(host::type_def::Export::dependency),
-            );
-            dependencies.extend(
-                item.signature()
-                    .support_exports()
-                    .into_iter()
-                    .map(host::support::SupportExport::dependency),
             );
         }
         dependencies.remove(&Dependency::new(&self.root, self.fingerprint.clone()));
@@ -1879,8 +1765,6 @@ impl Fingerprint {
     #[cfg(feature = "rust-import")]
     pub(super) const COLLECTION_OVERHEAD: usize = shared_slice_overhead::<ImmutableString>()
         + shared_slice_overhead::<TypeProof>()
-        + shared_slice_overhead::<host::support::SignatureContract>()
-        + shared_slice_overhead::<host::endpoint::Contract>()
         + shared_slice_overhead::<host::item::Fingerprint>();
 
     #[cfg(feature = "rust-import")]
@@ -1895,12 +1779,6 @@ impl Fingerprint {
             .types
             .iter()
             .try_fold(0_usize, |bytes, ty| bytes.checked_add(ty.retained_bytes()?))?;
-        let supports = self.supports.iter().try_fold(0_usize, |bytes, support| {
-            bytes.checked_add(support.retained_bytes()?)
-        })?;
-        let endpoints = self.endpoints.iter().try_fold(0_usize, |bytes, endpoint| {
-            bytes.checked_add(endpoint.retained_bytes()?)
-        })?;
         let items = self.items.iter().try_fold(0_usize, |bytes, item| {
             bytes.checked_add(item.retained_bytes()?)
         })?;
@@ -1909,8 +1787,6 @@ impl Fingerprint {
             .checked_add(self.root.len())?
             .checked_add(modules)?
             .checked_add(types)?
-            .checked_add(supports)?
-            .checked_add(endpoints)?
             .checked_add(items)
     }
 
@@ -1928,8 +1804,6 @@ impl Fingerprint {
         let mut content = ContentHasher(Sha256::new());
         self.modules.hash(&mut content);
         self.types.hash(&mut content);
-        self.supports.hash(&mut content);
-        self.endpoints.hash(&mut content);
         self.items.hash(&mut content);
         self.content = content.0.finalize().into();
     }
@@ -1957,8 +1831,6 @@ impl Ord for Fingerprint {
             &self.abi,
             &self.modules,
             &self.types,
-            &self.supports,
-            &self.endpoints,
             &self.items,
         )
             .cmp(&(
@@ -1966,8 +1838,6 @@ impl Ord for Fingerprint {
                 &other.abi,
                 &other.modules,
                 &other.types,
-                &other.supports,
-                &other.endpoints,
                 &other.items,
             ))
     }
@@ -2022,10 +1892,6 @@ impl crate::digest::Write for Fingerprint {
         }
         writer.tag(0x2904);
         write_slice(writer, &self.types)?;
-        writer.tag(0x2905);
-        write_slice(writer, &self.supports)?;
-        writer.tag(0x2906);
-        write_slice(writer, &self.endpoints)?;
         writer.tag(0x2907);
         write_slice(writer, &self.items)?;
         Ok(())
@@ -2239,7 +2105,6 @@ fn resolve_projections(
 mod imported_allocation_tests {
     use super::{Abi, Builder};
     use crate::{host, Shared};
-    use std::any::TypeId;
 
     #[test]
     fn fingerprint_order_matches_lexicographic_fields_with_shared_proofs() {
@@ -2249,8 +2114,6 @@ mod imported_allocation_tests {
                 .then_with(|| left.abi.cmp(&right.abi))
                 .then_with(|| left.modules.cmp(&right.modules))
                 .then_with(|| left.types.cmp(&right.types))
-                .then_with(|| left.supports.cmp(&right.supports))
-                .then_with(|| left.endpoints.cmp(&right.endpoints))
                 .then_with(|| left.items.cmp(&right.items))
         }
 
@@ -2288,33 +2151,7 @@ mod imported_allocation_tests {
             builder
                 .item(host::item::Definition::value("nested::value", nested).unwrap())
                 .unwrap();
-            let mut proof = builder.finish().unwrap().fingerprint().clone();
-            proof.supports = vec![host::support::SignatureContract::new(
-                host::path::Path::parse("ordered::Support").unwrap(),
-                "support",
-                [3; 32],
-                [4; 32],
-                [5; 32],
-                TypeId::of::<Support>(),
-            )
-            .unwrap()]
-            .into_boxed_slice()
-            .into();
-            proof.endpoints = vec![host::endpoint::Contract::new(
-                host::path::Path::parse("ordered::endpoint").unwrap(),
-                host::path::Path::parse("ordered::Support").unwrap(),
-                [3; 32],
-                [4; 32],
-                [5; 32],
-                [6; 32],
-                [7; 32],
-                TypeId::of::<Support>(),
-                crate::Dynamic::from,
-            )
-            .unwrap()]
-            .into_boxed_slice()
-            .into();
-            proof
+            builder.finish().unwrap().fingerprint().clone()
         }
 
         let base = fixture(host::type_def::Form::Record, host::type_ref::Builtin::I64);
@@ -2330,8 +2167,6 @@ mod imported_allocation_tests {
         }
         shared_collection!(modules);
         shared_collection!(types);
-        shared_collection!(supports);
-        shared_collection!(endpoints);
         shared_collection!(items);
         assert!(std::ptr::eq(
             base.types[0].contract.shape(),
@@ -2354,15 +2189,13 @@ mod imported_allocation_tests {
         assert_ne!(base, deep);
         assert_ne!(original(&base, &deep), std::cmp::Ordering::Equal);
 
-        let mut variants = vec![base.clone(); 7];
+        let mut variants = vec![base.clone(); 5];
         variants[0].root = "different".into();
         variants[1].abi = Abi::new(2).unwrap();
         variants[2].modules = Shared::default();
         variants[3].types =
             fixture(host::type_def::Form::Tuple, host::type_ref::Builtin::I64).types;
-        variants[4].supports = Shared::default();
-        variants[5].endpoints = Shared::default();
-        variants[6].items =
+        variants[4].items =
             fixture(host::type_def::Form::Record, host::type_ref::Builtin::Bool).items;
         for variant in &variants {
             assert_ne!(original(&base, variant), std::cmp::Ordering::Equal);
@@ -2466,7 +2299,6 @@ mod imported_allocation_tests {
     }
 
     struct Marker;
-    struct Support;
 }
 
 fn sorted_value<'a, T>(
@@ -2586,8 +2418,6 @@ fn fingerprint(
     abi: Abi,
     modules: &[host::path::Path],
     types: &[host::type_def::Definition],
-    supports: &[host::support::SignatureContract],
-    endpoints: &[host::endpoint::Contract],
     items: &[host::item::Definition],
 ) -> Result<Fingerprint, host::Error> {
     let mut module_proofs = Vec::new();
@@ -2647,8 +2477,6 @@ fn fingerprint(
         abi,
         modules: module_proofs.into_boxed_slice().into(),
         types: type_proofs.into_boxed_slice().into(),
-        supports: supports.to_vec().into_boxed_slice().into(),
-        endpoints: endpoints.to_vec().into_boxed_slice().into(),
         items: item_proofs.into_boxed_slice().into(),
     };
     fingerprint.seal();
@@ -2669,8 +2497,6 @@ fn fingerprint_usage(
     root: &host::path::Path,
     modules: &[host::path::Path],
     types: &[host::type_def::Definition],
-    supports: &[host::support::SignatureContract],
-    endpoints: &[host::endpoint::Contract],
     items: &[host::item::Definition],
 ) -> Result<(usize, usize), host::Error> {
     // Converting the prepared slices into shared storage briefly retains both
@@ -2680,20 +2506,6 @@ fn fingerprint_usage(
         .checked_mul(std::mem::size_of::<ImmutableString>())
         .and_then(|bytes| {
             bytes.checked_add(types.len().checked_mul(std::mem::size_of::<TypeProof>())?)
-        })
-        .and_then(|bytes| {
-            bytes.checked_add(
-                supports
-                    .len()
-                    .checked_mul(std::mem::size_of::<host::support::SignatureContract>())?,
-            )
-        })
-        .and_then(|bytes| {
-            bytes.checked_add(
-                endpoints
-                    .len()
-                    .checked_mul(std::mem::size_of::<host::endpoint::Contract>())?,
-            )
         })
         .and_then(|bytes| {
             bytes.checked_add(
@@ -2709,8 +2521,6 @@ fn fingerprint_usage(
     let retained_items = Some(1_usize)
         .and_then(|count| count.checked_add(modules.len()))
         .and_then(|count| count.checked_add(types.len()))
-        .and_then(|count| count.checked_add(supports.len()))
-        .and_then(|count| count.checked_add(endpoints.len()))
         .and_then(|count| count.checked_add(projection_count?))
         .and_then(|count| count.checked_add(items.len()))
         .ok_or(host::Error::Allocation)?;
@@ -2724,12 +2534,6 @@ fn fingerprint_usage(
     let types = types.iter().try_fold(0_usize, |bytes, definition| {
         bytes.checked_add(definition.fingerprint_retained_bytes()?)
     });
-    let supports = supports.iter().try_fold(0_usize, |bytes, support| {
-        bytes.checked_add(support.retained_bytes()?)
-    });
-    let endpoints = endpoints.iter().try_fold(0_usize, |bytes, endpoint| {
-        bytes.checked_add(endpoint.retained_bytes()?)
-    });
     let items = items.iter().try_fold(0_usize, |bytes, item| {
         bytes.checked_add(item.fingerprint_retained_bytes()?)
     });
@@ -2739,8 +2543,6 @@ fn fingerprint_usage(
         .and_then(|bytes| bytes.checked_add(root.display_len()?))
         .and_then(|bytes| bytes.checked_add(modules?))
         .and_then(|bytes| bytes.checked_add(types?))
-        .and_then(|bytes| bytes.checked_add(supports?))
-        .and_then(|bytes| bytes.checked_add(endpoints?))
         .and_then(|bytes| bytes.checked_add(items?))
         .ok_or(host::Error::Allocation)?;
     Ok((retained_items, retained_bytes))
