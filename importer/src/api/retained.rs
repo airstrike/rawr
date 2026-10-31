@@ -59,6 +59,28 @@ enum Source {
 }
 
 impl Continuation {
+    /// The identity of every input this API was read from: the resolution
+    /// owner and its compared files, or the shared replay's input proof. A
+    /// dependency's facts can change only when this does.
+    #[must_use]
+    pub fn input_identity(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+        let mut hash = Sha256::new();
+        match &self.publication.source {
+            Source::Owner { owner, input } => {
+                hash.update(b"owner");
+                hash.update(owner.content().digest().as_bytes());
+                hash.update(input.fingerprint().as_bytes());
+            }
+            #[cfg(feature = "rustc-driver")]
+            Source::Shared { proof, .. } => {
+                hash.update(b"shared");
+                hash.update(proof.fingerprint().as_bytes());
+            }
+        }
+        hash.finalize().into()
+    }
+
     pub(crate) fn capture(
         context: &crate::context::Context,
         owner: node::Validated<crate::cargo::resolution::owner::Product>,

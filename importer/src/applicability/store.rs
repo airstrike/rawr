@@ -4,8 +4,8 @@
 //! witness sets before any nightly build. A reader holds a lease on the
 //! publication it read; a busy or unreadable entry is a miss. The witness
 //! is the project's view of the crate, so a store keyed by it is the
-//! project's; a machine-wide key needs the crate's immutable identity
-//! (`extract::shared`).
+//! project's. A crate whose whole closure is immutable has a machine-wide
+//! key instead (`shared_key`), and its entry lives in rawr's home.
 
 use std::path::Path;
 
@@ -28,6 +28,21 @@ pub fn key(crate_name: &str, witness: &[u8; 32]) -> [u8; 32] {
     hash.update(crate_name.as_bytes());
     hash.update([0]);
     hash.update(witness);
+    hash.finalize().into()
+}
+
+/// The machine-wide key of a crate whose closure is immutable: its
+/// `extract::shared` key names its sources by checksum or commit, its
+/// features, profile, target and dependencies, and the extraction toolchain.
+#[must_use]
+pub fn shared_key(crate_name: &str, shared: &str) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"rawr.import.intrinsic-entry-shared-key/v1");
+    hash.update(crate::extract::protocol::SCHEMA.to_le_bytes());
+    hash.update(crate::cargo::toolchain::pinned_commit().as_bytes());
+    hash.update(crate_name.as_bytes());
+    hash.update([0]);
+    hash.update(shared.as_bytes());
     hash.finalize().into()
 }
 

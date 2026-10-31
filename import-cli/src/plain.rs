@@ -96,6 +96,28 @@ impl crate::Profile for Plain {
     }
 }
 
+/// Demand the Rust path a failure missed. A member a trait provides arrives
+/// only when named: each method the source calls is demanded on the type
+/// at once, as a builder chain names several.
+fn demand_more(
+    error: &rawr::package::Error,
+    request_demand: &[Box<str>],
+    crate_demand: &mut Vec<Box<str>>,
+    graph: &rawr::package::Graph,
+) {
+    crate_demand.extend(crate::new_demand(error, request_demand).map(Box::from));
+    if let Some(owner) = error.rust_member_owner() {
+        crate_demand.extend(
+            graph
+                .rust_method_names()
+                .iter()
+                .map(|name| Box::from(format!("{owner}::{name}"))),
+        );
+    }
+    crate_demand.sort_unstable();
+    crate_demand.dedup();
+}
+
 /// Why an imported call has no application.
 enum Proof {
     /// Rust rejects the call, finds it ambiguous, or the closed rules
@@ -119,9 +141,37 @@ struct Facts {
 fn acquire(
     graph: &rawr::package::Graph,
     limits: &rawr_import::cargo::Limits,
+    input: &[u8; 32],
 ) -> Result<Facts, crate::Error> {
     use crate::Error;
     use rawr_import::applicability::{inventory, store};
+    use std::path::PathBuf;
+    // A crate whose whole closure comes from registries and git commits has
+    // a machine-wide key, so its entry lives in rawr's home (D608.4). Any
+    // other crate is keyed by its native input witness, the project's view
+    // of it, so its entry stays with the project, as its build does.
+    let local = graph.entry_package().root().join("target/rawr/inventories");
+    // The entries a union of these exact API inputs was made of: read back
+    // with no Cargo or nightly process (D609.6).
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let union = local.join(format!("union-{}.json", hex(input)));
+    if let Ok(bytes) = std::fs::read(&union)
+        && let Ok((aliases, listed)) =
+            serde_json::from_slice::<(Vec<(Box<str>, Box<str>)>, Vec<([u8; 32], PathBuf)>)>(&bytes)
+    {
+        let entries = listed
+            .iter()
+            .map(|(key, directory)| store::read(directory, key).map(store::Held::into_entry))
+            .collect::<Option<Vec<_>>>();
+        if let Some(entries) = entries {
+            return Ok(Facts { entries, aliases });
+        }
+    }
     let request = |closure: &[rawr_import::cargo::config::Dependency]| {
         let environment = Environment::capture().map_err(Error::other)?;
         graph
@@ -131,20 +181,28 @@ fn acquire(
     };
     let probe = request(&[])?;
     let native = probe.pinned_native(limits).map_err(Error::other)?;
-    // A crate's native input witness is the project's view of it, so the
-    // entries it keys stay with the project, as its build does (D608.4).
-    let directory = graph.entry_package().root().join("target/rawr/inventories");
     let closure = probe.closure(&native, limits).map_err(Error::other)?;
+    // Each unit: its entry's key and store, and the witness its capture must
+    // agree with before it is published.
     let keys = closure
         .units
         .iter()
-        .map(|(name, unit, witness)| (unit.clone(), (store::key(name, witness), *witness)))
+        .map(|(name, unit, witness)| {
+            let (key, directory, shared) = match closure.shared.get(unit) {
+                Some(shared) => (store::shared_key(name, shared), closure.home.clone(), true),
+                None => (store::key(name, witness), local.clone(), false),
+            };
+            (unit.clone(), (key, *witness, directory, shared))
+        })
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut entries = Vec::new();
     let mut missing = std::collections::BTreeSet::new();
-    for (key, witness) in keys.values() {
-        match store::read(&directory, key) {
-            Some(held) if held.entry().native().1 == witness => entries.push(held.into_entry()),
+    let mut complete = true;
+    for (key, witness, directory, shared) in keys.values() {
+        match store::read(directory, key) {
+            Some(held) if *shared || held.entry().native().1 == witness => {
+                entries.push(held.into_entry());
+            }
             _ => {
                 missing.insert(*key);
             }
@@ -155,18 +213,38 @@ fn acquire(
         let acquired =
             inventory::Acquired::capture(request, &native, limits).map_err(Error::other)?;
         entries = acquired
-            .entries(|unit| keys.get(unit).map(|(key, _)| *key))
+            .entries(|unit| keys.get(unit).map(|(key, ..)| *key))
             .map_err(Error::other)?;
         for entry in &entries {
             let (unit, witness) = entry.native();
+            let Some((_, expected, directory, _)) = keys.get(unit) else {
+                complete = false;
+                continue;
+            };
             // The nightly saw the inputs the project's build sees, or the
             // entry stays local to this run.
-            if missing.contains(entry.key())
-                && keys
-                    .get(unit)
-                    .is_some_and(|(_, expected)| expected == witness)
-            {
-                let _ = store::publish(&directory, entry);
+            let agrees = expected == witness;
+            complete &= agrees;
+            if missing.contains(entry.key()) && agrees {
+                complete &= store::publish(directory, entry).is_ok();
+            }
+        }
+    }
+    if complete {
+        let listed = entries
+            .iter()
+            .filter_map(|entry| {
+                let (_, _, directory, _) = keys.get(entry.native().0)?;
+                Some((*entry.key(), directory.clone()))
+            })
+            .collect::<Vec<_>>();
+        if listed.len() == entries.len()
+            && let Ok(bytes) = serde_json::to_vec(&(&closure.aliases, listed))
+        {
+            let _ = std::fs::create_dir_all(&local);
+            let staging = local.join(format!(".union-{}.{}", hex(input), std::process::id()));
+            if std::fs::write(&staging, bytes).is_ok() {
+                let _ = std::fs::rename(&staging, &union);
             }
         }
     }
@@ -226,20 +304,12 @@ fn prepare(
         .map_err(Error::other)?;
     let project = graph.entry_package().root().to_path_buf();
     // A program that used proved applications last time keys its check by
-    // the facts its closure has now; the facts are read before any lookup.
+    // the identity of every input its API was read from: its dependencies'
+    // facts change only with them, so no facts are read for a warm run.
     let applied = project.join("target/rawr/inventories/applied");
     let mut inventory = None;
-    let mut facts = None;
-    if applied.is_file() {
-        let acquired = acquire(&graph, &limits)?;
-        facts = Some(
-            *rawr_import::applicability::Catalog::stored(&acquired.entries, &acquired.aliases)
-                .map_err(Error::other)?
-                .fingerprint(),
-        );
-        inventory = Some(acquired);
-    }
-    let adapter = adapter(&limits, facts.as_ref()).map_err(Error::other)?;
+    let mut keyed;
+    let mut current_adapter = None;
     let policy = rawr_import::classify::Policy::standard();
     let mut snapshot = Some(snapshot);
     let mut crate_demand = rawr_import::crate_demand::load(&project);
@@ -281,12 +351,16 @@ fn prepare(
             .map_err(Error::other)?;
         settlement.absorb(prepared.settlement());
         let api = prepared.retain_api(&limits).map_err(Error::other)?;
+        let input = api.input_identity();
+        keyed = applied.is_file().then_some(input);
+        let adapter =
+            &*current_adapter.insert(adapter(&limits, keyed.as_ref()).map_err(Error::other)?);
         let snapshot = snapshot
             .take()
             .unwrap_or_else(|| rawr::reload::source::Snapshot::from_graph(&source));
         let warm = rawr_import::composition::resolve_api_semantic(
             api,
-            &adapter,
+            adapter,
             &policy,
             expected,
             &limits,
@@ -302,7 +376,7 @@ fn prepare(
             Err(api) => {
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
-                    &adapter,
+                    adapter,
                     &policy,
                     expected,
                     &limits,
@@ -325,39 +399,39 @@ fn prepare(
                             .rust_application()
                             .ok_or_else(|| Error::other("imported call encoding"))?;
                         if inventory.is_none() {
-                            inventory = Some(acquire(&graph, &limits)?);
+                            inventory = Some(acquire(&graph, &limits, &input)?);
                         }
                         let facts = inventory
                             .as_ref()
                             .ok_or_else(|| Error::other("intrinsic facts"))?;
-                        prove(&graph, facts, &call, &mut applications).map_err(|reason| {
-                            match reason {
-                                Proof::Rejected(reason) => {
-                                    Error::other(format!("{}\n  {reason}", Error::Rawr(error)))
-                                }
-                                Proof::Failed(failure) => failure,
+                        match prove(&graph, facts, &call, &mut applications) {
+                            Ok(()) => continue,
+                            Err(Proof::Failed(failure)) => return Err(failure),
+                            // An unproved miss of a member the facade lacks
+                            // is demanded as before; demanded already, it
+                            // is reported as the miss it is.
+                            Err(Proof::Rejected(_))
+                                if crate::new_demand(&error, &request_demand).is_some() =>
+                            {
+                                demand_more(&error, &request_demand, &mut crate_demand, &graph);
+                                rawr_import::crate_demand::store(&project, &crate_demand);
+                                continue;
                             }
-                        })?;
-                        continue;
+                            Err(Proof::Rejected(_)) if error.rust_member_owner().is_some() => {
+                                return Err(Error::Rawr(error));
+                            }
+                            Err(Proof::Rejected(reason)) => {
+                                return Err(Error::other(format!(
+                                    "{}\n  {reason}",
+                                    Error::Rawr(error)
+                                )));
+                            }
+                        }
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if crate::new_demand(&error, &request_demand).is_some() =>
                     {
-                        crate_demand
-                            .extend(crate::new_demand(&error, &request_demand).map(Box::from));
-                        // A member a trait provides arrives only when named:
-                        // each method the source calls is demanded on the
-                        // type at once, as a builder chain names several.
-                        if let Some(owner) = error.rust_member_owner() {
-                            crate_demand.extend(
-                                graph
-                                    .rust_method_names()
-                                    .iter()
-                                    .map(|name| Box::from(format!("{owner}::{name}"))),
-                            );
-                        }
-                        crate_demand.sort_unstable();
-                        crate_demand.dedup();
+                        demand_more(&error, &request_demand, &mut crate_demand, &graph);
                         rawr_import::crate_demand::store(&project, &crate_demand);
                         continue;
                     }
@@ -378,7 +452,7 @@ fn prepare(
                     .map_err(Error::other)?
                     .with_trusted_runner(true, &facade, &contract)
                     .map_err(Error::other)?;
-                rawr_import::composition::record_resolved(&contract, &demand, &adapter, &policy)
+                rawr_import::composition::record_resolved(&contract, &demand, adapter, &policy)
                     .map_err(Error::other)?;
                 (
                     demand,
@@ -391,23 +465,15 @@ fn prepare(
     };
     // Remember whether this program's check depends on proved applications,
     // so its next run keys the check by the facts it then has.
-    let catalogs = demand.application_catalogs();
-    match facts {
-        Some(facts) if !catalogs.is_empty() && catalogs != [facts] => {
-            return Err(Error::other(
-                "a check keyed by its intrinsic facts holds applications proved from others",
-            ));
+    if demand.application_catalogs().is_empty() {
+        let _ = std::fs::remove_file(&applied);
+    } else if keyed.is_none() {
+        if let Some(parent) = applied.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
-        _ if catalogs.is_empty() => {
-            let _ = std::fs::remove_file(&applied);
-        }
-        _ => {
-            if let Some(parent) = applied.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&applied, b"");
-        }
+        let _ = std::fs::write(&applied, b"");
     }
+    let adapter = current_adapter.ok_or_else(|| Error::other("the plain profile adapter"))?;
     let profile = rawr_import::composition::profile::prepare_retained(
         &adapter,
         &profile_contract,

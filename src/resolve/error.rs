@@ -333,6 +333,9 @@ pub enum Error {
         item: ImmutableString,
         /// The encoded source call.
         call: Box<[u8]>,
+        /// The ordinary miss this call is, when the facade has no member of
+        /// its name: what is reported, and demanded, if no proof applies.
+        miss: Option<Box<Error>>,
         /// Exact source operation span.
         operation: Span,
     },

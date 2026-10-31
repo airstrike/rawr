@@ -412,6 +412,197 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
     );
 }
 
+/// A save that calls a new method on a type the program already binds, from
+/// a trait already in scope, runs no nightly process (D609.6): the method is
+/// proved from the crates' intrinsic facts, read back by the API's inputs.
+#[test]
+fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("new-member-no-nightly");
+    let home = base.join("home");
+    let crates = base.join("crates");
+    let root = base.join("app");
+    let _ = fs::remove_dir_all(&base);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
+    for name in ["a", "b", "c"] {
+        copy(
+            &fixtures.join(format!("applicability-{name}")),
+            &crates.join(format!("applicability-{name}")),
+        );
+    }
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[workspace]\n[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\n",
+            crates.join("applicability-a"),
+            crates.join("applicability-c"),
+        ),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    let run = |expected: &str| {
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), expected);
+    };
+    // Every nightly process leaves its trace: the nightly check build marks
+    // each crate it compiles, and each extraction writes its plan.
+    let nightly = |since: std::time::SystemTime| {
+        fn walk(path: &Path, since: std::time::SystemTime, found: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(path) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, since, found);
+                } else if path
+                    .file_name()
+                    .is_some_and(|name| !name.to_string_lossy().ends_with(".lock"))
+                    && entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(|modified| modified > since)
+                {
+                    found.push(path);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for directory in ["build", "extraction", "cache/resolution", "inventories"] {
+            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        }
+        found
+    };
+    let started = std::time::SystemTime::now();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse facts_c::Extension;\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn main() {\n    let _bound = facts_a::left();\n    println!(\"{}\", left());\n}\n",
+    )
+    .unwrap();
+    run("11\n");
+    assert!(
+        !nightly(started).is_empty(),
+        "the first run acquires the API and the facts on the nightly"
+    );
+    run("11\n");
+    run("11\n");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let saved = std::time::SystemTime::now();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse facts_c::Extension;\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn extended() -> i64 {\n    facts_a::left().extension()\n}\nfn main() {\n    let _bound = facts_a::left();\n    println!(\"{} {}\", left(), extended());\n}\n",
+    )
+    .unwrap();
+    run("11 101\n");
+    let traces = nightly(saved);
+    assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
+}
+
+/// A crate whose whole closure comes from a registry keeps its intrinsic
+/// entry in rawr's home under a machine-wide key: a second project reads it
+/// back instead of publishing its own. Path crates keep theirs per project.
+#[test]
+fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-inventories");
+    let home = base.join("home");
+    let crates = base.join("crates");
+    let _ = fs::remove_dir_all(&base);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
+    for name in ["a", "b", "c"] {
+        copy(
+            &fixtures.join(format!("applicability-{name}")),
+            &crates.join(format!("applicability-{name}")),
+        );
+    }
+    let project = |name: &str| {
+        let root = base.join(name);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\n[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\nsemver='1'\n",
+                crates.join("applicability-a"),
+                crates.join("applicability-c"),
+            ),
+        )
+        .unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("rust-toolchain.toml"),
+            root.join("rust-toolchain.toml"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn main() {\n    println!(\"{} {}\", left(), semver::Version::new(1, 2, 3));\n}\n",
+        )
+        .unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), "11 1.2.3\n");
+        root
+    };
+    // Each entry in a store: its crate and its publication.
+    let entries = |store: &Path| {
+        let mut entries = fs::read_dir(store)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| {
+                        let path = entry.ok()?.path();
+                        let generation = fs::read_to_string(path.join(".generation")).ok()?;
+                        let entry = fs::read_to_string(path.join("entry.json")).ok()?;
+                        let entry = serde_json::from_str::<serde_json::Value>(&entry).ok()?;
+                        Some((entry["crate_name"].as_str()?.to_owned(), generation))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        entries.sort();
+        entries
+    };
+    let first = project("first");
+    let shared = entries(&home.join("inventories"));
+    assert_eq!(
+        shared
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["semver"],
+        "only the registry crate's entry is machine-wide"
+    );
+    let local = entries(&first.join("target/rawr/inventories"));
+    assert_eq!(
+        local
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["facts_a", "facts_b", "facts_c"]
+    );
+    let second = project("second");
+    assert_eq!(
+        entries(&home.join("inventories")),
+        shared,
+        "the second project reads the shared entry back"
+    );
+    assert_eq!(entries(&second.join("target/rawr/inventories")).len(), 3);
+}
+
 /// A crate's bindings are shared per machine: a second project with the
 /// same program reads them from rawr's home, with no nightly build and no
 /// probe, and its next run takes the resolution back with no Cargo. semver

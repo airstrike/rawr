@@ -221,6 +221,11 @@ pub struct Closure {
     pub aliases: Vec<(Box<str>, Box<str>)>,
     /// Each crate's name, compiler unit and native input witness.
     pub units: Vec<(Box<str>, Box<str>, [u8; 32])>,
+    /// Each compiler unit's machine-wide key, for a crate whose whole
+    /// closure comes from registries and git commits (`extract::shared`).
+    pub shared: BTreeMap<Box<str>, Box<str>>,
+    /// Where machine-wide entries live, under rawr's home.
+    pub home: PathBuf,
 }
 
 /// Staged inputs that can only become a `Request` after canonical sealing.
@@ -357,6 +362,10 @@ pub struct Resolution {
     dag: Option<DagResolution>,
     #[cfg(feature = "rustc-driver")]
     capture: Option<crate::extract::plan::Capture>,
+    /// Each library unit's machine-wide key, for a closure probe: set only
+    /// for a unit whose whole closure is immutable (`extract::shared`).
+    #[cfg(feature = "rustc-driver")]
+    closure_keys: BTreeMap<Box<str>, Box<str>>,
 }
 
 /// Completed observations without consuming the request that must validate reuse.
@@ -384,6 +393,36 @@ struct CompletedHarness {
 
 impl CompletedHarness {
     fn into_resolution(self, request: Request) -> Resolution {
+        #[cfg(feature = "rustc-driver")]
+        let closure_keys = match (&self.observations, request.inputs_only) {
+            (Some(observations), true) => {
+                let selected = self
+                    .build_unit
+                    .artifacts()
+                    .iter()
+                    .filter_map(|output| {
+                        Some(crate::extract::shared::Selected {
+                            unit_key: output.semantic_key(),
+                            package_id: output.package_id(),
+                            target: output.target().to_str()?,
+                            features: output.features(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                crate::extract::shared::keys(
+                    observations.documents.units.bytes(),
+                    &self.metadata,
+                    &selected,
+                    self.toolchain.rustc_commit(),
+                    self.toolchain.host(),
+                    &request.target,
+                )
+                .into_iter()
+                .map(|(unit, shared)| (unit, shared.key))
+                .collect()
+            }
+            _ => BTreeMap::new(),
+        };
         Resolution {
             context: self.context,
             project_root: request.project_root,
@@ -414,6 +453,8 @@ impl CompletedHarness {
             dag: None,
             #[cfg(feature = "rustc-driver")]
             capture: self.capture,
+            #[cfg(feature = "rustc-driver")]
+            closure_keys,
         }
     }
 }
@@ -1286,6 +1327,18 @@ impl Request {
         }
         closure.aliases.sort_unstable();
         closure.units.sort_unstable();
+        closure.shared = resolution
+            .closure_keys
+            .iter()
+            .filter(|(unit, _)| {
+                closure
+                    .units
+                    .iter()
+                    .any(|(_, candidate, _)| candidate == *unit)
+            })
+            .map(|(unit, key)| (unit.clone(), key.clone()))
+            .collect();
+        closure.home = crate::store::home(resolution.context.cargo_home()).join("inventories");
         Ok(closure)
     }
 
