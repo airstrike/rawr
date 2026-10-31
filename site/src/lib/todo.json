@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.26",
+  "version": "0.3.27",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A project that depends on serde, or on any other crate rawr's runner also needs, builds its runner again.","issues":[405]},
-        {"text":"A save that names a new item of an unchanged path dependency runs no nightly build. The crate's whole table is kept with the project and replayed after its files are checked.","issues":[398]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.27",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A project that depends on serde, or on any other crate rawr's runner also needs, builds its runner again.","issues":[405]},
+          {"text":"A save that names a new item of an unchanged path dependency runs no nightly build. The crate's whole table is kept with the project and replayed after its files are checked.","issues":[398]}
+        ]
+      },
       {
         "version": "0.3.26",
         "date": "2026-10-31",
@@ -810,14 +812,14 @@
     {"issue":395,"title":"Script-written vectors of library values don't keep native allocation history","state":"open","category":"Divergences from rustc"},
     {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"},
     {"issue":397,"title":"Show the full package report for a resident source error","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":399,"title":"Compare build-script outputs before sharing intrinsic entries","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":400,"title":"A program's first proved call compiles it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":401,"title":"A crate extracted whole also answers macros such as `column!` that a later program calls for the…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":406,"title":"A struct that implements `Iterator` can be passed where a generic parameter takes…","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":407,"title":"An iterator passed to a function is collected in full at the call","state":"open","category":"Divergences from rustc"},
     {"issue":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"open","category":"Divergences from rustc"},

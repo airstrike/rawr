@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"A project that depends on serde, or on any other crate rawr's runner also needs, builds its runner again.","issues":[405]},
-      {"text":"A save that names a new item of an unchanged path dependency runs no nightly build. The crate's whole table is kept with the project and replayed after its files are checked.","issues":[398]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.27",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A project that depends on serde, or on any other crate rawr's runner also needs, builds its runner again.","issues":[405]},
+        {"text":"A save that names a new item of an unchanged path dependency runs no nightly build. The crate's whole table is kept with the project and replayed after its files are checked.","issues":[398]}
+      ]
+    },
     {
       "version": "0.3.26",
       "date": "2026-10-31",
