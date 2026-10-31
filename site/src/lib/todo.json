@@ -1,19 +1,21 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.28",
+  "version": "0.3.29",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A save that names any item of a dependency rawr has already read needs no nightly build, for large crates such as iced too. rawr reads each crate's whole API the first time a program reaches it.","issues":[281]},
-        {"text":"A macro defined in a dependency replays its `$crate` paths from that dependency's shared bindings.","issues":[404]},
-        {"text":"Trait facts of registry and git crates whose dependencies run build scripts are shared by every project on a machine, once a project's own build agrees with rawr's nightly.","issues":[403]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.29",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A save that names any item of a dependency rawr has already read needs no nightly build, for large crates such as iced too. rawr reads each crate's whole API the first time a program reaches it.","issues":[281]},
+          {"text":"A macro defined in a dependency replays its `$crate` paths from that dependency's shared bindings.","issues":[404]},
+          {"text":"Trait facts of registry and git crates whose dependencies run build scripts are shared by every project on a machine, once a project's own build agrees with rawr's nightly.","issues":[403]}
+        ]
+      },
       {
         "version": "0.3.28",
         "date": "2026-10-31",
@@ -710,7 +712,7 @@
     {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
     {"issue":282,"title":"Upstream text stops at `RAWR-RESOLVE-UNKNOWN-MEMBER` on `…::Text::new`, from the `text!(..)`…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
     {"issue":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open","category":"No glue (D593)"},
     {"issue":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
@@ -832,8 +834,8 @@
     {"issue":400,"title":"A program's first proved call compiles it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":401,"title":"A crate extracted whole also answers macros such as `column!` that a later program calls for the…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
+    {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
     {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":406,"title":"A struct that implements `Iterator` can be passed where a generic parameter takes…","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":407,"title":"An iterator passed to a function is collected in full at the call","state":"open","category":"Divergences from rustc"},
