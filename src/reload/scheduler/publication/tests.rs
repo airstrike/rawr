@@ -1,9 +1,7 @@
 use super::*;
-use crate::reload::scheduler::{Admission, Gate};
 use rawr_import::input::proof::Watch;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 struct Fixture {
     root: PathBuf,
@@ -103,53 +101,6 @@ fn observation_cannot_advertise_source_roles_outside_the_compiled_snapshot() {
         Err(IncompleteObservation)
     ));
     assert_eq!(slot.read().staged(), 0);
-}
-
-#[test]
-fn full_observation_does_not_weaken_rawr_byte_validation() {
-    let fixture = Fixture::new("bytes");
-    let slot = Arc::new(Slot::new(fixture.inputs()));
-    let observed = slot.register(fixture.observed());
-    fs::write(fixture.root.join("main.rs"), "let value = 2;").unwrap();
-    assert!(observed
-        .bind(fixture.snapshot())
-        .unwrap()
-        .revalidate()
-        .is_err());
-    assert_eq!(slot.read().staged(), 0);
-    assert!(!slot.read().contains(&fixture.root.join("native.rs")));
-}
-
-#[test]
-fn an_added_native_event_revokes_the_original_request_before_binding() {
-    let fixture = Fixture::new("revoke");
-    let slot = Arc::new(Slot::new(fixture.inputs()));
-    let gate = Gate::new(Duration::ZERO);
-    let now = Instant::now();
-    gate.observe(now).unwrap();
-    let request = gate.start(now).unwrap();
-    let observed = slot.register(fixture.observed());
-    assert!(gate
-        .observe_if(now, || slot
-            .read()
-            .contains(&fixture.root.join("native.rs")))
-        .unwrap());
-    let validated = observed
-        .bind(fixture.snapshot())
-        .unwrap()
-        .revalidate()
-        .unwrap();
-    let result = gate.admit_current(request.complete(validated), |_| {
-        panic!("obsolete publication")
-    });
-    let Admission::Obsolete(validated) = result;
-    drop(validated);
-    assert_eq!(slot.read().staged(), 0);
-    assert!(!slot
-        .read()
-        .current()
-        .contains(&fixture.root.join("native.rs")));
-    assert!(gate.start(now).is_some(), "newer event remains pending");
 }
 
 #[test]

@@ -87,7 +87,6 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
     ("cmp", &["min", "max"]),
 ];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
-const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
@@ -14788,12 +14787,12 @@ impl<'a> Parser<'a> {
         self.parse_local_type().map(Some)
     }
 
-    /// tokio's `join!(a, b, ..)`, `try_join!(a, b, ..)` and
-    /// `select! { pattern = future => body, .. else => body }`, at the `!`,
+    /// tokio's `join!(a, b, ..)` and a one-branch
+    /// `select! { pattern = future => body, else => body }`, at the `!`,
     /// written again as Rawr code: an `.await` on `rawr::future::__join2`
     /// (and the others for each count), and for `select!` a `match` of its
-    /// output. Plan `i` of a select gives `Err` `i` times around its output,
-    /// then `Ok` unless it is the last.
+    /// output. The core runs `join!` only, so `try_join!` and a `select!` of
+    /// more than one future are rejected.
     fn parse_tokio_macro(&mut self, name: &str, start: Span) -> Result<ParsedExpr, Error> {
         const MOST: usize = 5;
         let at = start.start();
@@ -14948,69 +14947,17 @@ impl<'a> Parser<'a> {
             }
         }
         let count = futures.len();
-        // tokio disables a branch whose value does not match its pattern and
-        // waits for the others. Each future of such a select gives `Some`
-        // of its value when its pattern matches it and `None` otherwise,
-        // which disables it (`__select_some`). With one branch tokio goes
-        // to `else`, or panics, as the plain select does.
-        let filtered = name == "select"
-            && count > 1
-            && branches
-                .iter()
-                .any(|(pattern, _)| refutable_tokens(pattern));
-        if filtered {
-            let selected = || ident("__rawr_selected");
-            for (future, (pattern, _)) in futures.iter_mut().zip(&branches) {
-                let awaited = std::iter::once((Token::LeftParen, at))
-                    .chain(std::mem::take(future))
-                    .chain([
-                        (Token::RightParen, at),
-                        (Token::Period, at),
-                        reserved("await"),
-                    ]);
-                let mut wrapped = vec![reserved("async"), (Token::LeftBrace, at)];
-                if refutable_tokens(pattern) {
-                    // `let v = (future).await; if matches!(&v, pattern)
-                    // { Some(v) } else { None }`
-                    wrapped.extend([(Token::Let, at), selected(), (Token::Equals, at)]);
-                    wrapped.extend(awaited);
-                    wrapped.extend([
-                        (Token::SemiColon, at),
-                        (Token::If, at),
-                        ident("matches"),
-                        (Token::Bang, at),
-                        (Token::LeftParen, at),
-                        (Token::Ampersand, at),
-                        selected(),
-                        (Token::Comma, at),
-                    ]);
-                    wrapped.extend(pattern.iter().cloned());
-                    wrapped.extend([
-                        (Token::RightParen, at),
-                        (Token::LeftBrace, at),
-                        ident("Some"),
-                        (Token::LeftParen, at),
-                        selected(),
-                        (Token::RightParen, at),
-                        (Token::RightBrace, at),
-                        (Token::Else, at),
-                        (Token::LeftBrace, at),
-                        ident("None"),
-                        (Token::RightBrace, at),
-                    ]);
-                } else {
-                    wrapped.extend([ident("Some"), (Token::LeftParen, at)]);
-                    wrapped.extend(awaited);
-                    wrapped.push((Token::RightParen, at));
-                }
-                wrapped.push((Token::RightBrace, at));
-                *future = wrapped;
-            }
-        }
         let least = if name == "select" { 1 } else { 2 };
         if count < least || count > MOST {
             return Err(unsupported(
                 format!("`{name}!` of {count} futures; Rawr takes {least} to {MOST}"),
+                end,
+            ));
+        }
+        // The core has `join!` only, so far (D513.7).
+        if count > 1 && name != "join" {
+            return Err(unsupported(
+                format!("`{name}!`; Rawr runs `join!` here so far"),
                 end,
             ));
         }
@@ -15024,24 +14971,13 @@ impl<'a> Parser<'a> {
             spliced.extend(futures.pop().into_iter().flatten());
             spliced.push((Token::RightParen, at));
         } else {
-            let function = if filtered { "select_some" } else { name };
-            // The core has `join!` only, so far (D513.7).
-            if name != "join" {
-                return Err(unsupported(
-                    format!("`{name}!`; Rawr runs `join!` here so far"),
-                    end,
-                ));
-            }
             spliced.extend([
                 ident("rawr"),
                 (Token::DoubleColon, at),
                 ident("future"),
                 (Token::DoubleColon, at),
             ]);
-            spliced.extend([
-                ident(&format!("__{function}{count}")),
-                (Token::LeftParen, at),
-            ]);
+            spliced.extend([ident(&format!("__{name}{count}")), (Token::LeftParen, at)]);
             // Each future is an argument as written, so a local moves in.
             for (index, future) in futures.into_iter().enumerate() {
                 if index > 0 {
@@ -15054,22 +14990,8 @@ impl<'a> Parser<'a> {
         spliced.extend([(Token::Period, at), reserved("await")]);
         if name == "select" {
             spliced.push((Token::LeftBrace, at));
-            for (index, (pattern, body)) in branches.into_iter().enumerate() {
-                let mut wraps = Vec::new();
-                if count > 1 {
-                    wraps.extend(std::iter::repeat_n("Err", index));
-                    if index + 1 < count {
-                        wraps.push("Ok");
-                    }
-                    if filtered {
-                        wraps.push("Some");
-                    }
-                }
-                for wrap in &wraps {
-                    spliced.extend([ident(wrap), (Token::LeftParen, at)]);
-                }
+            for (pattern, body) in branches {
                 spliced.extend(pattern);
-                spliced.extend(wraps.iter().map(|_| (Token::RightParen, at)));
                 spliced.push((Token::DoubleArrow, at));
                 spliced.push((Token::LeftBrace, at));
                 spliced.extend(body);
@@ -19079,12 +19001,6 @@ impl<'a> Parser<'a> {
                 operation: name_span,
             });
         };
-        if item.path() == TASK_PERFORM_PATH
-            && item.kind() == crate::host::item::Kind::AssociatedFunction
-        {
-            self.expect(Token::LeftParen, "'(' after Task::perform")?;
-            return self.parse_task_perform_future(name_span);
-        }
         if !matches!(
             item.kind(),
             crate::host::item::Kind::Function
@@ -19885,42 +19801,6 @@ impl<'a> Parser<'a> {
         ]);
         self.splice_tokens(tokens);
         true
-    }
-
-    /// `Task::perform(future, f)` over a Rust future, which crosses as a
-    /// `Task`: iced's own definition, `Task::future(future).map(f)`.
-    fn parse_task_perform_future(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
-        let future = self.parse_expr()?;
-        self.expect(Token::Comma, "',' after the future")?;
-        // The mapper's closure takes the future's output, as in
-        // `Task::perform(spawn_blocking(..), |result| result.unwrap())`.
-        self.closure_hint = self
-            .task_output(&future.ty)
-            .map(|output| self.inference.resolve(&output))
-            .filter(|output| !contains_inference(output))
-            .map(|output| Box::new([output]) as Box<[Ty]>);
-        let mapper = self.parse_expr();
-        self.closure_hint = None;
-        let mapper = mapper?;
-        if matches!(self.peek(), Token::Comma) {
-            self.next();
-        }
-        let end = self.expect(Token::RightParen, "')' after Task::perform arguments")?;
-        let call = span(name_span.start(), end);
-        const TASK_FUTURE: &str = "iced::Task::future";
-        let items = self
-            .models
-            .host_items(TASK_FUTURE)
-            .map(<[_]>::to_vec)
-            .ok_or_else(|| Error::InvalidHostOperation {
-                item: TASK_FUTURE.into(),
-                reason: "the bindings lack this item".into(),
-                operation: call,
-            })?;
-        let owner = self.models.item_owner(TASK_FUTURE).cloned();
-        let task = self.call_host_function(&items, owner, vec![future], call)?;
-        self.pending_arguments = Some((vec![mapper], end));
-        self.parse_host_method(task, "map".into(), call)
     }
 
     fn parse_host_value(
@@ -53412,33 +53292,6 @@ enum PendingFloatKind {
     Literal(f64),
     /// The name of the `RoundF32` helper the placeholder calls.
     Round(String),
-}
-
-/// Whether a pattern written as `tokens` may fail to match: anything but
-/// names, `_`, `mut`, `ref`, `&` and tuples of them. A crate's struct
-/// pattern counts, though it always matches.
-fn refutable_tokens(tokens: &[(Token, Position)]) -> bool {
-    tokens
-        .iter()
-        .enumerate()
-        .any(|(index, (token, _))| match token {
-            Token::Identifier(name) => {
-                name.starts_with(|first: char| first.is_uppercase())
-                    || matches!(
-                        tokens.get(index + 1),
-                        Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
-                    )
-            }
-            Token::Underscore
-            | Token::Mut
-            | Token::LeftParen
-            | Token::RightParen
-            | Token::Comma
-            | Token::Ampersand
-            | Token::Unit => false,
-            Token::Reserved(word) => word.as_str() != "ref",
-            _ => true,
-        })
 }
 
 /// Whether `pattern` binds some part of its value by value: a name, not a

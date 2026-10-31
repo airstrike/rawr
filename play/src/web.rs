@@ -31,9 +31,7 @@ mod tests {
 
     #[test]
     fn play_web_render_body() {
-        let body =
-            br#"{"code":"1 + 2","theme":"light","size":"320x200","messages":["Message::A"]}"#;
-        assert_eq!(parse_render(body).unwrap().code, "1 + 2");
+        assert_eq!(parse_render(br#"{"code":"1 + 2"}"#).unwrap().code, "1 + 2");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 // One dark or light theme for the whole site, on <html data-theme>. The
 // inline script in Base.astro (THEME_INIT) sets it before the first paint:
-// a share's pinned theme, else the visitor's choice from localStorage, else
-// the system's. The header's switch and the playground's DARK and LIGHT
-// control both call setTheme, which tells every listener ("rawr-theme").
+// the visitor's choice from localStorage, else the system's. The header's
+// switch and the playground's DARK and LIGHT control both call setTheme,
+// which tells every listener ("rawr-theme").
 
 import { CHROME, KEY } from "./theme-init.ts";
 
@@ -30,7 +30,6 @@ export function setTheme(next: Theme, remember = true): void {
     try {
       localStorage.setItem(KEY, next);
     } catch {}
-    delete root.dataset.themePin;
   }
   if (root.dataset.theme === next) return;
   root.dataset.theme = next;
@@ -50,7 +49,7 @@ export function onTheme(listener: (theme: Theme) => void): () => void {
 export function followSystem(): void {
   const query = matchMedia("(prefers-color-scheme: light)");
   query.addEventListener("change", () => {
-    if (!stored() && !document.documentElement.dataset.themePin) setTheme(query.matches ? "light" : "dark", false);
+    if (!stored()) setTheme(query.matches ? "light" : "dark", false);
   });
 }
 
