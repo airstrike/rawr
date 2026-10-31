@@ -91,7 +91,8 @@ jobs:
           cd "$project"
           rawr run < /dev/null > stdout.txt
           cat stdout.txt
-          printf 'parsed: 1.2.3\nmajor: 1\n' | diff - stdout.txt
+          printf 'parsed: 1.2.3\nmajor: 1\nwidest: 18446744073709551615.0.9223372036854775808\n' \
+            | diff - stdout.txt
 
       - name: rawr run examples/grep with arguments and stdin
         run: |
