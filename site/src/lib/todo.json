@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"`?play` runs snippets on a runner built once with the bot's image, through generated bindings of iced, iced_test and tokio, with no cargo per run. A tokio program runs there. A snippet outside the runner's calls fails to compile, as any program with a missing native call does.","issues":[436]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.36",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"`?play` runs snippets on a runner built once with the bot's image, through generated bindings of iced, iced_test and tokio, with no cargo per run. A tokio program runs there. A snippet outside the runner's calls fails to compile, as any program with a missing native call does.","issues":[436]}
+        ]
+      },
       {
         "version": "0.3.35",
         "date": "2026-10-31",
@@ -919,7 +921,7 @@
     {"issue":433,"title":"rawr preview on the plain runner","state":"open","category":"No glue (D593)"},
     {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open","category":"No glue (D593)"},
     {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
-    {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)"},
+    {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.36"},
     {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.34"},
     {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"open","category":"No glue (D593)"},
     {"issue":439,"title":"Delete the core's iced-only machinery rawr-iced drove","state":"open","category":"No glue (D593)"},
