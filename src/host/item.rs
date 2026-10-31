@@ -154,7 +154,7 @@ pub struct Fingerprint {
     guard: Option<Guard>,
     opens: bool,
     rules: Option<[u8; 32]>,
-    application: Option<[u8; 32]>,
+    application: Option<Box<[u8; 32]>>,
 }
 
 impl Definition {
@@ -608,7 +608,7 @@ impl Definition {
             imported,
             guard: self.guard,
             opens: self.opens,
-            application: self.application,
+            application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(MacroRules::digest),
         }
     }
@@ -626,7 +626,7 @@ impl Definition {
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
             opens: self.opens,
-            application: self.application,
+            application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(MacroRules::digest),
         })
     }

@@ -5188,7 +5188,7 @@ enum Op {
         span: Span,
     },
     Stream {
-        operation: StreamOperation,
+        operation: Box<StreamOperation>,
     },
     #[cfg(feature = "rust-import")]
     Event {
@@ -17177,19 +17177,17 @@ impl<'a> Parser<'a> {
                     selected: box_perform_proof(selected),
                 }
             }
-            Op::Stream {
-                operation:
-                    StreamOperation {
-                        selected_owner,
-                        selected_item,
-                        selected_inputs,
-                        selected_output,
-                        requirements,
-                        arguments,
-                        target,
-                        selector,
-                    },
-            } => {
+            Op::Stream { operation } => {
+                let StreamOperation {
+                    selected_owner,
+                    selected_item,
+                    selected_inputs,
+                    selected_output,
+                    requirements,
+                    arguments,
+                    target,
+                    selector,
+                } = *operation;
                 for (parameter, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     for capability in required.iter() {
@@ -20629,7 +20627,9 @@ impl<'a> Parser<'a> {
             target: target.clone(),
             selector: call,
         };
-        let helper = self.push_op(Op::Stream { operation });
+        let helper = self.push_op(Op::Stream {
+            operation: Box::new(operation),
+        });
         let (prelude, source) = self.private_call(&helper, arguments);
         Ok(ParsedExpr {
             prelude,
@@ -54952,7 +54952,7 @@ mod tests {
             std::mem::size_of::<super::Op>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::Op>(), 648);
+        assert_eq!(std::mem::size_of::<super::Op>(), 632);
         #[cfg(not(feature = "rust-import"))]
         assert!(
             std::mem::size_of::<super::ExecutableOp>() < 1_112,
@@ -54960,7 +54960,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1040);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 1048);
         assert_eq!(
             std::mem::size_of::<Box<crate::host::operation::Proof>>(),
             std::mem::size_of::<usize>()
