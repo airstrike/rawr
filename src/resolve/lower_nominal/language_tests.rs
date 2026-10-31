@@ -11469,3 +11469,72 @@ main();
     );
     assert_eq!(printed, "24\n");
 }
+
+/// A borrow of an element evaluates its index once, where the borrow is
+/// made, as rustc does (T392): a later change to the index's local, or a
+/// side effect in the index, doesn't move the borrow to another element.
+#[test]
+fn language_element_borrows_fix_their_index_when_made() {
+    let printed = printed(
+        r#"
+struct S { v: Vec<String>, n: usize }
+impl S {
+    fn bump(&mut self) {
+        let mut i = self.n;
+        let e = &mut self.v[i];
+        i += 1;
+        e.push('!');
+        self.n = i;
+    }
+}
+fn side(n: &mut usize) -> usize { *n += 1; 0 }
+fn main() {
+    let mut a = vec![String::from("a"), String::from("b")];
+    let mut i = 0;
+    let x = &mut a[i];
+    i = 1;
+    x.push_str("-x");
+    println!("{:?} {}", a, i);
+
+    let mut s = vec![S { v: vec![String::from("p"), String::from("q")], n: 0 }];
+    let mut j = 0;
+    let y = &mut s[j].v[j];
+    j = 1;
+    y.push_str("-y");
+    s[0].bump();
+    s[0].bump();
+    println!("{:?} {}", s[0].v, j);
+
+    let mut m = vec![vec![1, 2], vec![3, 4]];
+    let mut k = 0;
+    let z = &mut m[k][k];
+    k = 1;
+    *z += 10;
+    println!("{:?} {}", m, k);
+
+    let mut calls = 0usize;
+    let mut b = vec![1, 2, 3];
+    let w = &mut b[side(&mut calls)];
+    *w += 5;
+    *w += 5;
+    println!("{:?} {}", b, calls);
+
+    let mut grid = vec![vec![0; 2]; 2];
+    let mut r = 0;
+    {
+        let row = &mut grid[r];
+        r = 1;
+        let mut push = || row.push(9);
+        push();
+    }
+    println!("{:?} {}", grid, r);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        printed,
+        "[\"a-x\", \"b\"] 1\n[\"p-y!\", \"q!\"] 1\n[[11, 2], [3, 4]] 1\n[11, 2, 3] 1\n\
+         [[0, 0, 9], [0, 0]] 1\n"
+    );
+}

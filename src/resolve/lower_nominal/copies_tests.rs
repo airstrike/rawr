@@ -513,3 +513,23 @@ fn locals_passed_by_mut_reference_move_in_and_out() {
         assert_eq!(struct_places(work), (expected, 0), "{work}");
     }
 }
+
+/// A `&mut` borrow of a native element fixes its index where it is made,
+/// as Rust does (T392): changing the index's local after the borrow still
+/// reaches the first element, and each call through the borrow reaches
+/// the value itself, copying no `Tally`.
+#[test]
+fn element_borrows_fix_their_index_without_a_copy() {
+    let (value, copies) = copies(
+        "let mut all = vec![Tally::new(), Tally::new()];
+        let mut i = 0;
+        let r = &mut all[i];
+        i = 1;
+        for n in 0..100 {
+            r.add(n);
+        }
+        all[0].total() * 10 + all[1].total() + i as i64 * 1000000",
+    );
+    assert_eq!(value, 4950 * 10 + 1000000);
+    assert_eq!(copies, 0);
+}

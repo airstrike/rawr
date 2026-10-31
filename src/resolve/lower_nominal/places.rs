@@ -170,6 +170,21 @@ impl Parser<'_> {
         self.alias_by_itself(&name);
     }
 
+    /// Whether a `let` that borrows `lvalue` `&mut` holds the place's path
+    /// (`place_located`), not its text: when a `let` ahead shadows the
+    /// place's local, which its name would then reach, or when an element's
+    /// index is part of the place, which Rust evaluates once, where the
+    /// borrow is made. An async body finds a local by its name, so a path
+    /// there can't reach a shadowed one.
+    pub(super) fn borrow_holds_path(&self, lvalue: &Lvalue) -> bool {
+        let shadowed = self.root_shadowed_later(lvalue.binding());
+        if self.in_async_body() {
+            !shadowed && lvalue.indexes_by_value()
+        } else {
+            shadowed || lvalue.indexes_by_value()
+        }
+    }
+
     /// Whether the body being read is an async one, whose locals move
     /// between scopes at each `.await`, so where a local is doesn't last.
     pub(super) fn in_async_body(&self) -> bool {
@@ -1173,6 +1188,63 @@ impl PlacePattern {
                     .find(|(bound, declaration, _)| bound == name && *declaration == at)
             })
             .map_or_else(|| name.clone(), |(_, _, holder)| holder.clone())
+    }
+}
+
+/// Whether the text of a place's chain indexes by anything but a struct's
+/// slot: an element's index is an expression, read again at each use of
+/// the chain's text.
+fn indexes_by_value(chain: &str) -> bool {
+    let mut depth = 0usize;
+    let mut index = String::new();
+    for character in chain.chars() {
+        match character {
+            '[' if depth == 0 => {
+                depth = 1;
+                index.clear();
+            }
+            ']' if depth == 1 => {
+                depth = 0;
+                if index.is_empty() || !index.chars().all(|digit| digit.is_ascii_digit()) {
+                    return true;
+                }
+            }
+            '[' => {
+                depth += 1;
+                index.push(character);
+            }
+            ']' => {
+                depth -= 1;
+                index.push(character);
+            }
+            _ if depth > 0 => index.push(character),
+            _ => {}
+        }
+    }
+    false
+}
+
+impl Lvalue {
+    /// Whether this place is reached through an element's index, an
+    /// expression Rust evaluates once, where the place is borrowed: a
+    /// borrow that reaches the place again by its text at each use would
+    /// read the index again (`let r = &mut v[i]; i = 1;`, T392).
+    pub(super) fn indexes_by_value(&self) -> bool {
+        match self {
+            Lvalue::Binding { .. } => false,
+            Lvalue::Field(_) => false,
+            Lvalue::Place { place, .. } => indexes_by_value(place.as_str()),
+            Lvalue::Slice(_) => true,
+            Lvalue::Nested(nested) => {
+                indexes_by_value(nested.base.as_str())
+                    || nested.steps.iter().any(|step| match step {
+                        PlaceStep::Index(index) => {
+                            !index.as_str().chars().all(|digit| digit.is_ascii_digit())
+                        }
+                        _ => false,
+                    })
+            }
+        }
     }
 }
 
