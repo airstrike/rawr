@@ -233,6 +233,76 @@ pub struct Closure {
     pub home: PathBuf,
 }
 
+/// The name each library of a closure is declared by, keyed by its package
+/// id, from each library's crate name, package id and version. A crate name
+/// no other library shares is its own name. Libraries that share one, as
+/// rustc-hash 1 and 2 under iced do, are named by name and version, and
+/// numbered after that where one version comes from two sources. No two
+/// libraries get one name.
+#[cfg(feature = "rustc-driver")]
+fn closure_aliases<'a>(
+    libraries: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+) -> BTreeMap<&'a str, String> {
+    let mut by_name = BTreeMap::<&str, Vec<(&str, &str)>>::new();
+    for (name, package_id, version) in libraries {
+        by_name.entry(name).or_default().push((package_id, version));
+    }
+    let mut taken = by_name
+        .iter()
+        .filter(|(_, packages)| packages.len() == 1)
+        .map(|(name, _)| (*name).to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut names = BTreeMap::new();
+    for (name, mut packages) in by_name {
+        if let [(package_id, _)] = packages.as_slice() {
+            names.insert(*package_id, name.to_owned());
+            continue;
+        }
+        packages.sort_unstable();
+        for (package_id, version) in packages {
+            let base = format!("{name}_{}", version.replace(['.', '-', '+'], "_"));
+            let mut candidate = base.clone();
+            let mut count = 1;
+            while !taken.insert(candidate.clone()) {
+                count += 1;
+                candidate = format!("{base}_{count}");
+            }
+            names.insert(package_id, candidate);
+        }
+    }
+    names
+}
+
+#[cfg(all(test, feature = "rustc-driver"))]
+mod closure_alias_tests {
+    use super::closure_aliases;
+
+    /// iced's closure has two versions of rustc-hash, and a version can
+    /// come from two sources; each library still gets its own name, and
+    /// a name no other library shares stays the crate name.
+    #[test]
+    fn libraries_sharing_a_crate_name_get_distinct_names() {
+        let names = closure_aliases([
+            ("rustc_hash", "registry#rustc-hash@1.1.0", "1.1.0"),
+            ("rustc_hash", "registry#rustc-hash@2.1.3", "2.1.3"),
+            ("iced_core", "git#iced_core@0.14.0", "0.14.0"),
+            ("lyon", "registry#lyon@1.0.1", "1.0.1"),
+            ("lyon", "git#lyon@1.0.1", "1.0.1"),
+            ("lyon_1_0_1", "registry#lyon_1_0_1@0.1.0", "0.1.0"),
+        ]);
+        assert_eq!(names["registry#rustc-hash@1.1.0"], "rustc_hash_1_1_0");
+        assert_eq!(names["registry#rustc-hash@2.1.3"], "rustc_hash_2_1_3");
+        assert_eq!(names["git#iced_core@0.14.0"], "iced_core");
+        assert_eq!(names["git#lyon@1.0.1"], "lyon_1_0_1_2");
+        assert_eq!(names["registry#lyon@1.0.1"], "lyon_1_0_1_3");
+        assert_eq!(names["registry#lyon_1_0_1@0.1.0"], "lyon_1_0_1");
+        let mut distinct = names.values().collect::<Vec<_>>();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), names.len());
+    }
+}
+
 /// Staged inputs that can only become a `Request` after canonical sealing.
 pub struct Builder {
     inventory: bool,
@@ -1275,7 +1345,7 @@ impl Request {
         let metadata = &resolution.metadata;
         let declared = metadata.declared_packages();
         let root = metadata.root_package_id();
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         let mut closure = Closure::default();
         // Each library built for the program's target. A library only a
         // build script or proc macro links is built for the host, and
@@ -1289,33 +1359,28 @@ impl Request {
                 && !kinds.iter().any(|kind| kind.as_ref() == "proc-macro")
                 && Some(output.package_id()) != root
         });
-        // Two versions of one crate (rustc-hash 1 and 2 under iced) share
-        // a crate name, so each of them is declared by name and version.
-        let mut packages = BTreeMap::<&str, std::collections::BTreeSet<&str>>::new();
-        for output in libraries.clone() {
-            packages
-                .entry(output.crate_name())
-                .or_default()
-                .insert(output.package_id());
-        }
+        let mut units = Vec::new();
         for output in libraries {
             let package_id = output.package_id();
-            if !seen.insert(package_id.to_owned()) {
+            if !seen.insert(package_id) {
                 continue;
             }
             let package = metadata.package(package_id).ok_or_else(|| Error::Request {
                 field: "inventory closure",
                 reason: format!("`{package_id}` has no resolved package").into_boxed_str(),
             })?;
+            units.push((output, package));
+        }
+        let aliases = closure_aliases(units.iter().map(|(output, package)| {
+            (output.crate_name(), output.package_id(), package.version())
+        }));
+        for (output, package) in units {
+            let package_id = output.package_id();
             let name = output.crate_name();
-            let alias = if packages.get(name).is_some_and(|ids| ids.len() > 1) {
-                format!("{name}_{}", package.version().replace(['.', '-', '+'], "_"))
-            } else {
-                name.to_owned()
-            };
+            let alias = aliases[package_id].as_str();
             let dependency = match package.source() {
                 unit::PackageSource::Path { .. } => {
-                    config::Dependency::path(&alias, package.root(), limits)?
+                    config::Dependency::path(alias, package.root(), limits)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. }
                     if cargo_id.starts_with(
@@ -1323,7 +1388,7 @@ impl Request {
                     ) || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
                     config::Dependency::registry(
-                        &alias,
+                        alias,
                         &format!("={}", package.version()),
                         limits,
                     )?
@@ -1336,7 +1401,7 @@ impl Request {
                             field: "inventory closure",
                             reason: format!("`{package_id}` has no git URL").into_boxed_str(),
                         })?;
-                    config::Dependency::git(&alias, url, oid, limits)?
+                    config::Dependency::git(alias, url, oid, limits)?
                 }
                 unit::PackageSource::Registry { .. } => {
                     return Err(Error::Request {
