@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.31 (2026-10-31)
+
 - On Linux, `rawr run` compiles rawr's runtime again. The runtime build gets the toolchain's library path, so a build script that runs rustc (libc's) no longer fails to load libLLVM. (#431)
 
 ## 0.3.30 (2026-10-31)
