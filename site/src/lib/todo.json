@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"A warm `rawr check` of an iced program no longer spends minutes classifying: definitions and implementations are looked up by hash instead of by scanning the whole graph. Upstream clock's warm check went from 176 s to 79 s.","issues":[437]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.33",
@@ -900,7 +905,7 @@
     {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open","category":"No glue (D593)"},
     {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
     {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"open","category":"No glue (D593)"},
-    {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"open","category":"No glue (D593)"},
     {"issue":439,"title":"Delete the core's iced-only machinery rawr-iced drove","state":"open","category":"No glue (D593)"},
     {"issue":440,"title":"Delete the importer's host-profile machinery","state":"open","category":"No glue (D593)"},
@@ -908,7 +913,9 @@
     {"issue":442,"title":"Remove the Worker's iced-only leftovers","state":"open","category":"No glue (D593)"},
     {"issue":443,"title":"Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)"},
     {"issue":444,"title":"`?play` and the playground run every snippet through one compile path","state":"closed","category":"No glue (D593)","release":"0.3.33"},
-    {"issue":445,"title":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"closed","category":"Divergences from rustc","release":"0.3.33"}
+    {"issue":445,"title":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"closed","category":"Divergences from rustc","release":"0.3.33"},
+    {"issue":446,"title":"A warm check reruns cargo resolution and the probe on each demand round","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":447,"title":"Upstream component's generated runner fails to compile","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -1145,7 +1152,7 @@
           ],
           "milestone": "0.4"
         },
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate and compose per program","issues":[],"milestone":"0.4"}
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classification is about 1% of a warm check","issues":[],"milestone":"0.4"}
       ]
     },
     {

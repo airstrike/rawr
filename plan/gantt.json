@@ -64,7 +64,7 @@
         {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Classification and facade reuse remain","issues":[271,367,369,370,372],"milestone":"0.4"},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Facade-plan invalidation remains","issues":[252,254,276],"milestone":"0.4"},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"Saves read whole crates with no nightly","issues":[398,402,281],"milestone":"0.4"},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate and compose per program","issues":[],"milestone":"0.4"}
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classification is about 1% of a warm check","issues":[],"milestone":"0.4"}
       ]
     },
     {
