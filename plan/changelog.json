@@ -8,6 +8,29 @@
   },
   "releases": [
     {
+      "version": "0.3.21",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
+      ]
+    },
+    {
+      "version": "0.3.20",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"Script implementations of native traits preserve Result types in callback parameters and return values, so callbacks returning Ok or Err compile with their declared Rust signatures.","issues":[371]},
+        {"text":"Deployment waits read the current container application directly, avoiding false rollout timeouts when Cloudflare’s account-wide list still shows the previous image.","issues":[374]}
+      ]
+    },
+    {
+      "version": "0.3.19",
+      "date": "2026-10-29",
+      "entries": [
+        {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
+        {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
+      ]
+    },
+    {
       "version": "0.3.18",
       "date": "2026-10-29",
       "entries": [

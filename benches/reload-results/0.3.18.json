@@ -1,0 +1,238 @@
+{
+  "schema": 1,
+  "benchmark": "save-to-native-callback-output",
+  "release": "0.3.18",
+  "run_id": "20261029T181653.925436Z",
+  "label": "release-baseline-edits-startup-busy",
+  "started_utc": "2026-10-29T18:16:53.928778+00:00",
+  "status": "complete",
+  "release_revision": "47d9fc5b0660f8e3839897f8c3c8a99aaf1e1b21",
+  "scope": "body-only edit; file write begins to first observed newline with the new callback result; not GUI paint",
+  "clock": "time.monotonic_ns",
+  "native_tick_interval_ms": 20,
+  "fixture": {
+    "source": "import-cli/tests/fixtures/marked-ticker",
+    "template_sha256": "b6b742d237bcefe77822e7b5ac036b16db95c67662fa72007098f54d24a29651",
+    "prepared_sha256": "962b868ab6f58b7839624043e5ed3ac974b5c366fe2828f737095337a7bdc4b7",
+    "initial_factor": 1,
+    "edit_factors": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "binaries": {
+    "rawr": {
+      "version": "rawr 0.3.18",
+      "sha256": "4a17922a16a2f12b1829fcd0dbfee4883052e509b7bb30d91356758fcffc6837"
+    },
+    "rawr-import": {
+      "version": "rawr-import 0.3.18",
+      "sha256": "84522b5c89de76f879347f3a4f48eb111bd1ca1c69dc00397fed1df5d69434af"
+    },
+    "rawr-import-driver": {
+      "version": "rawr-import-driver 8 32 375b1431b7d89d1c2e2bc168c011848ae12b7d14",
+      "sha256": "dfe789a5bd58e3478a80244c1b643ecfc53a7515a57970634d81c5e8cbd8480d"
+    }
+  },
+  "cache": {
+    "rawr_home_existed": true,
+    "project_target_existed": true,
+    "policy": "persistent benchmark-owned rawr home and fixture target"
+  },
+  "build_jobs": 2,
+  "samples": [
+    {
+      "edit": 1,
+      "phase": "first",
+      "factor": 2,
+      "latency_ms": 1149.82775,
+      "save_write_ms": 4.540917,
+      "save_since_start_ns": 487265149333,
+      "observed_since_start_ns": 488414977083,
+      "tick_before_save": 13898,
+      "observed_tick": 13946,
+      "observed_value": 27892,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:01.294796+00:00",
+        "load_average_1_5_15_minutes": [
+          1.47021484375,
+          3.3095703125,
+          3.57373046875
+        ]
+      }
+    },
+    {
+      "edit": 2,
+      "phase": "later",
+      "factor": 3,
+      "latency_ms": 1169.233042,
+      "save_write_ms": 0.276417,
+      "save_since_start_ns": 488465165458,
+      "observed_since_start_ns": 489634398500,
+      "tick_before_save": 13948,
+      "observed_tick": 13996,
+      "observed_value": 41988,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:02.494814+00:00",
+        "load_average_1_5_15_minutes": [
+          1.47021484375,
+          3.3095703125,
+          3.57373046875
+        ]
+      }
+    },
+    {
+      "edit": 3,
+      "phase": "later",
+      "factor": 4,
+      "latency_ms": 1173.834125,
+      "save_write_ms": 0.275625,
+      "save_since_start_ns": 489684680708,
+      "observed_since_start_ns": 490858514833,
+      "tick_before_save": 13998,
+      "observed_tick": 14046,
+      "observed_value": 56184,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:03.714343+00:00",
+        "load_average_1_5_15_minutes": [
+          1.47021484375,
+          3.3095703125,
+          3.57373046875
+        ]
+      }
+    },
+    {
+      "edit": 4,
+      "phase": "later",
+      "factor": 5,
+      "latency_ms": 1201.933125,
+      "save_write_ms": 0.219916,
+      "save_since_start_ns": 490906392750,
+      "observed_since_start_ns": 492108325875,
+      "tick_before_save": 14048,
+      "observed_tick": 14097,
+      "observed_value": 70485,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:04.936074+00:00",
+        "load_average_1_5_15_minutes": [
+          1.43212890625,
+          3.27099609375,
+          3.55859375
+        ]
+      }
+    },
+    {
+      "edit": 5,
+      "phase": "later",
+      "factor": 6,
+      "latency_ms": 1178.580916,
+      "save_write_ms": 0.237708,
+      "save_since_start_ns": 492156247500,
+      "observed_since_start_ns": 493334828416,
+      "tick_before_save": 14099,
+      "observed_tick": 14148,
+      "observed_value": 84888,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:06.185953+00:00",
+        "load_average_1_5_15_minutes": [
+          1.43212890625,
+          3.27099609375,
+          3.55859375
+        ]
+      }
+    },
+    {
+      "edit": 6,
+      "phase": "later",
+      "factor": 7,
+      "latency_ms": 1186.493541,
+      "save_write_ms": 0.300041,
+      "save_since_start_ns": 493385029375,
+      "observed_since_start_ns": 494571522916,
+      "tick_before_save": 14150,
+      "observed_tick": 14199,
+      "observed_value": 99393,
+      "native_pid": 96500,
+      "load_before_save": {
+        "utc": "2026-10-29T18:25:07.414732+00:00",
+        "load_average_1_5_15_minutes": [
+          1.43212890625,
+          3.27099609375,
+          3.55859375
+        ]
+      }
+    }
+  ],
+  "log_relative_to_work_dir": "logs/20261029T181653.925436Z.jsonl",
+  "harness_sha256": "1b377ce1e467adddd8b309ea505fd5cb44fbc38d56ffd85ee78a4ab488020a68",
+  "machine": {
+    "system": "Darwin",
+    "release": "25.4.0",
+    "architecture": "arm64",
+    "logical_cpus": 12,
+    "python": "3.14.7",
+    "hw.model": "Mac14,5",
+    "machdep.cpu.brand_string": "Apple M2 Max"
+  },
+  "load_before_start": {
+    "utc": "2026-10-29T18:16:53.935022+00:00",
+    "load_average_1_5_15_minutes": [
+      3.3994140625,
+      3.1181640625,
+      3.16015625
+    ]
+  },
+  "rustc": "rustc 1.99.0-nightly (375b1431b 2026-07-10)\nbinary: rustc\ncommit-hash: 375b1431b7d89d1c2e2bc168c011848ae12b7d14\ncommit-date: 2026-07-10\nhost: aarch64-apple-darwin\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8",
+  "cargo": "cargo 1.99.0-nightly (59800466c 2026-07-07)",
+  "startup": {
+    "to_first_callback_ms": 146637.617333,
+    "native_pid": 96500,
+    "first_tick": 1
+  },
+  "load_before_edits": {
+    "utc": "2026-10-29T18:25:01.294714+00:00",
+    "load_average_1_5_15_minutes": [
+      1.47021484375,
+      3.3095703125,
+      3.57373046875
+    ]
+  },
+  "startup_to_edits_ms": 487265.119208,
+  "native_pid": 96500,
+  "last_native_tick": 14201,
+  "observed_callback_intervals_ms": {
+    "count": 14200,
+    "median": 25.029292,
+    "max": 35.820958
+  },
+  "load_after": {
+    "utc": "2026-10-29T18:25:08.806672+00:00",
+    "load_average_1_5_15_minutes": [
+      1.43212890625,
+      3.27099609375,
+      3.55859375
+    ]
+  },
+  "finished_utc": "2026-10-29T18:25:08.806690+00:00",
+  "summary": {
+    "all_edits": {
+      "count": 6,
+      "median_ms": 1176.2075205,
+      "max_ms": 1201.933125
+    },
+    "later_edits": {
+      "count": 5,
+      "median_ms": 1178.580916,
+      "max_ms": 1201.933125
+    }
+  }
+}
