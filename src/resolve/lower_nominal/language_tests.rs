@@ -11075,3 +11075,41 @@ fn language_byte_string_patterns() {
     );
     assert_eq!(value, "1 2 3 0 1");
 }
+
+/// A raw identifier (`r#for`, `r#type`) names a function, method, field or
+/// binding with a keyword's name, and `r#name` is `name`, as in rustc; Rust
+/// refuses `r#self`, `r#crate`, `r#super` and `r#Self`.
+#[test]
+fn language_raw_identifiers() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r##"
+#[derive(Debug)]
+struct S {
+    r#type: i32,
+    r#match: i32,
+}
+trait For {
+    fn r#for(&self) -> i32;
+}
+impl For for S {
+    fn r#for(&self) -> i32 { self.r#type + self.r#match }
+}
+fn r#loop(r#in: i32) -> i32 { r#in * 2 }
+fn main() {
+    let r#for = S { r#type: 1, r#match: 2 };
+    let r#switch = 3;
+    let switch = r#switch + 1;
+    let r#name = 5;
+    println!("{} {} {} {}", r#for.r#for(), r#loop(switch), name, For::r#for(&r#for));
+    println!("{:?}", r#for);
+}
+main();
+"##,
+    );
+    assert_eq!(printed, "3 8 5 3\nS { type: 1, match: 2 }\n");
+    for word in ["self", "crate", "super", "Self"] {
+        let error = rejected(&format!("fn main() {{ let r#{word} = 1; }} main(); 0"));
+        assert!(error.contains(&format!("r#{word}")), "{error}");
+    }
+}
