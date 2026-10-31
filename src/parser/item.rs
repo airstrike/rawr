@@ -2712,6 +2712,18 @@ fn parse_bounds_with(
 ) -> ParseResult<Vec<type_ref::Path>> {
     let mut bounds = Vec::new();
     loop {
+        // `for<'a> Fn(&'a T)`: the bound for every `'a`.
+        let binder = parse_binder(input)?;
+        let first_bound = bounds.len();
+        let first_projection = projections.len();
+        if !binder.is_empty() && matches!(input.peek(), Some((Token::Apostrophe, _))) {
+            let position = input.peek().expect("token streams always end with EOF").1;
+            return Err(PERR::MissingToken(
+                "a trait".into(),
+                "after a higher-ranked bound's lifetimes".into(),
+            )
+            .into_err(position));
+        }
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             lifetimes.push(parse_lifetime(input)?.name);
         } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
@@ -2744,11 +2756,21 @@ fn parse_bounds_with(
                 // `<T: Shape<Output = i64>>`: the `>>` also closes the list.
                 Some(closing) if split.is_some() => {
                     *closing = split;
+                    erase_bounds_lifetimes(
+                        &mut bounds[first_bound..],
+                        &mut projections[first_projection..],
+                        &binder,
+                    );
                     return Ok(bounds);
                 }
                 _ => reject_split(split)?,
             }
         }
+        erase_bounds_lifetimes(
+            &mut bounds[first_bound..],
+            &mut projections[first_projection..],
+            &binder,
+        );
         // After a bound's closing `>`, the lexer reads `+` as unary.
         if !matches!(input.peek(), Some((Token::Plus | Token::UnaryPlus, _))) {
             return Ok(bounds);
@@ -2804,11 +2826,46 @@ fn parse_where_with(
             }
             continue;
         }
-        let name = parse_name(input, "as a `where` clause parameter")?;
-        expect(input, Token::Colon, "after a `where` clause parameter")?;
+        // `for<'a> &'a T: Sized`: the predicate for every `'a`.
+        let binder = parse_binder(input)?;
+        let unsized_start = match input.peek() {
+            Some((Token::LeftBracket, _)) => Some("[_]"),
+            Some((Token::Identifier(word), _)) if matches!(word.as_str(), "dyn" | "str") => {
+                Some(if word.as_str() == "str" {
+                    "str"
+                } else {
+                    "dyn _"
+                })
+            }
+            _ => None,
+        };
+        let mut predicate = parse_type(input)?;
+        erase_bound_lifetimes(&mut predicate, &binder);
+        expect(input, Token::Colon, "after a `where` clause type")?;
         let mut projections = Vec::new();
         let mut bounded = Vec::new();
-        let bounds = parse_bounds_with(input, &mut projections, None, &mut bounded)?;
+        let mut bounds = parse_bounds_with(input, &mut projections, None, &mut bounded)?;
+        erase_bounds_lifetimes(&mut bounds, &mut projections, &binder);
+        let name = match &predicate {
+            type_ref::Type::Path(path)
+                if !path.global
+                    && path.segments.len() == 1
+                    && path.segments[0].arguments.is_empty()
+                    && (path.segments[0].name.text == "Self"
+                        || generics.iter().any(|parameter| {
+                            parameter.name.text == path.segments[0].name.text
+                        })) =>
+            {
+                path.segments[0].name.clone()
+            }
+            _ => {
+                where_other_type(&predicate, unsized_start, &bounds, &projections, &bounded)?;
+                if matches!(input.peek(), Some((Token::Comma, _))) {
+                    input.next();
+                }
+                continue;
+            }
+        };
         outlives.extend(bounded.into_iter().map(|lifetime| (name.clone(), lifetime)));
         if name.text == "Self"
             && let Some(supertraits) = self_bounds.as_deref_mut()
@@ -2848,6 +2905,47 @@ fn parse_where_with(
         }
     }
     lifetimes.bounds = outlives.into_boxed_slice();
+    Ok(())
+}
+
+/// A `where` predicate on a type other than a declared parameter (`for<'a>
+/// &'a T: Sized`). Rawr reads only `Sized` and the auto traits there, which
+/// hold for every sized type, as rustc proves them; any other bound is an
+/// error. `unsized_start` names the unsized type the predicate's first
+/// token starts (`str`, `[_]`, `dyn _`), which is not `Sized` (E0277).
+fn where_other_type(
+    predicate: &type_ref::Type,
+    unsized_start: Option<&str>,
+    bounds: &[type_ref::Path],
+    projections: &[crate::item::Equality],
+    lifetimes: &[crate::item::Name],
+) -> ParseResult<()> {
+    let unsized_path = matches!(predicate, type_ref::Type::Path(path)
+        if unsized_start == Some("[_]") && path.segments[0].name.text == "Vec"
+            || matches!(unsized_start, Some("str" | "dyn _")));
+    let other = bounds
+        .iter()
+        .find(|bound| !is_sized_trait(bound) && !is_auto_trait(bound))
+        .map(|bound| bound.span)
+        .or_else(|| projections.first().map(|(_, name, _)| name.span))
+        .or_else(|| lifetimes.first().map(|lifetime| lifetime.span));
+    if let Some(span) = other {
+        return Err(PERR::MissingToken(
+            "a declared generic parameter".into(),
+            "for a `where` clause bound other than `Sized` or an auto trait".into(),
+        )
+        .into_err(span.start()));
+    }
+    if unsized_path && bounds.iter().any(is_sized_trait) {
+        return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+            "Sized".into(),
+            format!(
+                "the size of a `{}` is not known at compile time, as in Rust (E0277)",
+                unsized_start.unwrap_or("_")
+            ),
+        ))
+        .into_err(predicate.span().start()));
+    }
     Ok(())
 }
 
@@ -3252,12 +3350,114 @@ pub(crate) fn is_sized_trait(path: &type_ref::Path) -> bool {
         })
 }
 
+/// `for<'a, 'b>` before a bound, a `where` predicate or a function type:
+/// the lifetimes it binds, or none without one.
+fn parse_binder(input: &mut TokenStream) -> ParseResult<Vec<crate::item::Name>> {
+    if !matches!(input.peek(), Some((Token::For, _))) {
+        return Ok(Vec::new());
+    }
+    input.next();
+    expect(
+        input,
+        Token::LessThan,
+        "after `for` in a higher-ranked bound",
+    )?;
+    let mut lifetimes = Vec::new();
+    while !matches!(input.peek(), Some((Token::GreaterThan, _))) {
+        lifetimes.push(parse_lifetime(input)?.name);
+        consume_comma_or_end(input, Token::GreaterThan, "between bound lifetimes")?;
+    }
+    expect(
+        input,
+        Token::GreaterThan,
+        "to close a higher-ranked bound's lifetimes",
+    )?;
+    Ok(lifetimes)
+}
+
+/// `ty` with each of the lifetimes a `for<'a>` binds elided: `for<'a>
+/// Fn(&'a T)` is `Fn(&T)` and `for<'a> fn(&'a T)` is `fn(&T)`, as Rust
+/// reads an elided lifetime there, for every lifetime.
+fn erase_bound_lifetimes(ty: &mut type_ref::Type, bound: &[crate::item::Name]) {
+    match ty {
+        type_ref::Type::Unit(_) => {}
+        type_ref::Type::Tuple { members, .. } => {
+            for member in members.iter_mut() {
+                erase_bound_lifetimes(member, bound);
+            }
+        }
+        type_ref::Type::Path(path) => erase_path_lifetimes(path, bound),
+        type_ref::Type::Reference {
+            lifetime, target, ..
+        } => {
+            if lifetime
+                .as_ref()
+                .is_some_and(|lifetime| bound.iter().any(|name| name.text == lifetime.name.text))
+            {
+                *lifetime = None;
+            }
+            erase_bound_lifetimes(target, bound);
+        }
+    }
+}
+
+/// [`erase_bound_lifetimes`] of the bounds a `for<'a>` binder starts and
+/// their equalities.
+fn erase_bounds_lifetimes(
+    bounds: &mut [type_ref::Path],
+    projections: &mut [crate::item::Equality],
+    binder: &[crate::item::Name],
+) {
+    if binder.is_empty() {
+        return;
+    }
+    for bound in bounds {
+        erase_path_lifetimes(bound, binder);
+    }
+    for (_, _, ty) in projections {
+        erase_bound_lifetimes(ty, binder);
+    }
+}
+
+/// [`erase_bound_lifetimes`] of a path's arguments: a lifetime argument
+/// the binder binds is `'_`.
+fn erase_path_lifetimes(path: &mut type_ref::Path, bound: &[crate::item::Name]) {
+    for segment in path.segments.iter_mut() {
+        for argument in segment.arguments.iter_mut() {
+            match argument {
+                type_ref::Argument::Type(ty) => erase_bound_lifetimes(ty, bound),
+                type_ref::Argument::Lifetime(lifetime)
+                    if bound.iter().any(|name| name.text == lifetime.name.text) =>
+                {
+                    lifetime.name.text = "_".into();
+                }
+                type_ref::Argument::Lifetime(_) => {}
+            }
+        }
+    }
+}
+
 /// A type whose last generic list may close with the first `>` of a `>>`;
 /// the second is left in `split` for the enclosing list.
 fn parse_type_split(
     input: &mut TokenStream,
     split: &mut Option<Position>,
 ) -> ParseResult<type_ref::Type> {
+    // `for<'a> fn(&'a T) -> &'a T`: a function pointer for every `'a`.
+    if matches!(input.peek(), Some((Token::For, _))) {
+        let bound = parse_binder(input)?;
+        if !matches!(input.peek(), Some((Token::Fn, _))) {
+            let position = input.peek().expect("token streams always end with EOF").1;
+            return Err(PERR::MissingToken(
+                "fn".into(),
+                "after a higher-ranked type's lifetimes".into(),
+            )
+            .into_err(position));
+        }
+        let mut ty = parse_type_split(input, split)?;
+        erase_bound_lifetimes(&mut ty, &bound);
+        return Ok(ty);
+    }
     if let Some((Token::Unit, position)) = input.peek() {
         let position = *position;
         input.next();
@@ -3358,17 +3558,21 @@ fn parse_type_split(
     {
         let start = *position;
         input.next();
+        // `dyn for<'a> Fn(&'a T)`.
+        let binder = parse_binder(input)?;
         if let Some((Token::Identifier(name) | Token::Reserved(name), _)) = input.peek()
             && is_fn_trait(name)
         {
             let mutable = name.as_str() != "Fn";
             input.next();
-            let path = parse_fn_signature(input, start, mutable)?;
+            let mut path = parse_fn_signature(input, start, mutable)?;
+            erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         // `dyn Iterator<Item = T>` is Rawr's iterator of `T`, as `impl
         // Iterator<Item = T>` is: a chain or the array of its items.
-        if let Some((Token::Identifier(name), _)) = input.peek()
+        if binder.is_empty()
+            && let Some((Token::Identifier(name), _)) = input.peek()
             && name.as_str() != "IntoIterator"
             && let Some(name) = iterator_trait(name)
         {
@@ -3379,6 +3583,10 @@ fn parse_type_split(
         // `=Output<i64>` of the trait's segment.
         let mut bindings = Vec::new();
         let mut path = parse_path_bindings(input, split, Some(&mut bindings))?;
+        erase_path_lifetimes(&mut path, &binder);
+        for (_, ty) in &mut bindings {
+            erase_bound_lifetimes(ty, &binder);
+        }
         if let Some(last) = path.segments.last_mut() {
             let mut arguments = last.arguments.to_vec();
             arguments.extend(bindings.into_iter().map(|(name, ty)| {
@@ -3488,14 +3696,19 @@ fn parse_type_split(
     // `fn(A) -> B`, `impl Fn(A) -> B` and `dyn Fn(A) -> B`: Rawr's one
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
-        Some(ImplStart::Fn(start, mutable)) => {
-            let path = parse_fn_signature(input, start, mutable)?;
+        Some(ImplStart::Fn(start, mutable, binder)) => {
+            let mut path = parse_fn_signature(input, start, mutable)?;
+            erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         Some(ImplStart::Iterator(name, start)) => {
             return parse_iterator_type(input, split, name, start)
         }
-        Some(ImplStart::Bounds(start)) => return parse_impl_bounds(input, split, start),
+        Some(ImplStart::Bounds(start, binder)) => {
+            let mut ty = parse_impl_bounds(input, split, start)?;
+            erase_bound_lifetimes(&mut ty, &binder);
+            return Ok(ty);
+        }
         None => {}
     }
 
@@ -3573,13 +3786,15 @@ fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
 
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
-    /// `fn(..)` or `impl Fn*(..)`, its head consumed, and whether its
-    /// call takes it `&mut` (`FnMut`, `FnOnce`).
-    Fn(Position, bool),
+    /// `fn(..)` or `impl Fn*(..)`, its head consumed, whether its call
+    /// takes it `&mut` (`FnMut`, `FnOnce`), and the lifetimes a `for<'a>`
+    /// after `impl` binds.
+    Fn(Position, bool, Vec<crate::item::Name>),
     /// `impl Iterator` (or another iterator trait), its builtin name.
     Iterator(&'static str, Position),
-    /// `impl Bound + Bound` of other traits, after `impl`.
-    Bounds(Position),
+    /// `impl Bound + Bound` of other traits, after `impl`, and the
+    /// lifetimes a `for<'a>` after `impl` binds.
+    Bounds(Position, Vec<crate::item::Name>),
 }
 
 /// The start of a function type, after consuming its `fn` or `impl Fn*`
@@ -3589,19 +3804,21 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Fn, position)) => {
             let position = *position;
             input.next();
-            return Ok(Some(ImplStart::Fn(position, false)));
+            return Ok(Some(ImplStart::Fn(position, false, Vec::new())));
         }
         Some((Token::Impl, position)) => *position,
         _ => return Ok(None),
     };
     input.next();
+    // `impl for<'a> Fn(&'a T)`.
+    let binder = parse_binder(input)?;
     let iterator = match input.peek() {
         Some((Token::Identifier(name) | Token::Reserved(name), _)) if is_fn_trait(name) => {
             let mutable = name.as_str() != "Fn";
             input.next();
-            return Ok(Some(ImplStart::Fn(start, mutable)));
+            return Ok(Some(ImplStart::Fn(start, mutable, binder)));
         }
-        Some((Token::Identifier(name), _)) => iterator_trait(name),
+        Some((Token::Identifier(name), _)) if binder.is_empty() => iterator_trait(name),
         _ => None,
     };
     Ok(Some(match iterator {
@@ -3609,7 +3826,7 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
             input.next();
             ImplStart::Iterator(name, start)
         }
-        None => ImplStart::Bounds(start),
+        None => ImplStart::Bounds(start, binder),
     }))
 }
 

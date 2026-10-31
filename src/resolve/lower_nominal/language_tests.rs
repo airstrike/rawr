@@ -11227,3 +11227,42 @@ main();
     );
     assert_eq!(printed, "24 6\n");
 }
+
+/// Higher-ranked bounds and types (`for<'a> Fn(&'a T)`, `for<'a> &'a T:
+/// Sized`, `for<'a> fn(&'a usize)`) hold for every lifetime, as an elided
+/// one does, as in rustc. A `where` predicate on a type other than a
+/// parameter takes only `Sized` and the auto traits, and `str: Sized` is
+/// rustc's E0277.
+#[test]
+fn language_higher_ranked_bounds() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+fn apply<T, F: for<'a> Fn(&'a T) -> usize>(value: T, f: F) -> usize {
+    f(&value)
+}
+fn twice<T, F>(value: T, f: F) -> usize
+where
+    F: for<'a, 'b> Fn(&'a T) -> usize,
+    for<'a> &'a T: Sized + Send,
+{
+    f(&value) + f(&value)
+}
+fn call(f: impl for<'a> Fn(&'a usize) -> usize) -> usize { f(&2) }
+fn boxed(f: Box<dyn for<'a> Fn(&'a usize) -> usize>) -> usize { f(&3) }
+fn main() {
+    let f: for<'a> fn(&'a usize) -> usize = |x| *x * 4;
+    println!("{} {}", apply(6, f), twice(3, f));
+    let b: Box<dyn for<'a> Fn(&'a usize) -> usize> = Box::new(|x: &usize| *x + 1);
+    println!("{} {} {}", call(|x: &usize| *x * 4), boxed(Box::new(|x: &usize| *x * 5)), b(&1));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 24\n8 15 2\n");
+    let error =
+        rejected("fn f<T>(t: T) -> i64 where for<'a> &'a T: Clone { 1 } fn main() {} main(); 0");
+    assert!(error.contains("other than `Sized`"), "{error}");
+    let error = rejected("fn f<T>(t: T) -> i64 where str: Sized { 1 } fn main() {} main(); 0");
+    assert!(error.contains("E0277"), "{error}");
+}

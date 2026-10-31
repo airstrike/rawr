@@ -11217,6 +11217,9 @@ struct Parser<'a> {
     /// passes down to each leaf, as Rust's `Formatter` does.
     debug_spec: Option<String>,
     closure_hint: Option<Box<[Ty]>>,
+    /// The lifetimes the `for<'a>` binders around the body type being
+    /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
+    bound_lifetimes: Vec<ImmutableString>,
     /// The `macro_rules!` expansions made so far (`expand`).
     expansions: usize,
     /// The host type a host callable returns, as iced's `Element`, at each
@@ -11591,6 +11594,7 @@ impl<'a> Parser<'a> {
             closure_hints: Vec::new(),
             debug_spec: None,
             closure_hint: None,
+            bound_lifetimes: Vec::new(),
             expansions: 0,
             closure_outputs: Vec::new(),
             closure_output: None,
@@ -46561,6 +46565,19 @@ impl<'a> Parser<'a> {
                 self.next();
                 return self.parse_local_fn_type();
             }
+            // `for<'a> fn(&'a T)`: a function pointer for every `'a`,
+            // whose lifetimes are elided ones.
+            Token::For => {
+                let outer = self.parse_local_binder()?;
+                if !matches!(self.peek(), Token::Fn) {
+                    self.bound_lifetimes.truncate(outer);
+                    return Err(self.unsupported("a higher-ranked type other than `fn(..)`"));
+                }
+                self.next();
+                let ty = self.parse_local_fn_type();
+                self.bound_lifetimes.truncate(outer);
+                return ty;
+            }
             Token::Ampersand => {
                 self.next();
                 self.skip_lifetime();
@@ -46614,6 +46631,17 @@ impl<'a> Parser<'a> {
         };
         // `dyn Fn(A) -> B` and `dyn Trait`.
         if name.as_str() == "dyn" && !self.models.get(&name).is_some() {
+            // `dyn for<'a> Fn(&'a T)`.
+            if matches!(self.peek(), Token::For) {
+                let outer = self.parse_local_binder()?;
+                self.splice_tokens(vec![(
+                    Token::Identifier(Box::new("dyn".into())),
+                    name_span.start(),
+                )]);
+                let ty = self.parse_local_type();
+                self.bound_lifetimes.truncate(outer);
+                return ty;
+            }
             if let Token::Identifier(trait_name) | Token::Reserved(trait_name) = self.peek()
                 && matches!(trait_name.as_str(), "Fn" | "FnMut" | "FnOnce")
             {
@@ -47191,14 +47219,49 @@ impl<'a> Parser<'a> {
         Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()))
     }
 
+    /// `for<'a, 'b>` before a body's type: its lifetimes join
+    /// `bound_lifetimes`, and the length to truncate it back to is returned.
+    fn parse_local_binder(&mut self) -> Result<usize, Error> {
+        let outer = self.bound_lifetimes.len();
+        self.expect(Token::For, "`for` of a higher-ranked type")?;
+        self.expect(Token::LessThan, "'<' after `for` in a higher-ranked type")?;
+        while !matches!(self.peek(), Token::GreaterThan) {
+            self.expect(Token::Apostrophe, "a lifetime in a higher-ranked type")?;
+            match self.next().0 {
+                Token::Identifier(name) => self.bound_lifetimes.push(name.as_str().into()),
+                _ => {
+                    self.bound_lifetimes.truncate(outer);
+                    return Err(self.unsupported("a lifetime name after '\''"));
+                }
+            }
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if !matches!(self.peek(), Token::GreaterThan) {
+                self.bound_lifetimes.truncate(outer);
+                return Err(self.unsupported("bound lifetimes without ','"));
+            }
+        }
+        self.next();
+        Ok(outer)
+    }
+
     fn skip_lifetime(&mut self) -> bool {
         if !matches!(self.peek(), Token::Apostrophe) {
             return false;
         }
         let at = self.next().1;
         // `let r: &'static u32 = &c;`, `f::<&'a u32>(&c)`: a lifetime a
-        // body's type names, which these facts do not read yet.
-        if !matches!(self.next().0, Token::Underscore) {
+        // body's type names, which these facts do not read yet. One a
+        // `for<'a>` binds is an elided one.
+        let elided = match self.next().0 {
+            Token::Underscore => true,
+            Token::Identifier(name) => self
+                .bound_lifetimes
+                .iter()
+                .any(|bound| bound.as_str() == name.as_str()),
+            _ => false,
+        };
+        if !elided {
             self.flow()
                 .unmodeled("a lifetime written in a body's type", point_span(at));
         }
