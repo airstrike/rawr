@@ -104,7 +104,7 @@ println!("{} {}", c.r, c.g);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-struct-update" data-out="out-struct-update" aria-label="Run struct-update.rs" hidden></button><b>rawr run struct-update.rs</b><span id="out-struct-update" aria-live="polite">0.5 1</span></div>
 </div>
 <h2 id="async">Async code</h2>
-<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. <a href="/docs/reference/iced#async">iced</a> describes how an app runs them. In <code>?play</code>, a program whose <code>main</code> is <code>async</code> runs the same way. <a href="/docs/reference/play#tokio">Play</a> lists its tokio.</p>
+<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. An <code>async</code> block gives a Rust future that iced can run as a task. <a href="/docs/run#async">Run</a> describes how such a future runs.</p>
 <p>A crate whose <code>main</code> is <code>#[tokio::main] async fn main</code>, or another runtime&rsquo;s <code>main</code>, runs on the runtime in its <code>Cargo.toml</code>. There, an <code>async</code> block or an <code>async fn</code> gives a Rust future, <code>.await</code> takes a future&rsquo;s output, <code>join!</code> runs futures together, and <code>tokio::spawn</code> runs one of yours as a task. A closure you pass to <code>spawn_blocking</code> runs on a worker thread. <a href="/docs/run#async">Run</a> describes how.</p>
 <p>Other programs can&rsquo;t use <code>async</code> yet.</p>
 </article>

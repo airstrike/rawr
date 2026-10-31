@@ -14,23 +14,38 @@ export const MOVED: Record<string, Record<string, string>> = {
     "snippets": "/docs/reference/play#sandbox"
   },
   "/docs/iced": {
-    "async": "/docs/reference/iced#async",
-    "async-rawr": "/docs/reference/iced#async-rawr",
-    "available": "/docs/reference/iced#available",
-    "available-widgets": "/docs/reference/iced#available-widgets",
-    "blocking": "/docs/reference/iced#blocking",
-    "canvas": "/docs/reference/iced#canvas",
-    "components": "/docs/reference/iced#components",
-    "custom-widgets": "/docs/reference/iced#custom-widgets",
+    "application": "/docs/iced#when",
+    "async": "/docs/run#async",
+    "async-rawr": "/docs/run#async",
+    "available": "/docs/reference/iced#bindings",
+    "available-widgets": "/docs/reference/iced#bindings",
+    "blocking": "/docs/run#async",
+    "canvas": "/docs/reference/iced#bindings",
+    "components": "/docs/reference/iced#bindings",
+    "custom-widgets": "/docs/reference/iced#gaps",
     "diagnostics": "/docs/reference/iced#diagnostics",
     "examples": "/docs/reference/iced#examples",
     "hot-reload": "/docs/iced/reload",
-    "main-statements": "/docs/iced/reload#main-statements",
-    "not-available": "/docs/reference/iced#not-available",
+    "iced-run": "/docs/iced#when",
+    "main-statements": "/docs/iced/reload#hot-reload",
+    "not-available": "/docs/reference/iced#gaps",
     "previews": "/docs/iced/previews#previews",
     "rust-crates": "/docs/reference/iced#rust-crates",
-    "subscriptions": "/docs/reference/iced#subscriptions",
-    "views": "/docs/reference/iced#views"
+    "shapes": "/docs/iced#when",
+    "subscriptions": "/docs/reference/iced#bindings",
+    "timed": "/docs/iced#when",
+    "views": "/docs/reference/iced#bindings",
+    "without": "/docs/iced#when"
+  },
+  "/docs/iced/previews": {
+    "commands": "/docs/iced/previews#status",
+    "files": "/docs/iced/previews#status"
+  },
+  "/docs/iced/reload": {
+    "main-statements": "/docs/iced/reload#hot-reload",
+    "native": "/docs/iced/reload#hot-reload",
+    "state": "/docs/iced/reload#hot-reload",
+    "tasks": "/docs/run#async"
   },
   "/docs/play": {
     "add-bot": "/docs/play/discord#add-bot",
@@ -62,8 +77,23 @@ export const MOVED: Record<string, Record<string, string>> = {
     "wrapping": "/docs/reference/play#iced"
   },
   "/docs/reference/commands": {
-    "rawr-iced": "/docs/iced/previews#commands",
+    "rawr-iced": "/docs/iced",
     "rawr-import": "/docs/imports"
+  },
+  "/docs/reference/iced": {
+    "async": "/docs/run#async",
+    "async-rawr": "/docs/run#async",
+    "available": "/docs/reference/iced#bindings",
+    "available-widgets": "/docs/reference/iced#bindings",
+    "blocking": "/docs/run#async",
+    "borrowed": "/docs/reference/iced#bindings",
+    "canvas": "/docs/reference/iced#bindings",
+    "components": "/docs/reference/iced#bindings",
+    "custom-widgets": "/docs/reference/iced#gaps",
+    "not-available": "/docs/reference/iced#gaps",
+    "pane-grid": "/docs/reference/iced#bindings",
+    "subscriptions": "/docs/reference/iced#bindings",
+    "views": "/docs/reference/iced#bindings"
   },
   "/docs/reference/overview": {
     "items": "/docs/reference/items",

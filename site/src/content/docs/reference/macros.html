@@ -49,7 +49,7 @@ print!("{s}");</code></pre>
   <li>A local that the macro binds with <code>let</code>, <code>for</code> or a closure parameter is the macro&rsquo;s own. It never meets a name your program passes in.</li>
   <li>A macro may call another, or itself through <code>$crate</code>.</li>
 </ul>
-<p>With rawr-iced installed, its own <code>column!</code>, <code>row!</code>, <code>text!</code>, <code>rich_text!</code> and <code>color!</code> take the place of iced&rsquo;s.</p>
+<p>iced&rsquo;s <code>column!</code>, <code>row!</code>, <code>text!</code>, <code>rich_text!</code> and <code>color!</code> expand this way too.</p>
 <h2 id="format">Format strings</h2>
 <p>Format strings follow Rust&rsquo;s rules. Positional, numbered, named and captured arguments work. So do fill, alignment, width, precision, signs, radix, <code>{:?}</code>, <code>{:#?}</code> and <code>{:x?}</code>. A width, precision or sign on <code>{:?}</code> of an <code>Option</code>, a tuple, a <code>Vec</code> or a derived struct applies to each number, <code>bool</code> and <code>()</code> inside, as rustc passes its formatter down. Strings and chars inside ignore it. <code>{:x?}</code> writes each integer inside in hexadecimal.</p>
 <div class="block">

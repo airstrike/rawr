@@ -182,14 +182,14 @@ sum 5050</span></div>
   <tr><th>Program</th><th>Runs in</th></tr>
   <tr><td>No dependencies and no native modules</td><td><code>rawr</code> itself.</td></tr>
   <tr><td>Dependencies in <code>Cargo.toml</code> or native modules</td><td><a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo.</td></tr>
-  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which reloads the app on save. Without rawr-iced, rawr-import runs it through <a href="/docs/iced#without">generated bindings</a>.</td></tr>
+  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/imports">rawr-import</a>, through <a href="/docs/iced#when">generated bindings</a> like any other crate.</td></tr>
 </table>
 <p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 
 <h2 id="reload">Reload</h2>
 <p><code>rawr run</code> watches every program it runs.</p>
 <ul>
-  <li>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
+  <li>An iced app picks up a save at its next message, and keeps running. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
   <li>A <a href="#native-main">native main</a> picks up a body edit at its next call into the marked file, and keeps running.</li>
   <li>A <a href="#swap">marked main</a> in a native loop picks up a body edit at the loop&rsquo;s next call into marked code, and keeps running.</li>
   <li>Any other running program restarts when you save, with the same arguments. One line on stderr says so:</li>
@@ -202,7 +202,7 @@ sum 5050</span></div>
 
 <h2 id="release">Release builds</h2>
 <p><code>cargo build --release</code> compiles the marked files natively too. No interpreter ships with the build.</p>
-<p>rawr-iced&rsquo;s <code>#[preview]</code> and <code>#[widget]</code> attributes come from the <code>rawr-macros</code> crate. Under Cargo they leave the item as written.</p>
+<p>The <code>#[preview]</code> attribute comes from the <code>rawr-macros</code> crate. Under Cargo it leaves the item as written.</p>
 <p>An app that embeds the <code>rawr</code> crate to run scripts does ship the interpreter. <a href="/docs/embedding">Embedding</a> covers that case.</p>
 
 <h2 id="speed">Speed</h2>

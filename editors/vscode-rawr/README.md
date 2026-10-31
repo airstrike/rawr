@@ -11,9 +11,10 @@ Xcode shows SwiftUI previews. A dropdown in the pane lists the crate's
 `#[preview]` items. Picking one renders it beside the code, and the pane
 follows edits as Rawr reloads.
 
-**The preview pane is not built yet.** Today the extension only recognizes
-Rawr files: while one is the active editor, the `rawr.marked` context key is
-true.
+**The preview pane is not built yet.** It also has no backend for now. Its
+backend is `rawr preview`, which was removed with rawr-iced and comes back on
+Rawr's plain runner as open work. Today the extension only recognizes Rawr
+files: while one is the active editor, the `rawr.marked` context key is true.
 
 ## Install locally
 
