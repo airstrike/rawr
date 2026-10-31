@@ -348,10 +348,64 @@ pub(crate) struct Memo {
     /// The crate's whole walk failed, so its table grows with demand and
     /// the walk is not tried again.
     pub(crate) large: bool,
-    pub(crate) units: BTreeMap<Unit, Rc<[Emission]>>,
-    pub(crate) modules: BTreeMap<Hash, Rc<[Child]>>,
+    pub(crate) units: BTreeMap<Unit, Answer<Emission>>,
+    pub(crate) modules: BTreeMap<Hash, Answer<Child>>,
     pub(crate) segments: BTreeMap<String, Option<Segment>>,
     pub(crate) index: Option<Rc<[Box<RawValue>]>>,
+}
+
+/// One recorded answer: what a walk recorded, or a table's text for it,
+/// read the first time a walk asks. A replay reads only the answers its
+/// demand reaches, not the whole table: iced's is 89 MB (#420).
+#[derive(Clone)]
+pub(crate) struct Answer<T> {
+    parsed: std::cell::OnceCell<Rc<[T]>>,
+    text: Option<Box<RawValue>>,
+}
+
+impl<T> From<Rc<[T]>> for Answer<T> {
+    fn from(parsed: Rc<[T]>) -> Self {
+        Self {
+            parsed: std::cell::OnceCell::from(parsed),
+            text: None,
+        }
+    }
+}
+
+impl<T: serde::de::DeserializeOwned> Answer<T> {
+    /// The answer, read from the table's text once. Text that does not
+    /// read is missing, so the compiler answers it again.
+    pub(crate) fn get(&self) -> Result<Rc<[T]>, Fault> {
+        if let Some(parsed) = self.parsed.get() {
+            return Ok(Rc::clone(parsed));
+        }
+        let text = self
+            .text
+            .as_ref()
+            .ok_or_else(|| Fault::Missing("an empty recorded answer".to_owned()))?;
+        let parsed = serde_json::from_str::<Vec<T>>(text.get())
+            .map_err(|error| Fault::Missing(format!("a recorded answer: {error}")))?;
+        Ok(Rc::clone(self.parsed.get_or_init(|| Rc::from(parsed))))
+    }
+}
+
+impl<T: Serialize> Serialize for Answer<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match (self.parsed.get(), &self.text) {
+            (_, Some(text)) => text.serialize(serializer),
+            (Some(parsed), None) => parsed.serialize(serializer),
+            (None, None) => serializer.collect_seq(std::iter::empty::<T>()),
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Answer<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            parsed: std::cell::OnceCell::new(),
+            text: Some(Box::<RawValue>::deserialize(deserializer)?),
+        })
+    }
 }
 
 /// One module's public children.
@@ -360,7 +414,7 @@ pub(crate) struct Memo {
 pub(crate) struct Module {
     #[serde(with = "hex16")]
     pub(crate) module: Hash,
-    pub(crate) children: Vec<Child>,
+    pub(crate) children: Answer<Child>,
 }
 
 /// A memo as it is written to disk.
@@ -374,7 +428,7 @@ pub(crate) struct Table {
     pub(crate) root: Root,
     pub(crate) whole: bool,
     pub(crate) large: bool,
-    pub(crate) units: Vec<(Unit, Vec<Emission>)>,
+    pub(crate) units: Vec<(Unit, Answer<Emission>)>,
     pub(crate) modules: Vec<Module>,
     pub(crate) segments: Vec<(String, Option<Segment>)>,
     pub(crate) index: Option<Vec<Box<RawValue>>>,
@@ -385,15 +439,11 @@ impl Memo {
         Self {
             whole: table.whole,
             large: table.large,
-            units: table
-                .units
-                .into_iter()
-                .map(|(unit, emissions)| (unit, Rc::from(emissions)))
-                .collect(),
+            units: table.units.into_iter().collect(),
             modules: table
                 .modules
                 .into_iter()
-                .map(|module| (module.module, Rc::from(module.children)))
+                .map(|module| (module.module, module.children))
                 .collect(),
             segments: table.segments.into_iter().collect(),
             index: table.index.map(Rc::from),
@@ -410,14 +460,14 @@ impl Memo {
             units: self
                 .units
                 .iter()
-                .map(|(unit, emissions)| (unit.clone(), emissions.to_vec()))
+                .map(|(unit, emissions)| (unit.clone(), emissions.clone()))
                 .collect(),
             modules: self
                 .modules
                 .iter()
                 .map(|(module, children)| Module {
                     module: *module,
-                    children: children.to_vec(),
+                    children: children.clone(),
                 })
                 .collect(),
             segments: self
@@ -436,12 +486,12 @@ impl Memo {
         for (unit, emissions) in &other.units {
             self.units
                 .entry(unit.clone())
-                .or_insert_with(|| Rc::clone(emissions));
+                .or_insert_with(|| emissions.clone());
         }
         for (module, children) in &other.modules {
             self.modules
                 .entry(*module)
-                .or_insert_with(|| Rc::clone(children));
+                .or_insert_with(|| children.clone());
         }
         for (name, segment) in &other.segments {
             self.segments
@@ -462,16 +512,16 @@ impl Oracle for Replay<'_> {
         self.0
             .units
             .get(unit)
-            .cloned()
-            .ok_or_else(|| Fault::Missing(format!("{unit:?}")))
+            .ok_or_else(|| Fault::Missing(format!("{unit:?}")))?
+            .get()
     }
 
     fn module(&mut self, module: Hash) -> Result<Rc<[Child]>, Fault> {
         self.0
             .modules
             .get(&module)
-            .cloned()
-            .ok_or_else(|| Fault::Missing(format!("module {}", hex(&module))))
+            .ok_or_else(|| Fault::Missing(format!("module {}", hex(&module))))?
+            .get()
     }
 
     fn segment(&mut self, name: &str) -> Result<Option<Segment>, Fault> {
@@ -498,20 +548,24 @@ pub(crate) struct Record<'a, O: Oracle> {
 
 impl<O: Oracle> Oracle for Record<'_, O> {
     fn unit(&mut self, unit: &Unit) -> Result<Rc<[Emission]>, Fault> {
-        if let Some(emissions) = self.memo.units.get(unit) {
-            return Ok(Rc::clone(emissions));
+        if let Some(Ok(emissions)) = self.memo.units.get(unit).map(Answer::get) {
+            return Ok(emissions);
         }
         let emissions = self.live.unit(unit)?;
-        self.memo.units.insert(unit.clone(), Rc::clone(&emissions));
+        self.memo
+            .units
+            .insert(unit.clone(), Answer::from(Rc::clone(&emissions)));
         Ok(emissions)
     }
 
     fn module(&mut self, module: Hash) -> Result<Rc<[Child]>, Fault> {
-        if let Some(children) = self.memo.modules.get(&module) {
-            return Ok(Rc::clone(children));
+        if let Some(Ok(children)) = self.memo.modules.get(&module).map(Answer::get) {
+            return Ok(children);
         }
         let children = self.live.module(module)?;
-        self.memo.modules.insert(module, Rc::clone(&children));
+        self.memo
+            .modules
+            .insert(module, Answer::from(Rc::clone(&children)));
         Ok(children)
     }
 

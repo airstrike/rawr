@@ -4131,6 +4131,43 @@ fn versioned_request_identity(
     definition: &universe::Definition,
     provisional_manifest: &str,
 ) -> Digest {
+    let mut identity = cargo_view(request, definition, provisional_manifest);
+    // Demand changes what the probe extracts. An empty demand keeps
+    // every existing identity; v2 is demand-seeded extraction.
+    if !request.demand.is_empty() {
+        identity.update(b"demand/v2");
+        identity.update((request.demand.len() as u64).to_le_bytes());
+        for path in &request.demand {
+            identity.update((path.len() as u64).to_le_bytes());
+            for segment in path {
+                identity.update((segment.len() as u64).to_le_bytes());
+                identity.update(segment.as_bytes());
+            }
+        }
+    }
+    Digest(identity.finalize().into())
+}
+
+/// The request as Cargo sees it: every input but the demand, which only
+/// the probe reads. Cargo's outputs are a function of it, so a new demand
+/// reuses them (`resolution::remembered`).
+fn cargo_identity(
+    request: &Request,
+    definition: &universe::Definition,
+    provisional_manifest: &str,
+) -> Digest {
+    Digest(
+        cargo_view(request, definition, provisional_manifest)
+            .finalize()
+            .into(),
+    )
+}
+
+fn cargo_view(
+    request: &Request,
+    definition: &universe::Definition,
+    provisional_manifest: &str,
+) -> Sha256 {
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.resolution-request/v2");
     if request.inventory {
@@ -4159,20 +4196,7 @@ fn versioned_request_identity(
             None => identity.update([0]),
         }
     }
-    // Demand changes what the probe extracts. An empty demand keeps
-    // every existing identity; v2 is demand-seeded extraction.
-    if !request.demand.is_empty() {
-        identity.update(b"demand/v2");
-        identity.update((request.demand.len() as u64).to_le_bytes());
-        for path in &request.demand {
-            identity.update((path.len() as u64).to_le_bytes());
-            for segment in path {
-                identity.update((segment.len() as u64).to_le_bytes());
-                identity.update(segment.as_bytes());
-            }
-        }
-    }
-    Digest(identity.finalize().into())
+    identity
 }
 
 fn prepare_versioned_roots(
