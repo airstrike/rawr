@@ -43,6 +43,7 @@ all four releases. Each timed edit window began after other builds stopped.
 | [0.3.18](reload-results/0.3.18-python3.12.json) | 1074.205 ms | 1133.550 ms | 1247.609 ms | 157.436 s |
 | [0.3.19](reload-results/0.3.19.json) | 1102.031 ms | 1169.356 ms | 1262.574 ms | 145.785 s |
 | [0.3.20](reload-results/0.3.20.json) | 1081.242 ms | 1174.988 ms | 1191.296 ms | 148.713 s |
+| [0.3.21](reload-results/0.3.21.json) | 1130.528 ms | 1259.909 ms | 1312.979 ms | 144.876 s |
 
 From 0.3.17 to 0.3.18, the later-edit median increased **25.998 ms (2.35%)**,
 and its maximum increased **112.767 ms (9.94%)**.
@@ -60,6 +61,20 @@ the later-edit median increased **5.632 ms (0.48%)**, and its maximum decreased
 conditions match. All six edits retained native PID 65798 and its increasing
 state counter. The five later samples are 1160.873, 1174.988, 1171.894,
 1191.296 and 1177.800 ms; the JSON preserves their full precision.
+
+From 0.3.20 to 0.3.21, the first edit increased **49.286 ms (4.56%)**,
+the later-edit median increased **84.921 ms (7.23%)**, and its maximum
+increased **121.683 ms (10.21%)**. Between those two releases, Rawr's own
+code changed only in version numbers; the release changed the playground
+bot's deployment checks. The difference is therefore run-to-run variance on
+this machine, not a code change. All six edits retained native PID 21568 and
+its increasing state counter. The five later samples are 1259.909, 1263.858,
+1226.140, 1230.497 and 1312.979 ms.
+
+An [earlier 0.3.21 run](reload-results/0.3.21-python3.12.9.json) used
+Python 3.12.9 and recorded a 1323.171 ms later-edit median with one
+2932.879 ms edit. It is retained as measured. The second run was chosen to
+match the original observer version, before its results were known.
 
 These are observed differences across small samples, not an isolated
 measurement of a particular code change. All four startups overlapped
