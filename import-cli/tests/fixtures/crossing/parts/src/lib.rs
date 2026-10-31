@@ -39,6 +39,13 @@ pub mod geometry {
             self.drawn.borrow_mut().push(label.to_owned());
         }
 
+        /// Draws `label` into the cache and gives what the renderer drew,
+        /// as iced_graphics's `Cache::draw` gives `Renderer::Geometry`.
+        pub fn sketch(&self, label: &str) -> R::Geometry {
+            self.drawn.borrow_mut().push(label.to_owned());
+            R::draw(label)
+        }
+
         /// What the cache holds, in order.
         pub fn drawn(&self) -> String {
             self.drawn.borrow().join(",")

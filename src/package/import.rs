@@ -2568,19 +2568,25 @@ fn names_declared(
     outcome: rawr_import::classify::Outcome<'_>,
     declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
 ) -> bool {
-    let signature = match outcome.representability() {
-        Representability::Function(plan) => plan.signature(),
-        Representability::Method(plan) => plan.signature(),
-        Representability::FunctionItem(plan) => plan.signature(),
-        Representability::Invocation(plan) => plan.signature(),
+    let (signature, call, crossings) = match outcome.representability() {
+        Representability::Function(plan) => (plan.signature(), None, &[][..]),
+        Representability::Method(plan) => (plan.signature(), None, &[][..]),
+        Representability::FunctionItem(plan) => (plan.signature(), plan.call(), plan.crossings()),
+        Representability::Invocation(plan) => (plan.signature(), plan.call(), plan.crossings()),
         Representability::Constant(plan) => return ty_ok(plan.ty(), declared),
         _ => return true,
     };
+    // What a callable it takes is given and gives, as `Cache::draw`'s
+    // `&mut Frame<Renderer>`, is named in the bridge too.
     signature
         .inputs()
         .iter()
         .all(|input| ty_ok(input, declared))
         && ty_ok(signature.output(), declared)
+        && call.into_iter().chain(crossings).all(|callable| {
+            callable.inputs().iter().all(|input| ty_ok(input, declared))
+                && ty_ok(callable.output(), declared)
+        })
 }
 
 /// The opaque `impl Trait` types the facade's functions and methods give:

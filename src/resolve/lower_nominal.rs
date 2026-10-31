@@ -11501,6 +11501,12 @@ struct Parser<'a> {
     pattern_trace: std::cell::RefCell<Option<borrows::PatternTrace>>,
     /// The expected type of each argument of the call being parsed.
     argument_hints: Vec<Option<Ty>>,
+    /// The next call's arguments go to a std method Rawr runs, as
+    /// `Option::map`, where a crate function named as a value is the
+    /// closure that calls it (T327).
+    script_callables: bool,
+    /// The argument being parsed is one of those.
+    script_callable: bool,
     /// Arguments already parsed for the next call, as for a builder chain.
     pending_arguments: Option<(Vec<ParsedExpr>, Position)>,
     /// The scope frames each statement being parsed opens (D558 tier 1):
@@ -11806,6 +11812,8 @@ impl<'a> Parser<'a> {
             place_root: None,
             pattern_trace: std::cell::RefCell::new(None),
             argument_hints: Vec::new(),
+            script_callables: false,
+            script_callable: false,
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
@@ -18822,7 +18830,7 @@ impl<'a> Parser<'a> {
             .or_else(|| self.models.host.item_owner(&item_path))
             .cloned();
         for relation in signature.relations() {
-            let Some(argument) =
+            let argument =
                 signature
                     .parameters()
                     .iter()
@@ -18831,14 +18839,27 @@ impl<'a> Parser<'a> {
                         crate::host::type_ref::Shape::Parameter(name)
                             if name.to_string() == relation.parameter() =>
                         {
-                            Some(argument)
+                            Some(argument.ty.clone())
                         }
                         _ => None,
-                    })
-            else {
+                    });
+            // A projection's parameter no argument is, as `Renderer` of
+            // `Cache<Renderer>` that `cache.draw(..)`'s receiver fixes, is
+            // what the call has inferred for it (T318).
+            #[cfg(feature = "rust-import")]
+            let projection = relation.trait_identity().is_none();
+            #[cfg(not(feature = "rust-import"))]
+            let projection = false;
+            let Some(argument) = argument.or_else(|| {
+                parameters
+                    .get(relation.parameter())
+                    .filter(|_| projection)
+                    .filter(|ty| !matches!(self.inference.resolve(ty), Ty::Infer(_)))
+                    .cloned()
+            }) else {
                 continue;
             };
-            let actual = self.inference.resolve(&argument.ty);
+            let actual = self.inference.resolve(&argument);
             let owner = owner.as_ref();
             let mut matched = None;
             let mut ambiguous = false;
@@ -20348,6 +20369,24 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A crate's function or method named as a value where a std method
+        // Rawr runs takes a closure, as `message.map(canvas::Action::publish)`
+        // or `.map(canvas::Action::and_capture)`: the closure that calls it,
+        // which takes the types the method gives it (T327).
+        #[cfg(feature = "rust-import")]
+        if std::mem::take(&mut self.script_callable)
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let [item] = items.as_ref()
+            && item.imported_identity().is_some()
+            && matches!(
+                item.kind(),
+                crate::host::item::Kind::Function
+                    | crate::host::item::Kind::AssociatedFunction
+                    | crate::host::item::Kind::Method
+            )
+        {
+            return self.host_function_value(item.clone(), expression);
+        }
         #[cfg(feature = "rust-import")]
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)
             && items.len() == 1
@@ -32319,6 +32358,21 @@ impl<'a> Parser<'a> {
                 value.span = expression;
                 return Ok(Some(value));
             }
+            // An imported type's operator no binding has yet, as clock's
+            // `Radians / 12.0`: a miss the importer answers with the
+            // type's impl of the operator's trait.
+            #[cfg(feature = "rust-import")]
+            if proof.definition.identity().imported().is_some()
+                && self.models.host_items(&path).is_none()
+                && self.models.host.entry(&path).is_none()
+            {
+                let error = Error::UnknownMember {
+                    owner: proof.definition.path().into(),
+                    member: method.into(),
+                    reference: expression,
+                };
+                return Err(self.native_miss(true, error));
+            }
         }
         // A generic bounded by the trait (`T: Add<Output = T>`): through
         // its dispatcher, whose fallback is the builtin operator.
@@ -32743,6 +32797,27 @@ impl<'a> Parser<'a> {
                 .iter()
                 .any(|item| item.kind() == crate::host::item::Kind::Method)
         }) {
+            // An imported type compared with a number, as clock's
+            // `rotation < 180.0` of `Degrees`: a miss the importer answers
+            // with the type's `PartialOrd<f32>` or `PartialEq<f32>`.
+            #[cfg(feature = "rust-import")]
+            {
+                let mut other = self.inference.resolve(&rhs.ty);
+                while let Ty::Reference { target, .. } = other {
+                    other = self.inference.resolve(&target);
+                }
+                if proof.definition.identity().imported().is_some()
+                    && matches!(other, Ty::Int(_) | Ty::Float(_))
+                    && self.models.host.entry(&path).is_none()
+                {
+                    let error = Error::UnknownMember {
+                        owner: proof.definition.path().into(),
+                        member: method.into(),
+                        reference: span(lhs.span.start(), rhs.span.end()),
+                    };
+                    return Err(self.native_miss(true, error));
+                }
+            }
             return Ok(None);
         }
         if method == "eq" {
@@ -40288,6 +40363,7 @@ impl<'a> Parser<'a> {
             "unwrap_or_else" | "or_else" | "ok_or_else" => vec![hint(Vec::new())],
             _ => Vec::new(),
         };
+        self.script_callables = true;
         let (mut arguments, end) = self.parse_call_arguments("`Option` method arguments")?;
         self.closure_hints = Vec::new();
         self.builtin_enum_receiver(&mut value, None, &member, &arguments, member_span)?;
@@ -40767,6 +40843,7 @@ impl<'a> Parser<'a> {
             }
             _ => Vec::new(),
         };
+        self.script_callables = true;
         let (mut arguments, end) = self.parse_call_arguments("`Result` method arguments")?;
         self.closure_hints = Vec::new();
         self.builtin_enum_receiver(
@@ -44582,6 +44659,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(Vec<ParsedExpr>, Position), Error> {
         let mut expected = std::mem::take(&mut self.argument_hints).into_iter();
         let deferred = self.deferred_hints.take();
+        let script_callables = std::mem::take(&mut self.script_callables);
         if let Some(pending) = self.pending_arguments.take() {
             return Ok(pending);
         }
@@ -44616,7 +44694,9 @@ impl<'a> Parser<'a> {
             {
                 self.closure_hint = Some(inputs);
             }
+            self.script_callable = script_callables;
             let argument = self.parse_expr_expecting(expected.as_ref());
+            self.script_callable = false;
             self.closure_hint = None;
             self.closure_output = None;
             self.no_struct = outer;
@@ -46161,6 +46241,21 @@ impl<'a> Parser<'a> {
                 let through = format!("{}{}", binding.qualified, &owner[segments[0].0.len()..]);
                 if self.models.host.type_(&through).is_some() {
                     through.into()
+                } else if let Some(crate::host::Entry::TypeAlias(alias)) =
+                    self.models.host.entry(&through)
+                    && let Some(type_ref::Alias {
+                        target: Some(target),
+                        ..
+                    }) = type_ref::Alias::host(alias, &self.models.host, owner_span)
+                    && let type_ref::Type::Path(type_ref::Path {
+                        target: type_ref::Target::Host { definition, .. },
+                        ..
+                    }) = *target
+                {
+                    // A crate's alias of a crate type through the module,
+                    // as the_matrix's `canvas::Cache::with_group`: that
+                    // type's, as `Cache::with_group` is after `use` (T327).
+                    definition.path().as_str().into()
                 } else {
                     owner
                 }
