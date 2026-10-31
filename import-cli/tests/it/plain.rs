@@ -156,6 +156,122 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     );
 }
 
+#[test]
+fn a_concrete_blanket_application_keeps_its_trait_arguments() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("concrete-trait-arguments");
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    for (path, source) in [
+        (
+            "Cargo.toml",
+            "[workspace]\n[package]\nname='concrete-trait-arguments'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={path='a'}\nfacts-c={path='c'}\n",
+        ),
+        (
+            "b/Cargo.toml",
+            "[package]\nname='facts-b'\nversion='0.1.0'\nedition='2024'\n",
+        ),
+        (
+            "b/src/lib.rs",
+            "pub trait Base<U> { fn base(&self) -> U; }\npub trait LeftMark {}\npub trait RightMark {}\n",
+        ),
+        (
+            "a/Cargo.toml",
+            "[package]\nname='facts-a'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-b={path='../b'}\n",
+        ),
+        (
+            "a/src/lib.rs",
+            r#"use facts_b::{Base, LeftMark, RightMark};
+#[derive(Clone, Copy)] pub struct LeftOnly;
+#[derive(Clone, Copy)] pub struct RightOnly;
+#[derive(Clone, Copy)] pub struct Both;
+impl Base<i64> for LeftOnly { fn base(&self) -> i64 { 101 } }
+impl Base<i64> for RightOnly { fn base(&self) -> i64 { 202 } }
+impl Base<i64> for Both { fn base(&self) -> i64 { 303 } }
+impl LeftMark for LeftOnly {}
+impl RightMark for RightOnly {}
+impl LeftMark for Both {}
+impl RightMark for Both {}
+pub fn left() -> LeftOnly { LeftOnly }
+pub fn right() -> RightOnly { RightOnly }
+pub fn both() -> Both { Both }
+"#,
+        ),
+        (
+            "c/Cargo.toml",
+            "[package]\nname='facts-c'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-b={path='../b'}\n",
+        ),
+        (
+            "c/src/lib.rs",
+            r#"use facts_b::{Base, LeftMark, RightMark};
+pub trait Extension<U> { fn extension(&self) -> U; }
+impl<T, U> Extension<U> for T where T: Base<U> {
+    fn extension(&self) -> U { self.base() }
+}
+pub trait Left { fn choose(&self) -> i64; }
+impl<T: Base<i64> + LeftMark> Left for T { fn choose(&self) -> i64 { 11 } }
+pub trait Right { fn choose(&self) -> bool; }
+impl<T: Base<i64> + RightMark> Right for T { fn choose(&self) -> bool { true } }
+"#,
+        ),
+        (
+            "src/main.rs",
+            r#"// rawr
+use facts_a::{LeftOnly, RightOnly};
+use facts_c::{Extension, Left, Right};
+fn main() {
+    let scalar: i64 = facts_a::left().extension();
+    let left: i64 = facts_a::left().choose();
+    let right: bool = facts_a::right().choose();
+    Left::choose(&facts_a::left());
+    Right::choose(&facts_a::right());
+    println!("{scalar} {left} {right}");
+}
+"#,
+        ),
+    ] {
+        let destination = root.join(path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(destination, source).unwrap();
+    }
+    let valid = fs::read_to_string(root.join("src/main.rs")).unwrap();
+    // Keep the exact extraction, facade and runtime caches through repeated
+    // valid -> ambiguous -> valid transitions, including a repeated test run.
+    for _ in 0..2 {
+        fs::write(root.join("src/main.rs"), &valid).unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), "101 11 true\n");
+
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nuse facts_a::Both;\nuse facts_c::{Left, Right};\nfn main() { let output: i64 = facts_a::both().choose(); println!(\"{output}\"); }\n",
+        )
+        .unwrap();
+        let ambiguous = rawr_import_within(
+            &root,
+            &["check"],
+            &home,
+            std::time::Duration::from_secs(120),
+        );
+        assert!(!ambiguous.status.success());
+        assert!(text(&ambiguous.stderr).contains("error[E0034]"));
+        assert!(!text(&ambiguous.stderr).contains("symbolic surface identity"));
+    }
+    fs::write(root.join("src/main.rs"), &valid).unwrap();
+    let restored = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+    assert!(
+        restored.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&restored.stdout),
+        text(&restored.stderr)
+    );
+    assert_eq!(text(&restored.stdout), "101 11 true\n");
+}
+
 /// A crate's bindings are shared per machine: a second project with the
 /// same program reads them from rawr's home, with no nightly build and no
 /// probe, and its next run takes the resolution back with no Cargo. semver

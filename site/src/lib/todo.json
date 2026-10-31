@@ -1,12 +1,35 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-29",
-  "version": "0.3.18",
+  "version": "0.3.21",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.21",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"The playground bot keeps reporting its running image after becoming ready for requests; readiness checks no longer reset its boot evidence. Real restarts still require a fresh report.","issues":[375]}
+        ]
+      },
+      {
+        "version": "0.3.20",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"Script implementations of native traits preserve Result types in callback parameters and return values, so callbacks returning Ok or Err compile with their declared Rust signatures.","issues":[371]},
+          {"text":"Deployment waits read the current container application directly, avoiding false rollout timeouts when Cloudflare’s account-wide list still shows the previous image.","issues":[374]}
+        ]
+      },
+      {
+        "version": "0.3.19",
+        "date": "2026-10-29",
+        "entries": [
+          {"text":"Provided trait methods use the concrete types from their implementation, so generic trait arguments no longer leak into generated callable signatures.","issues":[369],"refs":[271,281]},
+          {"text":"Valid imported calls keep working after an ambiguous call and on repeated cached runs. Unrelated methods with the same name are deferred until used instead of rejecting the whole imported surface.","issues":[370],"refs":[271,372]}
+        ]
+      },
       {
         "version": "0.3.18",
         "date": "2026-10-29",
@@ -701,7 +724,13 @@
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
     {"issue":367,"title":"Reuse verified crate extraction tables across projects","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":368,"title":"Record hot-reload measurements for every release","state":"closed","category":"Health","release":"0.3.18"},
-    {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"open","category":"No glue (D593)"}
+    {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)","release":"0.3.19"},
+    {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
+    {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed","category":"No glue (D593)","release":"0.3.20"},
+    {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
+    {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"},
+    {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
+    {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"}
   ],
   "groups": [
     {
@@ -899,10 +928,13 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Verified extraction sharing shipped; complete classification and facade reuse remain. #367, #271",
+          "note": "Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
-            {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"}
+            {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
+            {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
+            {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
+            {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"}
           ]
         },
         {
@@ -1060,6 +1092,17 @@
             {"number":360,"title":"Methods of a type only an alias names","state":"closed"},
             {"number":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed"}
           ]
+        },
+        {
+          "id": "native-callback-mutation",
+          "name": "Native callback mutations",
+          "start": 47,
+          "size": 4,
+          "state": "now",
+          "note": "Native Vec writes are lost; borrowing and element-place implementation underway. #365",
+          "issues": [
+            {"number":365,"title":"Native mutable vectors lose script callback changes","state":"open"}
+          ]
         }
       ]
     },
@@ -1123,6 +1166,17 @@
             {"number":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open"},
             {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
             {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
+          ]
+        },
+        {
+          "id": "callback-return-types",
+          "name": "Callback return types",
+          "start": 47,
+          "size": 2,
+          "state": "done",
+          "note": "Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371",
+          "issues": [
+            {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed"}
           ]
         },
         {

@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 58;
+const CLASSIFIER_VERSION: u32 = 59;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4740,6 +4740,14 @@ impl<P: api::Phase> Context<'_, P> {
         else {
             return Err(Error::Cardinality);
         };
+        // A concrete implementation still fixes the trait's parameters,
+        // even when the implementation itself declares none.
+        let provided = provided_signature(implementation, definition, signature, generics)?;
+        let (signature, generics) = provided
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         match self.function(signature, generics) {
             Ok(plan) => {
                 self.retain_inline_representability()?;
@@ -10069,6 +10077,96 @@ mod tests {
             context.classify_associated(&own, definition, &[], definition.id()),
             Err(super::Error::Cardinality)
         ));
+    }
+
+    #[test]
+    fn a_concrete_impl_substitutes_the_traits_arguments_in_its_method() {
+        use crate::api::{identity, model};
+
+        let graph = crate::test_fixture::classification_implementation_outcomes();
+        let limits = crate::cargo::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let target = graph.definitions().next().unwrap().id();
+        let trait_id = identity::Definition::new(
+            target.unit().clone(),
+            "d0".into(),
+            identity::Namespace::Type,
+        );
+        let method_id = identity::Definition::new(
+            target.unit().clone(),
+            "d1".into(),
+            identity::Namespace::Value,
+        );
+        let self_type = model::Type::Definition {
+            id: target.clone(),
+            arguments: Box::default(),
+        };
+        let parameter = model::Type::Parameter {
+            owner: trait_id.clone(),
+            index: 1,
+        };
+        let definition = model::Definition::new(
+            method_id.clone(),
+            Box::from([Box::<str>::from("fixture"), Box::<str>::from("exchange")]),
+            model::Owner::Definition(trait_id.clone()),
+            model::Visibility::Public,
+            model::Kind::Function {
+                signature: model::Signature::new(
+                    model::Safety::Safe,
+                    false,
+                    false,
+                    "\"Rust\"".into(),
+                    false,
+                    Box::default(),
+                    model::Receiver::Value {
+                        ty: self_type.clone(),
+                    },
+                    Box::from([parameter.clone()]),
+                    parameter,
+                ),
+                generics: rejection_generics(),
+            },
+            rejection_span(),
+            model::Origin::Source,
+        );
+        let implementation = model::Implementation::new(
+            "concrete-trait-application".into(),
+            graph.implementations().next().unwrap().id().clone(),
+            Box::from([target.clone()]),
+            model::Trait::Trait {
+                id: trait_id,
+                arguments: Box::from([
+                    model::Argument::Type(self_type.clone()),
+                    model::Argument::Type(model::Type::Primitive("i64".into())),
+                ]),
+            },
+            self_type,
+            model::Safety::Safe,
+            model::Polarity::Positive,
+            false,
+            false,
+            rejection_generics(),
+            Box::from([method_id]),
+            rejection_span(),
+            model::Origin::Source,
+        );
+
+        let evidence = context
+            .classify_default_method(&implementation, &definition)
+            .expect("the concrete trait application classifies");
+        let super::OutcomeEvidence::Inline(plan) = evidence else {
+            panic!("a trait application retains its substituted signature");
+        };
+        let Representability::Method(method) = plan.as_ref() else {
+            panic!("the concrete receiver method remains callable: {plan:?}");
+        };
+        let integer = super::representability::convert::Type::Builtin(
+            super::representability::convert::Builtin::I64,
+        );
+        assert!(method.signature().parameters().is_empty());
+        assert_eq!(method.signature().inputs(), std::slice::from_ref(&integer));
+        assert_eq!(method.signature().output(), &integer);
     }
 
     /// A trait's impl for another type that names this one, as crossterm's

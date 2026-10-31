@@ -585,9 +585,10 @@ fn install_decoded(
             return Err(Error::ProfileOrder);
         };
         let facade = pending.remove(index);
-        let definition = build(facade, profile, &definitions, &mut shapes, allocation)?;
+        let (definition, families) = build(facade, profile, &definitions, &mut shapes, allocation)?;
         retain_registry_definition(&definition, allocation)?;
         engine.register_host_facade(definition.clone())?;
+        engine.host_registry.defer_imported(families)?;
         definitions.push(definition);
     }
     Ok(definitions.into_boxed_slice())
@@ -916,7 +917,7 @@ fn build(
     installed: &[host::facade::Definition],
     shapes: &mut Vec<([u8; 32], crate::Shared<host::type_def::Shape>)>,
     allocation: &mut account::Attempt,
-) -> Result<host::facade::Definition, Error> {
+) -> Result<(host::facade::Definition, Vec<host::family::Pending>), Error> {
     let abi = host::facade::Abi::new(1)?;
     let mut builder = host::facade::Builder::new_imported(facade.root(), abi, allocation)?;
     let compatibility = profile.compatibility(facade);
@@ -1079,7 +1080,7 @@ fn build(
             let definition = item_definition(facade, item, profile, installed)
                 .map_err(|source| entry_error(facade.root(), item.path(), source))?;
             builder
-                .item(definition)
+                .imported_item(definition)
                 .map_err(|source| entry_error(facade.root(), item.path(), source.into()))?;
         }
     }
