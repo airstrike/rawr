@@ -2126,15 +2126,22 @@ struct Program {
     ast: Option<__rawr_internal::AST>,
     candidate: Option<__rawr_internal::reload::Candidate>,
     application_contract: __rawr_profile::ApplicationContract,
-    _facades: Box<[__rawr_internal::host::facade::Definition]>,
-    observation: __rawr_internal::package::import::runner::account::Observation,
+    /// Shared by every generation compiled against the same engine.
+    _facades: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    /// The account this program's own native reconstruction observed; a
+    /// resident generation compiled against its predecessor's engine
+    /// reports that engine's account instead.
+    observation: Option<__rawr_internal::package::import::runner::account::Observation>,
     /// Whether `main` is Rawr code, which runs on the thread that owns the
     /// program while the protocol goes on beside it.
     marked_main: bool,
 }
 
 fn program_account(program: &Option<Program>) -> Option<__rawr_internal::package::import::runner::account::Snapshot> {
-    program.as_ref().and_then(|program| program.observation.snapshot())
+    program.as_ref().and_then(|program| match &program.observation {
+        Some(observation) => observation.snapshot(),
+        None => program.engine.imported_native_snapshot(),
+    })
 }
 
 fn observed_account(observation: &Option<__rawr_internal::package::import::runner::account::Observation>) -> Option<__rawr_internal::package::import::runner::account::Snapshot> {
@@ -2142,7 +2149,7 @@ fn observed_account(observation: &Option<__rawr_internal::package::import::runne
 }
 
 fn retire_program(program: Option<Program>) -> Option<__rawr_internal::package::import::runner::account::Observation> {
-    program.map(|program| program.observation)
+    program.and_then(|program| program.observation)
 }
 
 fn account_payload(
@@ -2316,7 +2323,8 @@ fn compile_program(
     progress(5)?;
     let observation = observation.take().ok_or_else(|| std::io::Error::other("native observation unavailable"))?;
     let marked_main = snapshot.marked_root();
-    Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract, _facades: facades, observation, marked_main }))
+    Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract,
+        _facades: facades.into(), observation: Some(observation), marked_main }))
 }
 
 fn compile_live(
@@ -2713,6 +2721,15 @@ mod __rawr_profile {
     ) -> std::io::Result<Option<__rawr_internal::reload::Candidate>> {
         Ok(None)
     }
+    /// Compile the next generation once against the running program's
+    /// engine and its retained native surface (D355).
+    pub fn compile_resident(
+        engine: &__rawr_internal::Engine,
+        snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        _contract: &ApplicationContract,
+    ) -> Result<__rawr_internal::package::import::resident::Outcome, __rawr_internal::package::import::resident::Error> {
+        engine.compile_package_snapshot_resident_plain(snapshot)
+    }
     pub fn bind_runtime(
         _definitions: &[__rawr_internal::host::facade::Definition],
         _builders: &mut [__rawr_internal::host::runtime::Builder],
@@ -2830,6 +2847,183 @@ fn exit(status: i32) -> ! {
 struct Live {
     engine: __rawr_internal::Shared<__rawr_internal::Engine>,
     generation: std::sync::Arc<__rawr_internal::reload::Generation>,
+    facades: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    contract: __rawr_profile::ApplicationContract,
+}
+
+/// The parent's early requests for a next generation (HotBegin), each
+/// answered at most once and in order.
+#[derive(Default)]
+struct Hot {
+    begun: Option<Begun>,
+    sequence: u64,
+}
+
+/// One early request: its identity, and whether the parent sent the
+/// inputs it watches for it. The parent's own watcher revokes the request;
+/// this runner only correlates it.
+struct Begun {
+    identity: [u8; 56],
+    observed: bool,
+}
+
+impl Hot {
+    /// Whether a Compile with `nonce` may answer the current request: the
+    /// one begun with it, or none begun at all (an owner that did not
+    /// start the program sends none).
+    fn admits(&self, nonce: &[u8]) -> bool {
+        self.begun.as_ref().is_none_or(|begun| begun.identity[32..48] == *nonce)
+    }
+}
+
+/// What a resident compilation compiles against: the running program's
+/// engine and native surface, and the generation a running marked `main`
+/// runs, which the next one must be able to replace (D553.6).
+struct Resident<'a> {
+    engine: &'a __rawr_internal::Shared<__rawr_internal::Engine>,
+    facades: &'a std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    contract: &'a __rawr_profile::ApplicationContract,
+    running: Option<&'a std::sync::Arc<__rawr_internal::reload::Generation>>,
+}
+
+enum ResidentResult {
+    Compiled(Program, Option<[u8; 32]>, [u8; 32], [u8; 32]),
+    Miss,
+    Diagnostic(String),
+    Resource(String),
+}
+
+/// Compile the next generation once, against the running engine (D355).
+/// A native requirement its surface lacks, or a generation the running
+/// `main` can't take, needs the parent's full preparation.
+fn compile_resident(
+    resident: &Resident<'_>,
+    snapshot: &__rawr_internal::package::snapshot::Snapshot,
+) -> std::io::Result<ResidentResult> {
+    use __rawr_internal::package::import::resident::{Error, Outcome};
+    let compiled = match __rawr_profile::compile_resident(resident.engine, snapshot, resident.contract) {
+        Ok(Outcome::Compiled(compiled)) => compiled,
+        Ok(Outcome::NeedsPreparation) => return Ok(ResidentResult::Miss),
+        Err(Error::Source(error)) => return Ok(ResidentResult::Diagnostic(error.to_string())),
+        Err(Error::Resource(error)) => return Ok(ResidentResult::Resource(error.to_string())),
+        Err(error) => return Err(std::io::Error::other(error.to_string())),
+    };
+    let (compiled, ast) = compiled.with_top_level();
+    let (candidate, semantic, carrier, coverage) = compiled.into_parts();
+    if let Some(running) = resident.running
+        && __rawr_internal::island::refusal(running, &candidate).is_some()
+    {
+        return Ok(ResidentResult::Miss);
+    }
+    let program = Program {
+        engine: resident.engine.clone(),
+        ast: Some(ast),
+        candidate: Some(candidate),
+        application_contract: resident.contract.clone(),
+        _facades: resident.facades.clone(),
+        observation: None,
+        marked_main: snapshot.marked_root(),
+    };
+    Ok(ResidentResult::Compiled(program, semantic.map(|semantic| *semantic.as_bytes()), carrier, coverage))
+}
+
+fn resident_response(
+    stream: &mut std::os::unix::net::UnixStream,
+    header: &[u8],
+    tag: u8,
+    diagnostic: &str,
+) -> std::io::Result<()> {
+    let length = header.len().checked_add(diagnostic.len())
+        .filter(|length| *length <= 8 * 1024 * 1024 - 5)
+        .ok_or_else(|| std::io::Error::other("resident response frame limit"))?;
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(length)
+        .map_err(|_| std::io::Error::other("resident response allocation"))?;
+    payload.extend_from_slice(header);
+    payload.extend_from_slice(diagnostic.as_bytes());
+    send_frame(stream, tag, &payload)
+}
+
+/// Serve the parent's early request, its cancellation, its observation
+/// and its one resident compilation. `false` when `tag` is none of them.
+/// Without `resident`, no program runs here to compile against, and the
+/// compilation needs full preparation.
+fn serve_hot(
+    stream: &mut std::os::unix::net::UnixStream,
+    tag: u8,
+    payload: &[u8],
+    key: &[u8; 32],
+    hot: &mut Hot,
+    pending: &mut Option<PendingProgram>,
+    resident: Option<Resident<'_>>,
+) -> std::io::Result<bool> {
+    let accounts = || [resident.as_ref().and_then(|resident| resident.engine.imported_native_snapshot()), None];
+    match tag {
+        29 if pending.is_none() && hot.begun.is_none() && payload.len() == 56 && payload[..32] == *key => {
+            let sequence = u64::from_le_bytes(payload[48..56].try_into()
+                .map_err(|_| std::io::Error::other("hot sequence"))?);
+            if sequence <= hot.sequence {
+                return Err(std::io::Error::other("replayed hot begin"));
+            }
+            let identity = payload.try_into().map_err(|_| std::io::Error::other("hot begin identity"))?;
+            hot.sequence = sequence;
+            hot.begun = Some(Begun { identity, observed: false });
+            send_frame(stream, 30, payload)?;
+        }
+        31 if pending.is_none() && hot.begun.as_ref().is_some_and(|begun| payload == begun.identity) => {
+            hot.begun = None;
+            report_accounts(stream, tag, payload, accounts());
+            send_frame(stream, 32, payload)?;
+        }
+        33 if pending.is_none() && payload.len() > 56
+            && hot.begun.as_ref().is_some_and(|begun| !begun.observed && payload[..56] == begun.identity) => {
+            if let Some(begun) = hot.begun.as_mut() {
+                begun.observed = true;
+            }
+            send_frame(stream, 34, &payload[..56])?;
+        }
+        29 | 31 | 33 => {
+            report_accounts(stream, tag, payload, accounts());
+            return Err(std::io::Error::other("invalid hot preparation transition"));
+        }
+        37 if pending.is_none() && hot.begun.as_ref().is_some_and(|begun| begun.observed) => {
+            let begun = hot.begun.take().ok_or_else(|| std::io::Error::other("missing original resident request"))?;
+            let decoded = __rawr_internal::package::import::resident::wire::Attempt::decode(payload, &begun.identity)
+                .map_err(|error| std::io::Error::other(error.to_string()));
+            let (attempt, input) = account_result(decoded, stream, tag, payload, accounts())?;
+            let snapshot = account_result(decode_snapshot(input), stream, tag, payload, accounts())?;
+            let nonce: [u8; 16] = begun.identity[32..48].try_into()
+                .map_err(|_| std::io::Error::other("resident transition nonce"))?;
+            send_progress(stream, key, &nonce, 3, 1, 1)?;
+            let output = match &resident {
+                Some(resident) => compile_resident(resident, &snapshot),
+                None => Ok(ResidentResult::Miss),
+            };
+            let output = account_result(output, stream, tag, payload, accounts())?;
+            send_progress(stream, key, &nonce, 3, 2, 4)?;
+            let (response, diagnostic) = match output {
+                ResidentResult::Compiled(program, semantic, carrier, coverage) => {
+                    let compiled = attempt.compiled(carrier, coverage, semantic);
+                    *pending = Some(PendingProgram { key: compiled.key(), nonce, program: Some(program) });
+                    report_accounts(stream, tag, payload, accounts());
+                    send_frame(stream, 38, compiled.encode())?;
+                    return Ok(true);
+                }
+                ResidentResult::Miss => (39, String::new()),
+                ResidentResult::Diagnostic(reason) => (40, reason),
+                ResidentResult::Resource(reason) => (42, reason),
+            };
+            // Every other answer consumes the request it answers.
+            report_accounts(stream, tag, payload, accounts());
+            resident_response(stream, attempt.response_header(), response, &diagnostic)?;
+        }
+        37 => {
+            report_accounts(stream, tag, payload, accounts());
+            return Err(std::io::Error::other("invalid resident preparation transition"));
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 /// A generation the owner thread admitted, for a `rawr mcp` that
@@ -2859,9 +3053,19 @@ fn serve_entry(
     mut live: Option<Live>,
 ) {
     let mut pending: Option<PendingProgram> = None;
+    let mut hot = Hot::default();
     let mut serve = || -> std::io::Result<()> {
         loop {
             let (tag, payload) = next_frame(&received)?;
+            let resident = live.as_ref().map(|running| Resident {
+                engine: &running.engine,
+                facades: &running.facades,
+                contract: &running.contract,
+                running: Some(&running.generation),
+            });
+            if serve_hot(&mut stream, tag, &payload, &key, &mut hot, &mut pending, resident)? {
+                continue;
+            }
             match tag {
                 43 | 46 | 48 if payload.len() >= 32 && payload[..32] == key => {
                     let mut response = [0_u8; 33];
@@ -2871,7 +3075,7 @@ fn serve_entry(
                 35 | 11 if payload.len() >= 32 && payload[..32] == key => {
                     send_frame(&mut stream, if tag == 35 { 36 } else { 11 }, &key)?;
                 }
-                9 if live.is_some() && pending.is_none() && payload.len() >= 112 => {
+                9 if live.is_some() && pending.is_none() && payload.len() >= 112 && hot.admits(&payload[96..112]) => {
                     let Some(running) = live.as_ref() else { unreachable!("matched above") };
                     let next: [u8; 32] = payload[..32].try_into().map_err(|_| std::io::Error::other("generation key"))?;
                     let nonce: [u8; 16] = payload[96..112].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
@@ -2902,6 +3106,7 @@ fn serve_entry(
                         continue;
                     }
                     pending = Some(PendingProgram { key: next, nonce, program: candidate });
+                    hot.begun = None;
                     send_frame(&mut stream, 4, &response)?;
                 }
                 25 | 26 if live.is_some() && payload.len() == 48 => {
@@ -2924,6 +3129,7 @@ fn serve_entry(
                         if let (Some(running), Some(next)) = (live.as_mut(), program.candidate.as_ref()) {
                             running.engine = program.engine.clone();
                             running.generation = next.generation().clone();
+                            running.facades = program._facades.clone();
                         }
                         // The owner thread admits it at its next call from
                         // native code; a newer save's replaces it first.
@@ -2992,6 +3198,7 @@ fn run_protocol(
     let mut pending: Option<PendingProgram> = None;
     let mut prepared = false;
     let mut admitted = false;
+    let mut hot = Hot::default();
     let mut first = Some(first);
     let (events, received) = std::sync::mpsc::channel::<__RawrProtocolEvent>();
     let mut reader = stream.try_clone()?;
@@ -3008,6 +3215,17 @@ fn run_protocol(
             Some(frame) => frame,
             None => next_frame(&received)?,
         };
+        if admitted {
+            let resident = program.as_ref().map(|program| Resident {
+                engine: &program.engine,
+                facades: &program._facades,
+                contract: &program.application_contract,
+                running: None,
+            });
+            if serve_hot(&mut stream, tag, &payload, &key, &mut hot, &mut pending, resident)? {
+                continue;
+            }
+        }
         match tag {
             3 if !prepared && payload.len() >= 48 && payload[..32] == key => {
                 let nonce: [u8; 16] = payload[32..48].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
@@ -3051,7 +3269,7 @@ fn run_protocol(
                 admitted = true;
                 send_frame(&mut stream, 8, &payload)?;
             }
-            9 if admitted && pending.is_none() && payload.len() >= 112 => {
+            9 if admitted && pending.is_none() && payload.len() >= 112 && hot.admits(&payload[96..112]) => {
                 let next: [u8; 32] = payload[..32].try_into().map_err(|_| std::io::Error::other("generation key"))?;
                 let nonce: [u8; 16] = payload[96..112].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
                 if payload[32..64] != COMPILED_SURFACE {
@@ -3076,6 +3294,7 @@ fn run_protocol(
                 response.extend_from_slice(&next);
                 response.extend_from_slice(&nonce);
                 pending = Some(PendingProgram { key: next, nonce, program: candidate });
+                hot.begun = None;
                 report_accounts(&mut stream, tag, &payload,
                     [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 send_frame(&mut stream, 4, &response)?;
@@ -3174,6 +3393,8 @@ fn run_protocol(
                     let live = running.candidate.as_ref().map(|candidate| Live {
                         engine: running.engine.clone(),
                         generation: candidate.generation().clone(),
+                        facades: running._facades.clone(),
+                        contract: running.application_contract.clone(),
                     });
                     std::thread::Builder::new()
                         .name("rawr protocol".into())
@@ -14133,6 +14354,66 @@ mod tests {
         }
         assert!(!prepare.contains("begin_install()"));
         assert!(!prepare.contains("COMPILED_SEMANTIC"));
+    }
+
+    #[test]
+    fn plain_runner_compiles_once_against_its_running_engine() {
+        let source = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
+        let compile = source
+            .split_once("fn compile_resident(")
+            .expect("resident compiler")
+            .1
+            .split_once("fn resident_response(")
+            .expect("resident response")
+            .0;
+        assert_eq!(
+            compile.matches("__rawr_profile::compile_resident(").count(),
+            1
+        );
+        // No second compilation, and no new engine: the candidate and its
+        // top level come from the one resident compilation.
+        assert!(!compile.contains("compile_program("));
+        assert!(!compile.contains("reconstruct_imported_native"));
+        assert!(compile.contains("compiled.with_top_level()"));
+        assert!(compile.contains("engine: resident.engine.clone()"));
+        // A generation the running `main` can't take goes to full
+        // preparation, which refuses it with its reason.
+        assert!(compile.contains("island::refusal(running, &candidate)"));
+        let serve = source
+            .split_once("fn serve_hot(")
+            .expect("resident transitions")
+            .1
+            .split_once("_ => return Ok(false)")
+            .expect("other transitions")
+            .0;
+        let resident = serve
+            .split_once("37 if pending.is_none()")
+            .expect("resident request")
+            .1
+            .split_once("37 =>")
+            .expect("invalid resident transition")
+            .0;
+        for operation in [
+            "hot.begun.take()",
+            "wire::Attempt::decode(payload, &begun.identity)",
+            "account_result(decode_snapshot(input)",
+            "attempt.compiled(carrier, coverage, semantic)",
+            "send_frame(stream, 38, compiled.encode())",
+            "attempt.response_header()",
+        ] {
+            assert!(resident.contains(operation), "missing {operation}");
+        }
+        assert!(serve.contains("replayed hot begin"));
+        // Both protocol loops serve it: a native `main`'s and a marked one's.
+        assert_eq!(
+            source
+                .matches("if serve_hot(&mut stream, tag, &payload")
+                .count(),
+            2
+        );
+        let neutral =
+            std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).expect("neutral profile source is UTF-8");
+        assert!(neutral.contains("engine.compile_package_snapshot_resident_plain(snapshot)"));
     }
 
     #[test]

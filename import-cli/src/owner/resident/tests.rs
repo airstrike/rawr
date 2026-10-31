@@ -72,7 +72,9 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
 
     let fallback_inputs = match continuation {
         Attempt::Prepare(staged) => staged,
-        Attempt::Settled => panic!("native miss must continue full preparation"),
+        Attempt::Settled | Attempt::Swapped => {
+            panic!("native miss must continue full preparation")
+        }
     };
     let preparing = adapter.start(Instant::now()).unwrap().complete(());
     adapter.inject_modify(&incoming_source);

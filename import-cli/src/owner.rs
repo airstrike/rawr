@@ -340,6 +340,18 @@ fn session(
                 &source,
             ) {
                 Ok(resident::Attempt::Settled) => continue,
+                // A marked `main`'s runner admits the generation at its
+                // next call from native code, and says `swapped` then
+                // (D553.3).
+                Ok(resident::Attempt::Swapped) if marked => {
+                    swapped_marked = true;
+                    rawr_cli::events::queued();
+                    continue;
+                }
+                Ok(resident::Attempt::Swapped) => {
+                    rawr_cli::events::swapped();
+                    continue;
+                }
                 Ok(resident::Attempt::Prepare(staged)) => staged,
                 Err(report) => {
                     settle_failure(&mut lane, &adapter, report)?;

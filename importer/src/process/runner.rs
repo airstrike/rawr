@@ -917,7 +917,12 @@ impl<B> Candidate<Admitted, B> {
             previous: inner.key,
             nonce: transition_nonce()?,
             sequence,
-            live: inner.started && inner.manifest.profile.has_generated_projections(),
+            // A lifecycle profile's runner and the plain runner serve the
+            // early request and its resident compilation (D355); a
+            // projection-only profile's runner does not.
+            live: inner.started
+                && (inner.manifest.profile.owns_product_lifecycle()
+                    || !inner.manifest.profile.has_generated_projections()),
         };
         if started.live {
             let identity = started.identity();
