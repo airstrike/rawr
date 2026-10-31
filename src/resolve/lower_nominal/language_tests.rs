@@ -11538,3 +11538,48 @@ main();
          [[0, 0, 9], [0, 0]] 1\n"
     );
 }
+
+/// `T::method(&t)` names a method of a trait bounding `T`, as
+/// `<T as Trait>::method(&t)` does (T376): `&self` and `&mut self`
+/// methods, and the path as a function value.
+#[test]
+fn language_generic_parameter_paths_call_bound_methods() {
+    let printed = printed(
+        r#"
+trait Named {
+    fn name(&self) -> String;
+    fn bump(&mut self);
+    fn twice(&self, n: i64) -> i64 { n * 2 }
+}
+struct A(i64);
+impl Named for A {
+    fn name(&self) -> String { format!("A{}", self.0) }
+    fn bump(&mut self) { self.0 += 1; }
+}
+fn all<T: Named>(mut items: Vec<T>) -> Vec<String> {
+    for item in items.iter_mut() {
+        T::bump(item);
+    }
+    let mut first = items.remove(0);
+    T::bump(&mut first);
+    let mut names: Vec<String> = items.iter().map(T::name).collect();
+    names.push(T::name(&first));
+    names.push(format!("{} {}", <T as Named>::name(&first), T::twice(&first, 4)));
+    names
+}
+fn main() {
+    println!("{:?}", all(vec![A(1), A(2)]));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "[\"A3\", \"A3\", \"A3 8\"]\n");
+    let error = rejected(
+        r#"
+trait Named { fn name(&self) -> String; }
+fn show<T: Named>(t: T) -> String { T::nope(&t) }
+0
+"#,
+    );
+    assert!(error.contains("nope"), "{error}");
+}

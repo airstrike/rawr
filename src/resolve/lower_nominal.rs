@@ -38226,8 +38226,23 @@ impl<'a> Parser<'a> {
             && !self.bindings.contains_key(name.as_str())
         {
             self.next();
-            let (member, member_span) = self.expect_member_name()?;
             let param = Ty::Param(name.clone());
+            // `T::name(&t)`: a method of a trait bounding `T`, called as
+            // `<T as Trait>::name(&t)` is (T376).
+            if let Some((Token::Identifier(member), position)) = self.input.clone().next()
+                && let Some((trait_name, function)) =
+                    self.generic_trait_function(&name, &member, point_span(position))?
+                && function.receiver.is_some()
+            {
+                return self.parse_trait_path_call(
+                    Some(param),
+                    trait_name,
+                    name_span,
+                    None,
+                    name_span.start(),
+                );
+            }
+            let (member, member_span) = self.expect_member_name()?;
             // `T::new(..)`: a function without `self` of a trait bounding
             // `T`, run for the type its witness names.
             let function = self
