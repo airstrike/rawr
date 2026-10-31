@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 24;
+const SCHEMA: u32 = 25;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -765,8 +765,12 @@ impl Type {
                 identity,
                 arguments,
             } => {
+                // A boxed script closure, as `Map<Self, F, Message>` from
+                // iced's `Widget::map` holds, is declared as the demand's
+                // facade declares it (T417).
                 (declared.contains(identity)
-                    || crate::surface::identity::Definition::is_projected(identity))
+                    || crate::surface::identity::Definition::is_projected(identity)
+                    || *identity == *crate::surface::identity::Definition::callable().as_bytes())
                     && arguments.iter().all(|ty| ty.declared(declared))
             }
             Self::FunctionItem { input, output }

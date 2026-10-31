@@ -584,35 +584,18 @@ fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
 /// iced's bezier_tool and game_of_life: `.map(Message::Curve)` on a canvas
 /// whose program sends its own messages. The crate's `map` gives `Map<Self,
 /// F, Message>`, naming the closure's type, and the runner writes the
-/// closure as `Box<dyn Fn(Curve) -> Message>` (T417). The check compiles
-/// the runner; running it still misses `Canvas::map` in the runner's own
-/// facade.
+/// closure as `Box<dyn Fn(Curve) -> Message>` (T417). The runner's own
+/// bindings declare `map` as the check's do (T423). The output is `cargo
+/// run`'s.
 #[test]
-fn a_crate_method_whose_output_names_its_closure_type_checks() {
-    let root = root("crossing-mapped");
-    fs::copy(
-        root.join("variants").join("mapped.rs"),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
-    let checked = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("check")
-        .arg(&root)
-        .env(
-            "RAWR_HOME",
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home"),
-        )
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
-        .output()
-        .unwrap();
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&checked.stdout),
-        String::from_utf8_lossy(&checked.stderr)
+fn a_crate_method_whose_output_names_its_closure_type_runs() {
+    let (rawr, cargo) = both_printed("crossing-mapped", "mapped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Curve(Drawn(\"Increment\"))")
+            && rawr.contains("last view pad 0 map canvas[primary curves 4#1]"),
+        "{rawr}"
     );
-    assert!(checked.status.success(), "{output}");
 }
 
 /// iced's pick_list: `column!` boxes a string literal through the crate's
