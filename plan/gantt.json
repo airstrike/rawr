@@ -100,8 +100,8 @@
       "open": true,
       "rows": [
         {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
-        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
-        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
+        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"now","note":"Tokio runs; the image stage and iced frames remain","issues":[434,436,465]},
+        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]}
       ]
     },
     {
@@ -110,8 +110,8 @@
       "subtitle": "The last step",
       "open": true,
       "rows": [
-        {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"next","note":"","issues":[203]},
-        {"id":"delete-rawr-iced","name":"Delete rawr-iced","start":65,"size":1,"state":"next","note":"A no-op by then","issues":[169,306]}
+        {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"done","note":"Every iced program runs on generated bindings","issues":[203,430],"milestone":"0.3"},
+        {"id":"delete-rawr-iced","name":"Delete rawr-iced","start":65,"size":1,"state":"done","note":"Deleted by cutover, not attrition","issues":[169,306,430],"milestone":"0.3"}
       ]
     }
   ]

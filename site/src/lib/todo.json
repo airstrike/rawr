@@ -665,7 +665,7 @@
     {"issue":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"open","category":"Borrow checker (D572)"},
     {"issue":167,"title":"Changing a struct field through a binding (`row.list.push(9)`) copies the field and stores it…","state":"closed","category":"Borrow checker (D572)","release":"0.2.6"},
     {"issue":168,"title":"An or-pattern whose alternatives use unannotated integers and `None` is refused by type inference","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
-    {"issue":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"open","category":"rawr-iced (D586)"},
+    {"issue":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"closed","category":"rawr-iced (D586)"},
     {"issue":170,"title":"D584's own-signature check reads a parameter with several lifetimes as one (`Borrows::Several`)…","state":"open","category":"Borrow checker (D572)"},
     {"issue":171,"title":"A method's `self` isn't a recorded local, so `self.x` returned or `self.y = y` stored inside a…","state":"open","category":"Borrow checker (D572)"},
     {"issue":172,"title":"A struct that declares lifetime bounds (`'b: 'a`, `T: 'a`) has its fields treated as holding all…","state":"open","category":"Borrow checker (D572)"},
@@ -699,7 +699,7 @@
     {"issue":200,"title":"Inventory: for every upstream iced example and every example in rawr's `examples/`, run it…","state":"closed","category":"No glue (D593)"},
     {"issue":201,"title":"Run in place in iced's own workspace, every marked iced example stops at \"dependency identity is…","state":"open","category":"No glue (D593)"},
     {"issue":202,"title":"Every running iced example differs from `cargo run`: the window title is \"Rawr application\"…","state":"open","category":"No glue (D593)"},
-    {"issue":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"open","category":"No glue (D593)"},
+    {"issue":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"closed","category":"No glue (D593)"},
     {"issue":204,"title":"The importer can't bind: changelog's `Changelog::list()` (an async fn in a native module, with…","state":"closed","category":"No glue (D593)","release":"0.2.2"},
     {"issue":205,"title":"serde derives on script types (pokedex, todos)","state":"open","category":"No glue (D593)"},
     {"issue":206,"title":"The facade shadows or lacks an item: gallery's `Image::border_radius` is hidden by the facade's…","state":"open","category":"No glue (D593)"},
@@ -802,7 +802,7 @@
     {"issue":303,"title":"No `rawr cache clean` command reaches the shared runtime","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":305,"title":"Seen once, not reproduced: the import-cli script test's second script failed with \"invalid…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.7"},
     {"issue":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":309,"title":"No-glue: member lookups on crate types","state":"closed","category":"Shared dependency cache (D607)"},
@@ -1464,8 +1464,30 @@
           ],
           "milestone": "0.3"
         },
-        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
-        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
+        {
+          "id": "bot-prebuilt-bindings",
+          "name": "Prebuilt bindings for the bot",
+          "start": 53,
+          "size": 5,
+          "state": "now",
+          "note": "Tokio runs; the image stage and iced frames remain",
+          "issues": [
+            {"number":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open"},
+            {"number":436,"title":"?play and the playground run async programs on generated bindings","state":"closed"},
+            {"number":465,"title":"Build the play image's universe stage","state":"open"}
+          ]
+        },
+        {
+          "id": "browser-wasm-bindings",
+          "name": "wasm bindings for the browser",
+          "start": 58,
+          "size": 5,
+          "state": "next",
+          "note": "rawr-web",
+          "issues": [
+            {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"}
+          ]
+        }
       ]
     },
     {
@@ -1479,23 +1501,27 @@
           "name": "Flip the default route",
           "start": 63,
           "size": 2,
-          "state": "next",
-          "note": "",
+          "state": "done",
+          "note": "Every iced program runs on generated bindings",
           "issues": [
-            {"number":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"open"}
-          ]
+            {"number":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"closed"},
+            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "delete-rawr-iced",
           "name": "Delete rawr-iced",
           "start": 65,
           "size": 1,
-          "state": "next",
-          "note": "A no-op by then",
+          "state": "done",
+          "note": "Deleted by cutover, not attrition",
           "issues": [
-            {"number":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"open"},
-            {"number":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"open"}
-          ]
+            {"number":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"closed"},
+            {"number":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed"},
+            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
+          ],
+          "milestone": "0.3"
         }
       ]
     }
