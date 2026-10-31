@@ -63,7 +63,7 @@
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372","issues":[271,367,369,370,372],"milestone":"0.4"},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252","issues":[252,254,276],"milestone":"0.4"},
-        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Verified small-crate and recorded-subset hits; complete new-item reuse remains. #271, #281","issues":[],"milestone":"0.4"},
+        {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"now","note":"Path crates replay their project-kept tables; a new name in a large registry crate still runs the nightly. #398, #281","issues":[398,402,281],"milestone":"0.4"},
         {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"milestone":"0.4"}
       ]
     },
