@@ -308,8 +308,8 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
   assert.deepEqual(at("docs/iced/index.html"), ["counter.rs"]);
-  assert.deepEqual(at("docs/play/index.html"), ["expression.rs", "view.rs", "increment.rs", ""]);
-  assert.deepEqual(at("docs/reference/play.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
+  assert.deepEqual(at("docs/play/index.html"), [""]);
+  assert.deepEqual(at("docs/reference/play.html"), []);
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
   assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
   assert.deepEqual(at("docs/ratatui.html"), [], "a ratatui app needs a Cargo project and a terminal");
@@ -514,39 +514,22 @@ async function runJs(block: { name: string; code: string; play: string | null },
   return request;
 }
 
-test("run.ts sends a block's ?play options, and /play/run allows that exact snippet", async () => {
+test("run.ts sends a docs block's code to /play/run, and an edit to /play/render", async () => {
   const { readFileSync } = await import("node:fs");
   const { allowList, sitePages } = await import("../allowlist.mjs");
   const { runBlocks, sha256 } = await import("../src/play.ts");
   const root = new URL("../../../../site/dist/", import.meta.url);
   const html = readFileSync(new URL("docs/play/index.html", root), "utf8");
-  const app = runBlocks(html).find((block) => block.name === "increment.rs")!;
-  // The page shows the bot's ?play line, and the block sends the same options.
-  assert.equal(app.header, "light msg=Message::Increment msg=Message::Increment");
-  assert.equal(app.play, app.header);
-
-  // Run as shown: /play/run gets the code and the options, which make two
-  // messages in the light theme, and that pair is on the allow-list.
-  const run = await runJs(app);
-  assert.equal(run.url, "/play/run");
-  assert.deepEqual(run.body, { code: app.code, play: app.play });
-  const sent = parseSnippet(run.body) as Snippet;
-  assert.deepEqual(sent.messages, ["Message::Increment", "Message::Increment"]);
-  assert.equal(sent.theme, "light");
-  const { hashes } = await allowList(sitePages(root.pathname));
-  assert.ok(hashes.includes(await sha256(canonical(sent))));
-  // The code without its options, which drew the counter at 0, isn't allowed.
-  assert.ok(!hashes.includes(await sha256(canonical(parseSnippet({ code: app.code }) as Snippet))));
-
-  // An edit goes to /play/render with the same options.
-  const edited = await runJs(app, "\n// edited");
-  assert.equal(edited.url, "/play/render");
-  assert.equal(edited.body.play, app.play);
-  assert.deepEqual((parseSnippet(edited.body) as Snippet).messages, ["Message::Increment", "Message::Increment"]);
-
-  // A block with no options sends its code alone, as before.
   const sum = runBlocks(html).find((block) => block.name === "")!;
-  assert.deepEqual((await runJs(sum)).body, { code: sum.code });
+  // A block sends its code alone, and that code is on the allow-list.
+  const run = await runJs(sum);
+  assert.equal(run.url, "/play/run");
+  assert.deepEqual(run.body, { code: sum.code });
+  const { hashes } = await allowList(sitePages(root.pathname));
+  assert.ok(hashes.includes(await sha256(canonical(parseSnippet(run.body) as Snippet))));
+  // An edit is the visitor's own code: it goes to /play/render.
+  const edited = await runJs(sum, "\n// edited");
+  assert.equal(edited.url, "/play/render");
 });
 
 test("text results are read back, and give a preview line", async () => {
@@ -594,7 +577,7 @@ test("example slugs are stable, readable and unique", async () => {
   // examples.ts imports .rs files, which only the Worker's build reads: its names come from its source.
   const source = (await import("node:fs")).readFileSync(new URL("../src/examples.ts", import.meta.url), "utf8");
   const slugs = [...source.matchAll(/name: "([^"]+)"/g)].map((m) => slug(m[1]));
-  assert.ok(slugs.length > 20);
+  assert.ok(slugs.length >= 8);
   assert.ok(slugs.every((s) => /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s)));
   assert.equal(new Set(slugs).size, slugs.length);
 });

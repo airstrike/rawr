@@ -3,13 +3,12 @@
 // draws it and hands it the browser.
 //
 // A snippet runs in the browser by default: rawr-web (WEB_MODULE, from
-// web/build.sh) loads once the page is up, an iced snippet runs live on a
-// canvas and an edit swaps it in, and a plain program's output shows as the
-// server's would, an `async fn main` program's as it is written. "Run on
-// server" runs it through POST /play/render instead, which shows an iced
-// snippet's last frame or its GIF. The server also runs a snippet the browser
-// cannot: the module did not load, or an iced snippet without WebGL2 or
-// WebGPU. Share goes through POST /play/share.
+// web/build.sh) loads once the page is up, and a plain program's output
+// shows as the server's would. An iced or async snippet shows the one
+// message that says it doesn't run here yet. "Run on server" runs it through
+// POST /play/render instead, which answers the same way. The server also
+// runs a snippet when the module did not load. Share goes through POST
+// /play/share.
 //
 // The address keeps the page's state: `#<slug>` names the example loaded,
 // and `?run=server` the server when the visitor chose it (the browser, the
@@ -18,8 +17,7 @@
 // edit to the code drops the hash, since the code no longer is the example's.
 // Share's link keeps ?run=server and never has a hash.
 //
-// The theme is the page's (theme.ts): the GUI renders in it, and a change
-// of theme runs the snippet again in the browser.
+// The theme is the page's (theme.ts): Turnstile's widget draws in it.
 
 /** rawr-web's module: web/build.sh's output, which the release puts in the Worker's /web. */
 export const WEB_MODULE = "/web/rawr_web.js";
@@ -29,21 +27,14 @@ export type Where = "browser" | "server";
 
 export interface Snippet {
   code: string;
-  theme: Theme;
-  size: string;
-  messages: string[];
 }
 
 export interface Example {
   name: string;
   code: string;
-  /** Messages sent before the preview. */
-  messages?: string[];
-  /** The canvas size, WxH, when the default would cut the view off. */
-  size?: string;
-  /** The menu group: "Rust" or "iced". */
+  /** The menu group: "Rust". */
   group?: string;
-  /** The name in the address: "Async tasks" is "async-tasks". */
+  /** The name in the address: "Word count" is "word-count". */
   slug: string;
 }
 
@@ -65,6 +56,7 @@ export interface Chunk {
 }
 
 export interface TextResult {
+  /** "text", "unavailable" for an iced or async snippet, or "error" for one that does not compile. */
   kind?: string;
   status: number;
   output?: Chunk[];
@@ -74,35 +66,27 @@ export interface TextResult {
 
 export type Output =
   | { kind: "note" }
-  /** A plain program's output; `done` once it ended, with its status. */
-  | { kind: "term"; chunks: Chunk[]; done: boolean; status: number; note?: string }
-  | { kind: "image"; url: string; animated: boolean }
+  /** A plain program's output, with its status. */
+  | { kind: "term"; chunks: Chunk[]; status: number; note?: string }
   | { kind: "error"; text: string }
-  /** An iced app running on the canvas, with a report under it after a broken edit. */
-  | { kind: "live"; report: string | null };
+  /** Why an iced or async snippet doesn't run here yet. */
+  | { kind: "unavailable"; text: string };
 
 export interface State {
   code: string;
-  messages: string;
-  size: string;
   theme: Theme;
   /** Where the next run goes. */
   where: Where;
   output: Output;
   status: string;
   busy: boolean;
-  /** Messages are ignored by the last run: a plain program. */
-  plain: boolean;
   /** The example the code is, by slug, or "". */
   mark: string;
 }
 
 /** rawr-web's API (web/src/lib.rs). */
 export interface Web {
-  kind(code: string): "iced" | "text" | "async" | "server";
-  run(code: string, theme: string, messages: string[]): void;
   run_text(code: string): string;
-  run_async(code: string, write: (stream: string, text: string) => void): Promise<string>;
 }
 
 interface Widget {
@@ -119,7 +103,6 @@ export interface Deps {
   storage: { getItem(key: string): string | null; setItem(key: string, value: string): void } | null;
   /** Imports WEB_MODULE and initializes it. */
   loadWeb(): Promise<Web>;
-  gpu(): boolean;
   now(): number;
   clipboard(text: string): Promise<void>;
   turnstile(): Widget | undefined;
@@ -127,8 +110,6 @@ export interface Deps {
   loadTurnstile(): void;
   /** Whether Turnstile's container (#ts) is in the page. */
   hasContainer(): boolean;
-  /** The element that holds the canvas, kept across runs, and whether it is in the output. */
-  live: { holder(): { className: string; style: Record<string, string>; classList: { toggle(name: string, on: boolean): void } }; attach(on: boolean): void };
   setTimeout(f: () => void, ms: number): unknown;
   clearTimeout(id: unknown): void;
 }
@@ -149,10 +130,8 @@ export class Session {
   private pass: boolean;
   private widget: string | null = null;
   private token: string | null = null;
-  private url: string | null = null;
   private web: Promise<Web> | null = null;
   private loaded = false;
-  private started = false;
   private runs = 0;
   private typing: unknown = null;
   private saving: unknown = null;
@@ -166,8 +145,8 @@ export class Session {
     this.chosen = new URLSearchParams(location.search).get("run") === "server" ? "server" : "browser";
     const s = data.snippet;
     this.state = {
-      code: s.code, messages: s.messages.join("\n"), size: s.size, theme, where: this.chosen,
-      output: { kind: "note" }, status: data.shared ? `shared · ${data.shared}` : "ready", busy: false, plain: false, mark: "",
+      code: s.code, theme, where: this.chosen,
+      output: { kind: "note" }, status: data.shared ? `shared · ${data.shared}` : "ready", busy: false, mark: "",
     };
     let named = "";
     try {
@@ -197,13 +176,12 @@ export class Session {
     for (const listener of this.listeners) listener(this.state);
   }
 
-  private fill(s: { code: string; messages?: string[]; size?: string }) {
-    this.state = { ...this.state, code: s.code, messages: (s.messages ?? []).join("\n"), size: s.size ?? "" };
+  private fill(s: { code: string }) {
+    this.state = { ...this.state, code: s.code };
   }
 
   snippet(): Snippet {
-    const { code, theme, size, messages } = this.state;
-    return { code, theme, size: size.trim(), messages: messages.split("\n") };
+    return { code: this.state.code };
   }
 
   private save = () => {
@@ -238,24 +216,9 @@ export class Session {
     this.typed();
   }
 
-  setMessages(messages: string) {
-    this.set({ messages });
-    this.edited();
-    this.typed();
-  }
-
-  setSize(size: string) {
-    this.set({ size });
-    this.edited();
-    this.typed();
-  }
-
-  /** The page's theme changed: the GUI follows it. */
+  /** The page's theme changed: Turnstile's widget follows it. */
   setTheme(theme: Theme) {
-    if (theme === this.state.theme) return;
     this.set({ theme });
-    this.edited();
-    this.typed();
   }
 
   /** A visitor's choice of where it runs is remembered in the address. */
@@ -316,12 +279,7 @@ export class Session {
     });
   }
 
-  private plain(plain: boolean) {
-    this.set({ plain });
-  }
-
   private show(output: Output) {
-    if (output.kind !== "live") this.deps.live.attach(false);
     this.set({ output });
   }
 
@@ -356,16 +314,7 @@ export class Session {
       const type = response.headers.get("content-type") || "";
       if (response.ok && type.startsWith("application/json")) {
         const result: TextResult = await response.json();
-        this.show(terminal(result));
-        this.plain(true);
-        this.set({ status: ms + " ms" + (result.status !== 0 ? " · exit " + result.status : "") });
-      } else if (response.ok && type.startsWith("image/")) {
-        this.plain(false);
-        if (this.url) URL.revokeObjectURL(this.url);
-        this.url = URL.createObjectURL(await response.blob());
-        const note = response.headers.get("x-play-note");
-        this.show({ kind: "image", url: this.url, animated: type.startsWith("image/gif") });
-        this.set({ status: ms + " ms" + (note ? " · " + note : "") });
+        this.result(result, ms + " ms");
       } else {
         this.show({ kind: "error", text: await response.text() });
         this.set({ status: response.status === 429 ? "slow down" : response.status === 422 ? "error" : "failed" });
@@ -442,62 +391,23 @@ export class Session {
       return this.server("rawr-web did not load");
     }
     if (mine !== this.runs) return;
-    const code = this.state.code;
-    const kind = m.kind(code);
     const start = this.deps.now();
-    const ms = () => Math.round(this.deps.now() - start) + " ms in the browser";
-    if (kind === "server") return this.server("rawr-web cannot run this yet");
-    if (kind === "iced" && !this.deps.gpu()) return this.server("this browser has no WebGL2 or WebGPU");
-    if (kind === "async") {
-      // An async main runs on the page's clock: its output shows as it is written.
-      const chunks: Chunk[] = [];
-      this.show({ kind: "term", chunks: [], done: false, status: 0 });
-      this.plain(true);
-      this.set({ status: "running in the browser…" });
-      const result: TextResult = JSON.parse(
-        await m.run_async(code, (stream, text) => {
-          if (mine !== this.runs) return;
-          chunks.push({ stream: stream === "stderr" ? "stderr" : "stdout", text });
-          this.set({ output: { kind: "term", chunks: [...chunks], done: false, status: 0 } });
-        }),
-      );
-      if (mine !== this.runs) return;
-      if (result.kind === "error") return this.report(result.text ?? "");
-      this.show(terminal(result));
-      this.set({ status: ms() + (result.status !== 0 ? " · exit " + result.status : "") });
-      return;
-    }
-    if (kind === "text") {
-      const result: TextResult = JSON.parse(m.run_text(code));
-      // A snippet that doesn't parse reads as plain: a running app stays, with the report under it.
-      if (result.kind === "error") return this.report(result.text ?? "");
-      this.show(terminal(result));
-      this.plain(true);
-      this.set({ status: ms() + (result.status !== 0 ? " · exit " + result.status : "") });
-      return;
-    }
-    // iced replaces #iced with its canvas, so the holder is on the page before the first run.
-    const holder = this.deps.live.holder();
-    const [, w, h] = this.state.size.trim().match(/^(\d+)\s*[xX]\s*(\d+)$/) || [];
-    holder.classList.toggle("sized", Boolean(w));
-    holder.style.width = w ? w + "px" : "";
-    holder.style.height = h ? h + "px" : "";
-    this.deps.live.attach(true);
-    this.set({ output: { kind: "live", report: null } });
-    this.plain(false);
-    try {
-      m.run(code, this.state.theme, this.state.messages.split("\n").filter((line) => line.trim()));
-      this.started = true;
-      this.set({ status: ms() + " · live" });
-    } catch (error) {
-      this.report(String(error));
-    }
+    const result: TextResult = JSON.parse(m.run_text(this.state.code));
+    this.result(result, Math.round(this.deps.now() - start) + " ms in the browser");
   }
 
-  private report(text: string) {
-    if (this.started && this.state.output.kind === "live") this.set({ output: { kind: "live", report: text } });
-    else this.show({ kind: "error", text });
-    this.set({ status: "error" });
+  /** What a run gave, from the browser or the server: its output, its message, or its report. */
+  private result(result: TextResult, took: string) {
+    if (result.kind === "error") {
+      this.show({ kind: "error", text: result.text ?? "" });
+      this.set({ status: "error" });
+    } else if (result.kind === "unavailable") {
+      this.show({ kind: "unavailable", text: result.text ?? "" });
+      this.set({ status: "not available here yet" });
+    } else {
+      this.show(terminal(result));
+      this.set({ status: took + (result.status !== 0 ? " · exit " + result.status : "") });
+    }
   }
 
   /**
@@ -514,5 +424,5 @@ export class Session {
 
 /** A plain program's output: stdout, stderr in its own colour, then the exit status if not 0. */
 export function terminal(result: TextResult): Output {
-  return { kind: "term", chunks: result.output ?? [], done: true, status: result.status, note: result.note };
+  return { kind: "term", chunks: result.output ?? [], status: result.status, note: result.note };
 }
