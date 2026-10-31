@@ -4,16 +4,21 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"Raw identifiers such as `fn r#for` and `let r#for` work as in rustc.","issues":[320]},
-      {"text":"An associated type's bound can fix its own associated type, as in `type Fore: Iterator<Item = Self::For>;`, and generic code relies on it.","issues":[320]},
-      {"text":"Higher-ranked bounds and types work: `F: for<'a> Fn(&'a T)`, `for<'a> fn(&'a usize)`, `dyn for<'a> Fn` and `where for<'a> &'a T: Sized`.","issues":[320]},
-      {"text":"`<Self as Trait>::Name` works in an impl's signatures.","issues":[320]},
-      {"text":"`impl<T: Trait> Trait for &T` whose items forward to `T`'s impl gives references the trait. Other impls for references are refused with an error that says why.","issues":[320]},
-      {"text":"A closure bound by `let f: fn(&usize) -> usize = |x| ..` takes its parameter types from the annotation.","issues":[320]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.22",
+      "date": "2026-10-30",
+      "entries": [
+        {"text":"Raw identifiers such as `fn r#for` and `let r#for` work as in rustc.","issues":[320]},
+        {"text":"An associated type's bound can fix its own associated type, as in `type Fore: Iterator<Item = Self::For>;`, and generic code relies on it.","issues":[320]},
+        {"text":"Higher-ranked bounds and types work: `F: for<'a> Fn(&'a T)`, `for<'a> fn(&'a usize)`, `dyn for<'a> Fn` and `where for<'a> &'a T: Sized`.","issues":[320]},
+        {"text":"`<Self as Trait>::Name` works in an impl's signatures.","issues":[320]},
+        {"text":"`impl<T: Trait> Trait for &T` whose items forward to `T`'s impl gives references the trait. Other impls for references are refused with an error that says why.","issues":[320]},
+        {"text":"A closure bound by `let f: fn(&usize) -> usize = |x| ..` takes its parameter types from the annotation.","issues":[320]}
+      ]
+    },
     {
       "version": "0.3.21",
       "date": "2026-10-29",

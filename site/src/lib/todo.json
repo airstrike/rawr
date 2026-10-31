@@ -1,22 +1,24 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-30",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"Raw identifiers such as `fn r#for` and `let r#for` work as in rustc.","issues":[320]},
-        {"text":"An associated type's bound can fix its own associated type, as in `type Fore: Iterator<Item = Self::For>;`, and generic code relies on it.","issues":[320]},
-        {"text":"Higher-ranked bounds and types work: `F: for<'a> Fn(&'a T)`, `for<'a> fn(&'a usize)`, `dyn for<'a> Fn` and `where for<'a> &'a T: Sized`.","issues":[320]},
-        {"text":"`<Self as Trait>::Name` works in an impl's signatures.","issues":[320]},
-        {"text":"`impl<T: Trait> Trait for &T` whose items forward to `T`'s impl gives references the trait. Other impls for references are refused with an error that says why.","issues":[320]},
-        {"text":"A closure bound by `let f: fn(&usize) -> usize = |x| ..` takes its parameter types from the annotation.","issues":[320]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.22",
+        "date": "2026-10-30",
+        "entries": [
+          {"text":"Raw identifiers such as `fn r#for` and `let r#for` work as in rustc.","issues":[320]},
+          {"text":"An associated type's bound can fix its own associated type, as in `type Fore: Iterator<Item = Self::For>;`, and generic code relies on it.","issues":[320]},
+          {"text":"Higher-ranked bounds and types work: `F: for<'a> Fn(&'a T)`, `for<'a> fn(&'a usize)`, `dyn for<'a> Fn` and `where for<'a> &'a T: Sized`.","issues":[320]},
+          {"text":"`<Self as Trait>::Name` works in an impl's signatures.","issues":[320]},
+          {"text":"`impl<T: Trait> Trait for &T` whose items forward to `T`'s impl gives references the trait. Other impls for references are refused with an error that says why.","issues":[320]},
+          {"text":"A closure bound by `let f: fn(&usize) -> usize = |x| ..` takes its parameter types from the annotation.","issues":[320]}
+        ]
+      },
       {
         "version": "0.3.21",
         "date": "2026-10-29",
@@ -685,7 +687,7 @@
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
