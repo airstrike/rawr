@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 59;
+const CLASSIFIER_VERSION: u32 = 60;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5326,6 +5326,9 @@ impl<P: api::Phase> Context<'_, P> {
         if let Ok(input) = self.convert_value(input) {
             return Some(input);
         }
+        if let Some(native) = self.native_place_input(input) {
+            return Some(native);
+        }
         let model::Type::Reference {
             mutability: model::Mutability::Shared,
             ty,
@@ -5360,6 +5363,10 @@ impl<P: api::Phase> Context<'_, P> {
         let model::Type::Reference { mutability, ty, .. } = input else {
             return None;
         };
+        let mutable = matches!(mutability, model::Mutability::Mutable);
+        if mutable && let Some(native) = self.native_place_input(input) {
+            return Some(native);
+        }
         let target = self.convert_value(ty).ok()?;
         matches!(
             target,
@@ -5367,8 +5374,41 @@ impl<P: api::Phase> Context<'_, P> {
                 | representability::convert::Type::Nominal { .. }
         )
         .then(|| representability::convert::Type::Borrowed {
-            mutable: matches!(mutability, model::Mutability::Mutable),
+            mutable,
             ty: Box::new(target),
+        })
+    }
+
+    /// `&mut Vec<T>` or `&mut String` that native code lends a script
+    /// function or closure: a typed native place for the call (D651).
+    fn native_place_input(&self, input: &model::Type) -> Option<representability::convert::Type> {
+        if let Some(element) = self.copied_vec(input) {
+            return Some(representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Sequence {
+                    element: Box::new(self.convert(element).ok()?),
+                    owned: true,
+                    length: None,
+                }),
+            });
+        }
+        let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            ty,
+            ..
+        } = input
+        else {
+            return None;
+        };
+        let string @ representability::convert::Type::Builtin(
+            representability::convert::Builtin::String,
+        ) = self.convert(ty).ok()?
+        else {
+            return None;
+        };
+        Some(representability::convert::Type::Borrowed {
+            mutable: true,
+            ty: Box::new(string),
         })
     }
 
@@ -6897,8 +6937,18 @@ impl<P: api::Phase> Context<'_, P> {
             .graph
             .definition_index(id)
             .and_then(|index| self.graph.definitions().nth(index))?;
-        vec_element(definition, arguments)
-            .filter(|element| matches!(element, model::Type::Primitive(_)))
+        vec_element(definition, arguments).filter(|element| {
+            matches!(element, model::Type::Primitive(_))
+                // A `Vec<String>` crosses as a typed native place when
+                // native code lends it (D651); a script's own array is
+                // copied in and back out, as a scalar one is.
+                || matches!(
+                    self.convert(element),
+                    Ok(representability::convert::Type::Builtin(
+                        representability::convert::Builtin::String
+                    ))
+                )
+        })
     }
 
     /// A method whose own lifetimes the output borrows only through inputs
