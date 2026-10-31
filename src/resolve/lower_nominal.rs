@@ -23580,7 +23580,18 @@ impl<'a> Parser<'a> {
         }
         self.last_cell_borrow = None;
         let value_start = self.flow().value_start();
+        // `let f: fn(&usize) -> usize = |x| *x * 4;`: the closure's
+        // parameters have the annotation's types, as in Rust.
+        if matches!(self.peek(), Token::Pipe | Token::Or)
+            && let Some(Ty::Fn { inputs, .. }) = annotation
+                .as_ref()
+                .map(|annotation| self.inference.resolve(annotation))
+            && !inputs.iter().any(contains_inference)
+        {
+            self.closure_hint = Some(inputs);
+        }
         let value = self.parse_expr_expecting(annotation.as_ref());
+        self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`

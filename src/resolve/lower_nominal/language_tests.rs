@@ -11206,3 +11206,24 @@ main();
         "{error}"
     );
 }
+
+/// A closure bound by `let` to a function type takes the annotation's
+/// parameter types, as rustc infers them: `|x| *x` of `fn(&usize) ->
+/// usize` dereferences its `&usize`.
+#[test]
+fn language_let_annotation_types_closure_parameters() {
+    // What the program built by rustc prints.
+    let printed = printed(
+        r#"
+fn main() {
+    let f: fn(&usize) -> usize = |x| *x * 4;
+    let g: fn(&mut i64, i64) = |total, n| *total += n;
+    let mut total = 1;
+    g(&mut total, 5);
+    println!("{} {}", f(&6), total);
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "24 6\n");
+}
