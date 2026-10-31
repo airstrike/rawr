@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"`?play` runs snippets on a runner built once with the bot's image, through generated bindings of iced, iced_test and tokio, with no cargo per run. A tokio program runs there. A snippet outside the runner's calls fails to compile, as any program with a missing native call does.","issues":[436]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.35",
@@ -914,7 +919,7 @@
     {"issue":433,"title":"rawr preview on the plain runner","state":"open","category":"No glue (D593)"},
     {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open","category":"No glue (D593)"},
     {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
-    {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"open","category":"No glue (D593)"},
+    {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)"},
     {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.34"},
     {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"open","category":"No glue (D593)"},
     {"issue":439,"title":"Delete the core's iced-only machinery rawr-iced drove","state":"open","category":"No glue (D593)"},
@@ -933,7 +938,17 @@
     {"issue":452,"title":"Decide on the parse-time application rewrites","state":"open","category":"No glue (D593)"},
     {"issue":453,"title":"Remove the dead select! and try_join! wrapping in parse_tokio_macro","state":"open","category":"No glue (D593)"},
     {"issue":454,"title":"Remove the reload scheduler's unused publication chain","state":"open","category":"No glue (D593)"},
-    {"issue":455,"title":"Remove the site's and play's leftovers from iced renders","state":"open","category":"No glue (D593)"}
+    {"issue":455,"title":"Remove the site's and play's leftovers from iced renders","state":"open","category":"No glue (D593)"},
+    {"issue":456,"title":"A view's Element used outside a native callback ends with the call that made it","state":"open","category":"No glue (D593)"},
+    {"issue":457,"title":"Generated bindings hold iced::Application<_> with unfilled parameters and a non-Send boot closure","state":"open","category":"No glue (D593)"},
+    {"issue":458,"title":"A generic local's family keeps inferred _ parameters","state":"open","category":"No glue (D593)"},
+    {"issue":459,"title":"Type annotations don't apply a crate type's default parameters","state":"open","category":"Divergences from rustc"},
+    {"issue":460,"title":"No deref coercion or Deref method lookup on crate types","state":"open","category":"Divergences from rustc"},
+    {"issue":461,"title":"button(..).on_press(m) runs where rustc gives E0283","state":"open","category":"Divergences from rustc"},
+    {"issue":462,"title":"E0106 on an impl Widget return that rustc accepts","state":"open","category":"Divergences from rustc"},
+    {"issue":463,"title":"The universe runner covers only its seed program's calls","state":"open","category":"No glue (D593)"},
+    {"issue":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open","category":"No glue (D593)"},
+    {"issue":465,"title":"Build the play image's universe stage","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
