@@ -2322,7 +2322,7 @@ fn imported_runtime(
     register_defaults();
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     // The core's future, which a crate's async functions give in a program
-    // with no host profile (D513.3), before the facades that name it.
+    // with no host profile (D513.3), before the bindings that name it.
     registry.install(
         __rawr_internal::future::facade::runtime()
             .map_err(__rawr_internal::host::runtime::Error::profile)?,
@@ -2426,7 +2426,7 @@ struct Program {
     candidate: Option<__rawr_internal::reload::Candidate>,
     application_contract: __rawr_profile::ApplicationContract,
     /// Shared by every generation compiled against the same engine.
-    _facades: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    _bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     /// The account this program's own native reconstruction observed; a
     /// resident generation compiled against its predecessor's engine
     /// reports that engine's account instead.
@@ -2593,18 +2593,18 @@ fn compile_program(
     *observation = Some(observed);
     let mut native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
     let mut engine = __rawr_internal::Engine::new();
-    let (facades, application_contract) = __rawr_profile::install_compiler_facades(&mut engine, &mut native)?;
+    let (bindings, application_contract) = __rawr_profile::install_compiler_bindings(&mut engine, &mut native)?;
     progress(2)?;
     __rawr_internal::package::import::runner::admit_generated_structural_retained(
         &mut engine,
-        &facades,
+        &bindings,
         STRUCTURAL_ROWS,
         &mut native,
     )
     .map_err(|error| std::io::Error::other(error.to_string()))?;
     __rawr_internal::package::import::runner::admit_generated_applications(
         &mut engine,
-        &facades,
+        &bindings,
         rawr_applications::APPLICATIONS,
         adapters().filter(|adapter| adapter.application).map(|adapter| adapter.identity),
     )
@@ -2623,7 +2623,7 @@ fn compile_program(
     let observation = observation.take().ok_or_else(|| std::io::Error::other("native observation unavailable"))?;
     let marked_main = snapshot.marked_root();
     Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract,
-        _facades: facades.into(), observation: Some(observation), marked_main }))
+        _bindings: bindings.into(), observation: Some(observation), marked_main }))
 }
 
 fn compile_live(
@@ -2924,7 +2924,7 @@ mod __rawr_profile {
         let runtime = match kept {
             Some(runtime) => runtime,
             None => {
-                let runtime = super::imported_runtime(&program.engine, &program._facades)
+                let runtime = super::imported_runtime(&program.engine, &program._bindings)
                     .map_err(|error| error.to_string())?;
                 if program.marked_main {
                     RUNTIME.set(Some(runtime.next_generation()));
@@ -3035,7 +3035,7 @@ mod __rawr_profile {
     ) -> Result<(), &'static str> {
         Ok(())
     }
-    pub fn install_compiler_facades(
+    pub fn install_compiler_bindings(
         engine: &mut __rawr_internal::Engine,
         native: &mut __rawr_internal::package::import::runner::account::Native,
     ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {
@@ -3045,10 +3045,10 @@ mod __rawr_profile {
                 __rawr_internal::future::facade::definition().map_err(std::io::Error::other)?,
             )
             .map_err(std::io::Error::other)?;
-        if super::IMPORTED_FACADES.is_empty() {
+        if super::IMPORTED_BINDINGS.is_empty() {
             return Ok((Box::default(), ApplicationContract));
         }
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_FACADES, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }
@@ -3146,7 +3146,7 @@ fn exit(status: i32) -> ! {
 struct Live {
     engine: __rawr_internal::Shared<__rawr_internal::Engine>,
     generation: std::sync::Arc<__rawr_internal::reload::Generation>,
-    facades: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: __rawr_profile::ApplicationContract,
 }
 
@@ -3180,7 +3180,7 @@ impl Hot {
 /// runs, which the next one must be able to replace (D553.6).
 struct Resident<'a> {
     engine: &'a __rawr_internal::Shared<__rawr_internal::Engine>,
-    facades: &'a std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
+    bindings: &'a std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: &'a __rawr_profile::ApplicationContract,
     running: Option<&'a std::sync::Arc<__rawr_internal::reload::Generation>>,
 }
@@ -3219,7 +3219,7 @@ fn compile_resident(
         ast: Some(ast),
         candidate: Some(candidate),
         application_contract: resident.contract.clone(),
-        _facades: resident.facades.clone(),
+        _bindings: resident.bindings.clone(),
         observation: None,
         marked_main: snapshot.marked_root(),
     };
@@ -3358,7 +3358,7 @@ fn serve_entry(
             let (tag, payload) = next_frame(&received)?;
             let resident = live.as_ref().map(|running| Resident {
                 engine: &running.engine,
-                facades: &running.facades,
+                bindings: &running.bindings,
                 contract: &running.contract,
                 running: Some(&running.generation),
             });
@@ -3428,7 +3428,7 @@ fn serve_entry(
                         if let (Some(running), Some(next)) = (live.as_mut(), program.candidate.as_ref()) {
                             running.engine = program.engine.clone();
                             running.generation = next.generation().clone();
-                            running.facades = program._facades.clone();
+                            running.bindings = program._bindings.clone();
                         }
                         // The owner thread admits it at its next call from
                         // native code; a newer save's replaces it first.
@@ -3517,7 +3517,7 @@ fn run_protocol(
         if admitted {
             let resident = program.as_ref().map(|program| Resident {
                 engine: &program.engine,
-                facades: &program._facades,
+                bindings: &program._bindings,
                 contract: &program.application_contract,
                 running: None,
             });
@@ -3692,7 +3692,7 @@ fn run_protocol(
                     let live = running.candidate.as_ref().map(|candidate| Live {
                         engine: running.engine.clone(),
                         generation: candidate.generation().clone(),
-                        facades: running._facades.clone(),
+                        bindings: running._bindings.clone(),
                         contract: running.application_contract.clone(),
                     });
                     std::thread::Builder::new()
@@ -5502,14 +5502,14 @@ fn render_source(
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
         return Err(request::Error::Drift {
-            field: "generated profile facade plan",
+            field: "generated profile bindings plan",
         });
     }
     let facade = facade_plan
         .map(|bytes| {
             crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard()).map_err(
                 |_| request::Error::Drift {
-                    field: "generated profile facade plan",
+                    field: "generated profile bindings plan",
                 },
             )
         })
@@ -5589,10 +5589,12 @@ fn render_source(
     // The facade plan is megabytes of data: rustc reads it with
     // `include_bytes!` instead of parsing it as an integer array literal.
     output
-        .write_all(b"static IMPORTED_FACADES: &[u8] = include_bytes!(\"imported_facades.bin\");\n")
+        .write_all(
+            b"static IMPORTED_BINDINGS: &[u8] = include_bytes!(\"imported_bindings.bin\");\n",
+        )
         .map_err(|_| request::Error::Encoding)?;
     sources.push((
-        FACADES_PATH.into(),
+        BINDINGS_PATH.into(),
         facade_plan.unwrap_or_default().to_vec(),
     ));
     output
@@ -6035,7 +6037,7 @@ fn render_native(
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
 
 /// The facade plan `src/main.rs` includes as bytes.
-const FACADES_PATH: &str = "src/imported_facades.bin";
+const BINDINGS_PATH: &str = "src/imported_bindings.bin";
 
 /// The generated runner's source files in path order: the facade plan,
 /// `src/main.rs` and one file per adapter module, framed into one canonical
@@ -6132,7 +6134,7 @@ pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, req
         if sources
             .last()
             .is_some_and(|(previous, _): &(&str, &[u8])| *previous >= path)
-            || !(path == FACADES_PATH
+            || !(path == BINDINGS_PATH
                 || path.starts_with("src/")
                     && path.ends_with(".rs")
                     && !path[4..path.len() - 3].contains(['/', '\\', '.']))
@@ -6235,7 +6237,7 @@ fn render_profile_projection_bindings(
         return Ok(());
     }
     let facade = facade.ok_or(request::Error::Drift {
-        field: "generated projection facade plan",
+        field: "generated projection bindings plan",
     })?;
     let mut support_attestation = false;
     for projection in profile.projections() {
@@ -7528,7 +7530,7 @@ fn render_adapter_body(
                 render_rust_type(
                     payload,
                     facade.ok_or(request::Error::Drift {
-                        field: "event continuation facade",
+                        field: "event continuation bindings",
                     })?,
                     output,
                 )?;
@@ -10035,7 +10037,7 @@ fn render_replay_insert(
                     message => message,
                 },
                 facade.ok_or(request::Error::Drift {
-                    field: "generated projection facade plan",
+                    field: "generated projection bindings plan",
                 })?,
                 output,
             )?;
@@ -11761,7 +11763,7 @@ fn render_from_dynamic(
         ty if let Some(time) = std_time(ty) => cast(output, time),
         ty if is_facade_value(ty) => {
             let rust = concrete_type(ty).ok_or(request::Error::Drift {
-                field: "a facade value's Rust type",
+                field: "a host value's Rust type",
             })?;
             cast(output, &rust)
         }
@@ -14868,8 +14870,8 @@ mod tests {
         for operation in [
             "if !COMPILE_SNAPSHOT { return Ok(None); }",
             "account::Native::decode_observed(GENERATED_MANIFEST)",
-            "install_compiler_facades(&mut engine, &mut native)?",
-            "admit_generated_structural_retained(\n        &mut engine,\n        &facades,\n        STRUCTURAL_ROWS,\n        &mut native,",
+            "install_compiler_bindings(&mut engine, &mut native)?",
+            "admit_generated_structural_retained(\n        &mut engine,\n        &bindings,\n        STRUCTURAL_ROWS,\n        &mut native,",
             "engine.retain_imported_native(native)",
             "__rawr_profile::compile_initial(",
             "Ok(Some(Program { engine,",
@@ -14903,7 +14905,7 @@ mod tests {
         assert!(neutral
             .contains("native: &mut __rawr_internal::package::import::runner::account::Native,"));
         assert!(
-            neutral.contains("runner::install_retained(engine, super::IMPORTED_FACADES, native)")
+            neutral.contains("runner::install_retained(engine, super::IMPORTED_BINDINGS, native)")
         );
         assert!(!neutral.contains("runner::install("));
         assert!(

@@ -20,7 +20,7 @@ pub(crate) const ROOT: &str = "rawr_std";
 /// The facade's compile-time definition, built once per thread.
 pub(crate) fn definition() -> facade::Definition {
     thread_local! {
-        static DEFINITION: facade::Definition = build().expect("the std facade is valid");
+        static DEFINITION: facade::Definition = build().expect("the std bindings are valid");
     }
     DEFINITION.with(Clone::clone)
 }

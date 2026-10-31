@@ -36,5 +36,5 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
                     .collect::<crate::Array>(),
             ))
         })
-        .unwrap_or_else(|_| panic!("the std facade must retain env::args"));
+        .unwrap_or_else(|_| panic!("the std bindings must retain env::args"));
 }

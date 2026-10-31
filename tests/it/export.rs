@@ -171,7 +171,11 @@ fn export_rejects_a_taken_root() {
     let mut engine = engine();
     let mut again = Exports::new("shop");
     again.add::<tax_rate>();
-    let _ = engine.export(again).expect_err("the root `shop` is taken");
+    let error = engine.export(again).expect_err("the root `shop` is taken").to_string();
+    // An embedder's mistake names the attribute and the item (D662.4).
+    assert!(error.contains("`#[rawr::export]`"), "{error}");
+    assert!(error.contains("`shop`"), "{error}");
+    assert!(!error.to_lowercase().contains("facade"), "{error}");
 }
 
 static GUARDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

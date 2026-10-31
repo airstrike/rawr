@@ -121,14 +121,14 @@ mod __rawr_profile {
         _builders: &mut [__rawr_internal::host::runtime::Builder],
     ) -> Result<(), &'static str> { Ok(()) }
 
-    pub fn install_compiler_facades(
+    pub fn install_compiler_bindings(
         engine: &mut __rawr_internal::Engine,
         native: &mut __rawr_internal::package::import::runner::account::Native,
     ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {
-        if super::IMPORTED_FACADES.is_empty() {
+        if super::IMPORTED_BINDINGS.is_empty() {
             return Ok((Box::default(), ApplicationContract));
         }
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_FACADES, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }

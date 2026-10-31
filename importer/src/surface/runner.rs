@@ -109,7 +109,7 @@ impl<B> Request<B> {
             return Ok(());
         };
         let failure = || crate::bridge::request::Error::Drift {
-            field: "owned runner facade ancestry",
+            field: "owned runner bindings ancestry",
         };
         let chain = profile.node_chain().ok_or_else(failure)?;
         if inputs.provenance.context != chain.context().identity()
@@ -134,7 +134,7 @@ impl<B> Request<B> {
         pair: &crate::composition::profile::Pair,
     ) -> Result<(), crate::bridge::request::Error> {
         let failure = || crate::bridge::request::Error::Drift {
-            field: "owned runner facade ancestry",
+            field: "owned runner bindings ancestry",
         };
         let inputs = self.runner.as_ref().ok_or_else(failure)?;
         pair.retention

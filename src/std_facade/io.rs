@@ -211,7 +211,7 @@ fn bind_streams(runtime: &mut host::runtime::Builder) {
     let mut bind = |path: &str, callback: Callback| {
         runtime
             .bind(format!("{}::{path}", super::ROOT), callback)
-            .unwrap_or_else(|_| panic!("the std facade must retain {path}"));
+            .unwrap_or_else(|_| panic!("the std bindings must retain {path}"));
     };
     bind("io::stdin", |_| Ok(Dynamic::from(Stdin)));
     bind("io::stdout", |_| Ok(Dynamic::from(Stdout)));
@@ -271,7 +271,7 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     let mut bind = |path: &str, callback: Callback| {
         runtime
             .bind(format!("{}::{path}", super::ROOT), callback)
-            .unwrap_or_else(|_| panic!("the std facade must retain {path}"));
+            .unwrap_or_else(|_| panic!("the std bindings must retain {path}"));
     };
     macro_rules! kinds {
         ($($name:ident)*) => {

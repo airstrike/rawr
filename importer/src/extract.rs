@@ -788,40 +788,40 @@ impl FacadeSurfaceEvidenceCapability {
         let graph = graph.publish(proof)?;
         let contract = graph
             .classify(&crate::classify::Policy::standard(), limits)
-            .map_err(|error| extraction("facade-surface-classification", &error.to_string()))?;
+            .map_err(|error| extraction("bindings-surface-classification", &error.to_string()))?;
         let bytes = crate::surface::facade::Plan::encode(&contract, limits)
-            .map_err(|error| extraction("facade-surface-encoding", &error.to_string()))?;
+            .map_err(|error| extraction("bindings-surface-encoding", &error.to_string()))?;
         let plan = crate::surface::facade::Plan::decode(&bytes, limits)
-            .map_err(|error| extraction("facade-surface-decoding", &error.to_string()))?;
+            .map_err(|error| extraction("bindings-surface-decoding", &error.to_string()))?;
         let mut facades = plan.facades().filter(|facade| facade.root() == root);
-        let facade = facades
-            .next()
-            .ok_or_else(|| extraction("facade-surface-root", "expected facade root is absent"))?;
+        let facade = facades.next().ok_or_else(|| {
+            extraction("bindings-surface-root", "expected bindings root is absent")
+        })?;
         if facades.next().is_some() {
             return Err(extraction(
-                "facade-surface-root",
-                "expected facade root is duplicated",
+                "bindings-surface-root",
+                "expected bindings root is duplicated",
             ));
         }
         for path in expected_types {
             if !facade.types().any(|ty| ty.path() == *path) {
-                return Err(extraction("facade-surface-type", path));
+                return Err(extraction("bindings-surface-type", path));
             }
         }
         for path in expected_items {
             if !facade.items().any(|item| item.path() == *path) {
-                return Err(extraction("facade-surface-item", path));
+                return Err(extraction("bindings-surface-item", path));
             }
         }
         for path in rejected_paths {
             if facade.types().any(|ty| ty.path() == *path)
                 || facade.items().any(|item| item.path() == *path)
             {
-                return Err(extraction("facade-surface-rejection", path));
+                return Err(extraction("bindings-surface-rejection", path));
             }
         }
         eprintln!(
-            "FACADE_SURFACE root={} types={} items={} expected_types={} expected_items={} rejected={}",
+            "BINDINGS_SURFACE root={} types={} items={} expected_types={} expected_items={} rejected={}",
             root,
             facade.types().count(),
             facade.items().count(),

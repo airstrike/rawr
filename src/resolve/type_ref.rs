@@ -1093,7 +1093,7 @@ fn resolve_impl(
             _ => None,
         });
     let unsupported = || Error::UnsupportedNominalSyntax {
-        construct: "`impl Trait` other than `impl Fn*`, `impl Iterator`, a facade trait \
+        construct: "`impl Trait` other than `impl Fn*`, `impl Iterator`, a host trait \
                     (`impl Widget<Message>`) or a dependency's trait as a return type"
             .into(),
         source: span,

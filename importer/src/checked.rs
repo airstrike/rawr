@@ -417,7 +417,7 @@ fn usize_at(bytes: &[u8], offset: usize, reason: &'static str) -> Result<usize, 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A required generic, facade, or profile parent was not DAG-validated.
-    #[error("checked application requires current generic, facade, and profile parents")]
+    #[error("checked application requires current generic, bindings, and profile parents")]
     ForeignEvidence,
     /// Generic and profile classifications refer to different API graphs.
     #[error("checked application parents disagree on their imported API graph")]

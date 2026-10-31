@@ -158,7 +158,7 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     let mut bind = |path: &str, callback: Callback| {
         runtime
             .bind(format!("{}::{path}", super::ROOT), callback)
-            .unwrap_or_else(|_| panic!("the std facade must retain {path}"));
+            .unwrap_or_else(|_| panic!("the std bindings must retain {path}"));
     };
     bind("path::PathBuf::new", |_| Ok(Dynamic::from(PathBuf::new())));
     bind("path::PathBuf::default", |_| {

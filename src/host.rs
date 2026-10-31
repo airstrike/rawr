@@ -479,7 +479,7 @@ impl Registry {
         if self.owner_for_path(&canonical).is_some() {
             return Err(Error::RegistryConflict {
                 path: canonical.to_string().into(),
-                existing: self.entry_kind(&canonical).unwrap_or("facade entry"),
+                existing: self.entry_kind(&canonical).unwrap_or("binding"),
                 incoming: "legacy type",
             });
         }
@@ -566,21 +566,21 @@ impl Registry {
             let index = self
                 .types
                 .binary_search_by(|definition| definition.path_ref().cmp(entry.path_ref()))
-                .expect_err("facade preflight rejects occupied type paths");
+                .expect_err("registration preflight rejects occupied type paths");
             self.types.insert(index, entry);
         }
         for entry in parts.supports {
             let index = self
                 .supports
                 .binary_search_by(|support| support.path_ref().cmp(entry.path_ref()))
-                .expect_err("facade preflight rejects occupied support paths");
+                .expect_err("registration preflight rejects occupied support paths");
             self.supports.insert(index, entry);
         }
         for entry in parts.endpoints {
             let index = self
                 .endpoints
                 .binary_search_by(|endpoint| endpoint.path_ref().cmp(entry.path_ref()))
-                .expect_err("facade preflight rejects occupied endpoint paths");
+                .expect_err("registration preflight rejects occupied endpoint paths");
             self.endpoints.insert(index, entry);
         }
         for item in parts.items {
@@ -613,7 +613,7 @@ impl Registry {
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
-            .expect_err("facade preflight rejects occupied roots");
+            .expect_err("registration preflight rejects occupied roots");
         self.facades.insert(facade_index, dependency);
         #[cfg(feature = "rust-import")]
         self.rebuild_imported_index();
@@ -1054,8 +1054,8 @@ impl Registry {
         {
             return Err(Error::RegistryConflict {
                 path: root.to_string().into(),
-                existing: self.entry_kind(root).unwrap_or("facade"),
-                incoming: "facade",
+                existing: self.entry_kind(root).unwrap_or("bindings"),
+                incoming: "bindings",
             });
         }
 
@@ -1436,7 +1436,7 @@ impl Registry {
             let facade = self
                 .facades
                 .binary_search_by(|candidate| candidate.root().cmp(root))
-                .expect("imported facade types retain their owner root");
+                .expect("imported types retain their owner root");
             let key = self.imported.binary_search_by(|candidate| {
                 candidate
                     .identity
@@ -1480,7 +1480,7 @@ impl Registry {
 fn insert_sorted_unique<T: Ord>(entries: &mut Vec<T>, entry: T) {
     let index = entries
         .binary_search(&entry)
-        .expect_err("facade preflight rejects occupied registry paths");
+        .expect_err("registration preflight rejects occupied registry paths");
     entries.insert(index, entry);
 }
 

@@ -253,7 +253,7 @@ pub fn claimed<'a>(
         (None, _) => Ok(None),
         (Some(binary), None) => Ok(Some(binary)),
         (Some(first), Some(second)) => Err(diagnostic::Report::error(
-            diagnostic::code::FRAMEWORK_FACADE,
+            diagnostic::code::FRAMEWORK_EXTENSION,
             format!(
                 "this program uses {} and {}; {} serves the first and {} the second",
                 first.manifest.claims.reason(facts).unwrap_or_default(),

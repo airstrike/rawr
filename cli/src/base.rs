@@ -87,7 +87,7 @@ impl Session {
                 Ok(())
             } else {
                 Err(diagnostic::Report::error(
-                    diagnostic::code::FRAMEWORK_FACADE,
+                    diagnostic::code::FRAMEWORK_EXTENSION,
                     format!("this program no longer uses {}", uses(&self.claims)),
                 )
                 .help("stop it and run it again with `rawr run`")

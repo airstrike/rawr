@@ -317,7 +317,7 @@ impl<'a> Contracts<'a> {
         let facade = registry
             .item_owner(&facade_item.path())
             .cloned()
-            .expect("static intrinsic items retain their installed facade owner proof");
+            .expect("static intrinsic items retain their installed owner proof");
 
         Some(Self {
             registry,
@@ -1564,7 +1564,7 @@ impl<'a> Cursor<'a> {
     ) -> Result<Tail, application::Error> {
         if run.is_none() {
             return Err(self.malformed(
-                "registered facade lacks intrinsic owned `iced::Application::run`".to_string(),
+                "registered bindings lack intrinsic owned `iced::Application::run`".to_string(),
             ));
         }
         let mut tail = Tail {
@@ -1596,7 +1596,7 @@ impl<'a> Cursor<'a> {
                 if centered.is_none() {
                     return Err(application::Error::MalformedEntry {
                         reason:
-                            "registered facade lacks intrinsic owned `iced::Application::centered`"
+                            "registered bindings lack intrinsic owned `iced::Application::centered`"
                                 .into(),
                         entry: operation,
                     });
@@ -1657,7 +1657,7 @@ impl<'a> Cursor<'a> {
             if contract.is_none() {
                 return Err(application::Error::MalformedEntry {
                     reason: format!(
-                        "registered facade lacks intrinsic owned `iced::Application::{role}`"
+                        "registered bindings lack intrinsic owned `iced::Application::{role}`"
                     )
                     .into(),
                     entry: operation,

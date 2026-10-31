@@ -45,5 +45,5 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
                 Err(error) => crate::result::err(super::io::made(error)),
             })
         })
-        .unwrap_or_else(|_| panic!("the std facade must retain fs::read_to_string"));
+        .unwrap_or_else(|_| panic!("the std bindings must retain fs::read_to_string"));
 }

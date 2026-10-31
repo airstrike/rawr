@@ -62,7 +62,7 @@ fn stream_calls_require_one_authenticated_plan_role() {
     assert!(matches!(
         error.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { reason, .. })
-            if reason.contains("one exact facade-authenticated stream plan type")
+            if reason.contains("one exact authenticated stream plan type")
     ));
 }
 
