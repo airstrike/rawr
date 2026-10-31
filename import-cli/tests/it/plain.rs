@@ -1138,6 +1138,46 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
     );
 }
 
+/// A project that depends on a crate the runner also needs under a name of
+/// its own, as serde is for a `$crate` path, builds its runner: Cargo takes
+/// one name per package, so the runner reaches the project's crate by both.
+#[test]
+fn a_project_dependency_the_runner_also_needs_coexists() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-shared-dependency");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\n[package]\nname='runner-shared-dependency'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nsemver='1'\nserde='1'\n",
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn main() {\n    println!(\"{}\", semver::Version::new(1, 2, 3));\n}\n",
+    )
+    .unwrap();
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "1.2.3\n");
+    let manifest = fs::read_to_string(root.join("target/rawr/runner/Cargo.toml")).unwrap();
+    assert_eq!(
+        manifest.matches("\"serde\"").count() + manifest.matches("serde =").count(),
+        1,
+        "the runner depends on serde once:\n{manifest}"
+    );
+}
+
 /// A cargo script that declares a dependency runs as `cargo -Zscript`
 /// runs it (D608 point 6). Nothing is kept beside it: its manifest and
 /// lockfile are in rawr's area, keyed by its path, and a second script
