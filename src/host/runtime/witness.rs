@@ -105,6 +105,43 @@ impl Witness {
         Some(Self::issue(self.authority, ty))
     }
 
+    /// Whether this witness names the exact builtin type. Generated native
+    /// place descriptors use this before exposing concrete storage (D651).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn is_builtin(&self, expected: &str) -> bool {
+        matches!(&*self.ty, Type::Builtin { name, .. } if name.as_str() == expected)
+    }
+
+    /// Whether native storage has the same exact logical type in this runner,
+    /// including when a later script generation reborrows a retained value.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn same_native_type(&self, other: &Self) -> bool {
+        self.authority.same_runner(other.authority) && self.ty == other.ty
+    }
+
+    /// The element witness of a variable-length sequence, when this is one.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn sequence_element(&self) -> Option<Self> {
+        match &*self.ty {
+            Type::Array {
+                element,
+                length: None,
+            } => Some(Self::issue(self.authority, (**element).clone())),
+            _ => None,
+        }
+    }
+
+    /// Whether this witness names the exact imported native definition.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn is_imported(&self, expected: &[u8; 32]) -> bool {
+        matches!(&*self.ty, Type::Imported { identity, .. } if identity.as_bytes() == expected)
+    }
+
     /// The exact logical type this witness proves.
     #[cfg(feature = "rust-import")]
     pub(crate) fn ty(&self) -> &Type {

@@ -612,6 +612,16 @@ impl Type {
         model: &program::model::Model,
         registry: &host::runtime::Registry,
     ) -> Result<(), Error> {
+        if let Some(place) = crate::place::get(value) {
+            return if place.witness().matches_native(registry.witness, self) {
+                Ok(())
+            } else {
+                Err(Error::Representation {
+                    expected: self.to_string().into(),
+                    actual: "a native place of another type".into(),
+                })
+            };
+        }
         match self {
             // A function type, as a script struct's `Box<dyn Fn(i64) ->
             // Message>` field is: a callable the program made, of any of

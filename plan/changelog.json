@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.24",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A native `&mut Vec<String>` or `&mut String` lent to a script callback, slot or closure is now the native storage itself. Element edits, pushes, whole assignment, moves, and writes made before an error or caught panic reach native code, with the vector's allocation and capacity kept. Element references such as `v[i]`, `last_mut()` or a helper's `&mut v[0]` reach the native element without copying it. Native functions that take `&mut Vec<String>` can now be called.","issues":[391],"refs":[365]}
+      ]
+    },
+    {
       "version": "0.3.23",
       "date": "2026-10-31",
       "entries": [
