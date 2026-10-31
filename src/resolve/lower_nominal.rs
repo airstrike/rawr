@@ -4556,6 +4556,30 @@ impl Models {
                     .insert((declared.name.text.clone(), forward.mutable));
             }
         }
+        // `type Fore: Iterator;`, its item no equality names.
+        for (_, declared) in traits.values() {
+            for (index, name) in declared.associated.iter().enumerate() {
+                let iterator = declared
+                    .associated_bounds
+                    .get(index)
+                    .is_some_and(|(_, bounds)| {
+                        bounds.iter().any(|bound| is_iterator_trait(&bound.text))
+                    });
+                let item = declared
+                    .associated_equalities
+                    .get(index)
+                    .is_some_and(|equalities| {
+                        equalities
+                            .iter()
+                            .any(|(bound, item, _)| is_iterator_trait(bound) && item.text == "Item")
+                    });
+                if iterator && !item {
+                    associated
+                        .iterators
+                        .insert((declared.name.text.clone(), name.text.clone()));
+                }
+            }
+        }
         // `type Fore: Iterator<Item = Self::For>;`.
         for (_, declared) in traits.values() {
             for (name, equalities) in declared
@@ -9498,6 +9522,10 @@ struct AssociatedTypes {
     /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
     /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
     reference_forwards: BTreeSet<(ImmutableString, bool)>,
+    /// Each trait's associated types bounded by `Iterator` with no `Item =`,
+    /// by trait and name: `type Fore: Iterator;`, whose item is the opaque
+    /// `<T::Fore as Iterator>::Item`.
+    iterators: BTreeSet<(ImmutableString, ImmutableString)>,
 }
 
 /// An equality of an associated type's bound, as `(trait, name, type)`.
@@ -9826,6 +9854,21 @@ impl Inference {
                 self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
         {
             return Ty::Iter(Box::new(item));
+        }
+        // `T::Fore` of `type Fore: Iterator;` is an iterator of the opaque
+        // `<T::Fore as Iterator>::Item`, as rustc types its items (T379).
+        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+            && self
+                .associated
+                .iterators
+                .contains(&(trait_name.clone(), name.clone()))
+        {
+            let fore = Ty::Projection(Box::new(base), trait_name.clone(), name.clone());
+            return Ty::Iter(Box::new(Ty::Projection(
+                Box::new(fore),
+                "Iterator".into(),
+                "Item".into(),
+            )));
         }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
     }

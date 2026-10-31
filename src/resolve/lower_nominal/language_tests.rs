@@ -11617,3 +11617,50 @@ run()
 "#,
     );
 }
+
+/// An associated type bounded by `Iterator` with no `Item =` walks in a
+/// `for` and its adaptors, its items the opaque `<T::Fore as
+/// Iterator>::Item`, as rustc types them (T379).
+#[test]
+fn language_associated_iterators_without_an_item_walk() {
+    let printed = printed(
+        r#"
+use std::ops::Range;
+trait For {
+    type Fore: Iterator;
+    fn fore(&self) -> Self::Fore;
+}
+struct Four(usize);
+impl For for Four {
+    type Fore = Range<usize>;
+    fn fore(&self) -> Self::Fore { 0..self.0 }
+}
+fn count<T: For>(t: &T) -> usize {
+    let mut n = 0;
+    for _ in t.fore() {
+        n += 1;
+    }
+    n + t.fore().count() * 10 + t.fore().skip(1).collect::<Vec<_>>().len() * 100
+}
+fn main() {
+    println!("{}", count(&Four(4)));
+}
+main();
+"#,
+    );
+    assert_eq!(printed, "344\n");
+    rejected(
+        r#"
+trait For {
+    type Fore: Iterator;
+    fn fore(&self) -> Self::Fore;
+}
+fn total<T: For>(t: &T) -> usize {
+    let mut n = 0usize;
+    for x in t.fore() { n += x; }
+    n
+}
+0
+"#,
+    );
+}
