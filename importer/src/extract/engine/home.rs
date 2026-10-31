@@ -62,6 +62,11 @@ pub(crate) fn read(bindings: &Path, key: &str) -> Option<(Lease, Vec<u8>)> {
     Some((lease, bytes))
 }
 
+/// Hold the current publication of `key` for a reader of its own files.
+pub(crate) fn hold(bindings: &Path, key: &str) -> Option<Lease> {
+    lease(bindings, key)
+}
+
 /// The current publication, read under its guard without loading the table.
 pub(crate) fn generation(bindings: &Path, key: &str) -> Option<String> {
     Some(lease(bindings, key)?.generation)

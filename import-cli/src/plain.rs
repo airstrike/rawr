@@ -53,12 +53,27 @@ impl profile::Checked for Checked {
 const IDENTITY: &str = "rawr.plain";
 const VERSION: u32 = 1;
 
+/// The plain profile. A program whose imported calls were proved from
+/// intrinsic facts (D650) is checked under those facts too: the union's
+/// identity joins the profile's, so a check cached under other facts is
+/// never replayed for it.
 fn adapter(
     limits: &rawr_import::cargo::Limits,
+    facts: Option<&[u8; 32]>,
 ) -> Result<trusted::Adapter<Operations>, profile::Error> {
+    let identity = match facts {
+        Some(facts) => {
+            let hex = facts
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("{IDENTITY}.facts.{hex}")
+        }
+        None => IDENTITY.to_owned(),
+    };
     Ok(trusted::Adapter::trusted(
         Operations,
-        profile::Identity::new(IDENTITY, limits)?,
+        profile::Identity::new(&identity, limits)?,
         profile::Version::new(VERSION)?,
         false,
     )
@@ -90,49 +105,87 @@ enum Proof {
     Failed(crate::Error),
 }
 
-/// Prove one imported call from the dependencies' intrinsic facts and keep
-/// its application. The facts are acquired once per preparation.
-fn prove(
+/// The dependency closure's intrinsic entries this preparation proves
+/// with, and the aliases the program declares their crates by.
+struct Facts {
+    entries: Vec<rawr_import::applicability::inventory::Entry>,
+    aliases: Vec<(Box<str>, Box<str>)>,
+}
+
+/// Each closure crate's entry from the project's inventory store, under the
+/// key its native input witness sets before any nightly build. A crate
+/// whose entry is absent or stale is acquired on the nightly, and its entry
+/// published when the nightly saw the inputs the project's build sees.
+fn acquire(
     graph: &rawr::package::Graph,
     limits: &rawr_import::cargo::Limits,
+) -> Result<Facts, crate::Error> {
+    use crate::Error;
+    use rawr_import::applicability::{inventory, store};
+    let request = |closure: &[rawr_import::cargo::config::Dependency]| {
+        let environment = Environment::capture().map_err(Error::other)?;
+        graph
+            .rust_inventory_plain(environment, closure, limits)
+            .map_err(Error::other)?
+            .ok_or_else(|| Error::other("the crate has no Rust dependency"))
+    };
+    let probe = request(&[])?;
+    let native = probe.pinned_native(limits).map_err(Error::other)?;
+    // A crate's native input witness is the project's view of it, so the
+    // entries it keys stay with the project, as its build does (D608.4).
+    let directory = graph.entry_package().root().join("target/rawr/inventories");
+    let closure = probe.closure(&native, limits).map_err(Error::other)?;
+    let keys = closure
+        .units
+        .iter()
+        .map(|(name, unit, witness)| (unit.clone(), (store::key(name, witness), *witness)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut entries = Vec::new();
+    let mut missing = std::collections::BTreeSet::new();
+    for (key, witness) in keys.values() {
+        match store::read(&directory, key) {
+            Some(held) if held.entry().native().1 == witness => entries.push(held.into_entry()),
+            _ => {
+                missing.insert(*key);
+            }
+        }
+    }
+    if !missing.is_empty() {
+        let request = request(&closure.dependencies)?;
+        let acquired =
+            inventory::Acquired::capture(request, &native, limits).map_err(Error::other)?;
+        entries = acquired
+            .entries(|unit| keys.get(unit).map(|(key, _)| *key))
+            .map_err(Error::other)?;
+        for entry in &entries {
+            let (unit, witness) = entry.native();
+            // The nightly saw the inputs the project's build sees, or the
+            // entry stays local to this run.
+            if missing.contains(entry.key())
+                && keys
+                    .get(unit)
+                    .is_some_and(|(_, expected)| expected == witness)
+            {
+                let _ = store::publish(&directory, entry);
+            }
+        }
+    }
+    Ok(Facts {
+        entries,
+        aliases: closure.aliases,
+    })
+}
+
+/// Prove one imported call from the dependency closure's intrinsic facts
+/// and keep its application. No compiler runs here.
+fn prove(
+    graph: &rawr::package::Graph,
+    facts: &Facts,
     call: &rawr_import::surface::application::Call,
-    inventory: &mut Option<rawr_import::applicability::inventory::Acquired>,
     applications: &mut Vec<rawr_import::surface::application::Application>,
 ) -> Result<(), Proof> {
     use crate::Error;
-    let acquired = match inventory {
-        Some(acquired) => acquired,
-        None => {
-            let request = |closure: &[rawr_import::cargo::config::Dependency]| {
-                let environment = Environment::capture()
-                    .map_err(Error::other)
-                    .map_err(Proof::Failed)?;
-                graph
-                    .rust_inventory_plain(environment, closure, limits)
-                    .map_err(Error::other)
-                    .map_err(Proof::Failed)?
-                    .ok_or_else(|| Proof::Failed(Error::other("the crate has no Rust dependency")))
-            };
-            let probe = request(&[])?;
-            let native = probe
-                .pinned_native(limits)
-                .map_err(Error::other)
-                .map_err(Proof::Failed)?;
-            // Every crate the build reaches is declared, so each crate that
-            // can implement a trait has its own complete partition.
-            let closure = probe
-                .closure_dependencies(&native, limits)
-                .map_err(Error::other)
-                .map_err(Proof::Failed)?;
-            let request = request(&closure)?;
-            let acquired =
-                rawr_import::applicability::inventory::Acquired::capture(request, &native, limits)
-                    .map_err(Error::other)
-                    .map_err(Proof::Failed)?;
-            inventory.insert(acquired)
-        }
-    };
-    let catalog = rawr_import::applicability::Catalog::join(std::slice::from_ref(acquired))
+    let catalog = rawr_import::applicability::Catalog::stored(&facts.entries, &facts.aliases)
         .map_err(Error::other)
         .map_err(Proof::Failed)?;
     let application = catalog
@@ -172,7 +225,21 @@ fn prepare(
         .imported_transport(expected, &limits)
         .map_err(Error::other)?;
     let project = graph.entry_package().root().to_path_buf();
-    let adapter = adapter(&limits).map_err(Error::other)?;
+    // A program that used proved applications last time keys its check by
+    // the facts its closure has now; the facts are read before any lookup.
+    let applied = project.join("target/rawr/inventories/applied");
+    let mut inventory = None;
+    let mut facts = None;
+    if applied.is_file() {
+        let acquired = acquire(&graph, &limits)?;
+        facts = Some(
+            *rawr_import::applicability::Catalog::stored(&acquired.entries, &acquired.aliases)
+                .map_err(Error::other)?
+                .fingerprint(),
+        );
+        inventory = Some(acquired);
+    }
+    let adapter = adapter(&limits, facts.as_ref()).map_err(Error::other)?;
     let policy = rawr_import::classify::Policy::standard();
     let mut snapshot = Some(snapshot);
     let mut crate_demand = rawr_import::crate_demand::load(&project);
@@ -183,7 +250,6 @@ fn prepare(
     // on the call's receiver and lexical scope (D650), proved from the
     // dependencies' intrinsic facts, acquired once.
     let mut applications = Vec::new();
-    let mut inventory = None;
     let (demand, profile_contract, cached, native) = loop {
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
@@ -258,14 +324,20 @@ fn prepare(
                         let call = error
                             .rust_application()
                             .ok_or_else(|| Error::other("imported call encoding"))?;
-                        prove(&graph, &limits, &call, &mut inventory, &mut applications).map_err(
-                            |reason| match reason {
+                        if inventory.is_none() {
+                            inventory = Some(acquire(&graph, &limits)?);
+                        }
+                        let facts = inventory
+                            .as_ref()
+                            .ok_or_else(|| Error::other("intrinsic facts"))?;
+                        prove(&graph, facts, &call, &mut applications).map_err(|reason| {
+                            match reason {
                                 Proof::Rejected(reason) => {
                                     Error::other(format!("{}\n  {reason}", Error::Rawr(error)))
                                 }
                                 Proof::Failed(failure) => failure,
-                            },
-                        )?;
+                            }
+                        })?;
                         continue;
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
@@ -317,6 +389,25 @@ fn prepare(
             }
         };
     };
+    // Remember whether this program's check depends on proved applications,
+    // so its next run keys the check by the facts it then has.
+    let catalogs = demand.application_catalogs();
+    match facts {
+        Some(facts) if !catalogs.is_empty() && catalogs != [facts] => {
+            return Err(Error::other(
+                "a check keyed by its intrinsic facts holds applications proved from others",
+            ));
+        }
+        _ if catalogs.is_empty() => {
+            let _ = std::fs::remove_file(&applied);
+        }
+        _ => {
+            if let Some(parent) = applied.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&applied, b"");
+        }
+    }
     let profile = rawr_import::composition::profile::prepare_retained(
         &adapter,
         &profile_contract,

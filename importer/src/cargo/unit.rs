@@ -372,19 +372,21 @@ impl Metadata {
         self.package_id(self.root)
     }
 
+    /// Each alias this resolution declares, with its package id.
     #[cfg(feature = "rustc-driver")]
-    /// Every package this resolution declares directly, by package id.
-    pub(crate) fn declared_packages(&self) -> BTreeSet<&str> {
+    pub(crate) fn declared_packages(&self) -> BTreeMap<&str, &str> {
         self.declared
-            .values()
-            .filter_map(|index| self.package_id(*index).ok())
+            .iter()
+            .filter_map(|(alias, index)| Some((alias.as_ref(), self.package_id(*index).ok()?)))
             .collect()
     }
 
+    #[cfg(feature = "rustc-driver")]
     pub(crate) fn root_package_id(&self) -> Option<&str> {
         self.root_id().ok()
     }
 
+    #[cfg(feature = "rustc-driver")]
     fn extracts_alias(&self, alias: &str) -> bool {
         self.libraries.contains(alias)
     }

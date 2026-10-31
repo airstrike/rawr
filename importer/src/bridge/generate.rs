@@ -5304,7 +5304,12 @@ fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), reque
         for path in invocation.traits.iter() {
             writeln!(output, "    use ::{} as _;", path.join("::")).map_err(encoding)?;
         }
-        write!(output, "    pub(crate) fn call(receiver: &").map_err(encoding)?;
+        let lent = match invocation.ownership {
+            crate::classify::representability::ownership::Receiver::Shared => "&",
+            crate::classify::representability::ownership::Receiver::Mutable => "&mut ",
+            crate::classify::representability::ownership::Receiver::Owned => "",
+        };
+        write!(output, "    pub(crate) fn call(receiver: {lent}").map_err(encoding)?;
         render_native(&invocation.native_receiver, output)?;
         for (index, input) in invocation.native_inputs.iter().enumerate() {
             write!(output, ", argument_{index}: ").map_err(encoding)?;
@@ -5317,6 +5322,9 @@ fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), reque
         argument_list(invocation.native_inputs.len(), 0, &mut arguments)?;
         let arguments = String::from_utf8(arguments).map_err(|_| request::Error::Encoding)?;
         match &invocation.expression {
+            crate::surface::application::Expression::Method { name } if lent.is_empty() => {
+                writeln!(output, "receiver.{name}({arguments})").map_err(encoding)?;
+            }
             crate::surface::application::Expression::Method { name } => {
                 // The source's receiver is a place of the type: method
                 // lookup starts there, not at the adapter's reference.
@@ -7132,23 +7140,34 @@ fn render_adapter_body(
                             String::new()
                         };
                         // The arena is lent while the method runs, as for a
-                        // function (D551.6).
-                        write!(
-                            output,
-                            "    let output{annotation} = lend(arguments.arena, || receiver.{}",
-                            plan.name()
-                        )
-                        .map_err(|_| request::Error::Encoding)?;
-                        render_item_turbofish(
-                            signature,
-                            substitutions,
-                            constants,
-                            *container_parameters,
-                            output,
-                        )?;
-                        output
-                            .write_all(b"(")
+                        // function (D551.6). A proof-backed application
+                        // calls its isolated helper (`render_applications`).
+                        if plan.application_invocation().is_some() {
+                            write!(
+                                output,
+                                "    let output{annotation} = lend(arguments.arena, || rawr_applications::{}::call(receiver{}",
+                                identity_name("application", plan),
+                                if signature.inputs().is_empty() { "" } else { ", " },
+                            )
                             .map_err(|_| request::Error::Encoding)?;
+                        } else {
+                            write!(
+                                output,
+                                "    let output{annotation} = lend(arguments.arena, || receiver.{}",
+                                plan.name()
+                            )
+                            .map_err(|_| request::Error::Encoding)?;
+                            render_item_turbofish(
+                                signature,
+                                substitutions,
+                                constants,
+                                *container_parameters,
+                                output,
+                            )?;
+                            output
+                                .write_all(b"(")
+                                .map_err(|_| request::Error::Encoding)?;
+                        }
                         argument_list(signature.inputs().len(), 1, output)?;
                         output
                             .write_all(b"));\n")

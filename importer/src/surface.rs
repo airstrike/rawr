@@ -1531,6 +1531,24 @@ fn model_type_matches(
 }
 
 impl<B> Demand<Sealed, B> {
+    /// The intrinsic fact unions this demand's proof-backed applications
+    /// were proved from. A replay is current only while they are.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn application_catalogs(&self) -> Vec<[u8; 32]> {
+        let mut catalogs = self
+            .plans
+            .iter()
+            .filter_map(|plan| {
+                plan.application_invocation()
+                    .map(|invocation| invocation.catalog)
+            })
+            .collect::<Vec<_>>();
+        catalogs.sort_unstable();
+        catalogs.dedup();
+        catalogs
+    }
+
     /// Reconstruct one current sealed demand from its exact canonical checked-node output.
     #[doc(hidden)]
     pub fn replay_cached(

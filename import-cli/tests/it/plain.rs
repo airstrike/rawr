@@ -276,44 +276,89 @@ fn main() {
 /// each function imports a different trait in its own block. Rawr proves
 /// each call from the crates' intrinsic facts (D650) and the runner calls
 /// the native method through a helper that imports only that block's trait.
+/// Each crate's facts are kept under its own key: a later run reuses them,
+/// and a changed crate gets a new entry alone.
 #[test]
 fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lexical-applications");
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lexical-applications");
+    let home = base.join("home");
+    let crates = base.join("crates");
+    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
-    let _ = fs::remove_dir_all(root.join("src"));
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("Cargo.toml"),
-        format!(
-            "[workspace]\n[package]\nname='lexical-applications'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\n",
-            fixtures.join("applicability-a"),
-            fixtures.join("applicability-c"),
-        ),
-    )
-    .unwrap();
-    fs::copy(
-        Path::new(FIXTURE).join("rust-toolchain.toml"),
-        root.join("rust-toolchain.toml"),
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/main.rs"),
-        "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn right() -> bool {\n    use facts_c::Right;\n    facts_a::both().choose()\n}\nfn main() {\n    println!(\"{} {}\", left(), right());\n}\n",
-    )
-    .unwrap();
-    for _ in 0..2 {
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+    for name in ["a", "b", "c"] {
+        copy(
+            &fixtures.join(format!("applicability-{name}")),
+            &crates.join(format!("applicability-{name}")),
+        );
+    }
+    let project = |name: &str, source: &str| {
+        let root = base.join(name);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\n[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\n",
+                crates.join("applicability-a"),
+                crates.join("applicability-c"),
+            ),
+        )
+        .unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("rust-toolchain.toml"),
+            root.join("rust-toolchain.toml"),
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), source).unwrap();
+        root
+    };
+    let run = |root: &Path, expected: &str| {
+        let run = rawr_import_within(root, &["run"], &home, std::time::Duration::from_secs(600));
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
             text(&run.stdout),
             text(&run.stderr)
         );
-        assert_eq!(text(&run.stdout), "11 true\n");
-    }
+        assert_eq!(text(&run.stdout), expected);
+    };
+    // Each published entry: its key directory and its publication.
+    let published = |root: &Path| {
+        let mut entries = fs::read_dir(root.join("target/rawr/inventories"))
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| {
+                        let path = entry.ok()?.path();
+                        let generation = fs::read_to_string(path.join(".generation")).ok()?;
+                        let entry = fs::read_to_string(path.join("entry.json")).ok()?;
+                        let entry = serde_json::from_str::<serde_json::Value>(&entry).ok()?;
+                        let name = ["facts_a", "facts_b", "facts_c"]
+                            .into_iter()
+                            .find(|name| entry["crate_name"] == *name)?;
+                        Some((name, path, generation))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        entries.sort();
+        entries
+    };
+
+    let first = project(
+        "first",
+        "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn right() -> bool {\n    use facts_c::Right;\n    facts_a::both().choose()\n}\nfn bumped() -> i64 {\n    use facts_c::BumpLeft;\n    let mut both = facts_a::both();\n    both.bump()\n}\nfn taken() -> i64 {\n    use facts_c::TakeLeft;\n    facts_a::both().spend()\n}\nfn main() {\n    println!(\"{} {} {} {}\", left(), right(), bumped(), taken());\n}\n",
+    );
+    run(&first, "11 true 41 51\n");
+    let shared = published(&first);
+    assert_eq!(
+        shared.iter().map(|(name, ..)| *name).collect::<Vec<_>>(),
+        ["facts_a", "facts_b", "facts_c"],
+        "each crate of the closure has its own entry"
+    );
+    // A later run of the project reads every entry back.
+    run(&first, "11 true 41 51\n");
+    assert_eq!(published(&first), shared, "a later run reuses every entry");
     let helpers =
-        fs::read_to_string(root.join("target/rawr/runner/src/rawr_applications.rs")).unwrap();
+        fs::read_to_string(first.join("target/rawr/runner/src/rawr_applications.rs")).unwrap();
     for expected in [
         "#[no_implicit_prelude]",
         "use ::facts_c::Left as _;",
@@ -321,24 +366,50 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
         "pub(crate) fn call(receiver: &::facts_a::Both) -> i64 {",
         "pub(crate) fn call(receiver: &::facts_a::Both) -> bool {",
         "(*receiver).choose()",
+        "pub(crate) fn call(receiver: &mut ::facts_a::Both) -> i64 {",
+        "(*receiver).bump()",
+        "pub(crate) fn call(receiver: ::facts_a::Both) -> i64 {",
+        "receiver.spend()",
     ] {
         assert!(helpers.contains(expected), "{expected}\n{helpers}");
     }
     assert!(!helpers.contains("use super::*"));
-    // Swapping the blocks' imports swaps which method each call selects.
-    fs::write(
-        root.join("src/main.rs"),
+    // A second project, its blocks' imports swapped: each call re-selects.
+    let second = project(
+        "second",
         "// rawr\nfn first() {\n    use facts_c::Right;\n    println!(\"{}\", facts_a::both().choose());\n}\nfn second() {\n    use facts_c::Left;\n    println!(\"{}\", facts_a::both().choose());\n}\nfn main() {\n    first();\n    second();\n}\n",
-    )
-    .unwrap();
-    let swapped = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
-    assert!(
-        swapped.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        text(&swapped.stdout),
-        text(&swapped.stderr)
     );
-    assert_eq!(text(&swapped.stdout), "true\n11\n");
+    run(&second, "true\n11\n");
+
+    // A changed crate has a new key; the others keep theirs.
+    let source = crates.join("applicability-c/src/lib.rs");
+    let mut text_c = fs::read_to_string(&source).unwrap();
+    text_c.push_str("\npub const CHANGED: i64 = 1;\n");
+    fs::write(&source, text_c).unwrap();
+    run(&first, "11 true 41 51\n");
+    let changed = published(&first);
+    let kept = |name: &str| {
+        changed
+            .iter()
+            .filter(|(entry, ..)| *entry == name)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    for name in ["facts_a", "facts_b"] {
+        assert_eq!(
+            kept(name),
+            shared
+                .iter()
+                .filter(|(entry, ..)| *entry == name)
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(
+        kept("facts_c").len(),
+        2,
+        "the changed crate has a second entry"
+    );
 }
 
 /// A crate's bindings are shared per machine: a second project with the

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::api::{self, identity, model};
@@ -38,16 +38,14 @@ impl Prepared {
 }
 
 /// Unvalidated canonical facts from one authenticated compiler document.
-#[derive(Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Facts {
     pub(crate) definitions: Box<[model::Definition]>,
     pub(crate) implementations: Box<[model::Implementation]>,
     pub(crate) partitions: Box<[Partition]>,
 }
 
-#[derive(Eq, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Partition {
     pub(crate) unit: identity::Unit,
     pub(crate) native_unit: Box<str>,
@@ -65,56 +63,52 @@ pub(crate) struct Partition {
     pub(crate) deref: Option<Lookup>,
 }
 
-#[derive(Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Prelude {
     pub(crate) module: identity::Definition,
     pub(crate) edition: Box<str>,
     pub(crate) traits: Box<[TraitNames]>,
 }
 
-#[derive(Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct TraitNames {
     pub(crate) id: identity::Definition,
     pub(crate) methods: Box<[Box<str>]>,
 }
 
-#[derive(Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Association {
     pub(crate) implementation: identity::Definition,
     pub(crate) item: identity::Definition,
     pub(crate) declaration: Option<identity::Definition>,
 }
 
-#[derive(Eq, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Clone))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Inherent {
     pub(crate) owner: identity::Definition,
     pub(crate) implementations: Box<[identity::Definition]>,
     pub(crate) associated: Box<[Association]>,
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Lookup {
     pub(crate) trait_id: identity::Definition,
     pub(crate) domains: Box<[LookupDomain]>,
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct LookupDomain {
     pub(crate) root: identity::Definition,
     pub(crate) implementations: Box<[LookupHeader]>,
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct LookupHeader {
     pub(crate) implementation: identity::Definition,
     pub(crate) receiver: Receiver,
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) enum Receiver {
     Nominal(identity::Definition),
     Closed,
@@ -214,6 +208,165 @@ impl Acquired {
     /// Number of independently completed selected-crate domains.
     pub fn partitions(&self) -> usize {
         self.facts.partitions.len()
+    }
+}
+
+/// One public export relative to its crate's root: its path, namespace and
+/// exact target.
+pub(super) type RelativeExport = (Box<[Box<str>]>, identity::Namespace, identity::Definition);
+
+/// The format of a shared crate entry.
+const ENTRY_SCHEMA: u32 = 1;
+
+/// One crate's complete intrinsic facts, shared per machine under a key the
+/// crate's own native inputs set before any nightly build (D609.3). Its
+/// exports are relative to the crate root: the alias a program spells it by
+/// is local and applied when entries join (`Catalog::stored`).
+#[derive(Deserialize, Serialize)]
+pub struct Entry {
+    schema: u32,
+    key: [u8; 32],
+    crate_name: Box<str>,
+    exports: Box<[RelativeExport]>,
+    facts: Facts,
+    #[serde(skip)]
+    fingerprint: [u8; 32],
+}
+
+impl Entry {
+    fn seal(mut self) -> Result<Self> {
+        self.facts.validate()?;
+        if self.schema != ENTRY_SCHEMA
+            || self.facts.partitions.len() != 1
+            || self.facts.partitions[0].unit.crate_name() != self.crate_name.as_ref()
+        {
+            return Err(invalid("shared crate entry differs from its one crate"));
+        }
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(b"rawr.import.intrinsic-entry/v1");
+        fingerprint.update(
+            serde_json::to_vec(&self).map_err(|_| invalid("shared entry encoding failed"))?,
+        );
+        self.fingerprint = fingerprint.finalize().into();
+        Ok(self)
+    }
+
+    /// Decode a stored entry; it must be the one its key names.
+    pub fn decode(bytes: &[u8], key: &[u8; 32]) -> Result<Self> {
+        let entry: Self =
+            serde_json::from_slice(bytes).map_err(|_| invalid("shared entry does not decode"))?;
+        if &entry.key != key {
+            return Err(invalid("shared entry is not the one its key names"));
+        }
+        entry.seal()
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|_| invalid("shared entry encoding failed"))
+    }
+
+    pub const fn key(&self) -> &[u8; 32] {
+        &self.key
+    }
+
+    pub fn crate_name(&self) -> &str {
+        &self.crate_name
+    }
+
+    /// The compiler unit whose native inputs this entry was captured from,
+    /// and their witness: a consumer's build must agree before reuse.
+    pub fn native(&self) -> (&str, &[u8; 32]) {
+        let partition = &self.facts.partitions[0];
+        (&partition.native_unit, &partition.native_inputs)
+    }
+
+    pub(super) fn exports(&self) -> impl Iterator<Item = &RelativeExport> {
+        self.exports.iter()
+    }
+
+    pub(super) const fn facts(&self) -> &Facts {
+        &self.facts
+    }
+
+    pub(super) const fn fingerprint(&self) -> &[u8; 32] {
+        &self.fingerprint
+    }
+}
+
+impl Acquired {
+    /// Split this capture into one entry per crate. `key` gives each
+    /// crate's shared key from its compiler unit. Declarations of its
+    /// dependencies and of crates no partition owns, such as the standard
+    /// library's, go with each entry that may read them; identical copies
+    /// join as one.
+    pub fn entries(&self, key: impl Fn(&str) -> Option<[u8; 32]>) -> Result<Vec<Entry>> {
+        let owned = self
+            .facts
+            .partitions
+            .iter()
+            .map(|partition| &partition.unit)
+            .collect::<BTreeSet<_>>();
+        let mut entries = Vec::new();
+        for partition in self.facts.partitions.iter() {
+            let unit = &partition.unit;
+            let key = key(&partition.native_unit)
+                .ok_or_else(|| invalid("a captured crate has no shared key"))?;
+            // A crate's facts read its dependencies' declarations, which
+            // its key covers too; its own implementations are its alone.
+            let readable = |owner: &identity::Unit| {
+                owner == unit
+                    || !owned.contains(owner)
+                    || partition.dependencies.binary_search(owner).is_ok()
+            };
+            let ours = |owner: &identity::Unit| owner == unit || !owned.contains(owner);
+            let crate_name = unit.crate_name();
+            let mut exports = self
+                .graph
+                .exports()
+                .filter_map(|path| match path {
+                    api::ledger::Path::Imported(export)
+                        if export.key().root_alias() == crate_name =>
+                    {
+                        Some((
+                            export.key().path().map(Into::into).collect(),
+                            export.key().namespace(),
+                            export.target().clone(),
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            exports.sort_unstable();
+            exports.dedup();
+            entries.push(
+                Entry {
+                    schema: ENTRY_SCHEMA,
+                    key,
+                    crate_name: crate_name.into(),
+                    exports: exports.into_boxed_slice(),
+                    facts: Facts {
+                        definitions: self
+                            .facts
+                            .definitions
+                            .iter()
+                            .filter(|definition| readable(definition.id().unit()))
+                            .cloned()
+                            .collect(),
+                        implementations: self
+                            .facts
+                            .implementations
+                            .iter()
+                            .filter(|implementation| ours(implementation.id().unit()))
+                            .cloned()
+                            .collect(),
+                        partitions: Box::new([partition.clone()]),
+                    },
+                    fingerprint: [0; 32],
+                }
+                .seal()?,
+            );
+        }
+        Ok(entries)
     }
 }
 

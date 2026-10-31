@@ -21622,7 +21622,9 @@ impl<'a> Parser<'a> {
             ),
             receiver_arguments: Box::new([]),
             name: member.as_str().into(),
-            mutable: false,
+            // Rust selects a `&mut self` method of any receiver and checks
+            // its mutability afterwards, as `finish_host_method` does.
+            mutable: true,
             arguments: types.into_boxed_slice(),
             scope,
         }

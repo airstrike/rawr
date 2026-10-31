@@ -64,3 +64,35 @@ impl<T: Base<i64> + Gate<Mode = Disabled>> EqualityRight for T {
         false
     }
 }
+pub trait BumpLeft {
+    fn bump(&mut self) -> i64;
+}
+impl<T: Base<i64> + LeftMark> BumpLeft for T {
+    fn bump(&mut self) -> i64 {
+        41
+    }
+}
+pub trait BumpRight {
+    fn bump(&mut self) -> bool;
+}
+impl<T: Base<i64> + RightMark> BumpRight for T {
+    fn bump(&mut self) -> bool {
+        false
+    }
+}
+pub trait TakeLeft {
+    fn spend(self) -> i64;
+}
+impl<T: Base<i64> + LeftMark> TakeLeft for T {
+    fn spend(self) -> i64 {
+        51
+    }
+}
+pub trait TakeRight {
+    fn spend(self) -> bool;
+}
+impl<T: Base<i64> + RightMark> TakeRight for T {
+    fn spend(self) -> bool {
+        false
+    }
+}

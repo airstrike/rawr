@@ -64,9 +64,10 @@ impl Graph {
         .map(Some)
     }
 
-    /// The request that acquires the program's dependencies' intrinsic
-    /// facts (D650): every dependency, with no demand and no runner
-    /// universe. Its inventory proves imported calls locally.
+    /// The request that acquires intrinsic facts (D650), with no demand and
+    /// no runner universe. With no `closure` it declares the program's
+    /// dependencies, as the probe that finds their library closure; with
+    /// one it declares exactly that closure.
     #[doc(hidden)]
     pub fn rust_inventory_plain(
         &self,
@@ -862,14 +863,19 @@ fn request_inventory(
     .environment(environment)
     .profile(&config.profile)?;
     builder = builder.cargo_authority(&config.cargo_authority)?;
-    for dependency in dependencies(config, limits)? {
-        builder = builder.dependency(dependency)?;
-    }
-    if let Some(app) = app {
-        builder = builder.dependency(app)?;
-    }
-    for dependency in closure {
-        builder = builder.dependency(dependency.clone())?;
+    // The probe declares what the program does; the inventory declares
+    // its whole library closure, each crate by its own name.
+    if closure.is_empty() {
+        for dependency in dependencies(config, limits)? {
+            builder = builder.dependency(dependency)?;
+        }
+        if let Some(app) = app {
+            builder = builder.dependency(app)?;
+        }
+    } else {
+        for dependency in closure {
+            builder = builder.dependency(dependency.clone())?;
+        }
     }
     builder
         .inventory()

@@ -211,6 +211,18 @@ impl Owner {
     }
 }
 
+/// A program's library closure for intrinsic inventories ([`Request::closure`]).
+#[cfg(feature = "rustc-driver")]
+#[derive(Default)]
+pub struct Closure {
+    /// Every library crate, declared by its crate name.
+    pub dependencies: Vec<config::Dependency>,
+    /// Each alias the program declares, with the crate name it names.
+    pub aliases: Vec<(Box<str>, Box<str>)>,
+    /// Each crate's name, compiler unit and native input witness.
+    pub units: Vec<(Box<str>, Box<str>, [u8; 32])>,
+}
+
 /// Staged inputs that can only become a `Request` after canonical sealing.
 pub struct Builder {
     inventory: bool,
@@ -1177,17 +1189,16 @@ impl Request {
         self.resolve(native, limits)
     }
 
-    /// Every library crate this request's build reaches that it does not
-    /// declare, as an exact dependency at its resolved source, version and
-    /// features. An intrinsic inventory declares them too, so each crate
-    /// that can implement a trait has its own complete partition (D650.5).
-    /// This runs the normal resolution only: no metadata probe.
+    /// Every library crate this request's build reaches, as an exact
+    /// dependency at its resolved source, version and features, declared by
+    /// its crate name; the alias each declared dependency had; and each
+    /// crate's native input witness. An intrinsic inventory declares the
+    /// whole closure, so each crate that can implement a trait has its own
+    /// complete partition (D650.5), and a crate's witness keys its shared
+    /// entry before any nightly build (D609.3). This runs the normal
+    /// resolution only: no metadata probe.
     #[cfg(feature = "rustc-driver")]
-    pub fn closure_dependencies(
-        mut self,
-        native: &Native,
-        limits: &Limits,
-    ) -> Result<Vec<config::Dependency>> {
+    pub fn closure(mut self, native: &Native, limits: &Limits) -> Result<Closure> {
         self.inventory = false;
         self.demand = Box::default();
         self.inputs_only = true;
@@ -1196,7 +1207,7 @@ impl Request {
         let declared = metadata.declared_packages();
         let root = metadata.root_package_id();
         let mut seen = std::collections::BTreeSet::new();
-        let mut dependencies = Vec::new();
+        let mut closure = Closure::default();
         for output in resolution.build_unit.artifacts() {
             let library = output
                 .target_kinds()
@@ -1210,7 +1221,6 @@ impl Request {
             if !library
                 || proc_macro
                 || Some(package_id) == root
-                || declared.contains(package_id)
                 || !seen.insert(package_id.to_owned())
             {
                 continue;
@@ -1219,10 +1229,10 @@ impl Request {
                 field: "inventory closure",
                 reason: format!("`{package_id}` has no resolved package").into_boxed_str(),
             })?;
-            let alias = output.crate_name();
+            let name = output.crate_name();
             let dependency = match package.source() {
                 unit::PackageSource::Path { .. } => {
-                    config::Dependency::path(alias, package.root(), limits)?
+                    config::Dependency::path(name, package.root(), limits)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. }
                     if cargo_id.starts_with(
@@ -1230,7 +1240,7 @@ impl Request {
                     ) || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
                     config::Dependency::registry(
-                        alias,
+                        name,
                         &format!("={}", package.version()),
                         limits,
                     )?
@@ -1243,7 +1253,7 @@ impl Request {
                             field: "inventory closure",
                             reason: format!("`{package_id}` has no git URL").into_boxed_str(),
                         })?;
-                    config::Dependency::git(alias, url, oid, limits)?
+                    config::Dependency::git(name, url, oid, limits)?
                 }
                 unit::PackageSource::Registry { .. } => {
                     return Err(Error::Request {
@@ -1257,9 +1267,26 @@ impl Request {
             }
             .package(package.name())?
             .features(output.features().iter().map(AsRef::as_ref), false)?;
-            dependencies.push(dependency);
+            closure.dependencies.push(dependency);
+            for (alias, declared) in &declared {
+                if *declared == package_id {
+                    closure.aliases.push(((*alias).into(), name.into()));
+                }
+            }
+            let witness = resolution
+                .input
+                .partition(output.semantic_key())
+                .ok_or_else(|| Error::Request {
+                    field: "inventory closure",
+                    reason: format!("`{package_id}` has no native input witness").into_boxed_str(),
+                })?;
+            closure
+                .units
+                .push((name.into(), output.semantic_key().into(), witness));
         }
-        Ok(dependencies)
+        closure.aliases.sort_unstable();
+        closure.units.sort_unstable();
+        Ok(closure)
     }
 
     /// Prepare the complete semantic owner before extraction, reusing an

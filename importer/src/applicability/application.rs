@@ -3,7 +3,7 @@
 use sha2::{Digest as _, Sha256};
 
 use super::{call, resolve, scope, Catalog};
-use crate::api::{identity, ledger, model};
+use crate::api::{identity, model};
 use crate::classify::representability::{convert, ownership, signature};
 use crate::surface::application::{Application, Call, Expression, Invocation, Path, Type};
 
@@ -46,23 +46,25 @@ impl Catalog<'_> {
         else {
             return Err(Error::Unsupported("method declaration is not a function"));
         };
-        if !matches!(
-            declared.receiver(),
+        // The declared receiver decides how the adapter lends the value:
+        // `&self` and `&mut self` borrow it in its slot, `self` takes it.
+        let ownership = match declared.receiver() {
             model::Receiver::Reference {
                 mutability: model::Mutability::Shared,
                 ..
+            } => ownership::Receiver::Shared,
+            model::Receiver::Reference {
+                mutability: model::Mutability::Mutable,
+                ..
+            } => ownership::Receiver::Mutable,
+            model::Receiver::Value { .. } => ownership::Receiver::Owned,
+            _ => {
+                return Err(Error::Unsupported(
+                    "the declared receiver has no native application transport",
+                ))
             }
-        ) {
-            return Err(Error::Unsupported(
-                "the first native application transport requires a shared receiver",
-            ));
-        }
+        };
         let request = proof.request();
-        if request.mutable {
-            return Err(Error::Unsupported(
-                "mutable source receiver transport is not yet proved",
-            ));
-        }
         let (receiver, expression) = match (&request.lookup, &request.receiver) {
             (call::Lookup::Method { name }, receiver @ convert::Type::Nominal { .. }) => {
                 (receiver.clone(), Expression::Method { name: name.clone() })
@@ -133,7 +135,7 @@ impl Catalog<'_> {
                 definition.span().clone(),
             ),
             receiver,
-            ownership: ownership::Receiver::Shared,
+            ownership,
             signature,
             native_receiver,
             native_inputs,
@@ -212,13 +214,8 @@ impl Catalog<'_> {
     /// the proof cannot see, so the call stays undecided.
     fn scope_traits(&self, call: &Call) -> Result<Vec<scope::Import>, Rejection> {
         let roots = self
-            .graphs
-            .iter()
-            .flat_map(|graph| graph.exports())
-            .filter_map(|path| match path {
-                ledger::Path::Imported(export) => Some(export.key().root_alias()),
-                _ => None,
-            })
+            .table()
+            .map(|(key, _)| key.root_alias())
             .collect::<std::collections::BTreeSet<_>>();
         let mut traits = Vec::new();
         let mut push = |definition: crate::surface::identity::Definition, path: Path| {
@@ -249,25 +246,19 @@ impl Catalog<'_> {
                 && last.as_ref() == "*"
             {
                 let module = module.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-                for graph in &self.graphs {
-                    for export in graph.exports() {
-                        let ledger::Path::Imported(export) = export else {
-                            continue;
-                        };
-                        let key = export.key();
-                        let segments = key.path().collect::<Vec<_>>();
-                        if key.root_alias() == root.as_ref()
-                            && export.target().namespace() == identity::Namespace::Type
-                            && segments.len() == module.len() + 1
-                            && segments[..module.len()] == module[..]
-                        {
-                            push(
-                                crate::surface::identity::Definition::of(export.target()),
-                                std::iter::once(root.clone())
-                                    .chain(segments.iter().map(|segment| (*segment).into()))
-                                    .collect(),
-                            );
-                        }
+                for (key, target) in self.table() {
+                    let segments = key.path().collect::<Vec<_>>();
+                    if key.root_alias() == root.as_ref()
+                        && target.namespace() == identity::Namespace::Type
+                        && segments.len() == module.len() + 1
+                        && segments[..module.len()] == module[..]
+                    {
+                        push(
+                            crate::surface::identity::Definition::of(target),
+                            std::iter::once(root.clone())
+                                .chain(segments.iter().map(|segment| (*segment).into()))
+                                .collect(),
+                        );
                     }
                 }
                 continue;
@@ -286,9 +277,8 @@ impl Catalog<'_> {
             convert::Type::Builtin(builtin) => Type::Primitive(
                 builtin
                     .rust_name()
-                    .filter(|name| matches!(*name, "i64" | "bool" | "f64" | "char"))
                     .ok_or(Error::Unsupported(
-                        "native scalar spelling is outside the closed rules",
+                        "a text or range value has no closed native spelling here",
                     ))?
                     .into(),
             ),
@@ -326,19 +316,11 @@ impl Catalog<'_> {
 }
 
 impl Catalog<'_> {
-    fn exports(&self) -> Vec<&identity::Export> {
+    /// Public type-namespace exports and their targets, sorted by export.
+    fn exports(&self) -> Vec<(&identity::Export, &identity::Definition)> {
         let mut exports = self
-            .graphs
-            .iter()
-            .flat_map(|graph| graph.exports())
-            .filter_map(|path| match path {
-                ledger::Path::Imported(export)
-                    if export.target().namespace() == identity::Namespace::Type =>
-                {
-                    Some(export.key())
-                }
-                _ => None,
-            })
+            .table()
+            .filter(|(_, target)| target.namespace() == identity::Namespace::Type)
             .collect::<Vec<_>>();
         exports.sort_unstable();
         exports.dedup();
@@ -355,15 +337,7 @@ impl Catalog<'_> {
             .identities
             .get(definition)
             .ok_or(Error::Unsupported("native type identity is absent"))?;
-        Ok(self
-            .graphs
-            .iter()
-            .flat_map(|graph| graph.exports())
-            .any(|path| {
-                matches!(path, ledger::Path::Imported(export)
-                if export.target().namespace() == identity::Namespace::Type
-                    && export.target() == *semantic)
-            }))
+        Ok(self.exports().iter().any(|(_, target)| target == semantic))
     }
 
     /// The public export that spells a closed nominal: its own, or a closed
@@ -376,23 +350,12 @@ impl Catalog<'_> {
             .identities
             .get(definition)
             .ok_or(Error::Unsupported("native type identity is absent"))?;
-        for graph in &self.graphs {
-            let mut own = graph
-                .exports()
-                .filter_map(|path| match path {
-                    ledger::Path::Imported(export)
-                        if export.target().namespace() == identity::Namespace::Type
-                            && export.target() == *semantic =>
-                    {
-                        Some(export.key())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            own.sort_unstable();
-            if let Some(export) = own.first() {
-                return Ok((*export).clone());
-            }
+        if let Some((export, _)) = self
+            .exports()
+            .into_iter()
+            .find(|(_, target)| target == semantic)
+        {
+            return Ok(export.clone());
         }
         // A public closed alias may name a private target. Compare
         // normalized semantic types; never guess a private path.
@@ -403,20 +366,7 @@ impl Catalog<'_> {
                 &mut resolve::State::default(),
             )
             .map_err(failure)?;
-        for export in self.exports() {
-            let Some(target) = self
-                .graphs
-                .iter()
-                .flat_map(|graph| graph.exports())
-                .find_map(|path| match path {
-                    ledger::Path::Imported(candidate) if candidate.key() == export => {
-                        Some(candidate.target())
-                    }
-                    _ => None,
-                })
-            else {
-                continue;
-            };
+        for (export, target) in self.exports() {
             let Some(declaration) = self.definitions.get(target) else {
                 continue;
             };
