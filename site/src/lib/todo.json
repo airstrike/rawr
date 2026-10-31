@@ -1,11 +1,21 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-10-29",
+  "updated": "2026-10-30",
   "version": "0.3.21",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"Raw identifiers such as `fn r#for` and `let r#for` work as in rustc.","issues":[320]},
+        {"text":"An associated type's bound can fix its own associated type, as in `type Fore: Iterator<Item = Self::For>;`, and generic code relies on it.","issues":[320]},
+        {"text":"Higher-ranked bounds and types work: `F: for<'a> Fn(&'a T)`, `for<'a> fn(&'a usize)`, `dyn for<'a> Fn` and `where for<'a> &'a T: Sized`.","issues":[320]},
+        {"text":"`<Self as Trait>::Name` works in an impl's signatures.","issues":[320]},
+        {"text":"`impl<T: Trait> Trait for &T` whose items forward to `T`'s impl gives references the trait. Other impls for references are refused with an error that says why.","issues":[320]},
+        {"text":"A closure bound by `let f: fn(&usize) -> usize = |x| ..` takes its parameter types from the annotation.","issues":[320]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.21",
@@ -675,7 +685,7 @@
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
@@ -730,7 +740,15 @@
     {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
     {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"open","category":"No glue (D593)"},
     {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
-    {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"}
+    {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"},
+    {"issue":376,"title":"`T::method(&t)` for a `&self` trait method through a generic parameter fails","state":"open","category":"Divergences from rustc"},
+    {"issue":377,"title":"Closure argument whose Fn bound names a not-yet-inferred type rejects `*x`","state":"open","category":"Divergences from rustc"},
+    {"issue":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"open","category":"Divergences from rustc"},
+    {"issue":379,"title":"`for` over an associated type bounded by plain `Iterator` is not iterable","state":"open","category":"Divergences from rustc"},
+    {"issue":380,"title":"A script iterator struct can't fill `I: Iterator<Item = X>`","state":"open","category":"Divergences from rustc"},
+    {"issue":381,"title":"Impls for references beyond forwarding impls are refused","state":"open","category":"Divergences from rustc"},
+    {"issue":382,"title":"Equality in a generic trait's associated type bound is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":383,"title":"`where` bounds on non-parameter types accept only Sized and auto traits","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -986,10 +1004,10 @@
           "name": "Raw identifiers",
           "start": 51,
           "size": 1,
-          "state": "next",
+          "state": "done",
           "note": "r#for",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ]
         },
         {
@@ -997,10 +1015,10 @@
           "name": "Equality in bounds",
           "start": 51,
           "size": 2,
-          "state": "next",
+          "state": "done",
           "note": "Iterator<Item = Self::For>",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ]
         },
         {
@@ -1008,10 +1026,10 @@
           "name": "Qualified Self paths",
           "start": 52,
           "size": 1,
-          "state": "next",
+          "state": "done",
           "note": "<Self as T>::A",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ]
         },
         {
@@ -1019,10 +1037,10 @@
           "name": "Higher-ranked bounds",
           "start": 53,
           "size": 2,
-          "state": "next",
+          "state": "done",
           "note": "for<'a> Fn(&'a T)",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ]
         },
         {
@@ -1030,10 +1048,10 @@
           "name": "Impl for a reference",
           "start": 54,
           "size": 3,
-          "state": "next",
+          "state": "done",
           "note": "impl<T> For for &T. #320",
           "issues": [
-            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"open"}
+            {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ]
         }
       ]
