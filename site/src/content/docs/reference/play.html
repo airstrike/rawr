@@ -1,4 +1,4 @@
-<meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, output, limits, where ?play differs from rawr run, which snippets don't run there yet, and every note and error reply.">
+<meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, output, limits, where ?play differs from rawr run, and every note and error reply.">
 <article>
 <h1>Play</h1>
 <p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. Both run plain Rust programs with the same limits.</p>
@@ -11,7 +11,7 @@
   <tr><td><code>mod util;</code></td><td>The snippet doesn&rsquo;t compile, because there is no <code>util.rs</code>. The error is <code>file modules require project/package compilation</code>. An inline module, <code>mod util { .. }</code>, works.</td></tr>
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
   <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
-  <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>. A snippet that names <code>iced</code> or <code>tokio</code> gets <a href="#unavailable">a message</a> instead.</td></tr>
+  <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
 </table>
 
 
@@ -50,16 +50,9 @@
 <p>A snippet can use rawr&rsquo;s std and no crates. Use <code>rawr run</code> for a program that needs a crate.</p>
 
 
-<h2 id="unavailable">Snippets that don&rsquo;t run here yet</h2>
-<p>iced programs and async programs don&rsquo;t run in the playground or in <code class="nw">?play</code> yet. They will once generated bindings reach the bot and the browser. Until then such a snippet gets one message instead of a run. Use <code>rawr run</code> to run it on your own machine.</p>
-
-<h3 id="iced">iced programs</h3>
-<p>A snippet is an iced program when it names the <code>iced</code> crate. It is one too when it uses a name from iced&rsquo;s widgets and types without declaring or importing it. Those names are the ones a snippet could once use without a <code>use</code>, such as <code>text</code>, <code>button</code>, <code>column</code>, <code>Color</code> and <code>Widget</code>. A snippet that declares its own <code>fn text</code> is a plain program.</p>
-<div class="block"><pre><code>iced programs don't run here yet. They will once generated bindings reach ?play and the playground.</code></pre></div>
-
-<h3 id="tokio">Async programs and tokio</h3>
-<p>A snippet is an async program when its <code>main</code> is <code>async</code>, as <code>#[tokio::main]</code> marks it. It is one too when it names the <code>tokio</code> crate.</p>
-<div class="block"><pre><code>async programs (`async fn main`, `#[tokio::main]`) don't run here yet. They will once generated bindings reach ?play and the playground.</code></pre></div>
+<h3 id="async-main">An async main</h3>
+<p>A <code>main</code> that is <code>async</code> needs a runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>, as in Rust. Without one the snippet doesn&rsquo;t compile, with rustc&rsquo;s error.</p>
+<div class="block"><pre><code>error[E0752]: `main` function is not allowed to be `async`</code></pre></div>
 
 
 <h2 id="notes">Notes and replies</h2>

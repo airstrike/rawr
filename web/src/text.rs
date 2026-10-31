@@ -1,11 +1,10 @@
-//! A plain program in the browser: a snippet that needs neither iced nor an
-//! async runtime runs on the base language, as the `?play` server runs it,
-//! and its output comes back as the server's text result.
+//! A snippet in the browser runs on the base language, as the `?play`
+//! server runs it, and its output comes back as the server's text result.
 
 use std::sync::{Arc, Mutex};
 
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
-use rawr_snippet::{plain, route, SOURCE_NAME};
+use rawr_snippet::{plain, SOURCE_NAME};
 
 /// Most output kept, in bytes, as on the server.
 const MAX_OUTPUT: usize = 64 * 1024;
@@ -119,34 +118,15 @@ fn error(text: &str) -> String {
     format!(r#"{{"kind":"error","text":{}}}"#, json(text))
 }
 
-/// A snippet that doesn't run here yet, as the server's
-/// `{"kind":"unavailable","text":".."}`.
-fn unavailable(reason: route::Unavailable) -> String {
-    format!(
-        r#"{{"kind":"unavailable","text":{}}}"#,
-        json(reason.message())
-    )
-}
-
-/// Run a snippet once; a plain program's output as the server's text
-/// result, an iced or async snippet's message as [`unavailable`], or a
+/// Run a snippet once; its output as the server's text result, or a
 /// compile error as [`error`].
 pub fn run(source: &str) -> String {
     let sink = Arc::new(Mutex::new(Output::default()));
     let engine = engine(&sink);
     let mut program = plain::program(source);
     let mut note = None;
-    // One parse says whether the snippet runs here, and is the one compiled.
-    let compiled = match parse(&engine, &program) {
-        Ok((unit, evidence)) => {
-            let facts = rawr::layer::Facts::of_unit(&unit);
-            if let Some(reason) = route::unavailable(source, &facts) {
-                return unavailable(reason);
-            }
-            compile_unit(&engine, unit, evidence)
-        }
-        Err(failure) => Err(failure),
-    };
+    let compiled =
+        parse(&engine, &program).and_then(|(unit, evidence)| compile_unit(&engine, unit, evidence));
     let compiled = match compiled {
         Ok(compiled) => Ok(compiled),
         Err(failure) => match failure

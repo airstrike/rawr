@@ -1,8 +1,7 @@
 // The playground's examples, embedded when the Worker is built
 // (wrangler.jsonc's "rules" import *.rs files as text). They are plain Rust
 // programs, from play/tests/fixtures/rust, and the first is what a first
-// visit opens. iced and async programs don't run in the playground until
-// generated bindings reach it, so none is listed.
+// visit opens.
 
 import type { Example } from "./playpage.ts";
 import enums from "../../../tests/fixtures/rust/enums.rs";

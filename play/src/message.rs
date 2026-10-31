@@ -83,25 +83,20 @@ fn code_block(content: &str) -> Option<String> {
     (!code.is_empty()).then(|| code.to_owned())
 }
 
-/// What a finished `rawr-play` process gave: a plain program's output, or
-/// why the snippet doesn't run here yet.
+/// What a finished `rawr-play` process gave.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Done {
     /// The program's output.
     Text(Output),
-    /// The message for a snippet that needs iced or an async runtime.
-    Unavailable(String),
 }
 
-/// The reply to a finished `rawr-play` process: the output fenced, the
-/// message for a snippet that doesn't run here, its error text fenced on a
-/// clean failure, and a short notice when it was killed (out of memory
+/// The reply to a finished `rawr-play` process: the output fenced, its
+/// error text fenced on a clean failure, and a short notice when it was killed (out of memory
 /// under `--memory-mb`, or a crash).
 #[must_use]
 pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> String {
     match outcome(success, stdout, stderr) {
         Ok(Done::Text(output)) => output_text(&output),
-        Ok(Done::Unavailable(text)) => text,
         Err(text) => error_text(&text),
     }
 }
@@ -110,9 +105,6 @@ pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> String {
 /// unfenced (as [`reply`] reads it; the playground shows it as is).
 pub fn outcome(success: bool, stdout: &[u8], stderr: &str) -> Result<Done, String> {
     if success && stdout.first() == Some(&b'{') {
-        if let Some(text) = unavailable(stdout) {
-            return Ok(Done::Unavailable(text));
-        }
         return Output::from_json(stdout).map(Done::Text);
     }
     let stderr = stderr.trim();
@@ -120,16 +112,6 @@ pub fn outcome(success: bool, stdout: &[u8], stderr: &str) -> Result<Done, Strin
         return Err("?play stopped: out of memory or crashed".to_owned());
     }
     Err(sanitize(stderr))
-}
-
-/// The message in `rawr_play::unavailable_json`'s object, if `stdout` is
-/// one.
-fn unavailable(stdout: &[u8]) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(stdout).ok()?;
-    if value["kind"] != "unavailable" {
-        return None;
-    }
-    value["text"].as_str().map(str::to_owned)
 }
 
 /// `text` without the server's file paths: a crash's `thread 'main'
@@ -344,18 +326,6 @@ mod tests {
         }
         let long = error_text(&"é".repeat(5000));
         assert!(long.len() <= MAX_REPLY && long.ends_with("…\n```"));
-    }
-
-    #[test]
-    fn message_reply_for_an_unavailable_snippet_is_its_message() {
-        let json = crate::unavailable_json(crate::Unavailable::Iced);
-        let text = reply(true, json.as_bytes(), "");
-        assert_eq!(
-            text,
-            crate::Unavailable::Iced.message(),
-            "one plain message"
-        );
-        assert!(!text.contains("```"), "{text}");
     }
 
     #[test]

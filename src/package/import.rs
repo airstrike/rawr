@@ -1007,6 +1007,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnsupportedNominalSyntax { .. }
         | R::Syntax { .. }
         | R::UnlabeledJumpInWhileCondition { .. }
+        | R::AsyncMain { .. }
         | R::Application(_)
         | R::InvalidPreview { .. }
         | R::InvalidWidget { .. }

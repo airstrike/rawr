@@ -64,6 +64,7 @@ fn an_async_main_awaits_async_fns_and_joins_them() {
         r#"
         async fn add(a: i64, b: i64) -> i64 { a + b }
         async fn twice(n: i64) -> i64 { let m = add(n, n).await; m }
+        #[tokio::main]
         pub async fn main() -> i64 {
             let (x, y) = tokio::join!(twice(1), add(3, 4));
             let z = async move { x * 10 }.await;
@@ -79,6 +80,7 @@ fn a_step_that_fails_ends_the_future_with_its_message() {
     let future = main_of(
         r#"
         async fn boom() -> i64 { panic!("no luck") }
+        #[tokio::main]
         pub async fn main() -> i64 { boom().await + 1 }
         "#,
     );
@@ -95,6 +97,7 @@ fn try_join_is_not_yet_in_a_program_without_iced() {
     let error = Shared::new(engine)
         .compile_authority(
             "async fn one() -> Result<i64, i64> { Ok(1) }
+             #[tokio::main]
              pub async fn main() -> Result<(i64, i64), i64> { tokio::try_join!(one(), one()) }",
         )
         .expect_err("try_join! is refused");

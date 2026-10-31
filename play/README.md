@@ -1,39 +1,23 @@
 # rawr-play
 
-Run a Rawr snippet. A plain program runs and returns its output as text.
+Run a Rawr snippet. A program runs and returns its output as text.
 One long-running bot links `rawr` as a library and starts one `rawr-play`
 process per snippet. It runs no rustc and no importer per request. It needs
 no GPU and no fonts, so it runs on any Linux VM or container.
 
-iced programs and async programs don't run here yet. Such a snippet gets
-one plain message instead of a run. They will run once generated bindings
-reach `?play` (prebuilt for the bot) and the playground (built for wasm).
+## Programs
 
-## Plain programs, and what doesn't run yet
-
-The snippet is parsed once. That parse says whether it runs here
-(`play/snippet/src/route.rs`, shared with rawr-web):
-
-- A snippet is iced's when it names the `iced` crate. It is also iced's
-  when it uses a name from `ICED_PRELUDE` that it neither declares nor
-  imports, such as `column!` or `text`. `ICED_PRELUDE` is routing data: the
-  names a snippet could once use without a `use`. It binds nothing. Such a
-  snippet gets `iced programs don't run here yet. They will once generated
-  bindings reach ?play and the playground.`
-- A snippet is async when its `main` is `async`, as `#[tokio::main]` marks
-  it, or when it names the `tokio` crate. Such a snippet gets `async
-  programs (`async fn main`, `#[tokio::main]`) don't run here yet. They will
-  once generated bindings reach ?play and the playground.`
-- Every other snippet is a plain program.
-
-A plain program runs on the base language from that same parse, as `rawr
-run` runs a file: its top level, then `fn main` if it has one. A snippet of
+Every snippet takes one path. The snippet is parsed once, and a program
+runs on the base language from that parse, as `rawr run` runs a file: its top level, then `fn main` if it has one. A snippet of
 statements alone becomes a block in `fn main`, read as Rust reads a block.
 The block's value is printed with `{:?}` unless it is `()`. So `1 + 2`
 prints `3`, and `1 + 2;` prints nothing. A `main` that returns `Err` prints
 `Error: ..` and exits with status 1. A panic exits with status 101, as in
 Rust. A limit exits with status 1. Output is capped at 64 KiB. A program
 that writes more is stopped and its output ends with `… output truncated`.
+A snippet that names a crate the base language doesn't have fails to
+compile, as any program would. An `async fn main` with no runtime's
+attribute is rustc's E0752.
 
 ## CLI
 
@@ -42,7 +26,7 @@ cargo run -p rawr-play -- hello.rs -o target/play/hello.json
 echo '1 + 2' | cargo run -p rawr-play -- - -o -
 ```
 
-A plain program writes one JSON object:
+A program writes one JSON object:
 
 ```json
 {"kind":"text","status":0,"output":[{"stream":"stdout","text":"total: 27\n"}],"truncated":false,"limit":false}
@@ -55,8 +39,7 @@ panicked. `limit` says whether a limit stopped it. `truncated` says whether
 the output passed 64 KiB. `note`, when present, is a remark on the run, such
 as an iterator that nothing consumed.
 
-An iced or async snippet writes `{"kind":"unavailable","text":".."}` with
-its message. `--time-ms N` sets the script time budget, and `--memory-mb N`
+`--time-ms N` sets the script time budget, and `--memory-mb N`
 caps the process's address space (`RLIMIT_AS`, Linux only). Errors go to
 stderr with exit status 1.
 
@@ -64,10 +47,9 @@ stderr with exit status 1.
 
 The bot replies to a message whose first line starts with `?play`, or whose
 code fence info string contains `?play`. The snippet is the first code
-block: ` ```rust `, ` ```rawr ` or a bare fence. A plain program gets its
+block: ` ```rust `, ` ```rawr ` or a bare fence. A program gets its
 output in a ` ```text ` block. Output longer than Discord allows is cut,
-with a note. A non-zero exit status follows the block. An iced or async
-snippet gets its message as plain text. An error gets its text in a code
+with a note. A non-zero exit status follows the block. An error gets its text in a code
 block (at most 2000 characters). It ignores bots. When the author edits a
 message it already answered, it runs it again and edits its reply. Over the
 rate limit it reacts with ⏳ and does not run.
@@ -197,9 +179,8 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 `https://rawr.airstrike.fyi/play` is a web playground: an editor
 (Tab indents, Ctrl/Cmd+Enter runs), plain Rust examples from
 `play/tests/fixtures/rust` (embedded when the Worker is built) and the
-output: a plain program's output as a terminal with its exit status, an
-iced or async snippet's message, or the same error text the bot replies
-with. A run is in the browser by default (rawr-web, `web/`), and on the
+output: a program's output as a terminal with its exit status, or the
+same error text the bot replies with. A run is in the browser by default (rawr-web, `web/`), and on the
 server on request. **Share** stores the code in the Durable Object under a
 content-addressed id (`/play/<id>`, at most 64 KiB; the same snippet is the
 same id).
@@ -221,8 +202,8 @@ them.
 Server runs go Worker → Durable Object → the bot's HTTP port
 (`PLAY_HTTP_PORT`, 8080, reachable only through the Durable Object) → the
 same child process as `?play`, with the same limits. The bot's `POST
-/render` reads `{"code": ..}` and answers with `application/json`: a plain
-program's output, or an iced or async snippet's message. Playground runs
+/render` reads `{"code": ..}` and answers with `application/json`: a
+program's output. Playground runs
 share the pool but run one at a time and never ahead of a waiting Discord
 run. Each IP
 (kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a

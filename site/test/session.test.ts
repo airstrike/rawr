@@ -79,18 +79,6 @@ test("Run in browser runs a plain program in rawr-web and shows its output as th
   assert.match(page.session.state.status, /in the browser · exit 3$/);
 });
 
-test("an iced or async snippet shows its message, in the browser and from the server", async () => {
-  const text = "iced programs don't run here yet.";
-  const page = standIn({ code: 'text("hi")', web: { run_text: () => JSON.stringify({ kind: "unavailable", text }) } });
-  await page.session.go();
-  assert.deepEqual(page.session.state.output, { kind: "unavailable", text });
-  assert.equal(page.session.state.status, "not available here yet");
-  page.respond(() => Response.json({ kind: "unavailable", text }));
-  page.session.choose("server");
-  await new Promise((done) => setTimeout(done, 0));
-  assert.deepEqual(page.session.state.output, { kind: "unavailable", text });
-});
-
 test("a snippet that does not compile shows its report", async () => {
   const page = standIn({ code: "x", web: { run_text: () => JSON.stringify({ kind: "error", text: "error: expected `)`" }) } });
   await page.session.go();

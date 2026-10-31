@@ -3979,7 +3979,7 @@ fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> 
 
 /// Whether `path` names a runtime's entry macro: a crate's `main`, as
 /// `#[tokio::main]` and `#[async_std::main]` are.
-fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
+pub(super) fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
     path.segments.len() > 1
         && path
             .segments

@@ -190,13 +190,11 @@ function OutputView({ output }: { output: Output }) {
     case "note":
       return (
         <p className="note">
-          Run (Ctrl/Cmd + Enter). A Rust program shows its output. iced and async programs don't run here yet.
+          Run (Ctrl/Cmd + Enter). A Rust program shows its output.
         </p>
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
-    case "unavailable":
-      return <p className="note">{output.text}</p>;
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
       return (

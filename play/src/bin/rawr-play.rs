@@ -5,11 +5,9 @@
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
 //! runs one of these per snippet, so `--memory-mb` caps the whole process.
 //!
-//! A plain program writes its output as one JSON object
+//! A program writes its output as one JSON object
 //! (`rawr_play::Output::to_json`):
 //! `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],..}`.
-//! A snippet that needs iced or an async runtime writes
-//! `{"kind":"unavailable","text":".."}` (`rawr_play::unavailable_json`).
 //! Errors (diagnostics, bad arguments) go to stderr with exit status 1.
 //!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
@@ -104,10 +102,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let bytes = output.to_json().into_bytes();
                 let summary = format!("text, exit status {}, {} bytes", output.status, bytes.len());
                 (bytes, summary)
-            }
-            rawr_play::Outcome::Unavailable(reason) => {
-                let bytes = rawr_play::unavailable_json(reason).into_bytes();
-                (bytes, reason.message().to_owned())
             }
         };
     if output == "-" {
