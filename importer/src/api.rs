@@ -104,6 +104,26 @@ pub struct Graph<P: Phase> {
     transaction: Usage,
     retained: Usage,
     evidence: P::Evidence,
+    /// Definitions and implementations by their identity's hash, built at
+    /// the first lookup.
+    lookup: std::sync::OnceLock<Lookup>,
+}
+
+/// Indexes of a graph's definitions and implementations keyed by rustc's
+/// definition-path hash, so a lookup compares one hash instead of whole
+/// unit identities.
+#[derive(Default)]
+struct Lookup {
+    definitions: std::collections::HashMap<Box<str>, u32>,
+    implementations: std::collections::HashMap<Box<str>, u32>,
+    /// Each trait's implementations, by the trait's hash, in graph order.
+    by_trait: std::collections::HashMap<Box<str>, Box<[u32]>>,
+    /// Each nominal type's implementations, by the hash of the self type's
+    /// definition, in graph order.
+    by_self: std::collections::HashMap<Box<str>, Box<[u32]>>,
+    /// Each definition's relevant implementations, by its hash, in graph
+    /// order.
+    relevant: std::collections::HashMap<Box<str>, Box<[u32]>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -811,6 +831,7 @@ impl Graph<Captured> {
             transaction: self.transaction,
             retained: self.retained,
             evidence: (),
+            lookup: std::sync::OnceLock::new(),
         }
     }
 
@@ -1132,6 +1153,7 @@ impl Graph<Captured> {
             transaction: Usage { items: 0, bytes: 0 },
             retained: Usage { items: 0, bytes: 0 },
             evidence: (),
+            lookup: std::sync::OnceLock::new(),
         };
         graph
             .validate_cardinality(allocation)
@@ -1202,6 +1224,7 @@ impl Graph<Captured> {
             transaction: self.transaction,
             retained: self.retained,
             evidence: FreshEvidence { input, chain },
+            lookup: self.lookup,
         })
     }
 
@@ -1462,16 +1485,131 @@ impl Graph<Extracted> {
 }
 
 impl<P: Phase> Graph<P> {
+    /// A hash names one definition, so the sorted search runs only when two
+    /// identities share one.
     pub(crate) fn definition_index(&self, id: &identity::Definition) -> Option<usize> {
+        let index = *self.lookup().definitions.get(id.def_path_hash())? as usize;
+        if self.definitions.get(index)?.id() == id {
+            return Some(index);
+        }
         self.definitions
             .binary_search_by(|definition| definition.id().cmp(id))
             .ok()
     }
 
     pub(crate) fn implementation_index(&self, id: &identity::Definition) -> Option<usize> {
+        let index = *self.lookup().implementations.get(id.def_path_hash())? as usize;
+        if self.implementations.get(index)?.id() == id {
+            return Some(index);
+        }
         self.implementations
             .binary_search_by(|implementation| implementation.id().cmp(id))
             .ok()
+    }
+
+    /// The implementations of the trait `id`, in graph order.
+    pub(crate) fn implementations_of(
+        &self,
+        id: &identity::Definition,
+    ) -> impl Iterator<Item = &model::Implementation> {
+        let indices = self
+            .lookup()
+            .by_trait
+            .get(id.def_path_hash())
+            .map_or(&[][..], AsRef::as_ref);
+        indices
+            .iter()
+            .map(|index| &self.implementations[*index as usize])
+            .filter(move |implementation| {
+                matches!(implementation.trait_ref(), model::Trait::Trait { id: actual, .. } if actual == id)
+            })
+    }
+
+    /// The implementations whose self type is the nominal type `id`, at
+    /// any arguments, in graph order.
+    pub(crate) fn implementations_for(
+        &self,
+        id: &identity::Definition,
+    ) -> impl Iterator<Item = &model::Implementation> {
+        let indices = self
+            .lookup()
+            .by_self
+            .get(id.def_path_hash())
+            .map_or(&[][..], AsRef::as_ref);
+        indices
+            .iter()
+            .map(|index| &self.implementations[*index as usize])
+            .filter(move |implementation| {
+                matches!(implementation.self_type(), model::Type::Definition { id: actual, .. } if actual == id)
+            })
+    }
+
+    /// The implementations relevant to the definition `id`, in graph order.
+    pub(crate) fn relevant_implementations(
+        &self,
+        id: &identity::Definition,
+    ) -> impl Iterator<Item = &model::Implementation> {
+        let indices = self
+            .lookup()
+            .relevant
+            .get(id.def_path_hash())
+            .map_or(&[][..], AsRef::as_ref);
+        indices
+            .iter()
+            .map(|index| &self.implementations[*index as usize])
+            .filter(move |implementation| implementation.relevance().any(|actual| actual == id))
+    }
+
+    fn lookup(&self) -> &Lookup {
+        self.lookup.get_or_init(|| {
+            let mut lookup = Lookup::default();
+            for (index, definition) in self.definitions.iter().enumerate() {
+                lookup
+                    .definitions
+                    .entry(definition.id().def_path_hash().into())
+                    .or_insert(index as u32);
+            }
+            let mut by_trait = std::collections::HashMap::<&str, Vec<u32>>::new();
+            let mut by_self = std::collections::HashMap::<&str, Vec<u32>>::new();
+            let mut relevant = std::collections::HashMap::<&str, Vec<u32>>::new();
+            for (index, implementation) in self.implementations.iter().enumerate() {
+                lookup
+                    .implementations
+                    .entry(implementation.id().def_path_hash().into())
+                    .or_insert(index as u32);
+                if let model::Trait::Trait { id, .. } = implementation.trait_ref() {
+                    by_trait
+                        .entry(id.def_path_hash())
+                        .or_default()
+                        .push(index as u32);
+                }
+                if let model::Type::Definition { id, .. } = implementation.self_type() {
+                    by_self
+                        .entry(id.def_path_hash())
+                        .or_default()
+                        .push(index as u32);
+                }
+                for id in implementation.relevance() {
+                    let indices = relevant.entry(id.def_path_hash()).or_default();
+                    if indices.last() != Some(&(index as u32)) {
+                        indices.push(index as u32);
+                    }
+                }
+            }
+            lookup.by_trait = by_trait
+                .into_iter()
+                .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
+                .collect();
+            lookup.by_self = by_self
+                .into_iter()
+                .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
+                .collect();
+            lookup.relevant = relevant
+                .into_iter()
+                .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
+                .collect();
+            lookup
+        })
     }
 }
 

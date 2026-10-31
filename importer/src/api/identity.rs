@@ -14,7 +14,7 @@ pub struct Package {
 }
 
 /// One exact normal library compiler unit within a package.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialOrd, Serialize)]
 pub struct Unit {
     authority: Authority,
     target: Box<str>,
@@ -75,7 +75,7 @@ impl Namespace {
 }
 
 /// A definition identity derived from rustc's stable definition-path hash.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialOrd, Serialize)]
 pub struct Definition {
     unit: Unit,
     def_path_hash: Box<str>,
@@ -95,6 +95,28 @@ pub struct Export {
     root_alias: Box<str>,
     path: Box<[Box<str>]>,
     namespace: Namespace,
+}
+
+// Equality reads the field most likely to differ first: two units of one
+// graph share their package, and two definitions of one unit their unit.
+impl PartialEq for Unit {
+    fn eq(&self, other: &Self) -> bool {
+        self.stable_crate_id == other.stable_crate_id
+            && self.crate_name == other.crate_name
+            && self.features == other.features
+            && self.compilation == other.compilation
+            && self.target == other.target
+            && self.target_kind == other.target_kind
+            && self.authority == other.authority
+    }
+}
+
+impl PartialEq for Definition {
+    fn eq(&self, other: &Self) -> bool {
+        self.def_path_hash == other.def_path_hash
+            && self.namespace == other.namespace
+            && self.unit == other.unit
+    }
 }
 
 impl Package {

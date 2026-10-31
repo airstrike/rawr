@@ -4,7 +4,7 @@ use serde::ser::{SerializeSeq as _, SerializeStruct as _};
 use serde::{Deserialize, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 
 use crate::api::{self, ledger, model};
@@ -313,7 +313,19 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
+    /// The implementations of each `core` trait, by the trait's name, in
+    /// graph order (`core_implementations`).
+    core_traits: std::cell::OnceCell<HashMap<&'graph str, Box<[usize]>>>,
+    /// `callable_traits`, read once.
+    callable_traits: std::cell::OnceCell<Option<CallableTraits>>,
 }
+
+/// `core`'s `Fn` and `FnOnce` traits and `FnOnce::Output`.
+type CallableTraits = (
+    api::identity::Definition,
+    api::identity::Definition,
+    api::identity::Definition,
+);
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) const EVIDENCE_RETAINED_ITEMS: usize = 6_000_000;
@@ -607,6 +619,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
             opaque_self: std::cell::RefCell::new(None),
+            core_traits: std::cell::OnceCell::new(),
+            callable_traits: std::cell::OnceCell::new(),
         };
         let initialized = (|| {
             context.retain(
@@ -1323,20 +1337,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 predicates.push(predicate.clone());
                 continue;
             }
-            let mut found = self.graph.implementations().filter(|implementation| {
-                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-                    return false;
-                };
-                let model::Type::Parameter { owner, index } = implementation.self_type() else {
-                    return false;
-                };
-                id == trait_id
-                    && owner == implementation.id()
-                    && implementation
-                        .generics()
-                        .predicates()
-                        .any(|predicate| callable(predicate, *index))
-            });
+            let mut found = self
+                .graph
+                .implementations_of(trait_id)
+                .filter(|implementation| {
+                    let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                        return false;
+                    };
+                    let model::Type::Parameter { owner, index } = implementation.self_type() else {
+                        return false;
+                    };
+                    id == trait_id
+                        && owner == implementation.id()
+                        && implementation
+                            .generics()
+                            .predicates()
+                            .any(|predicate| callable(predicate, *index))
+                });
             let (Some(implementation), None) = (found.next(), found.next()) else {
                 predicates.push(predicate.clone());
                 continue;
@@ -1471,37 +1488,39 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 })?;
         // The implementations of `From<F>` for `T` whose `F` is a callable,
         // with what `T` gives their parameters.
-        let mut found = self.graph.implementations().filter_map(|implementation| {
-            let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
-                return None;
-            };
-            let [_, model::Argument::Type(model::Type::Parameter { index: source, .. })] =
-                arguments.as_ref()
-            else {
-                return None;
-            };
-            if !self.is_core_trait(id, "From")
-                || !implementation.generics().predicates().any(|predicate| {
-                    matches!(
-                        predicate,
-                        model::Predicate::Bound {
-                            ty: model::Type::Parameter { index: bound, .. },
-                            ..
-                        } if bound == source
-                    ) && callable(predicate)
-                })
-            {
-                return None;
-            }
-            let mut fixed = Vec::new();
-            match_self_type(
-                implementation.self_type(),
-                target,
-                implementation.id(),
-                &mut fixed,
-            )
-            .then_some((implementation, *source, fixed))
-        });
+        let mut found = self
+            .core_implementations("From")
+            .filter_map(|implementation| {
+                let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+                    return None;
+                };
+                let [_, model::Argument::Type(model::Type::Parameter { index: source, .. })] =
+                    arguments.as_ref()
+                else {
+                    return None;
+                };
+                if !self.is_core_trait(id, "From")
+                    || !implementation.generics().predicates().any(|predicate| {
+                        matches!(
+                            predicate,
+                            model::Predicate::Bound {
+                                ty: model::Type::Parameter { index: bound, .. },
+                                ..
+                            } if bound == source
+                        ) && callable(predicate)
+                    })
+                {
+                    return None;
+                }
+                let mut fixed = Vec::new();
+                match_self_type(
+                    implementation.self_type(),
+                    target,
+                    implementation.id(),
+                    &mut fixed,
+                )
+                .then_some((implementation, *source, fixed))
+            });
         let (implementation, source, fixed) = found.next()?;
         if found.next().is_some() {
             return None;
@@ -1801,7 +1820,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let mut relations = Vec::new();
         for projection in projected {
             let mut cases = Vec::new();
-            for implementation in self.graph.implementations() {
+            for implementation in self.graph.implementations_of(&projection.trait_id) {
                 let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
                     continue;
                 };
@@ -1908,7 +1927,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return None;
         }
         let mut found = None;
-        for implementation in self.graph.implementations() {
+        for implementation in self.graph.implementations_of(trait_id) {
             let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
                 continue;
             };
@@ -2155,7 +2174,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             }
             let mut cases = Vec::new();
-            for implementation in self.graph.implementations() {
+            for implementation in self.graph.implementations_of(trait_id) {
                 let model::Trait::Trait {
                     id,
                     arguments: implemented,
@@ -2224,7 +2243,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         /// More implementations than this are not read as cases.
         const CASES: usize = 64;
         let mut cases = Vec::<Case>::new();
-        for implementation in self.graph.implementations() {
+        for implementation in self.core_implementations("From") {
             let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
                 continue;
             };
@@ -2276,6 +2295,42 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .definition_index(definition)
             .and_then(|index| self.graph.definitions().nth(index))
             .and_then(|definition| definition.display_path().last())
+    }
+
+    /// The implementations of the `core` trait `name`, in graph order.
+    fn core_implementations(
+        &self,
+        name: &str,
+    ) -> impl Iterator<Item = &'graph model::Implementation> + use<'graph, '_, P> {
+        let graph = self.graph;
+        let traits = self.core_traits.get_or_init(|| {
+            let mut traits = HashMap::<&'graph str, Vec<usize>>::new();
+            for (index, implementation) in graph.implementations().enumerate() {
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    continue;
+                };
+                if id.unit().authority().sysroot().is_none() || id.unit().crate_name() != "core" {
+                    continue;
+                }
+                let Some(name) = graph
+                    .definition_index(id)
+                    .and_then(|index| graph.definitions().nth(index))
+                    .and_then(|definition| definition.display_path().last())
+                else {
+                    continue;
+                };
+                traits.entry(name).or_default().push(index);
+            }
+            traits
+                .into_iter()
+                .map(|(name, indices)| (name, indices.into_boxed_slice()))
+                .collect()
+        });
+        traits
+            .get(name)
+            .map_or(&[][..], AsRef::as_ref)
+            .iter()
+            .filter_map(move |index| graph.implementations().nth(*index))
     }
 }
 
@@ -4149,11 +4204,7 @@ impl<P: api::Phase> Context<'_, P> {
             Some(model::Type::Definition { id, .. }) => id,
             _ => export.target(),
         };
-        for implementation in self.graph.implementations().filter(|implementation| {
-            implementation
-                .relevance()
-                .any(|definition| definition == target)
-        }) {
+        for implementation in self.graph.relevant_implementations(target) {
             let substitutions = match instance {
                 Some(instance) => {
                     let Some(substitutions) = instance_substitutions(
@@ -4921,7 +4972,7 @@ impl<P: api::Phase> Context<'_, P> {
             return false;
         };
         owner == id
-            && self.graph.implementations().any(|other| {
+            && self.graph.implementations_of(id).any(|other| {
                 other.id() != implementation.id()
                     && matches!(other.trait_ref(), model::Trait::Trait { id: other_id, .. } if other_id == id)
                     && other.self_type() == implementation.self_type()
@@ -5653,12 +5704,14 @@ impl<P: api::Phase> Context<'_, P> {
         let Some(definition) = self.graph.definitions().nth(definition) else {
             return false;
         };
-        self.graph.implementations().any(|implementation| {
-            implementation.polarity() == model::Polarity::Positive
-                && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
+        self.graph
+            .implementations_for(definition.id())
+            .any(|implementation| {
+                implementation.polarity() == model::Polarity::Positive
+                    && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
                     if self.iced_trait(id, name))
-                && any_arguments(implementation.self_type(), definition.id())
-        })
+                    && any_arguments(implementation.self_type(), definition.id())
+            })
     }
 
     fn enumeration(
@@ -6078,13 +6131,13 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// `core`'s `Fn` and `FnOnce` and `FnOnce::Output`, where the graph
     /// holds them.
-    fn callable_traits(
-        &self,
-    ) -> Option<(
-        api::identity::Definition,
-        api::identity::Definition,
-        api::identity::Definition,
-    )> {
+    fn callable_traits(&self) -> Option<CallableTraits> {
+        self.callable_traits
+            .get_or_init(|| self.read_callable_traits())
+            .clone()
+    }
+
+    fn read_callable_traits(&self) -> Option<CallableTraits> {
         let mut callable = None;
         let mut once = None;
         for definition in self.graph.definitions() {
@@ -6893,52 +6946,54 @@ impl<P: api::Phase> Context<'_, P> {
         id: &api::identity::Definition,
         arguments: &[model::Argument],
     ) -> Option<model::Type> {
-        self.graph.implementations().find_map(|implementation| {
-            if implementation.polarity() != model::Polarity::Positive {
-                return None;
-            }
-            let model::Type::Definition {
-                id: actual,
-                arguments: declared,
-            } = implementation.self_type()
-            else {
-                return None;
-            };
-            if actual != id || declared.len() != arguments.len() {
-                return None;
-            }
-            let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
-                return None;
-            };
-            if !self.is_core_trait(trait_id, "Future") {
-                return None;
-            }
-            let mut substitutions = Vec::new();
-            for (declared, argument) in declared.iter().zip(arguments) {
-                match (declared, argument) {
-                    (
-                        model::Argument::Type(model::Type::Parameter { owner, index }),
-                        model::Argument::Type(argument),
-                    ) => substitutions.push(((owner.clone(), *index), argument.clone())),
-                    (model::Argument::Type(_), _) => return None,
-                    _ => {}
+        self.graph
+            .implementations_for(id)
+            .find_map(|implementation| {
+                if implementation.polarity() != model::Polarity::Positive {
+                    return None;
                 }
-            }
-            let output = implementation.associated().find_map(|associated| {
-                let definition = self
-                    .graph
-                    .definition_index(associated)
-                    .and_then(|index| self.graph.definitions().nth(index))?;
-                match definition.kind() {
-                    model::Kind::AssociatedType {
-                        default: model::Default::Present(ty),
-                        ..
-                    } if definition.display_path().last() == Some("Output") => Some(ty),
-                    _ => None,
+                let model::Type::Definition {
+                    id: actual,
+                    arguments: declared,
+                } = implementation.self_type()
+                else {
+                    return None;
+                };
+                if actual != id || declared.len() != arguments.len() {
+                    return None;
                 }
-            })?;
-            Some(substitute_parameters(output, &substitutions))
-        })
+                let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
+                    return None;
+                };
+                if !self.is_core_trait(trait_id, "Future") {
+                    return None;
+                }
+                let mut substitutions = Vec::new();
+                for (declared, argument) in declared.iter().zip(arguments) {
+                    match (declared, argument) {
+                        (
+                            model::Argument::Type(model::Type::Parameter { owner, index }),
+                            model::Argument::Type(argument),
+                        ) => substitutions.push(((owner.clone(), *index), argument.clone())),
+                        (model::Argument::Type(_), _) => return None,
+                        _ => {}
+                    }
+                }
+                let output = implementation.associated().find_map(|associated| {
+                    let definition = self
+                        .graph
+                        .definition_index(associated)
+                        .and_then(|index| self.graph.definitions().nth(index))?;
+                    match definition.kind() {
+                        model::Kind::AssociatedType {
+                            default: model::Default::Present(ty),
+                            ..
+                        } if definition.display_path().last() == Some("Output") => Some(ty),
+                        _ => None,
+                    }
+                })?;
+                Some(substitute_parameters(output, &substitutions))
+            })
     }
 
     /// An `impl Sipper<Output, Progress>`, or an `impl Straw<T, Progress,
@@ -7036,32 +7091,34 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// `T` of a type's own `impl Future<Output = T>`, such as tokio's `Sleep`.
     fn future_impl_output(&self, id: &api::identity::Definition) -> Option<&model::Type> {
-        self.graph.implementations().find_map(|implementation| {
-            if implementation.polarity() != model::Polarity::Positive
-                || !exact_definition(implementation.self_type(), id)
-            {
-                return None;
-            }
-            let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
-                return None;
-            };
-            if !self.is_core_trait(trait_id, "Future") {
-                return None;
-            }
-            implementation.associated().find_map(|associated| {
-                let definition = self
-                    .graph
-                    .definition_index(associated)
-                    .and_then(|index| self.graph.definitions().nth(index))?;
-                match definition.kind() {
-                    model::Kind::AssociatedType {
-                        default: model::Default::Present(ty),
-                        ..
-                    } if definition.display_path().last() == Some("Output") => Some(ty),
-                    _ => None,
+        self.graph
+            .implementations_for(id)
+            .find_map(|implementation| {
+                if implementation.polarity() != model::Polarity::Positive
+                    || !exact_definition(implementation.self_type(), id)
+                {
+                    return None;
                 }
+                let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
+                    return None;
+                };
+                if !self.is_core_trait(trait_id, "Future") {
+                    return None;
+                }
+                implementation.associated().find_map(|associated| {
+                    let definition = self
+                        .graph
+                        .definition_index(associated)
+                        .and_then(|index| self.graph.definitions().nth(index))?;
+                    match definition.kind() {
+                        model::Kind::AssociatedType {
+                            default: model::Default::Present(ty),
+                            ..
+                        } if definition.display_path().last() == Some("Output") => Some(ty),
+                        _ => None,
+                    }
+                })
             })
-        })
     }
 
     /// The derivable std traits the bounds on type parameter `index` name.
@@ -7130,15 +7187,17 @@ impl<P: api::Phase> Context<'_, P> {
         let [model::Argument::Type(self_type)] = &arguments[..] else {
             return None;
         };
-        self.graph.implementations().find_map(|implementation| {
-            let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-                return None;
-            };
-            if id != trait_id || implementation.self_type() != self_type {
-                return None;
-            }
-            self.associated_type(implementation, "Item")
-        })
+        self.graph
+            .implementations_of(trait_id)
+            .find_map(|implementation| {
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    return None;
+                };
+                if id != trait_id || implementation.self_type() != self_type {
+                    return None;
+                }
+                self.associated_type(implementation, "Item")
+            })
     }
 
     /// The type an implementation gives its associated type `name`.
@@ -7651,25 +7710,27 @@ impl<P: api::Phase> Context<'_, P> {
         let Some(definition) = self.graph.definitions().nth(definition) else {
             return false;
         };
-        self.graph.implementations().any(|implementation| {
-            if implementation.polarity() != model::Polarity::Positive {
-                return false;
-            }
-            let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-                return false;
-            };
-            let Some(trait_definition) = self
-                .graph
-                .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
-            else {
-                return false;
-            };
-            let core_trait = id.unit().authority().sysroot().is_some()
-                && id.unit().crate_name() == "core"
-                && trait_definition.display_path().last() == Some(name);
-            core_trait && any_arguments(implementation.self_type(), definition.id())
-        })
+        self.graph
+            .implementations_for(definition.id())
+            .any(|implementation| {
+                if implementation.polarity() != model::Polarity::Positive {
+                    return false;
+                }
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    return false;
+                };
+                let Some(trait_definition) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                else {
+                    return false;
+                };
+                let core_trait = id.unit().authority().sysroot().is_some()
+                    && id.unit().crate_name() == "core"
+                    && trait_definition.display_path().last() == Some(name);
+                core_trait && any_arguments(implementation.self_type(), definition.id())
+            })
     }
 }
 
