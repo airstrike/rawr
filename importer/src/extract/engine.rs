@@ -697,6 +697,36 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     true,
                 )?;
             }
+            // A later program may call any macro this crate reaches, whose
+            // `$crate` names its own crate: each crate's root under the
+            // segment a macro reads it as, so the whole table answers
+            // those paths as a demanded walk would (#281).
+            let segments = self
+                .crates
+                .iter()
+                .filter(|krate| !krate.sysroot)
+                .map(|krate| {
+                    format!(
+                        "{CRATE_SEGMENT}{}_{}",
+                        krate.crate_name, krate.stable_crate_id
+                    )
+                })
+                .collect::<Vec<_>>();
+            for name in segments {
+                let Some(segment) = self.oracle.segment(&name)? else {
+                    continue;
+                };
+                if self
+                    .crate_roots
+                    .iter()
+                    .any(|(known, _, _)| *known == segment.root)
+                {
+                    continue;
+                }
+                self.crate_roots
+                    .push((segment.root, name.clone(), segment.krate));
+                self.walk(segment.root, vec![name], &[], 1, true)?;
+            }
         } else {
             for path in demand {
                 self.select_path(root, path.get(1..).unwrap_or_default(), 0)?;
