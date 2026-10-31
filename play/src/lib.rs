@@ -1,11 +1,9 @@
 //! Run untrusted Rawr snippets for `?play`: a plain program runs, and its
 //! output comes back as text.
 //!
-//! [`run`] parses a snippet once. A snippet that needs iced or an async
-//! runtime gets one plain message instead of a run (see
-//! [`rawr_snippet::route`]): neither runs here until generated bindings
-//! reach `?play`. A plain program runs on the base language (see
-//! [`plain`]).
+//! [`run`] parses a snippet once and runs it on the base language (see
+//! [`plain`]). Every snippet takes that one path: one that names a crate
+//! the base language doesn't have fails as any program would.
 //!
 //! Snippets are untrusted. Every run is on a fresh Engine with bounded
 //! operations, call depth, data sizes, output and a wall-clock deadline,
@@ -25,7 +23,6 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 pub use plain::Output;
-pub use rawr_snippet::route::Unavailable;
 pub use rawr_snippet::SOURCE_NAME;
 
 /// Per-run resource limits for untrusted snippets.
@@ -85,37 +82,22 @@ impl fmt::Display for PlayError {
 
 impl std::error::Error for PlayError {}
 
-/// What a snippet gave: a plain program's output, or why it doesn't run
-/// here yet.
+/// What a snippet gave.
 #[derive(Clone, Debug)]
 pub enum Outcome {
-    /// The text a plain program wrote, and how it ended.
+    /// The text a program wrote, and how it ended.
     Text(Output),
-    /// The snippet needs iced or an async runtime.
-    Unavailable(Unavailable),
-}
-
-/// `{"kind":"unavailable","text":".."}`: what `rawr-play` writes for a
-/// snippet that doesn't run here yet. It starts with `{`, as a plain
-/// program's output does.
-#[must_use]
-pub fn unavailable_json(reason: Unavailable) -> String {
-    serde_json::json!({ "kind": "unavailable", "text": reason.message() }).to_string()
 }
 
 /// Why a snippet reads no file: it runs on a server whose files are not
 /// its own. `include_str!`, `include_bytes!` and `std::fs` fail with this.
 const NO_FILES: &str = "?play has no files";
 
-/// Run one snippet: a plain program runs, and a snippet that needs iced or
-/// an async runtime gets its message.
+/// Run one snippet.
 pub fn run(source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
     rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + limits.time;
     let parsed = plain::Parsed::new(source, limits, deadline)?;
-    if let Some(reason) = parsed.unavailable(source) {
-        return Ok(Outcome::Unavailable(reason));
-    }
     parsed.run(source, limits).map(Outcome::Text)
 }
 
@@ -161,19 +143,11 @@ fn limit(text: &str, limits: &Limits) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, Limits, Outcome, PlayError, Unavailable};
+    use super::{run, Limits, Outcome, PlayError};
 
     fn text(source: &str) -> super::Output {
         match run(source, &Limits::default()).unwrap() {
             Outcome::Text(output) => output,
-            Outcome::Unavailable(reason) => panic!("{source} was refused: {reason:?}"),
-        }
-    }
-
-    fn unavailable(source: &str) -> Unavailable {
-        match run(source, &Limits::default()).unwrap() {
-            Outcome::Unavailable(reason) => reason,
-            Outcome::Text(output) => panic!("{source} ran as text: {output:?}"),
         }
     }
 
@@ -186,29 +160,6 @@ mod tests {
             reason.contains("arrays and maps up to 65536 items"),
             "{reason}"
         );
-    }
-
-    #[test]
-    fn iced_and_async_snippets_get_their_message() {
-        assert_eq!(unavailable("column![text(\"hi\")]"), Unavailable::Iced);
-        assert_eq!(
-            unavailable("fn view() -> impl Widget<()> {\n    text(\"x\")\n}\n"),
-            Unavailable::Iced
-        );
-        assert_eq!(
-            unavailable("use tokio::sync::mpsc;\nfn main() {\n    let (_sender, _receiver) = mpsc::channel::<i64>(4);\n}\n"),
-            Unavailable::Async
-        );
-        assert_eq!(
-            unavailable("async fn main() {\n    println!(\"hi\");\n}\n"),
-            Unavailable::Async
-        );
-        let json = super::unavailable_json(Unavailable::Iced);
-        assert!(
-            json.starts_with(r#"{"kind":"unavailable","text":"iced programs"#),
-            "{json}"
-        );
-        assert!(!json.to_ascii_lowercase().contains("facade"), "{json}");
     }
 
     #[test]
@@ -350,9 +301,7 @@ mod tests {
         };
         let source =
             "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
-        let Outcome::Text(output) = run(source, &limits).unwrap() else {
-            panic!("a plain program runs as text");
-        };
+        let Outcome::Text(output) = run(source, &limits).unwrap();
         assert_eq!((output.status, output.limit), (1, true));
         assert_eq!(output.text(), "start\ntime limit exceeded\n");
     }
@@ -366,9 +315,7 @@ mod tests {
         };
         let source = "fn main() {\n    loop { println!(\"0123456789abcdef\"); }\n}\n";
         let started = std::time::Instant::now();
-        let Outcome::Text(output) = run(source, &limits).unwrap() else {
-            panic!("a plain program runs as text");
-        };
+        let Outcome::Text(output) = run(source, &limits).unwrap();
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "stopped once full"
@@ -404,7 +351,6 @@ mod tests {
             let refused = match run(&source, &Limits::default()) {
                 Err(_) => true,
                 Ok(Outcome::Text(output)) => output.status != 0,
-                Ok(Outcome::Unavailable(_)) => false,
             };
             assert!(refused, "{body}");
         }

@@ -66,23 +66,13 @@ fn cli_reports_a_plain_compile_error_on_stderr() {
 }
 
 #[test]
-fn cli_answers_iced_and_async_snippets_with_their_message() {
-    for (source, reason) in [
-        ("column![text(\"hi\"), button(\"go\")]", rawr_play::Unavailable::Iced),
-        (
-            "use tokio::time::{sleep, Duration};\n\n#[tokio::main]\nasync fn main() {\n    sleep(Duration::from_millis(100)).await;\n    println!(\"done\");\n}\n",
-            rawr_play::Unavailable::Async,
-        ),
-    ] {
-        let result = run_stdin(source, &[]);
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let stdout = String::from_utf8(result.stdout).unwrap();
-        assert_eq!(stdout, rawr_play::unavailable_json(reason));
-        let text = rawr_play::message::reply(true, stdout.as_bytes(), "");
-        assert_eq!(text, reason.message());
-    }
+fn cli_refuses_an_async_main_with_no_runtime_as_rustc_does() {
+    let result = run_stdin("async fn main() {\n    println!(\"hi\");\n}\n", &[]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("error[E0752]: `main` function is not allowed to be `async`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("play.rs:1:1"), "{stderr}");
 }

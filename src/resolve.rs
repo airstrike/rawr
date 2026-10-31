@@ -14,6 +14,7 @@ pub(crate) mod package;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
+pub(crate) use error::ASYNC_MAIN;
 pub use error::{Category, Error};
 use std::collections::BTreeMap;
 
@@ -431,6 +432,31 @@ pub(crate) fn resolve_with_evidence(
     )
 }
 
+/// rustc's E0752: the program's `main` is `async` with no runtime's entry,
+/// such as `#[tokio::main]`, to run its future.
+fn async_main(items: &[crate::item::Parsed]) -> Result<(), Error> {
+    let refused = items.iter().find_map(|item| match item {
+        crate::item::Parsed::Function(function)
+            if function.name.text == "main"
+                && function.asynchronous
+                && !function
+                    .header
+                    .attributes
+                    .iter()
+                    .any(|attribute| lower_nominal::runtime_entry(&attribute.path)) =>
+        {
+            Some(function)
+        }
+        _ => None,
+    });
+    match refused {
+        Some(function) => Err(Error::AsyncMain {
+            at: Span::new(function.span.start(), function.name.span.end()),
+        }),
+        None => Ok(()),
+    }
+}
+
 fn resolve_with_evidence_and_namespace(
     unit: parse::Unit,
     host: &host::Registry,
@@ -459,6 +485,7 @@ fn resolve_with_evidence_and_namespace(
             source: module.span,
         });
     }
+    async_main(&parsed_items)?;
     let symbols = Symbols::predeclare(&parsed_items, namespace, allocation_order, host)?;
     let mut items = Vec::with_capacity(parsed_items.len());
 

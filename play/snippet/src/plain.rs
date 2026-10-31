@@ -1,16 +1,4 @@
-//! A plain program: a snippet that needs neither iced nor an async
-//! runtime, as a program with a `fn main`.
-
-/// Whether `source` has an `async fn main` (or `pub async fn main`) at its
-/// top level, as `#[tokio::main]` marks one.
-#[must_use]
-pub fn has_async_main(source: &str) -> bool {
-    source.split('\n').any(|line| {
-        let rest = line.strip_prefix("pub ").unwrap_or(line);
-        rest.strip_prefix("async fn main")
-            .is_some_and(|rest| rest.trim_start().starts_with('('))
-    })
-}
+//! A snippet as a program with a `fn main`.
 
 /// `source` with each `#[cfg(test)]` item (such as `mod tests { .. }`)
 /// blanked, keeping line numbers: a pasted example often ends with tests.
@@ -102,12 +90,15 @@ pub fn has_item(source: &str) -> bool {
         if start && !byte.is_ascii_whitespace() && !comment {
             start = false;
             let rest = &source[index..];
-            item |= ITEMS.iter().any(|word| {
+            let word = |rest: &str, word: &str| {
                 rest.starts_with(word)
-                    && (*word == "#["
+                    && (word == "#["
                         || !rest[word.len()..]
                             .starts_with(|c: char| c.is_alphanumeric() || c == '_'))
-            });
+            };
+            // `async fn` is an item, and `async { .. }` a statement.
+            item |= ITEMS.iter().any(|item| word(rest, item))
+                || (word(rest, "async") && word(rest["async".len()..].trim_start(), "fn"));
         }
         match byte {
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
@@ -162,17 +153,7 @@ pub fn has_item(source: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_async_main, program};
-
-    #[test]
-    fn an_async_main_is_found_at_the_top_level() {
-        assert!(has_async_main("#[tokio::main]\nasync fn main() {}\n"));
-        assert!(has_async_main(
-            "pub async fn main() -> Result<(), String> { Ok(()) }\n"
-        ));
-        assert!(!has_async_main("fn main() {}\nasync fn helper() {}\n"));
-        assert!(!has_async_main("mod m {\n    async fn main() {}\n}\n"));
-    }
+    use super::program;
 
     #[test]
     fn plain_snippets_become_programs() {
@@ -195,6 +176,9 @@ mod tests {
         assert_eq!(program(items), items);
         let item_later = "let s = \"a;b\";\nfn f() {}";
         assert_eq!(program(item_later), item_later);
+        let asynchronous = "async fn main() {}\n";
+        assert_eq!(program(asynchronous), asynchronous);
+        assert!(!super::has_item("async { 1 }.await"));
         let commented = "// About it.\n/* More. */ fn main() {}\n";
         assert_eq!(program(commented), commented);
         assert_eq!(super::quiet_program("1 + 2"), "fn main() { 1 + 2\n; }\n");

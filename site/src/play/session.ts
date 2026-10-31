@@ -3,10 +3,9 @@
 // draws it and hands it the browser.
 //
 // A snippet runs in the browser by default: rawr-web (WEB_MODULE, from
-// web/build.sh) loads once the page is up, and a plain program's output
-// shows as the server's would. An iced or async snippet shows the one
-// message that says it doesn't run here yet. "Run on server" runs it through
-// POST /play/render instead, which answers the same way. The server also
+// web/build.sh) loads once the page is up, and a program's output shows as
+// the server's would. "Run on server" runs it through POST /play/render
+// instead, which answers the same way. The server also
 // runs a snippet when the module did not load. Share goes through POST
 // /play/share.
 //
@@ -56,7 +55,7 @@ export interface Chunk {
 }
 
 export interface TextResult {
-  /** "text", "unavailable" for an iced or async snippet, or "error" for one that does not compile. */
+  /** "text", or "error" for a snippet that does not compile. */
   kind?: string;
   status: number;
   output?: Chunk[];
@@ -68,9 +67,7 @@ export type Output =
   | { kind: "note" }
   /** A plain program's output, with its status. */
   | { kind: "term"; chunks: Chunk[]; status: number; note?: string }
-  | { kind: "error"; text: string }
-  /** Why an iced or async snippet doesn't run here yet. */
-  | { kind: "unavailable"; text: string };
+  | { kind: "error"; text: string };
 
 export interface State {
   code: string;
@@ -396,14 +393,11 @@ export class Session {
     this.result(result, Math.round(this.deps.now() - start) + " ms in the browser");
   }
 
-  /** What a run gave, from the browser or the server: its output, its message, or its report. */
+  /** What a run gave, from the browser or the server: its output or its report. */
   private result(result: TextResult, took: string) {
     if (result.kind === "error") {
       this.show({ kind: "error", text: result.text ?? "" });
       this.set({ status: "error" });
-    } else if (result.kind === "unavailable") {
-      this.show({ kind: "unavailable", text: result.text ?? "" });
-      this.set({ status: "not available here yet" });
     } else {
       this.show(terminal(result));
       this.set({ status: took + (result.status !== 0 ? " · exit " + result.status : "") });

@@ -1,10 +1,6 @@
-//! Plain programs: a snippet that needs neither iced nor an async runtime
-//! runs on the base language, as `rawr run` runs a file, and its output
-//! comes back as text.
-//!
-//! The snippet is parsed once. That parse gives the [`Facts`] that say
-//! whether it runs here at all ([`rawr_snippet::route`]), and a plain
-//! program is compiled from that same parse.
+//! Plain programs: a snippet runs on the base language, as `rawr run` runs
+//! a file, and its output comes back as text. The snippet is parsed once,
+//! and the program is compiled from that parse.
 //!
 //! A snippet with items (`fn main`, a struct, ..) runs as written: its top
 //! level, then `fn main` if there is one. A snippet of statements alone is
@@ -14,10 +10,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use rawr::layer::Facts;
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
 
-use crate::{Limits, PlayError, Unavailable, SOURCE_NAME};
+use crate::{Limits, PlayError, SOURCE_NAME};
 pub use rawr_snippet::plain::program;
 use rawr_snippet::plain::quiet_program;
 
@@ -152,13 +147,12 @@ impl Output {
     }
 }
 
-/// A snippet parsed once as a plain program, with its facts.
+/// A snippet parsed once as a plain program.
 pub struct Parsed {
     engine: Engine,
     sink: Arc<Mutex<Output>>,
     program: String,
     unit: rawr::parse::Unit,
-    facts: Facts,
 }
 
 impl Parsed {
@@ -176,21 +170,12 @@ impl Parsed {
                 Err(_) => PlayError::Compile(error.to_string()),
             }
         })?;
-        let facts = Facts::of_unit(&unit);
         Ok(Self {
             engine,
             sink,
             program,
             unit,
-            facts,
         })
-    }
-
-    /// Why this snippet, written as `source`, doesn't run here: it needs
-    /// iced or an async runtime. `None` for a plain program.
-    #[must_use]
-    pub fn unavailable(&self, source: &str) -> Option<Unavailable> {
-        rawr_snippet::route::unavailable(source, &self.facts)
     }
 
     /// Compile the parse and run it once; `source` is the snippet as the
@@ -201,7 +186,6 @@ impl Parsed {
             sink,
             mut program,
             unit,
-            ..
         } = self;
         let unreadable = || PlayError::Compile("the snippet cannot be read".to_owned());
         let mut evidence = diagnostic(&program).ok_or_else(unreadable)?;

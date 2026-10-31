@@ -192,14 +192,10 @@ try {
   await shot("plain.png");
   check(await evaluate(`document.querySelector("#out pre.term .err")?.textContent === "done\\n"`), "stderr shows in its own colour");
 
-  // An iced snippet and an async one each show their message.
-  await setCode('column![text("hi"), button("go")]');
-  await until("the iced message", `(document.querySelector("#out .note") || {}).textContent?.startsWith("iced programs don't run here yet.")`, 5000);
-  await shot("iced.png");
-  check(true, "an iced snippet shows its message");
-  await setCode("#[tokio::main]\nasync fn main() {\n    println!(\"hi\");\n}");
-  await until("the async message", `(document.querySelector("#out .note") || {}).textContent?.startsWith("async programs")`, 5000);
-  check(await evaluate(`document.getElementById("status").textContent === "not available here yet"`), "an async snippet shows its message");
+  // An async main with no runtime is rustc's E0752, as any program's error.
+  await setCode("async fn main() {\n    println!(\"hi\");\n}");
+  await until("E0752", `(document.querySelector("#out pre.error") || {}).textContent?.includes("error[E0752]")`, 5000);
+  check(true, "an async main with no runtime gets E0752");
 
   // An example from its address: restored and run once the module is up.
   // From another page: a hash change alone would not load the page again.

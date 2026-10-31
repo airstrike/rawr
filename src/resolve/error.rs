@@ -67,6 +67,9 @@ pub enum Category {
     /// A `break` or `continue` with no label in a `while` condition, as
     /// rustc's E0590.
     UnlabeledJumpInWhileCondition,
+    /// A root `main` that is `async` with no runtime's entry, as rustc's
+    /// E0752.
+    AsyncMain,
     /// The restricted application-root contract was violated.
     InvalidApplication,
     /// A local preview declaration cannot be normalized at compile time.
@@ -109,6 +112,7 @@ impl fmt::Display for Category {
             Self::UnlabeledJumpInWhileCondition => {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
+            Self::AsyncMain => formatter.write_str("async main"),
             Self::InvalidApplication => formatter.write_str("invalid application"),
             Self::InvalidPreview => formatter.write_str("invalid preview"),
             Self::InvalidWidget => formatter.write_str("invalid widget protocol"),
@@ -416,6 +420,12 @@ pub enum Error {
         /// The jump's span.
         at: Span,
     },
+    /// A root `fn main` that is `async` with no runtime's entry, such as
+    /// `#[tokio::main]`, which rustc refuses (E0752).
+    AsyncMain {
+        /// The function's signature, from `async` to its output.
+        at: Span,
+    },
     /// Restricted application-root discovery failed.
     Application(crate::application::Error),
     /// Local preview metadata or one of its exact callback proofs is invalid.
@@ -478,6 +488,7 @@ impl Error {
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
+            Self::AsyncMain { .. } => Category::AsyncMain,
             Self::Application(_) => Category::InvalidApplication,
             Self::InvalidPreview { .. } => Category::InvalidPreview,
             Self::InvalidWidget { .. } => Category::InvalidWidget,
@@ -519,6 +530,7 @@ impl Error {
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
             Self::Syntax { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
+            Self::AsyncMain { .. } => "main",
             Self::Application(_) => "application",
             Self::InvalidPreview { preview, .. } => preview.as_str(),
             Self::InvalidWidget { widget, .. } => widget.as_str(),
@@ -559,7 +571,9 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
-            Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
+            Self::Syntax { at, .. }
+            | Self::UnlabeledJumpInWhileCondition { at, .. }
+            | Self::AsyncMain { at } => *at,
             Self::Application(error) => error.primary_span(),
             Self::InvalidPreview { reference, .. } => *reference,
             Self::InvalidWidget { reference, .. } => *reference,
@@ -606,7 +620,8 @@ impl Error {
             | Self::InvalidMatch { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
-            | Self::UnlabeledJumpInWhileCondition { .. } => None,
+            | Self::UnlabeledJumpInWhileCondition { .. }
+            | Self::AsyncMain { .. } => None,
             Self::Application(error) => error.secondary_span(),
             Self::InvalidPreview { declaration, .. } => *declaration,
             Self::InvalidWidget { declaration, .. } => *declaration,
@@ -620,6 +635,10 @@ impl Error {
         }
     }
 }
+
+/// rustc's message and label for an `async fn main` with no runtime's
+/// entry (E0752).
+pub const ASYNC_MAIN: &str = "`main` function is not allowed to be `async`";
 
 /// Names checked Rawr keeps under another spelling (`switch`, `debug`, ..)
 /// read as Rust's in every message (`tokenizer::demangle_names`).
@@ -844,6 +863,7 @@ impl fmt::Display for Written<'_> {
             Error::Syntax { message, .. } => formatter.write_str(message),
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
+            Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
             Error::Application(error) => error.fmt(formatter),
             Error::InvalidPreview {
                 preview,

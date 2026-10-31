@@ -1,6 +1,5 @@
-//! `rawr-play-bot`: run `?play` code blocks posted to Discord. A plain
-//! program replies with its output. A snippet that needs iced or an async
-//! runtime replies with one message saying it doesn't run here yet.
+//! `rawr-play-bot`: run `?play` code blocks posted to Discord. A program
+//! replies with its output, and one that doesn't compile with its error.
 //!
 //! Each snippet runs in its own `rawr-play` process (beside this binary, or
 //! `PLAY_RENDERER`), so a run past `PLAY_TIMEOUT_MS` is killed and one
@@ -728,17 +727,15 @@ impl Handler {
         self.shared.record(ran.outcome, ran.millis, guild);
         match ran.result {
             Ok(Done::Text(output)) => message::output_text(&output),
-            Ok(Done::Unavailable(text)) => text,
             Err(text) => message::error_text(&text),
         }
     }
 }
 
 /// Serve `POST /render` (the playground, through the Worker) and `GET
-/// /health` on `port`: a plain program's output as JSON
-/// (`rawr_play::Output::to_json`), or a snippet's
-/// `{"kind":"unavailable","text":..}` (`rawr_play::unavailable_json`), on
-/// success; the error text as 422 otherwise.
+/// /health` on `port`: a program's output as JSON
+/// (`rawr_play::Output::to_json`) on success; the error text as 422
+/// otherwise.
 async fn serve(shared: Arc<Shared>, port: u16) {
     use http_body_util::{BodyExt, Full, Limited};
     use hyper::body::{Bytes, Incoming};
@@ -806,10 +803,6 @@ async fn serve(shared: Arc<Shared>, port: u16) {
                             };
                             match ran.result {
                                 Ok(Done::Text(output)) => json(output.to_json()),
-                                Ok(Done::Unavailable(message)) => json(
-                                    serde_json::json!({ "kind": "unavailable", "text": message })
-                                        .to_string(),
-                                ),
                                 Err(error) => text(StatusCode::UNPROCESSABLE_ENTITY, error),
                             }
                         }
