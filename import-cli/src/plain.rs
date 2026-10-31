@@ -153,6 +153,7 @@ fn acquire(
     graph: &rawr::package::Graph,
     limits: &rawr_import::cargo::Limits,
     input: &[u8; 32],
+    settlement: &mut rawr_import::bindings::Settlement,
 ) -> Result<Facts, crate::Error> {
     use crate::Error;
     use rawr_import::applicability::{inventory, store};
@@ -193,31 +194,54 @@ fn acquire(
     let probe = request(&[])?;
     let native = probe.pinned_native(limits).map_err(Error::other)?;
     let closure = probe.closure(&native, limits).map_err(Error::other)?;
+    // What the project's last build gave its build scripts, against which
+    // an entry whose closure runs one is shared (#403).
+    let rawr = graph.entry_package().root().join("target/rawr");
+    let project = store::Scripts::project(&rawr);
     // Each unit: its entry's key and store, and the witness its capture must
-    // agree with before it is published.
-    let keys = closure
-        .units
-        .iter()
-        .map(|(name, unit, witness)| {
-            let (key, directory, shared) = match closure.shared.get(unit) {
-                Some(shared) => (store::shared_key(name, shared), closure.home.clone(), true),
-                None => (store::key(name, witness), local.clone(), false),
-            };
-            (unit.clone(), (key, *witness, directory, shared))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
+    // agree with before it is published. A unit whose shared closure runs a
+    // build script reads rawr's home unless the project's last build gave
+    // other outputs than its entry was captured with, and this run's build
+    // checks it (`settlement`). Otherwise its entry is the project's, and
+    // goes to the home once the build gives the outputs the nightly did.
+    let mut promote = std::collections::BTreeMap::new();
+    let mut keys = std::collections::BTreeMap::new();
     let mut entries = Vec::new();
     let mut missing = std::collections::BTreeSet::new();
     let mut complete = true;
-    for (key, witness, directory, shared) in keys.values() {
-        match store::read(directory, key) {
-            Some(held) if *shared || held.entry().native().1 == witness => {
+    for (name, unit, witness) in &closure.units {
+        let scripts = closure.scripts.get(unit);
+        let (key, directory, shared) = match closure.shared.get(unit) {
+            Some(shared) if scripts.is_none() => {
+                (store::shared_key(name, shared), closure.home.clone(), true)
+            }
+            Some(shared) => {
+                let packages = scripts.cloned().unwrap_or_default();
+                let key = store::shared_key(name, shared);
+                if let Some(held) = store::read(&closure.home, &key)
+                    && project
+                        .as_ref()
+                        .is_none_or(|project| held.entry().scripts_agree(&packages, project))
+                {
+                    settlement.inventory_read(&rawr, &closure.home, &key, &packages, held.entry());
+                    keys.insert(unit.clone(), (key, *witness, closure.home.clone(), true));
+                    entries.push(held.into_entry());
+                    continue;
+                }
+                promote.insert(unit.clone(), (key, packages));
+                (store::key(name, witness), local.clone(), false)
+            }
+            None => (store::key(name, witness), local.clone(), false),
+        };
+        match store::read(&directory, &key) {
+            Some(held) if shared || held.entry().native().1 == witness => {
                 entries.push(held.into_entry());
             }
             _ => {
-                missing.insert(*key);
+                missing.insert(key);
             }
         }
+        keys.insert(unit.clone(), (key, *witness, directory, shared));
     }
     if !missing.is_empty() {
         let request = request(&closure.dependencies)?;
@@ -239,6 +263,16 @@ fn acquire(
             if missing.contains(entry.key()) && agrees {
                 complete &= store::publish(directory, entry).is_ok();
             }
+        }
+    }
+    // A project's entry whose build scripts give this run's build what they
+    // gave the nightly goes to rawr's home, for any project whose build
+    // agrees, once that build has run.
+    for entry in &entries {
+        if let Some((key, packages)) = promote.get(entry.native().0)
+            && store::read(&closure.home, key).is_none()
+        {
+            settlement.inventory(&rawr, &closure.home, key, packages, entry);
         }
     }
     if complete {
@@ -410,7 +444,7 @@ fn prepare(
                             .rust_application()
                             .ok_or_else(|| Error::other("imported call encoding"))?;
                         if inventory.is_none() {
-                            inventory = Some(acquire(&graph, &limits, &input)?);
+                            inventory = Some(acquire(&graph, &limits, &input, &mut settlement)?);
                         }
                         let facts = inventory
                             .as_ref()

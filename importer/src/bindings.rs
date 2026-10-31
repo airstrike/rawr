@@ -263,12 +263,34 @@ pub(crate) enum Settled {
         scripts: BTreeMap<String, Vec<Script>>,
         inputs: crate::input::bindings::Inputs,
     },
+    /// A crate's intrinsic entry this run captured, whose closure runs a
+    /// build script: published to rawr's home under its machine-wide key
+    /// once the project's build gives its packages the outputs the nightly
+    /// did (#403).
+    Inventory {
+        home: PathBuf,
+        key: String,
+        packages: Box<[Box<str>]>,
+        entry: Box<crate::applicability::inventory::Entry>,
+    },
+    /// Such an entry read from rawr's home: refused, and evicted, when the
+    /// project's build gives its packages other outputs.
+    InventoryRead {
+        home: PathBuf,
+        key: String,
+        crate_name: String,
+        packages: Box<[Box<str>]>,
+        scripts: crate::applicability::store::Scripts,
+    },
 }
 
 impl Settled {
     fn key(&self) -> &str {
         match self {
-            Self::Extracted { key, .. } | Self::Read { key, .. } => key,
+            Self::Extracted { key, .. }
+            | Self::Read { key, .. }
+            | Self::Inventory { key, .. }
+            | Self::InventoryRead { key, .. } => key,
         }
     }
 }
@@ -305,7 +327,9 @@ impl Settlement {
                     scripts,
                     ..
                 } => (crate_name, scripts),
-                Settled::Extracted { nightly: None, .. } => continue,
+                Settled::Extracted { nightly: None, .. }
+                | Settled::Inventory { .. }
+                | Settled::InventoryRead { .. } => continue,
             };
             if let Some((package, _)) = scripts.iter().find(|(package, scripts)| {
                 stable
@@ -316,6 +340,50 @@ impl Settlement {
             }
         }
         None
+    }
+
+    /// Publish `entry`, a crate's intrinsic facts this run kept with the
+    /// project, to rawr's `home` under `key` once the project's build in
+    /// `rawr` has given `packages` the build-script outputs it was captured
+    /// with (#403).
+    pub fn inventory(
+        &mut self,
+        rawr: &Path,
+        home: &Path,
+        key: &[u8; 32],
+        packages: &[Box<str>],
+        entry: &crate::applicability::inventory::Entry,
+    ) {
+        let Ok(entry) = entry.clone_rekeyed(*key) else {
+            return;
+        };
+        self.rawr.get_or_insert_with(|| rawr.to_path_buf());
+        self.entries.push(Settled::Inventory {
+            home: home.to_path_buf(),
+            key: crate::extract::engine::hex(key),
+            packages: packages.into(),
+            entry: Box::new(entry),
+        });
+    }
+
+    /// Check `entry`, read from rawr's `home` under `key`, against what the
+    /// project's build in `rawr` gives `packages` (#403).
+    pub fn inventory_read(
+        &mut self,
+        rawr: &Path,
+        home: &Path,
+        key: &[u8; 32],
+        packages: &[Box<str>],
+        entry: &crate::applicability::inventory::Entry,
+    ) {
+        self.rawr.get_or_insert_with(|| rawr.to_path_buf());
+        self.entries.push(Settled::InventoryRead {
+            home: home.to_path_buf(),
+            key: crate::extract::engine::hex(key),
+            crate_name: entry.crate_name().to_owned(),
+            packages: packages.into(),
+            scripts: entry.scripts().clone(),
+        });
     }
 
     /// Take what `other` left too, as the preparation loop prepares again.
@@ -426,6 +494,44 @@ impl Settlement {
                              or unavailable build-script outputs for `{}` on this project's \
                              toolchain. rawr refused them: run again to make them here",
                             package_name(package),
+                        )
+                    });
+                }
+                Settled::Inventory {
+                    home,
+                    packages,
+                    entry,
+                    ..
+                } => {
+                    let agrees = stable.as_ref().is_some_and(|stable| {
+                        entry.scripts_agree(
+                            &packages,
+                            &crate::applicability::store::Scripts::from_map(stable.clone()),
+                        )
+                    });
+                    if agrees {
+                        let _ = crate::applicability::store::publish(&home, &entry);
+                    }
+                }
+                Settled::InventoryRead {
+                    home,
+                    key,
+                    crate_name,
+                    packages,
+                    scripts,
+                } => {
+                    let project = crate::applicability::store::Scripts::from_map(
+                        stable.clone().unwrap_or_default(),
+                    );
+                    if scripts.agree(&packages, &project) {
+                        continue;
+                    }
+                    home::evict(&home, &key);
+                    refused.get_or_insert_with(|| {
+                        format!(
+                            "the shared facts of `{crate_name}` were captured with different or \
+                             unavailable build-script outputs on this project's toolchain. rawr \
+                             refused them: run again to capture them here",
                         )
                     });
                 }

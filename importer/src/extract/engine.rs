@@ -12,10 +12,10 @@
 //! So the driver answers units from the compiler and records them in the
 //! crate's table, and the same engine replays any demand whose units the
 //! table holds with no compiler at all. The two produce the same body,
-//! because they are the same walk over the same answers. A small crate's
-//! table holds its whole walk. A large crate's grows with each demand it
-//! meets: walking iced whole cost the counter's first run about 18 s in a
-//! debug build.
+//! because they are the same walk over the same answers. A crate's table
+//! holds its whole walk, so any later demand of it replays (#281). iced's
+//! whole walk is about 36,000 units, 8 s in a debug driver; only a crate
+//! whose whole walk fails grows its table with each demand instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -35,7 +35,7 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 5;
+pub(crate) const TABLE_SCHEMA: u32 = 6;
 
 const MAX_DEFINITIONS: usize = 500_000;
 const MAX_PACKAGES: usize = 4_096;
@@ -345,8 +345,8 @@ pub(crate) struct Root {
 #[derive(Default)]
 pub(crate) struct Memo {
     pub(crate) whole: bool,
-    /// The crate's whole walk passed the driver's bound, so its table grows
-    /// with demand and the walk is not tried again.
+    /// The crate's whole walk failed, so its table grows with demand and
+    /// the walk is not tried again.
     pub(crate) large: bool,
     pub(crate) units: BTreeMap<Unit, Rc<[Emission]>>,
     pub(crate) modules: BTreeMap<Hash, Rc<[Child]>>,
@@ -634,6 +634,13 @@ pub(crate) struct Engine<'o, O: Oracle> {
     current: Option<Hash>,
     active: Level,
     only_names: Option<BTreeSet<Key>>,
+    /// The modules the current walk is inside, so a module that re-exports
+    /// one of its ancestors, as `pub use super::*` in a child does, is not
+    /// walked into again.
+    walking: Vec<Hash>,
+    /// The segment a `$crate` of a macro defined in the selected crate reads
+    /// as, which a whole walk records too (#404).
+    own_segment: Option<String>,
 }
 
 impl<'o, O: Oracle> Engine<'o, O> {
@@ -674,7 +681,16 @@ impl<'o, O: Oracle> Engine<'o, O> {
             current: None,
             active: Level::Shape,
             only_names: None,
+            walking: Vec::new(),
+            own_segment: None,
         }
+    }
+
+    /// This walk with the segment that names the selected crate's own root
+    /// in its macros' `$crate` paths, so a whole walk records it.
+    pub(crate) fn own_segment(mut self, segment: String) -> Self {
+        self.own_segment = Some(segment);
+        self
     }
 
     /// Walk the crate for `demand`, its paths with the crate's alias first;
@@ -701,16 +717,22 @@ impl<'o, O: Oracle> Engine<'o, O> {
             // `$crate` names its own crate: each crate's root under the
             // segment a macro reads it as, so the whole table answers
             // those paths as a demanded walk would (#281).
+            // The selected crate's own macros name it the same way (#404).
             let segments = self
-                .crates
-                .iter()
-                .filter(|krate| !krate.sysroot)
-                .map(|krate| {
-                    format!(
-                        "{CRATE_SEGMENT}{}_{}",
-                        krate.crate_name, krate.stable_crate_id
-                    )
-                })
+                .own_segment
+                .clone()
+                .into_iter()
+                .chain(
+                    self.crates
+                        .iter()
+                        .filter(|krate| !krate.sysroot)
+                        .map(|krate| {
+                            format!(
+                                "{CRATE_SEGMENT}{}_{}",
+                                krate.crate_name, krate.stable_crate_id
+                            )
+                        }),
+                )
                 .collect::<Vec<_>>();
             for name in segments {
                 let Some(segment) = self.oracle.segment(&name)? else {
@@ -1284,6 +1306,23 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 "external public module traversal depth exceeded".to_owned(),
             ));
         }
+        if self.walking.contains(&module) {
+            return Ok(());
+        }
+        self.walking.push(module);
+        let walked = self.walk_children(module, prefix, inherited, depth, names_only);
+        self.walking.pop();
+        walked
+    }
+
+    fn walk_children(
+        &mut self,
+        module: Hash,
+        prefix: Vec<String>,
+        inherited: &[Reexport],
+        depth: usize,
+        names_only: bool,
+    ) -> Result<(), Fault> {
         let children = self.oracle.module(module)?;
         for child in children.iter() {
             let Some(export) = &child.export else {
@@ -1527,6 +1566,7 @@ mod tests {
     struct Fixture {
         units: BTreeMap<Unit, Vec<Emission>>,
         modules: BTreeMap<Hash, Vec<Child>>,
+        segments: BTreeMap<String, Segment>,
         asked: BTreeMap<Unit, usize>,
     }
 
@@ -1542,8 +1582,8 @@ mod tests {
             ))
         }
 
-        fn segment(&mut self, _: &str) -> Result<Option<Segment>, Fault> {
-            Ok(None)
+        fn segment(&mut self, name: &str) -> Result<Option<Segment>, Fault> {
+            Ok(self.segments.get(name).cloned())
         }
 
         fn index(&mut self) -> Result<Rc<[Box<RawValue>]>, Fault> {
@@ -1939,5 +1979,141 @@ mod tests {
         assert_eq!(replayed, live);
         let document: serde_json::Value = serde_json::from_slice(&replayed).unwrap();
         assert_eq!(document["definitions"].as_array().unwrap().len(), 1);
+    }
+    /// A whole table answers a path through the selected crate's own
+    /// `$crate`, as a macro defined in it names it (#404).
+    #[test]
+    fn a_whole_table_answers_the_selected_crates_own_crate_root() {
+        let own = format!("{}fixture_0123456789abcdef", super::CRATE_SEGMENT);
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        fixture.segments.insert(
+            own.clone(),
+            Segment {
+                root: hash(0),
+                krate: "0123456789abcdef".to_owned(),
+            },
+        );
+        fixture
+            .units
+            .insert(Unit::Shape(key(1)), vec![definition(1)]);
+        let whole = |fixture: &mut Fixture, own: Option<&str>| {
+            let mut memo = Memo::default();
+            let mut record = Record {
+                live: fixture,
+                memo: &mut memo,
+            };
+            let engine = Engine::new(
+                &mut record,
+                root(),
+                vec!["fixture".to_owned()],
+                String::new(),
+            );
+            match own {
+                Some(own) => engine.own_segment(own.to_owned()),
+                None => engine,
+            }
+            .run(&[])
+            .unwrap();
+            memo
+        };
+        let demand = vec![vec!["fixture".to_owned(), own.clone(), "One".to_owned()]];
+        let replay = |memo: &Memo| {
+            Engine::new(
+                &mut Replay(memo),
+                root(),
+                vec!["fixture".to_owned()],
+                String::new(),
+            )
+            .run(&demand)
+            .map(|extracted| extracted.body().unwrap())
+        };
+        assert!(
+            matches!(replay(&whole(&mut fixture, None)), Err(Fault::Missing(_))),
+            "without the segment the table cannot answer the macro's path"
+        );
+        let replayed = replay(&whole(&mut fixture, Some(&own))).unwrap();
+        let live = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&demand)
+        .unwrap()
+        .body()
+        .unwrap();
+        assert_eq!(replayed, live);
+    }
+    /// A module that re-exports its ancestor, as `pub use super::*` in a
+    /// child does, is walked once on each path, not until the depth bound:
+    /// iced's whole walk reached one.
+    #[test]
+    fn a_module_that_reexports_its_ancestor_is_walked_once() {
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        let module = |name: &str, byte: u8, into: Hash| Child {
+            name: name.to_owned(),
+            landing: None,
+            export: Some(ChildExport {
+                binding: Binding::Nameable,
+                variant: None,
+                span: span(),
+                reexports: Vec::new(),
+                hops: Vec::new(),
+                target: ChildTarget::Definition {
+                    key: key(byte),
+                    id: id(byte),
+                    error: None,
+                    display_path: vec![name.to_owned()],
+                    request: Box::new(Ok((
+                        Request {
+                            key: key(byte),
+                            owner: raw(r#"{"kind":"free"}"#),
+                            level: Level::Shape,
+                        },
+                        None,
+                    ))),
+                    module: Some(Nested {
+                        module: into,
+                        foreign: false,
+                    }),
+                },
+            }),
+        };
+        fixture
+            .modules
+            .get_mut(&hash(0))
+            .unwrap()
+            .push(module("inner", 5, hash(5)));
+        fixture
+            .modules
+            .insert(hash(5), vec![module("outer", 0, hash(0))]);
+        fixture
+            .units
+            .insert(Unit::Shape(key(1)), vec![definition(1)]);
+        fixture
+            .units
+            .insert(Unit::Shape(key(5)), vec![definition(5)]);
+        let extracted = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
+        let paths = extracted
+            .reachable
+            .iter()
+            .map(|export| export.path.join("::"))
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"inner::outer".to_owned()), "{paths:?}");
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path.starts_with("inner::outer::inner")),
+            "{paths:?}"
+        );
     }
 }
