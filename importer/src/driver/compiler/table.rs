@@ -48,7 +48,7 @@ impl Served {
         }
     }
 
-    /// Whether the crate's whole walk passed its bound.
+    /// Whether the crate's whole walk failed.
     pub(super) const fn large(&self) -> bool {
         self.large
     }
