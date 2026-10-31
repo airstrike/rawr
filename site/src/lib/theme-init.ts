@@ -9,8 +9,8 @@ export const CHROME: Record<"dark" | "light", string> = { dark: "#141416", light
 /** Runs in <head> before the body is parsed, so the first paint has the theme. */
 export const THEME_INIT = `(() => {
   const root = document.documentElement;
-  let theme = root.dataset.themePin;
-  if (theme !== "dark" && theme !== "light") { try { theme = localStorage.getItem(${JSON.stringify(KEY)}); } catch {} }
+  let theme;
+  try { theme = localStorage.getItem(${JSON.stringify(KEY)}); } catch {}
   if (theme !== "dark" && theme !== "light") theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
   root.dataset.theme = theme;
   const chrome = document.querySelector('meta[name="theme-color"][data-follow]');

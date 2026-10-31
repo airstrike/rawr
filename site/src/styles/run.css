@@ -17,11 +17,10 @@
 
 /* Before Run the static output keeps its rows but is hidden. */
 .run .pending { visibility: hidden; }
-/* A live result: stdout, stderr and the exit status inline; a frame as an image. */
+/* A live result: stdout, stderr and the exit status inline. */
 .run .live span, .run span span { display: inline; }
 .run span.err { color: var(--err); }
 .run span.exit { color: var(--dim); }
-.run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }
 
 /* The code of a runnable snippet is editable (run.ts). */
 code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--pink); }
