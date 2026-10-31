@@ -494,7 +494,27 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
         !nightly(started).is_empty(),
         "the first run acquires the API and the facts on the nightly"
     );
+    // The first run's check was keyed by its facts as soon as it needed
+    // them, so the next run compiles nothing: the store gains no node (#400).
+    let stored = || {
+        fn walk(path: &Path, found: &mut std::collections::BTreeSet<PathBuf>) {
+            for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if !path.to_string_lossy().ends_with(".lock") {
+                    found.insert(path);
+                }
+            }
+        }
+        let mut found = std::collections::BTreeSet::new();
+        walk(&root.join("target/rawr/store"), &mut found);
+        found
+    };
+    let before = stored();
     run("11\n");
+    let added = stored().difference(&before).cloned().collect::<Vec<_>>();
+    assert!(added.is_empty(), "the second run compiled again: {added:?}");
     run("11\n");
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -510,9 +530,11 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
     assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
 }
 
-/// A crate whose whole closure comes from a registry keeps its intrinsic
-/// entry in rawr's home under a machine-wide key: a second project reads it
-/// back instead of publishing its own. Path crates keep theirs per project.
+/// A crate whose whole closure comes from a registry and runs no build
+/// script keeps its intrinsic entry in rawr's home under a machine-wide key:
+/// a second project reads it back instead of publishing its own. Path
+/// crates, and crates whose closure runs a build script, keep theirs per
+/// project.
 #[test]
 fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-inventories");
@@ -532,7 +554,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\n[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\nsemver='1'\n",
+                "[workspace]\n[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\nsemver='1'\ncamino='1'\n",
                 crates.join("applicability-a"),
                 crates.join("applicability-c"),
             ),
@@ -586,21 +608,25 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
         ["semver"],
         "only the registry crate's entry is machine-wide"
     );
+    // camino runs a build script, whose outputs only the project's own build
+    // can compare, so its entry stays with the project (#399).
     let local = entries(&first.join("target/rawr/inventories"));
-    assert_eq!(
-        local
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>(),
-        ["facts_a", "facts_b", "facts_c"]
-    );
+    let local = local
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    for name in ["facts_a", "facts_b", "facts_c", "camino"] {
+        assert!(local.contains(&name), "{name} is kept locally: {local:?}");
+    }
     let second = project("second");
     assert_eq!(
         entries(&home.join("inventories")),
         shared,
         "the second project reads the shared entry back"
     );
-    assert_eq!(entries(&second.join("target/rawr/inventories")).len(), 3);
+    assert!(entries(&second.join("target/rawr/inventories"))
+        .iter()
+        .any(|(name, _)| name == "camino"));
 }
 
 /// A crate's bindings are shared per machine: a second project with the
@@ -1077,6 +1103,38 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     assert_eq!(
         text(&run.stdout),
         "0 3 22\n8\n40 8\n116\n(\"0x123\", 5)\n220 220\n"
+    );
+}
+
+/// A crate's whole table, made by a program that called none of its
+/// macros, still answers a later program's macro whose `$crate` names
+/// another crate (#281): the whole walk keeps every crate's `$crate` root.
+#[test]
+fn a_whole_table_answers_a_later_macros_crate_root() {
+    const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("whole-macro-roots");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(MACROS), &root);
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let run = |source: &str, expected: &str| {
+        fs::write(root.join("src/main.rs"), source).unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), expected);
+    };
+    run(
+        "// rawr\nfn main() {\n    println!(\"{}\", outer::__offset());\n}\n",
+        "100\n",
+    );
+    run(
+        "// rawr\nuse outer::list;\nfn main() {\n    let made = list![1, 2, 3];\n    println!(\"{}\", made.sum());\n}\n",
+        // `list!` doubles each element.
+        "12\n",
     );
 }
 

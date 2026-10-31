@@ -222,7 +222,8 @@ pub struct Closure {
     /// Each crate's name, compiler unit and native input witness.
     pub units: Vec<(Box<str>, Box<str>, [u8; 32])>,
     /// Each compiler unit's machine-wide key, for a crate whose whole
-    /// closure comes from registries and git commits (`extract::shared`).
+    /// closure comes from registries and git commits and runs no build
+    /// script (`extract::shared`).
     pub shared: BTreeMap<Box<str>, Box<str>>,
     /// Where machine-wide entries live, under rawr's home.
     pub home: PathBuf,
@@ -420,6 +421,11 @@ impl CompletedHarness {
                     &request.target,
                 )
                 .into_iter()
+                // A closure that runs a build script may give the nightly
+                // other outputs than the project's own build, which only that
+                // build can compare (T275): its crate's entry stays with the
+                // project rather than be shared unverified (#399).
+                .filter(|(_, shared)| shared.scripts.is_empty())
                 .map(|(unit, shared)| (unit, shared.key))
                 .collect()
             }
