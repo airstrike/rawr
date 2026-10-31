@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"`?play` and the playground run every snippet through one compile path. A snippet that names a crate they don't have gets the ordinary compile error, not a special message.","issues":[444]},
+        {"text":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed to be `async`\"), under `rawr run`, `rawr check`, `?play` and the playground.","issues":[445]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.32",
@@ -898,7 +904,9 @@
     {"issue":440,"title":"Delete the importer's host-profile machinery","state":"open","category":"No glue (D593)"},
     {"issue":441,"title":"Rename facade to bindings in the core, importer, store and generated output","state":"open","category":"No glue (D593)"},
     {"issue":442,"title":"Remove the Worker's iced-only leftovers","state":"open","category":"No glue (D593)"},
-    {"issue":443,"title":"Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)"}
+    {"issue":443,"title":"Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)"},
+    {"issue":444,"title":"`?play` and the playground run every snippet through one compile path","state":"open","category":"No glue (D593)"},
+    {"issue":445,"title":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
