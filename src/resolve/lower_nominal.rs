@@ -87,7 +87,6 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
     ("cmp", &["min", "max"]),
 ];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
-const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
@@ -18994,12 +18993,6 @@ impl<'a> Parser<'a> {
                 operation: name_span,
             });
         };
-        if item.path() == TASK_PERFORM_PATH
-            && item.kind() == crate::host::item::Kind::AssociatedFunction
-        {
-            self.expect(Token::LeftParen, "'(' after Task::perform")?;
-            return self.parse_task_perform_future(name_span);
-        }
         if !matches!(
             item.kind(),
             crate::host::item::Kind::Function
@@ -19800,42 +19793,6 @@ impl<'a> Parser<'a> {
         ]);
         self.splice_tokens(tokens);
         true
-    }
-
-    /// `Task::perform(future, f)` over a Rust future, which crosses as a
-    /// `Task`: iced's own definition, `Task::future(future).map(f)`.
-    fn parse_task_perform_future(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
-        let future = self.parse_expr()?;
-        self.expect(Token::Comma, "',' after the future")?;
-        // The mapper's closure takes the future's output, as in
-        // `Task::perform(spawn_blocking(..), |result| result.unwrap())`.
-        self.closure_hint = self
-            .task_output(&future.ty)
-            .map(|output| self.inference.resolve(&output))
-            .filter(|output| !contains_inference(output))
-            .map(|output| Box::new([output]) as Box<[Ty]>);
-        let mapper = self.parse_expr();
-        self.closure_hint = None;
-        let mapper = mapper?;
-        if matches!(self.peek(), Token::Comma) {
-            self.next();
-        }
-        let end = self.expect(Token::RightParen, "')' after Task::perform arguments")?;
-        let call = span(name_span.start(), end);
-        const TASK_FUTURE: &str = "iced::Task::future";
-        let items = self
-            .models
-            .host_items(TASK_FUTURE)
-            .map(<[_]>::to_vec)
-            .ok_or_else(|| Error::InvalidHostOperation {
-                item: TASK_FUTURE.into(),
-                reason: "the bindings lack this item".into(),
-                operation: call,
-            })?;
-        let owner = self.models.item_owner(TASK_FUTURE).cloned();
-        let task = self.call_host_function(&items, owner, vec![future], call)?;
-        self.pending_arguments = Some((vec![mapper], end));
-        self.parse_host_method(task, "map".into(), call)
     }
 
     fn parse_host_value(
