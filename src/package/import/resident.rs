@@ -84,9 +84,32 @@ impl Engine {
         snapshot: &package::snapshot::Snapshot,
         cycle: &host::facade::ProfileCycle,
     ) -> Result<Outcome, Error> {
+        self.compile_resident(snapshot, Some(cycle))
+    }
+
+    /// [`Engine::compile_package_snapshot_resident`] for a runner with no
+    /// host profile: any program, a plain one included, and no application
+    /// semantics to derive.
+    #[doc(hidden)]
+    pub fn compile_package_snapshot_resident_plain(
+        &self,
+        snapshot: &package::snapshot::Snapshot,
+    ) -> Result<Outcome, Error> {
+        self.compile_resident(snapshot, None)
+    }
+
+    fn compile_resident(
+        &self,
+        snapshot: &package::snapshot::Snapshot,
+        cycle: Option<&host::facade::ProfileCycle>,
+    ) -> Result<Outcome, Error> {
         let native = self.imported_native.as_ref().ok_or(Error::Unowned)?;
         let mut attempt = account::support::Pending::transform(native.attempt()?)?;
-        let output = match captured::Output::transform(self, snapshot, cycle, &mut attempt) {
+        let output = match cycle {
+            Some(cycle) => captured::Output::transform(self, snapshot, cycle, &mut attempt),
+            None => captured::Output::transform_plain(self, snapshot, &mut attempt),
+        };
+        let output = match output {
             Ok(output) => output,
             Err(captured::Error::NativeMiss(_)) => return Ok(Outcome::NeedsPreparation),
             Err(captured::Error::Source(error)) => return Err(Error::Source(error)),
@@ -110,6 +133,15 @@ impl Engine {
 }
 
 impl Compiled {
+    /// The same compiled program's top level, for a runner that evaluates
+    /// it when it installs the candidate. Nothing is compiled again.
+    #[must_use]
+    pub fn with_top_level(mut self) -> (Self, crate::AST) {
+        let (candidate, ast) = self.candidate.with_top_level();
+        self.candidate = candidate;
+        (self, ast)
+    }
+
     /// Consume the one-shot candidate and the evidence derived from that exact
     /// compilation. No second compile is needed for the eventual installation.
     pub fn into_parts(
