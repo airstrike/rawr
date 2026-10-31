@@ -33,9 +33,17 @@ pub(super) fn render(output: &mut Vec<u8>) {
             let key = serde_json::to_vec(ty).expect("a concrete conversion type serializes");
             let rust = concrete_type(ty).expect("a native sequence descriptor has a concrete type");
             output.extend_from_slice(reading(&rust).as_bytes());
+            // A script makes a native vector of builtin values where it is
+            // written (D651). One of library values stays a script array
+            // until native code takes it: script code still keeps such
+            // values in its arena, which a native vector can't lend from.
+            let factory = if holds_nominal(ty) {
+                String::new()
+            } else {
+                format!("    __rawr_internal::place::sequence::register::<{element}>(&{key:?}).expect(\"unique generated native sequence descriptor\");\n")
+            };
             output.extend_from_slice(format!(
-                "    __rawr_internal::place::sequence::register::<{element}>(&{key:?}).expect(\"unique generated native sequence descriptor\");
-    __rawr_internal::place::sequence::register_capabilities::<{rust}>(
+                "{factory}    __rawr_internal::place::sequence::register_capabilities::<{rust}>(
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_cloning(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_copying(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_comparing(),
@@ -44,6 +52,14 @@ pub(super) fn render(output: &mut Vec<u8>) {
         }
     });
     output.extend_from_slice(b"}\n");
+}
+
+fn holds_nominal(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal { .. } => true,
+        convert::Type::Sequence { element, .. } => holds_nominal(element),
+        _ => false,
+    }
 }
 
 fn reading(rust: &str) -> String {

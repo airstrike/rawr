@@ -1326,13 +1326,80 @@ impl<T: 'static> Drop for PlaceHeld<T> {
     }
 }
 
+thread_local! {
+    /// Native vectors script code owns, on the thread that made them, by
+    /// slot. Each access moves its value out for the access alone, so no
+    /// borrow of the table outlives a statement.
+    static PLACE_VALUES: RefCell<(u64, std::collections::BTreeMap<u64, Box<dyn Any>>)> =
+        RefCell::new((0, std::collections::BTreeMap::new()));
+}
+
+/// Ownership of a native value in this thread's place table (D651). The
+/// carrier is a slot number: another thread finds nothing under it.
+struct PlaceLocal;
+struct PlaceSlot(u64);
+
+impl Drop for PlaceSlot {
+    fn drop(&mut self) {
+        let value = PLACE_VALUES
+            .try_with(|values| values.try_borrow_mut().ok().and_then(|mut values| values.1.remove(&self.0)))
+            .ok()
+            .flatten();
+        drop(value);
+    }
+}
+
+/// A value out of its slot for one access, put back however the access ends.
+struct PlaceLease(u64, Option<Box<dyn Any>>);
+
+impl Drop for PlaceLease {
+    fn drop(&mut self) {
+        if let Some(value) = self.1.take() {
+            PLACE_VALUES.with_borrow_mut(|values| values.1.insert(self.0, value));
+        }
+    }
+}
+
+fn place_slot_missing() -> Box<__rawr_internal::EvalAltResult> {
+    __rawr_internal::EvalAltResult::ErrorRuntime("the owned native place is borrowed, moved or on another thread".into(), __rawr_internal::Position::NONE).into()
+}
+
+impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
+    type Stored = PlaceSlot;
+    type Vector = PlaceLocal;
+    fn store(value: T) -> Result<PlaceSlot, Box<__rawr_internal::EvalAltResult>> {
+        Ok(PLACE_VALUES.with_borrow_mut(|values| {
+            values.0 += 1;
+            let slot = values.0;
+            values.1.insert(slot, Box::new(value));
+            PlaceSlot(slot)
+        }))
+    }
+    fn access<R>(
+        stored: &PlaceSlot,
+        mutable: bool,
+        visit: impl FnOnce(__rawr_internal::place::Access<'_, T>) -> Result<R, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<R, Box<__rawr_internal::EvalAltResult>> {
+        let value = PLACE_VALUES.with_borrow_mut(|values| values.1.remove(&stored.0)).ok_or_else(place_slot_missing)?;
+        let mut lease = PlaceLease(stored.0, Some(value));
+        let value = lease.1.as_mut().and_then(|value| value.downcast_mut::<T>()).ok_or_else(place_slot_missing)?;
+        visit(if mutable { __rawr_internal::place::Access::Mutable(value) } else { __rawr_internal::place::Access::Shared(value) })
+    }
+    fn take(stored: &PlaceSlot) -> Result<T, Box<__rawr_internal::EvalAltResult>> {
+        let value = PLACE_VALUES.with_borrow_mut(|values| values.1.remove(&stored.0)).ok_or_else(place_slot_missing)?;
+        value.downcast::<T>().map(|value| *value).map_err(|_| place_slot_missing())
+    }
+}
+
 fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime(format!("native place: {error:?}").into(), __rawr_internal::Position::NONE).into()
 }
 
 impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
     type Stored = NativeHandle;
-    type Vector = PlaceOwner<Vec<T>>;
+    // A native vector is owned where it is made, not in the arena, which
+    // a callback's return may already hold.
+    type Vector = PlaceLocal;
     fn store(value: T) -> Result<NativeHandle, Box<__rawr_internal::EvalAltResult>> {
         with_arena(|arena| arena.insert(value)).map_err(place_error)
     }
