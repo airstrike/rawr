@@ -265,12 +265,10 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   const root = new URL("../../../../", import.meta.url);
   const html = readFileSync(new URL("site/dist/index.html", root), "utf8");
   const sources = runnable(html);
-  assert.equal(sources.length, 2, "cart.rs and the counter");
-  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs", "main.rs"]);
+  assert.equal(sources.length, 1, "cart.rs");
+  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs"]);
   // What the page shows (and its Run button sends) is examples/scripts/cart.rs, marked as a program.
   assert.equal(sources[0], "// rawr\n" + readFileSync(new URL("examples/scripts/cart.rs", root), "utf8").trimEnd());
-  assert.match(sources[1], /^\/\/ rawr\nuse iced::Center;\n/);
-  assert.ok(sources[1].includes("fn view(&self) -> impl Widget<Message> {"));
   assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
   // The allow-list is the set of their hashes; anything else is refused.
   const allowed = new Set(await Promise.all(sources.map(sha256)));
@@ -285,7 +283,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const pages = sitePages(new URL("../../../../site/dist", import.meta.url).pathname);
   const { hashes, blocks } = await allowList(pages);
   const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
-  assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
+  assert.deepEqual(at("index.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/index.html"), []);
   assert.deepEqual(at("docs/start.html"), ["hello.rs", "cart.rs"]);
   assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
@@ -303,11 +301,11 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "drop-order.rs", "clone-out.rs", "rc-refcell.rs"]);
   assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "write.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
-    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs", "futures.rs",
+    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
     "hashmap.rs", "refcell.rs", "cell.rs", "mem.rs", "ordering.rs", "conversions.rs", "errors.rs", "path.rs",
   ]);
-  assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
-  assert.deepEqual(at("docs/iced/index.html"), ["counter.rs"]);
+  assert.deepEqual(at("docs/reference/iced.html"), []);
+  assert.deepEqual(at("docs/iced/index.html"), []);
   assert.deepEqual(at("docs/play/index.html"), [""]);
   assert.deepEqual(at("docs/reference/play.html"), []);
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
@@ -316,10 +314,9 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   // Every name is one source: the docs' cart.rs is the landing page's block.
   const names = blocks.filter((block: { name: string }) => block.name !== "").map((block: { name: string }) => block.name);
   assert.equal(new Set(names).size, names.length - 1);
-  // The docs' cart.rs and the iced page's counter.rs are the landing page's
-  // cart.rs and main.rs, so each pair is one entry.
+  // The docs' cart.rs is the landing page's cart.rs, so the pair is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
-  assert.equal(hashes.length, blocks.length - 2);
+  assert.equal(hashes.length, blocks.length - 1);
   assert.ok(hashes.includes(await sha256(canonical(snippet({ code: "let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()" })))));
   assert.ok(!hashes.includes(await sha256(canonical(snippet({ code: "println!(\"hi\");" })))));
 });
