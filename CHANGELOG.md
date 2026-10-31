@@ -6,6 +6,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+- The run after a program's first proved imported call starts warm instead of compiling again. (#400)
+- A crate extracted whole also answers macros such as `column!` that a later program calls for the first time. (#401; part of #281)
+- Crates whose dependencies run build scripts keep their trait facts per project instead of sharing them across the machine unverified. (#399)
+- A borrow of an element (`let x = &mut a[i]`) reads its index once, where the borrow is made, as Rust does. Changing `i` afterwards, or an index with a side effect, no longer moves the borrow to another element. (#392)
+- `T::method(&t)` calls a method of a trait bounding the generic parameter `T`, as `<T as Trait>::method(&t)` does, and `T::method` is a function value. (#376)
+- A closure passed to a generic function takes its parameter types from the function's `Fn` bound: `each(4usize, |x| *x * 4)`. (#377)
+- A `for` loop and iterator adaptors work over an associated type bounded by `Iterator` with no `Item =`. (#379)
+- A struct that implements `Iterator` can be passed where a generic parameter takes `I: Iterator<Item = X>` or `impl Iterator<Item = X>`. (#406; part of #380)
 
 ## 0.3.25 (2026-10-31)
 

@@ -5,7 +5,19 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"The run after a program's first proved imported call starts warm instead of compiling again.","issues":[400]},
+        {"text":"A crate extracted whole also answers macros such as `column!` that a later program calls for the first time.","issues":[401],"refs":[281]},
+        {"text":"Crates whose dependencies run build scripts keep their trait facts per project instead of sharing them across the machine unverified.","issues":[399]},
+        {"text":"A borrow of an element (`let x = &mut a[i]`) reads its index once, where the borrow is made, as Rust does. Changing `i` afterwards, or an index with a side effect, no longer moves the borrow to another element.","issues":[392]},
+        {"text":"`T::method(&t)` calls a method of a trait bounding the generic parameter `T`, as `<T as Trait>::method(&t)` does, and `T::method` is a function value.","issues":[376]},
+        {"text":"A closure passed to a generic function takes its parameter types from the function's `Fn` bound: `each(4usize, |x| *x * 4)`.","issues":[377]},
+        {"text":"A `for` loop and iterator adaptors work over an associated type bounded by `Iterator` with no `Item =`.","issues":[379]},
+        {"text":"A struct that implements `Iterator` can be passed where a generic parameter takes `I: Iterator<Item = X>` or `impl Iterator<Item = X>`.","issues":[406],"refs":[380]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.25",
@@ -768,10 +780,10 @@
     {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"closed","category":"No glue (D593)","release":"0.3.25"},
     {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
     {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"},
-    {"issue":376,"title":"`T::method(&t)` for a `&self` trait method through a generic parameter fails","state":"open","category":"Divergences from rustc"},
-    {"issue":377,"title":"Closure argument whose Fn bound names a not-yet-inferred type rejects `*x`","state":"open","category":"Divergences from rustc"},
+    {"issue":376,"title":"`T::method(&t)` for a `&self` trait method through a generic parameter fails","state":"closed","category":"Divergences from rustc"},
+    {"issue":377,"title":"Closure argument whose Fn bound names a not-yet-inferred type rejects `*x`","state":"closed","category":"Divergences from rustc"},
     {"issue":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"open","category":"Divergences from rustc"},
-    {"issue":379,"title":"`for` over an associated type bounded by plain `Iterator` is not iterable","state":"open","category":"Divergences from rustc"},
+    {"issue":379,"title":"`for` over an associated type bounded by plain `Iterator` is not iterable","state":"closed","category":"Divergences from rustc"},
     {"issue":380,"title":"A script iterator struct can't fill `I: Iterator<Item = X>`","state":"open","category":"Divergences from rustc"},
     {"issue":381,"title":"Impls for references beyond forwarding impls are refused","state":"open","category":"Divergences from rustc"},
     {"issue":382,"title":"Equality in a generic trait's associated type bound is refused","state":"open","category":"Divergences from rustc"},
@@ -784,15 +796,25 @@
     {"issue":389,"title":"Widen proved applications: text types, literal arguments, generic receivers","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":390,"title":"Drop the cargo probe from warm runs with proved applications","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.25"},
     {"issue":391,"title":"A native `&mut Vec<String>` or `&mut String` lent to a script callback, slot or closure is now…","state":"closed","category":"Divergences from rustc","release":"0.3.24"},
-    {"issue":392,"title":"A `&mut` element reference re-reads its index expression at each use","state":"open","category":"Divergences from rustc"},
+    {"issue":392,"title":"A `&mut` element reference re-reads its index expression at each use","state":"closed","category":"Divergences from rustc"},
     {"issue":393,"title":"Moving a Clone library value into native storage clones it and drops the original","state":"open","category":"Divergences from rustc"},
     {"issue":394,"title":"A single non-'static Fn callable parameter is not bound","state":"open","category":"Divergences from rustc"},
     {"issue":395,"title":"Script-written vectors of library values don't keep native allocation history","state":"open","category":"Divergences from rustc"},
     {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"},
     {"issue":397,"title":"Show the full package report for a resident source error","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":398,"title":"A new import path of a bound crate re-extracts the API","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":399,"title":"Compare build-script outputs before sharing intrinsic entries","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":400,"title":"A program's first proved call compiles it twice","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":399,"title":"Compare build-script outputs before sharing intrinsic entries","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":400,"title":"A program's first proved call compiles it twice","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":401,"title":"A crate extracted whole also answers macros such as `column!` that a later program calls for the…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":402,"title":"Replay path crates' whole tables with no nightly run","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":406,"title":"A struct that implements `Iterator` can be passed where a generic parameter takes…","state":"open","category":"Divergences from rustc"},
+    {"issue":407,"title":"An iterator passed to a function is collected in full at the call","state":"open","category":"Divergences from rustc"},
+    {"issue":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"open","category":"Divergences from rustc"},
+    {"issue":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"open","category":"Divergences from rustc"},
+    {"issue":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
