@@ -1037,6 +1037,15 @@ const OPS = {
   },
 
   entry(ctx, op) {
+    // A released entry can only have its text corrected; what it shipped stays.
+    if (op.release) {
+      const release = ctx.plan.changelog.releases.find((r) => r.version === op.release) ?? fail(`no release ${op.release}`);
+      const entry = release.entries[op.index] ?? fail(`${op.release} has ${release.entries.length} entries; there is no entry ${op.index}`);
+      if (op.remove || op.issues || op.refs || !op.text) fail(`an entry of ${op.release} can only have its text changed`);
+      checkRefs(ctx, op.text);
+      entry.text = op.text;
+      return `entry ${op.index} of ${op.release} changed`;
+    }
     const entries = ctx.plan.changelog.unreleased.entries;
     const entry = entries[op.index] ?? fail(`Unreleased has ${entries.length} entries; there is no entry ${op.index}`);
     if (op.remove) {

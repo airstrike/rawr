@@ -50,7 +50,7 @@
         "version": "0.3.25",
         "date": "2026-10-31",
         "entries": [
-          {"text":"`rawr run` applies a body edit in a plain or marked program by compiling it in the running runner, with no full preparation. On the reload benchmark a save shows at the next callback in about 49 ms, down from about 1 s, in the same process with its state kept. New native needs, manifest or declaration changes, and edits a running `main` can't take still go through full preparation.","issues":[373]},
+          {"text":"`rawr run` applies a body edit in a plain or marked program by compiling it in the running runner, with no full preparation. On the reload benchmark a save shows at the next callback in about 80 ms, down from about 1.3 s, in the same process with its state kept. New native needs, manifest or declaration changes, and edits a running `main` can't take still go through full preparation.","issues":[373]},
           {"text":"A new method call on a type a program already uses is proved from the crates' own facts, so a save that adds one needs no nightly extraction.","issues":[387]},
           {"text":"A program with proved imported calls starts warm in about half a second, down from about two: a warm run no longer runs a Cargo probe.","issues":[390]},
           {"text":"Trait facts of crates from registries and git commits are shared by every project on a machine.","issues":[386]}
@@ -858,21 +858,21 @@
     {
       "id": "foundations",
       "title": "Foundations",
-      "subtitle": "Typed Rust, hot reload and the playground",
+      "subtitle": "Typed Rust with hot reload and the playground",
       "open": false,
       "rows": [
-        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics, match","issues":[],"milestone":"0.0"},
-        {"id":"hot-reload-state-kept","name":"Hot reload, state kept","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"milestone":"0.0"},
-        {"id":"iced-facade-rawr-iced","name":"iced facade, rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets, previews","issues":[],"milestone":"0.0"},
+        {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics and match","issues":[],"milestone":"0.0"},
+        {"id":"hot-reload-state-kept","name":"Hot reload keeps state","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"milestone":"0.0"},
+        {"id":"iced-facade-rawr-iced","name":"rawr-iced facade for iced","start":4,"size":4,"state":"done","note":"Hosts, widgets and previews","issues":[],"milestone":"0.0"},
         {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[],"milestone":"0.0"},
         {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[],"milestone":"0.0"},
-        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"Discord bot, browser via wasm","issues":[],"milestone":"0.0"},
-        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Script, typed handles","issues":[],"milestone":"0.0"},
-        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio, async fn","issues":[],"milestone":"0.0"},
-        {"id":"own-name-own-versions","name":"Own name, own versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[],"milestone":"0.1"},
-        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya, ratatui","issues":[],"milestone":"0.1"},
-        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves, deref coercion","issues":[],"milestone":"0.1"},
-        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes, 11,409 programs","issues":[],"milestone":"0.2"},
+        {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"A Discord bot and the browser through wasm","issues":[],"milestone":"0.0"},
+        {"id":"embedding-in-an-app","name":"Embedding in an app","start":12,"size":2,"state":"done","note":"Scripts with typed handles","issues":[],"milestone":"0.0"},
+        {"id":"async","name":"Async","start":13,"size":3,"state":"done","note":"Futures, tokio and async fn","issues":[],"milestone":"0.0"},
+        {"id":"own-name-own-versions","name":"Own name and versions","start":16,"size":1,"state":"done","note":"Every crate 0.1.0","issues":[],"milestone":"0.1"},
+        {"id":"other-hosts","name":"Other hosts","start":16,"size":2,"state":"done","note":"Freya and ratatui","issues":[],"milestone":"0.1"},
+        {"id":"language-gaps-against-rustc","name":"Language gaps against rustc","start":17,"size":2,"state":"done","note":"Casts, moves and deref coercion","issues":[],"milestone":"0.1"},
+        {"id":"borrow-checker","name":"Borrow checker","start":19,"size":5,"state":"done","note":"rustc's NLL and error codes on 11,409 programs","issues":[],"milestone":"0.2"},
         {"id":"marker-after-frontmatter","name":"Marker after frontmatter","start":23,"size":1,"state":"done","note":"0.2.8","issues":[],"milestone":"0.2"},
         {"id":"impl-trait-outputs","name":"impl Trait outputs","start":24,"size":2,"state":"done","note":"Optional callables","issues":[],"milestone":"0.2"}
       ]
@@ -880,7 +880,7 @@
     {
       "id": "cache",
       "title": "Shared dependency cache",
-      "subtitle": "Your own cargo, one runtime per machine",
+      "subtitle": "Projects build with their own cargo",
       "open": true,
       "rows": [
         {
@@ -889,7 +889,7 @@
           "start": 26,
           "size": 3,
           "state": "done",
-          "note": "No added files, check build",
+          "note": "Builds with cargo check and adds no files",
           "issues": [
             {"number":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open"},
             {"number":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed"},
@@ -992,7 +992,7 @@
           "start": 54,
           "size": 3,
           "state": "done",
-          "note": "impl<T> For for &T. #320",
+          "note": "`impl<T> For for &T`",
           "issues": [
             {"number":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed"}
           ],
@@ -1013,7 +1013,7 @@
           "start": 45,
           "size": 2,
           "state": "done",
-          "note": "Stable generation leases, atomic publication and last-use pruning. #272",
+          "note": "Unused entries are pruned safely",
           "issues": [
             {"number":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed"}
           ],
@@ -1025,7 +1025,7 @@
           "start": 49,
           "size": 2,
           "state": "done",
-          "note": "Compare toolchain outputs and validate declared inputs before reuse. #275",
+          "note": "Inputs are checked before any reuse",
           "issues": [
             {"number":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed"}
           ],
@@ -1051,7 +1051,7 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Extraction sharing shipped; concrete method signatures and retained candidate families fixed. Complete classification, local applicability and facade reuse remain. #367, #369, #370, #271, #372",
+          "note": "Classification and facade reuse remain",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
@@ -1067,7 +1067,7 @@
           "start": 45,
           "size": 2,
           "state": "now",
-          "note": "Watch ordering and home documentation verified; facade-plan invalidation remains. #254, #276, #252",
+          "note": "Facade-plan invalidation remains",
           "issues": [
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
@@ -1089,7 +1089,7 @@
           ],
           "milestone": "0.4"
         },
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate, compose per program","issues":[],"milestone":"0.4"}
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classify per crate and compose per program","issues":[],"milestone":"0.4"}
       ]
     },
     {
@@ -1098,10 +1098,10 @@
       "subtitle": "Every example through generated bindings",
       "open": true,
       "rows": [
-        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider, tooltip","issues":[],"milestone":"0.2"},
+        {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider and tooltip run","issues":[],"milestone":"0.2"},
         {
           "id": "pick-list-svg",
-          "name": "pick_list, svg",
+          "name": "pick_list and svg",
           "start": 26,
           "size": 2,
           "state": "done",
@@ -1166,7 +1166,7 @@
           "start": 37,
           "size": 3,
           "state": "done",
-          "note": ".boxed(), impl Widget",
+          "note": "`.boxed()` and `impl Widget` work",
           "issues": [
             {"number":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed"}
           ],
@@ -1178,7 +1178,7 @@
           "start": 40,
           "size": 2,
           "state": "done",
-          "note": "8 examples past it. #312, #338",
+          "note": "Eight examples get past it",
           "issues": [
             {"number":312,"title":"No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed"},
             {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"}
@@ -1191,7 +1191,7 @@
           "start": 40,
           "size": 3,
           "state": "done",
-          "note": "system_information runs; text to its runner build. #300",
+          "note": "system_information runs",
           "issues": [
             {"number":300,"title":"Upstream text stops at \"symbolic callable output must be one owned, runtime-supported type\"…","state":"closed"}
           ],
@@ -1203,7 +1203,7 @@
           "start": 41,
           "size": 3,
           "state": "done",
-          "note": "exit runs. #336, #340, part of #345",
+          "note": "exit runs",
           "issues": [
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
             {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
@@ -1217,7 +1217,7 @@
           "start": 43,
           "size": 4,
           "state": "done",
-          "note": "Provided methods, alias methods, generic struct inference and lent field writes. custom_widget runs, responds and hot-reloads with state kept; custom_quad reaches #240. #359, #360, #364",
+          "note": "custom_widget runs and hot-reloads",
           "issues": [
             {"number":359,"title":"A crate trait's provided method on a script type","state":"closed"},
             {"number":360,"title":"Methods of a type only an alias names","state":"closed"},
@@ -1231,7 +1231,7 @@
           "start": 43,
           "size": 4,
           "state": "done",
-          "note": "Generic impls and methods compile per use. #322–#324, #341",
+          "note": "Generic impls compile per use",
           "issues": [
             {"number":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed"},
             {"number":323,"title":"The generator refuses a script impl whose signatures convert one of the impl's own type…","state":"closed"},
@@ -1246,7 +1246,7 @@
           "start": 47,
           "size": 2,
           "state": "done",
-          "note": "Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371",
+          "note": "Callbacks keep their Rust signatures",
           "issues": [
             {"number":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed"}
           ],
@@ -1258,7 +1258,7 @@
           "start": 47,
           "size": 4,
           "state": "now",
-          "note": "Typed places landed. Operation audit and Miri left. #365",
+          "note": "The audit and Miri remain",
           "issues": [
             {"number":365,"title":"Native mutable vectors lose script callback changes","state":"open"}
           ],
@@ -1266,11 +1266,11 @@
         },
         {
           "id": "struct-literals-live-edits",
-          "name": "Struct literals, live edits",
+          "name": "Struct literals and live edits",
           "start": 44,
           "size": 2,
           "state": "next",
-          "note": "#325, #326",
+          "note": "Not started",
           "issues": [
             {"number":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open"},
             {"number":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open"}
@@ -1279,11 +1279,11 @@
         },
         {
           "id": "projections-function-values",
-          "name": "Projections, function values",
+          "name": "Projections and function values",
           "start": 44,
           "size": 3,
           "state": "now",
-          "note": "#318 and #327 done; #317 and #319 remain",
+          "note": "#317 and #319 remain",
           "issues": [
             {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
             {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed"},
@@ -1298,7 +1298,7 @@
           "start": 45,
           "size": 3,
           "state": "next",
-          "note": "events, exit, theme, modal. #335–#340",
+          "note": "Events, exit, theme and modal runners",
           "issues": [
             {"number":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
@@ -1315,7 +1315,7 @@
           "start": 47,
           "size": 6,
           "state": "next",
-          "note": "About 18 examples. #314, #283, #328, #334",
+          "note": "Gaps in about 18 examples",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
@@ -1345,8 +1345,8 @@
           ],
           "milestone": "0.3"
         },
-        {"id":"bot-prebuilt-bindings","name":"Bot, prebuilt bindings","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
-        {"id":"browser-wasm-bindings","name":"Browser, wasm bindings","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
+        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"next","note":"Built once per image","issues":[]},
+        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[]}
       ]
     },
     {
