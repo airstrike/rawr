@@ -389,13 +389,15 @@ struct CompletedHarness {
     /// The shared tables this extraction leaves to publish.
     #[cfg(feature = "rustc-driver")]
     settlement: Vec<crate::bindings::Settled>,
+    #[cfg(feature = "rustc-driver")]
+    closure_units: Option<Box<[u8]>>,
 }
 
 impl CompletedHarness {
     fn into_resolution(self, request: Request) -> Resolution {
         #[cfg(feature = "rustc-driver")]
-        let closure_keys = match (&self.observations, request.inputs_only) {
-            (Some(observations), true) => {
+        let closure_keys = match &self.closure_units {
+            Some(units) => {
                 let selected = self
                     .build_unit
                     .artifacts()
@@ -410,7 +412,7 @@ impl CompletedHarness {
                     })
                     .collect::<Vec<_>>();
                 crate::extract::shared::keys(
-                    observations.documents.units.bytes(),
+                    units,
                     &self.metadata,
                     &selected,
                     self.toolchain.rustc_commit(),
@@ -482,6 +484,9 @@ struct Harness {
     dag: Option<DagHarness>,
     #[cfg(feature = "rustc-driver")]
     extraction_plan: crate::extract::plan::Plan,
+    /// A closure probe's unit graph, for its crates' machine-wide keys.
+    #[cfg(feature = "rustc-driver")]
+    closure_units: Option<Box<[u8]>>,
 }
 
 /// A prepared harness whose ordinary Build and both postchecks succeeded.
@@ -1722,6 +1727,10 @@ impl Request {
                 dag: None,
                 #[cfg(feature = "rustc-driver")]
                 extraction_plan,
+                #[cfg(feature = "rustc-driver")]
+                closure_units: self
+                    .inputs_only
+                    .then(|| initial_bytes.to_vec().into_boxed_slice()),
             })
         })
     }
@@ -2061,6 +2070,8 @@ impl Request {
             }),
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units: self.inputs_only.then(|| initial_bytes.clone()),
         })
     }
 
@@ -2333,6 +2344,8 @@ impl Request {
             dag,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         } = harness;
         let mut allocation = request_allocation.ok_or_else(|| Error::Request {
             field: "legacy workspace inputs",
@@ -2620,6 +2633,8 @@ impl Request {
             dag: None,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         };
         #[allow(unused_mut)]
         let mut resolution = self.complete_harness(
@@ -2732,6 +2747,8 @@ impl Request {
                 dag: _,
             #[cfg(feature = "rustc-driver")]
             extraction_plan,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         } = harness;
         let fallback_packages = build.fallback_packages(toolchain.cargo_commit(), limits)?;
         for (package_id, package_manifest) in fallback_packages {
@@ -2878,6 +2895,8 @@ impl Request {
             capture,
             #[cfg(feature = "rustc-driver")]
             settlement,
+            #[cfg(feature = "rustc-driver")]
+            closure_units,
         })
     }
 }

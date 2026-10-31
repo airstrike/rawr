@@ -600,6 +600,7 @@ impl Request {
             command_target,
             dag: None,
             extraction_plan,
+            closure_units: None,
         })
     }
 }
