@@ -750,6 +750,17 @@ pub(crate) enum BodyTokenKind {
     Integer(crate::INT),
     /// `!`, as after a macro's name.
     Bang,
+    /// `*`, `&`, `&&`, `<`, `>`, `as`, `self` and `mut`, which a forwarding
+    /// impl for references writes (`<T as Trait>::f(*self)`).
+    Star,
+    StarStar,
+    Ampersand,
+    AndAnd,
+    LessThan,
+    GreaterThan,
+    As,
+    SelfValue,
+    Mut,
     Other,
 }
 

@@ -707,6 +707,15 @@ impl Codec for item::BodyToken {
             Kind::OrOr => Some(16),
             Kind::Other => Some(17),
             Kind::Bang => Some(18),
+            Kind::Star => Some(19),
+            Kind::Ampersand => Some(20),
+            Kind::AndAnd => Some(21),
+            Kind::LessThan => Some(22),
+            Kind::GreaterThan => Some(23),
+            Kind::As => Some(24),
+            Kind::SelfValue => Some(25),
+            Kind::Mut => Some(26),
+            Kind::StarStar => Some(27),
         };
         if let Some(tag) = tag {
             writer.byte(tag);
@@ -738,6 +747,15 @@ impl Codec for item::BodyToken {
             16 => Kind::OrOr,
             17 => Kind::Other,
             18 => Kind::Bang,
+            19 => Kind::Star,
+            20 => Kind::Ampersand,
+            21 => Kind::AndAnd,
+            22 => Kind::LessThan,
+            23 => Kind::GreaterThan,
+            24 => Kind::As,
+            25 => Kind::SelfValue,
+            26 => Kind::Mut,
+            27 => Kind::StarStar,
             _ => return None,
         };
         Some(Self::new(kind, Span::get(reader)?))

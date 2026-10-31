@@ -4958,6 +4958,15 @@ fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
         Token::If => (Kind::If, 2),
         Token::Or => (Kind::OrOr, 2),
         Token::Bang => (Kind::Bang, 1),
+        Token::Multiply => (Kind::Star, 1),
+        Token::PowerOf => (Kind::StarStar, 2),
+        Token::Ampersand => (Kind::Ampersand, 1),
+        Token::And => (Kind::AndAnd, 2),
+        Token::LessThan => (Kind::LessThan, 1),
+        Token::GreaterThan => (Kind::GreaterThan, 1),
+        Token::As => (Kind::As, 2),
+        Token::SelfValue => (Kind::SelfValue, 4),
+        Token::Mut => (Kind::Mut, 3),
         ref word if let Some(name) = crate::tokenizer::rust_name(word) => {
             let width = name.len() - "__rawr_".len();
             (Kind::Identifier(name.into()), width)

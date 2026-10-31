@@ -3,6 +3,7 @@
 pub(crate) mod application;
 pub(crate) mod borrowck;
 mod error;
+mod forward;
 mod intrinsic;
 pub(crate) mod item;
 pub(crate) mod lower_nominal;
@@ -2390,6 +2391,7 @@ fn resolve_item(
                     .supertraits
                     .iter()
                     .any(crate::parser::item::is_sized_trait),
+                reference_forwards: Box::default(),
                 generics: trait_generics,
                 declaration: None,
             })
@@ -2745,6 +2747,7 @@ fn resolve_methods(
     definitions: &[type_def::Definition],
     host: &host::Registry,
 ) -> Result<(Vec<method::Definition>, Vec<method::Definition>), LocatedError> {
+    forward::fold_reference_impls(items)?;
     declare_facade_traits(items, host)?;
     let items = items.as_mut_slice();
     elaborate_supertraits(items)?;
@@ -4082,6 +4085,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         },
         supertrait_arguments: Box::default(),
         sized: false,
+        reference_forwards: Box::default(),
         generics,
         declaration: None,
     })

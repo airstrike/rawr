@@ -1381,6 +1381,15 @@ fn delimiter_depth(tokens: &[crate::item::BodyToken], end: usize) -> usize {
             | crate::item::BodyTokenKind::OrOr
             | crate::item::BodyTokenKind::Integer(_)
             | crate::item::BodyTokenKind::Bang
+            | crate::item::BodyTokenKind::Star
+            | crate::item::BodyTokenKind::StarStar
+            | crate::item::BodyTokenKind::Ampersand
+            | crate::item::BodyTokenKind::AndAnd
+            | crate::item::BodyTokenKind::LessThan
+            | crate::item::BodyTokenKind::GreaterThan
+            | crate::item::BodyTokenKind::As
+            | crate::item::BodyTokenKind::SelfValue
+            | crate::item::BodyTokenKind::Mut
             | crate::item::BodyTokenKind::Other => {}
         }
     }

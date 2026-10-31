@@ -4537,6 +4537,14 @@ impl Models {
                     .insert(key, (ty.clone(), parameters.clone()));
             }
         }
+        // `impl<T: For> For for &T`, forwarding to `T`'s.
+        for (_, declared) in traits.values() {
+            for forward in declared.reference_forwards.iter() {
+                associated
+                    .reference_forwards
+                    .insert((declared.name.text.clone(), forward.mutable));
+            }
+        }
         // `type Fore: Iterator<Item = Self::For>;`.
         for (_, declared) in traits.values() {
             for (name, equalities) in declared
@@ -9332,6 +9340,9 @@ struct AssociatedTypes {
     /// and name, in the trait's `Self`: `(Iterator, Item, Self::For)` of
     /// `type Fore: Iterator<Item = Self::For>;`.
     equalities: BTreeMap<(ImmutableString, ImmutableString), Box<[AssociatedEquality]>>,
+    /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
+    /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
+    reference_forwards: BTreeSet<(ImmutableString, bool)>,
 }
 
 /// An equality of an associated type's bound, as `(trait, name, type)`.
@@ -9624,6 +9635,15 @@ impl Inference {
                 {
                     return self.resolve(ty);
                 }
+            }
+            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
+            Ty::Reference { mutable, target }
+                if self
+                    .associated
+                    .reference_forwards
+                    .contains(&(trait_name.clone(), *mutable)) =>
+            {
+                return self.project(self.resolve(target), trait_name, name);
             }
             // `<T::Fore as Shape>::Output` of `type Fore: Shape<Output =
             // i64>;`: the equality.
@@ -11434,7 +11454,8 @@ struct Parser<'a> {
     pending_projections: Vec<(Ty, Ty, Span)>,
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
-    pending_witnesses: Vec<(String, Ty, Span)>,
+    /// Each also says whether a reference's witness is its referent's.
+    pending_witnesses: Vec<(String, Ty, Span, bool)>,
     /// This body's generic parameters a signature names inside a host
     /// type, in declaration order: each host operation here takes their
     /// witnesses after its operands.
@@ -13067,21 +13088,30 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Vec<origin::Fragment> {
         let mut arguments = Vec::new();
+        // A parameter witnessed for its traits alone may take a reference,
+        // which implements them only by forwarding to its referent's impls
+        // (`resolve::forward`): the referent's witness serves.
         let names = witness_generics(generics, &self.models)
-            .map(|generic| generic.name.text.clone())
+            .map(|generic| {
+                (
+                    generic.name.text.clone(),
+                    !generic.host && !generic.bounds.contains(capability::Kind::Default),
+                )
+            })
             .collect::<Vec<_>>();
         // A call inside a closure may pass this body's own witnesses, which
         // the closure then captures.
         if !names.is_empty() {
             self.capture_witnesses();
         }
-        for name in names {
+        for (name, forwarded) in names {
             let Some(ty) = substitution.get(&name) else {
                 continue;
             };
             let placeholder = witness_placeholder(self.pending_witnesses.len());
             arguments.push(origin::Fragment::plain(placeholder.clone()));
-            self.pending_witnesses.push((placeholder, ty.clone(), span));
+            self.pending_witnesses
+                .push((placeholder, ty.clone(), span, forwarded));
         }
         arguments
     }
@@ -13220,8 +13250,11 @@ impl<'a> Parser<'a> {
         }
         self.finish_instances()?;
         self.finish_defaults()?;
-        for (placeholder, ty, span) in std::mem::take(&mut self.pending_witnesses) {
-            let ty = self.inference.resolve(&ty);
+        for (placeholder, ty, span, forwarded) in std::mem::take(&mut self.pending_witnesses) {
+            let mut ty = self.inference.resolve(&ty);
+            while forwarded && let Ty::Reference { target, .. } = &ty {
+                ty = self.inference.resolve(target);
+            }
             let witness = self.witness(&ty, span)?;
             if witness.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -13633,6 +13666,27 @@ impl<'a> Parser<'a> {
             }
             Ty::Reference { target, .. } if trait_name == "IntoFragment" => {
                 self.type_implements(&self.inference.resolve(target), trait_name)
+            }
+            // `impl<T: For + Copy> For for &T` forwarding to `T`'s impl
+            // (`resolve::forward`): `&T` implements it where `T` does and
+            // has its other bounds.
+            Ty::Reference { mutable, target } => {
+                let target = self.inference.resolve(target);
+                self.models
+                    .traits
+                    .get(trait_name)
+                    .into_iter()
+                    .flat_map(|(_, declared)| declared.reference_forwards.iter())
+                    .filter(|forward| forward.mutable == *mutable)
+                    .any(|forward| {
+                        self.type_implements(&target, trait_name)
+                            && bound_kinds(forward.bounds)
+                                .all(|kind| self.type_provides(&target, kind))
+                            && forward
+                                .traits
+                                .iter()
+                                .all(|bound| self.type_implements(&target, &bound.text))
+                    })
             }
             // Rust's own operator impls on numbers (`i64: Add`, `f64: Neg`),
             // `bool: Not`, and `String: Add<&str>` / `AddAssign<&str>`.
@@ -47111,6 +47165,18 @@ impl<'a> Parser<'a> {
                     .map(|(_, trait_name, _)| trait_name.clone())
                     .collect()
             }
+            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
+            Ty::Reference { mutable, target } => self
+                .projection_trait(&target, written.clone(), member, span)
+                .ok()
+                .filter(|trait_name| {
+                    self.models
+                        .associated
+                        .reference_forwards
+                        .contains(&(trait_name.clone(), mutable))
+                })
+                .into_iter()
+                .collect(),
             _ => Vec::new(),
         };
         let owner = base.name(&self.models);
