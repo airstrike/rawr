@@ -352,3 +352,102 @@ pub(super) fn capture(
     inventory::Acquired::capture(builder.build().unwrap(), native, limits)
         .expect("the independent intrinsic domain authenticates")
 }
+
+#[test]
+fn lowering_calls_prove_from_their_lexical_import_paths() {
+    use crate::surface::application::Call;
+
+    let _turn = crate::store::test_turn();
+    crate::store::isolate_for_tests();
+    let limits = Limits::standard();
+    let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/lexical-calls");
+    std::fs::create_dir_all(&root).unwrap();
+    let inventories = [
+        capture(&root.join("ab"), &["a", "b"], &native, &limits),
+        capture(&root.join("cb"), &["c", "b"], &native, &limits),
+    ];
+    let script = test_launch::Script::new(
+        std::fs::canonicalize(&root).unwrap(),
+        test_launch::FileLimits { count: 0, bytes: 0 },
+        Vec::new(),
+    )
+    .unwrap();
+    script
+        .run(|| {
+            let catalog = Catalog::join(&inventories).unwrap();
+            let call = |receiver: &str, scope: &[&[&str]]| {
+                Call {
+                    receiver: catalog.export("facts_a", &[receiver]).unwrap(),
+                    receiver_arguments: Box::new([]),
+                    name: "choose".into(),
+                    mutable: false,
+                    arguments: Box::new([]),
+                    scope: scope
+                        .iter()
+                        .map(|path| path.iter().map(|segment| (*segment).into()).collect())
+                        .collect(),
+                }
+                .canonical()
+            };
+            let left = catalog
+                .prove_call(&call("Both", &[&["facts_c", "Left"]]), "2024")
+                .unwrap();
+            assert_eq!(
+                left.signature().output(),
+                &convert::Type::Builtin(convert::Builtin::I64)
+            );
+            let right = catalog
+                .prove_call(&call("Both", &[&["facts_c", "Right"]]), "2024")
+                .unwrap();
+            assert_eq!(
+                right.signature().output(),
+                &convert::Type::Builtin(convert::Builtin::Bool)
+            );
+            assert_ne!(left.identity(), right.identity());
+            assert_ne!(left.call().key(), right.call().key());
+            // A type, a module path and the source's own items cannot
+            // change method lookup; the proof keeps its selection.
+            let wider = catalog
+                .prove_call(
+                    &call(
+                        "Both",
+                        &[
+                            &["facts_c", "Left"],
+                            &["facts_a", "Both"],
+                            &["crate", "local"],
+                        ],
+                    ),
+                    "2024",
+                )
+                .unwrap();
+            assert_eq!(wider.signature().output(), left.signature().output());
+            assert_ne!(wider.call().key(), left.call().key());
+            // A glob brings every trait its module exports.
+            assert!(matches!(
+                catalog.prove_call(&call("Both", &[&["facts_c", "*"]]), "2024"),
+                Err(super::Rejection::Ambiguous(_))
+            ));
+            let glob = catalog
+                .prove_call(&call("LeftOnly", &[&["facts_c", "*"]]), "2024")
+                .unwrap();
+            assert_eq!(
+                glob.signature().output(),
+                &convert::Type::Builtin(convert::Builtin::I64)
+            );
+            assert!(matches!(
+                catalog.prove_call(&call("Neither", &[&["facts_c", "*"]]), "2024"),
+                Err(super::Rejection::NotApplicable)
+            ));
+            // An import from a crate without facts here may name a trait the
+            // proof cannot see: undecided, never silently dropped.
+            assert!(matches!(
+                catalog.prove_call(
+                    &call("Both", &[&["facts_c", "Left"], &["std", "fmt", "Write"]]),
+                    "2024"
+                ),
+                Err(super::Rejection::Unknown(_))
+            ));
+        })
+        .expect("proving lowering calls launches no child process");
+}

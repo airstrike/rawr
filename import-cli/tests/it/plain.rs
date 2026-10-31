@@ -325,6 +325,20 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
         assert!(helpers.contains(expected), "{expected}\n{helpers}");
     }
     assert!(!helpers.contains("use super::*"));
+    // Swapping the blocks' imports swaps which method each call selects.
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn first() {\n    use facts_c::Right;\n    println!(\"{}\", facts_a::both().choose());\n}\nfn second() {\n    use facts_c::Left;\n    println!(\"{}\", facts_a::both().choose());\n}\nfn main() {\n    first();\n    second();\n}\n",
+    )
+    .unwrap();
+    let swapped = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+    assert!(
+        swapped.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&swapped.stdout),
+        text(&swapped.stderr)
+    );
+    assert_eq!(text(&swapped.stdout), "true\n11\n");
 }
 
 /// A crate's bindings are shared per machine: a second project with the

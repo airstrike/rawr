@@ -160,27 +160,7 @@ impl Catalog<'_> {
     /// import paths that name traits in this catalog can change method
     /// lookup; other paths in scope are types, values or modules.
     pub fn prove_call(&self, call: &Call, edition: &str) -> Result<Application, Rejection> {
-        let mut traits = Vec::new();
-        for path in call.scope.iter() {
-            let Some((root, rest)) = path.split_first() else {
-                continue;
-            };
-            let rest = rest.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-            let Some(definition) = self.export(root, &rest) else {
-                continue;
-            };
-            let is_trait = self
-                .identities
-                .get(&definition)
-                .and_then(|id| self.definitions.get(id))
-                .is_some_and(|definition| matches!(definition.kind(), model::Kind::Trait { .. }));
-            if is_trait {
-                traits.push(scope::Import {
-                    definition,
-                    path: path.clone(),
-                });
-            }
-        }
+        let traits = self.scope_traits(call)?;
         let prelude = match self.prelude("std", edition) {
             Some(module) => scope::Prelude::Active { module },
             None => {
@@ -222,6 +202,82 @@ impl Catalog<'_> {
             }
             call::Outcome::Unknown { reason } => Err(Rejection::Unknown(reason)),
         }
+    }
+
+    /// The traits a call's lexical import paths bring into scope. A path
+    /// into a crate this catalog holds names a trait, or a type, value or
+    /// module that cannot change method lookup; its complete exports decide
+    /// which. A glob brings every trait its module exports. A path into a
+    /// crate with no intrinsic facts here, such as `std`, may name a trait
+    /// the proof cannot see, so the call stays undecided.
+    fn scope_traits(&self, call: &Call) -> Result<Vec<scope::Import>, Rejection> {
+        let roots = self
+            .graphs
+            .iter()
+            .flat_map(|graph| graph.exports())
+            .filter_map(|path| match path {
+                ledger::Path::Imported(export) => Some(export.key().root_alias()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut traits = Vec::new();
+        let mut push = |definition: crate::surface::identity::Definition, path: Path| {
+            let is_trait = self
+                .identities
+                .get(&definition)
+                .and_then(|id| self.definitions.get(id))
+                .is_some_and(|definition| matches!(definition.kind(), model::Kind::Trait { .. }));
+            if is_trait {
+                traits.push(scope::Import { definition, path });
+            }
+        };
+        for path in call.scope.iter() {
+            let Some((root, rest)) = path.split_first() else {
+                continue;
+            };
+            // A path the source resolves inside its own crate names script
+            // items, which no Rust impl selection here depends on.
+            if matches!(root.as_ref(), "crate" | "self" | "super") {
+                continue;
+            }
+            if !roots.contains(root.as_ref()) {
+                return Err(Rejection::Unknown(
+                    "an import in scope names a crate with no intrinsic facts in this proof",
+                ));
+            }
+            if let Some((last, module)) = rest.split_last()
+                && last.as_ref() == "*"
+            {
+                let module = module.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+                for graph in &self.graphs {
+                    for export in graph.exports() {
+                        let ledger::Path::Imported(export) = export else {
+                            continue;
+                        };
+                        let key = export.key();
+                        let segments = key.path().collect::<Vec<_>>();
+                        if key.root_alias() == root.as_ref()
+                            && export.target().namespace() == identity::Namespace::Type
+                            && segments.len() == module.len() + 1
+                            && segments[..module.len()] == module[..]
+                        {
+                            push(
+                                crate::surface::identity::Definition::of(export.target()),
+                                std::iter::once(root.clone())
+                                    .chain(segments.iter().map(|segment| (*segment).into()))
+                                    .collect(),
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            let rest = rest.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+            if let Some(definition) = self.export(root, &rest) {
+                push(definition, path.clone());
+            }
+        }
+        Ok(traits)
     }
 
     fn native_type(&self, ty: &convert::Type) -> Result<Type, Error> {

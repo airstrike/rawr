@@ -21651,8 +21651,7 @@ impl<'a> Parser<'a> {
 
     /// The Rust import paths in lexical scope at `at` in this source:
     /// module-level imports and those of every block that contains it.
-    /// A glob from a Rust crate could bring any trait into scope, which the
-    /// call's proof would have to enumerate; it is refused, not ignored.
+    /// A glob is kept as its module path and `*`.
     #[cfg(feature = "rust-import")]
     fn lexical_scope(&self, at: Span) -> Result<ScopePaths, Error> {
         let mut paths = Vec::new();
@@ -21665,13 +21664,18 @@ impl<'a> Parser<'a> {
             {
                 continue;
             }
-            if matches!(used.tree, crate::item::UseTree::Glob { .. }) {
-                return Err(Error::InvalidHostOperation {
-                    item: "<glob import>".into(),
-                    reason: "a glob import in scope of a proved imported call is not supported yet"
-                        .into(),
-                    operation: used.span,
-                });
+            // A glob is its module path and `*`: the proof enumerates the
+            // module's traits from the crate's complete exports.
+            if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
+                paths.push(
+                    prefix
+                        .segments
+                        .iter()
+                        .map(|segment| Box::<str>::from(segment.name.text.as_str()))
+                        .chain(std::iter::once(Box::<str>::from("*")))
+                        .collect(),
+                );
+                continue;
             }
             for (_, path) in used.bindings() {
                 let path = path
